@@ -49,7 +49,7 @@ cmd_deps() {
         libpango1.0-dev libssh2-1-dev libssl-dev \
         libvncserver-dev libtelnet-dev libwebsockets-dev \
         libpulse-dev libwebp-dev libcunit1-dev \
-        freerdp3-dev
+        freerdp3-dev libspice-client-glib-2.0-dev
 
     # uuid-dev is the standard package on Debian; fall back to libossp-uuid-dev
     sudo apt-get install -y uuid-dev 2>/dev/null || true
@@ -108,10 +108,12 @@ cmd_build_guacd() {
             --with-ssh \
             --with-vnc \
             --with-rdp \
+            --with-spice \
             --without-telnet \
             --without-kubernetes \
             --disable-guacenc \
             --disable-guaclog \
+            --disable-guacclip \
             --disable-static
     fi
 

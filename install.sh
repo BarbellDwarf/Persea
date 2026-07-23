@@ -74,7 +74,7 @@ install_deps() {
         libpango1.0-dev libpulse-dev \
         libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
         libcunit1-dev libtelnet-dev libwebsockets-dev \
-        freerdp3-dev
+        freerdp3-dev libspice-client-glib-2.0-dev
 
     # uuid-dev (Debian standard) or fallback
     apt-get install -y uuid-dev 2>/dev/null || apt-get install -y libossp-uuid-dev || true
@@ -177,10 +177,12 @@ build_guacd() {
         --with-ssh \
         --with-vnc \
         --with-rdp \
+        --with-spice \
         --without-telnet \
         --without-kubernetes \
         --disable-guacenc \
         --disable-guaclog \
+        --disable-guacclip \
         --disable-static
 
     info "Compiling guacd..."

@@ -103,10 +103,12 @@ build_guacd() {
         --with-ssh \
         --with-vnc \
         --with-rdp \
+        --with-spice \
         --without-telnet \
         --without-kubernetes \
         --disable-guacenc \
         --disable-guaclog \
+        --disable-guacclip \
         --disable-static
 
     info "Compiling guacd..."

@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpango1.0-dev libpulse-dev \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
     libcunit1-dev libtelnet-dev libwebsockets-dev \
-    uuid-dev freerdp3-dev \
+    uuid-dev freerdp3-dev libspice-client-glib-2.0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -58,10 +58,12 @@ RUN /build/guacamole-server/configure \
         --with-ssh \
         --with-vnc \
         --with-rdp \
+        --with-spice \
         --without-telnet \
         --without-kubernetes \
         --disable-guacenc \
         --disable-guaclog \
+        --disable-guacclip \
         --disable-static \
     && make -j"$(nproc)" \
     && make install \
