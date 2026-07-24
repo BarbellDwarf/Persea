@@ -2497,6 +2497,11 @@ pub async fn ab_connect_entry(
         spice_ca_cert: ab_entry.spice_ca_cert,
         spice_cert_subject: ab_entry.spice_cert_subject,
         spice_proxy: ab_entry.spice_proxy,
+        spice_pve_host: None,
+        spice_pve_node: None,
+        spice_pve_vmid: None,
+        spice_pve_token: None,
+        spice_pve_verify_tls: None,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -4162,6 +4167,11 @@ pub async fn quick_connect(
             spice_ca_cert: ab_entry.spice_ca_cert,
             spice_cert_subject: ab_entry.spice_cert_subject,
             spice_proxy: ab_entry.spice_proxy,
+            spice_pve_host: None,
+            spice_pve_node: None,
+            spice_pve_vmid: None,
+            spice_pve_token: None,
+            spice_pve_verify_tls: None,
         };
 
         tracing::info!(
@@ -4273,6 +4283,11 @@ pub async fn quick_connect(
         spice_ca_cert: None,
         spice_cert_subject: None,
         spice_proxy: None,
+        spice_pve_host: None,
+        spice_pve_node: None,
+        spice_pve_vmid: None,
+        spice_pve_token: None,
+        spice_pve_verify_tls: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

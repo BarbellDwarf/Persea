@@ -8,6 +8,7 @@ mod guacd;
 mod import;
 mod oidc;
 mod protocol;
+mod pve;
 mod recording;
 mod session;
 mod tunnel;

@@ -156,6 +156,19 @@ pub struct CreateSessionRequest {
     pub spice_cert_subject: Option<String>,
     /// SPICE: proxy URL, e.g. a Proxmox SPICE proxy "http://host:3128".
     pub spice_proxy: Option<String>,
+    /// SPICE Proxmox broker: PVE API base URL (e.g. "https://pve:8006"). When
+    /// set, rustguac fetches a just-in-time SPICE ticket + config from the PVE
+    /// spiceproxy API at connect and overrides the direct-connect SPICE fields.
+    pub spice_pve_host: Option<String>,
+    /// Proxmox node name for the broker call.
+    pub spice_pve_node: Option<String>,
+    /// Proxmox VM id (QEMU) for the broker call.
+    pub spice_pve_vmid: Option<u32>,
+    /// Proxmox API token, formatted "user@realm!tokenid=secret".
+    pub spice_pve_token: Option<String>,
+    /// Verify the PVE API server's TLS certificate (default false; PVE ships a
+    /// self-signed cluster cert).
+    pub spice_pve_verify_tls: Option<bool>,
 }
 
 /// Session status in the lifecycle.
@@ -892,25 +905,13 @@ impl SessionManager {
                 )
             }
             SessionType::Spice => {
-                let hostname = req.hostname.ok_or_else(|| {
-                    SessionError::ValidationError("hostname is required for SPICE sessions".into())
-                })?;
-                let port = req.port.unwrap_or(5900);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.vnc_allowed_networks)?;
-
-                tracing::info!(
-                    session_id = %session_id,
-                    hostname = %hostname,
-                    width, height, dpi,
-                    "Creating new SPICE session"
-                );
-
-                let params = guacd::ConnectionParams::Spice(Box::new(guacd::SpiceParams {
-                    hostname: hostname.clone(),
-                    port,
-                    // Credentials are streamed to guacd via argv, not connect args.
+                // Base SPICE params from the request (direct-connect fields).
+                // Credentials are streamed to guacd via argv, not connect args.
+                let mut spice = guacd::SpiceParams {
+                    hostname: String::new(),
+                    port: req.port.unwrap_or(5900),
                     password: req.password.clone(),
                     username: req.username.clone(),
                     tls: req.spice_tls.unwrap_or(false),
@@ -926,7 +927,72 @@ impl SessionManager {
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
                     enable_audio: false,
-                }));
+                };
+
+                let hostname = if let Some(pve_url) = req.spice_pve_host.clone() {
+                    // Proxmox VE broker: PVE tickets are one-time and short-lived,
+                    // so fetch a just-in-time SPICE config at connect. Overrides
+                    // the direct-connect fields.
+                    let node = req.spice_pve_node.clone().unwrap_or_default();
+                    let vmid = req.spice_pve_vmid.unwrap_or(0);
+                    if node.is_empty() || vmid == 0 {
+                        return Err(SessionError::ValidationError(
+                            "Proxmox SPICE requires spice_pve_node and spice_pve_vmid".into(),
+                        ));
+                    }
+                    let broker = crate::pve::PveBroker {
+                        base_url: pve_url,
+                        api_token: req.spice_pve_token.clone().unwrap_or_default(),
+                        verify_tls: req.spice_pve_verify_tls.unwrap_or(false),
+                    };
+                    let cfg = broker
+                        .fetch_spice_config(&node, vmid, None)
+                        .await
+                        .map_err(|e| {
+                            SessionError::ValidationError(format!(
+                                "Proxmox SPICE broker failed: {e}"
+                            ))
+                        })?;
+                    tracing::info!(
+                        session_id = %session_id,
+                        node = %node,
+                        vmid,
+                        proxy = %cfg.proxy,
+                        "Creating Proxmox VE SPICE console session"
+                    );
+                    spice.hostname = cfg.host.clone();
+                    spice.port = cfg.tls_port;
+                    spice.tls = true;
+                    spice.tls_port = Some(cfg.tls_port);
+                    spice.ca_cert = Some(cfg.ca_cert);
+                    spice.cert_subject = Some(cfg.host_subject);
+                    spice.proxy = Some(cfg.proxy);
+                    // The one-time ticket is the SPICE password (sent via argv).
+                    spice.password = Some(cfg.ticket);
+                    cfg.host
+                } else {
+                    // Direct SPICE connection.
+                    let hostname = req.hostname.clone().ok_or_else(|| {
+                        SessionError::ValidationError(
+                            "hostname is required for SPICE sessions".into(),
+                        )
+                    })?;
+                    check_allowed_network(
+                        &hostname,
+                        spice.port,
+                        &self.config.vnc_allowed_networks,
+                    )?;
+                    spice.hostname = hostname.clone();
+                    tracing::info!(
+                        session_id = %session_id,
+                        hostname = %hostname,
+                        width, height, dpi,
+                        "Creating new SPICE session"
+                    );
+                    hostname
+                };
+
+                let params = guacd::ConnectionParams::Spice(Box::new(spice));
                 (
                     params, hostname, username, None, None, None, None, None, None,
                 )
