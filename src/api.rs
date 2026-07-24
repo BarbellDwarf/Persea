@@ -71,6 +71,13 @@ pub async fn create_session(
                 req.port.unwrap_or(5900)
             )
         }
+        crate::session::SessionType::Spice => {
+            format!(
+                "{}:{}",
+                req.hostname.as_deref().unwrap_or("?"),
+                req.port.unwrap_or(5900)
+            )
+        }
         crate::session::SessionType::Web => req.url.as_deref().unwrap_or("?").to_string(),
         crate::session::SessionType::Vdi => {
             req.container_image.as_deref().unwrap_or("?").to_string()
@@ -2412,6 +2419,7 @@ pub async fn ab_connect_entry(
         "ssh" => SessionType::Ssh,
         "rdp" => SessionType::Rdp,
         "vnc" => SessionType::Vnc,
+        "spice" => SessionType::Spice,
         "web" => SessionType::Web,
         "vdi" => SessionType::Vdi,
         other => {
@@ -2484,6 +2492,11 @@ pub async fn ab_connect_entry(
         allow_sharing: ab_entry.allow_sharing,
         fullscreen_on_connect: ab_entry.fullscreen_on_connect,
         autohide_side_tabs: ab_entry.autohide_side_tabs,
+        spice_tls: ab_entry.spice_tls,
+        spice_tls_port: ab_entry.spice_tls_port,
+        spice_ca_cert: ab_entry.spice_ca_cert,
+        spice_cert_subject: ab_entry.spice_cert_subject,
+        spice_proxy: ab_entry.spice_proxy,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -4144,6 +4157,11 @@ pub async fn quick_connect(
             allow_sharing: ab_entry.allow_sharing,
             fullscreen_on_connect: ab_entry.fullscreen_on_connect,
             autohide_side_tabs: ab_entry.autohide_side_tabs,
+            spice_tls: ab_entry.spice_tls,
+            spice_tls_port: ab_entry.spice_tls_port,
+            spice_ca_cert: ab_entry.spice_ca_cert,
+            spice_cert_subject: ab_entry.spice_cert_subject,
+            spice_proxy: ab_entry.spice_proxy,
         };
 
         tracing::info!(
@@ -4250,6 +4268,11 @@ pub async fn quick_connect(
         allow_sharing: None,
         fullscreen_on_connect: None,
         autohide_side_tabs: None,
+        spice_tls: None,
+        spice_tls_port: None,
+        spice_ca_cert: None,
+        spice_cert_subject: None,
+        spice_proxy: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

@@ -126,6 +126,11 @@ pub async fn cmd_import_guacamole(
             auto_open_if_singleton: None,
             fullscreen_on_connect: None,
             autohide_side_tabs: None,
+            spice_tls: None,
+            spice_tls_port: None,
+            spice_ca_cert: None,
+            spice_cert_subject: None,
+            spice_proxy: None,
         };
 
         // Place the entry into a subfolder matching its parent group path.
@@ -720,6 +725,11 @@ mod tests {
             auto_open_if_singleton: None,
             fullscreen_on_connect: None,
             autohide_side_tabs: None,
+            spice_tls: None,
+            spice_tls_port: None,
+            spice_ca_cert: None,
+            spice_cert_subject: None,
+            spice_proxy: None,
         };
         let mut entries = vec![
             (("".into(), "web".into()), entry()),

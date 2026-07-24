@@ -28,6 +28,7 @@ pub enum SessionType {
     Rdp,
     Vnc,
     Vdi,
+    Spice,
 }
 
 /// Parameters for creating a new session.
@@ -144,6 +145,17 @@ pub struct CreateSessionRequest {
     /// when the pointer nears the left edge). Populated from the source
     /// entry; ad-hoc sessions leave it None (client behaves as if false).
     pub autohide_side_tabs: Option<bool>,
+    /// SPICE: connect using TLS.
+    pub spice_tls: Option<bool>,
+    /// SPICE: TLS port (if the encrypted port differs from `port`).
+    pub spice_tls_port: Option<u16>,
+    /// SPICE: PEM CA certificate for verifying the server's TLS (e.g. a
+    /// Proxmox cluster CA).
+    pub spice_ca_cert: Option<String>,
+    /// SPICE: expected TLS certificate subject (Proxmox "host-subject").
+    pub spice_cert_subject: Option<String>,
+    /// SPICE: proxy URL, e.g. a Proxmox SPICE proxy "http://host:3128".
+    pub spice_proxy: Option<String>,
 }
 
 /// Session status in the lifecycle.
@@ -879,6 +891,46 @@ impl SessionManager {
                     params, hostname, username, None, None, None, None, None, None,
                 )
             }
+            SessionType::Spice => {
+                let hostname = req.hostname.ok_or_else(|| {
+                    SessionError::ValidationError("hostname is required for SPICE sessions".into())
+                })?;
+                let port = req.port.unwrap_or(5900);
+                let username = req.username.clone().unwrap_or_default();
+
+                check_allowed_network(&hostname, port, &self.config.vnc_allowed_networks)?;
+
+                tracing::info!(
+                    session_id = %session_id,
+                    hostname = %hostname,
+                    width, height, dpi,
+                    "Creating new SPICE session"
+                );
+
+                let params = guacd::ConnectionParams::Spice(Box::new(guacd::SpiceParams {
+                    hostname: hostname.clone(),
+                    port,
+                    // Credentials are streamed to guacd via argv, not connect args.
+                    password: req.password.clone(),
+                    username: req.username.clone(),
+                    tls: req.spice_tls.unwrap_or(false),
+                    tls_port: req.spice_tls_port,
+                    ca_cert: req.spice_ca_cert.clone(),
+                    cert_subject: req.spice_cert_subject.clone(),
+                    ignore_cert: req.ignore_cert.unwrap_or(false),
+                    proxy: req.spice_proxy.clone(),
+                    color_depth: req.color_depth,
+                    width,
+                    height,
+                    dpi,
+                    disable_copy: req.disable_copy.unwrap_or(false),
+                    disable_paste: req.disable_paste.unwrap_or(false),
+                    enable_audio: false,
+                }));
+                (
+                    params, hostname, username, None, None, None, None, None, None,
+                )
+            }
             SessionType::Web => {
                 let raw_url = req.url.ok_or_else(|| {
                     SessionError::ValidationError("url is required for web sessions".into())
@@ -1157,6 +1209,7 @@ impl SessionManager {
                     guacd::ConnectionParams::Ssh(p) => (p.hostname.clone(), p.port),
                     guacd::ConnectionParams::Rdp(p) => (p.hostname.clone(), p.port),
                     guacd::ConnectionParams::Vnc(p) => (p.hostname.clone(), p.port),
+                    guacd::ConnectionParams::Spice(p) => (p.hostname.clone(), p.port),
                 }
             };
 
@@ -1176,6 +1229,10 @@ impl SessionManager {
                         p.port = final_addr.port();
                     }
                     guacd::ConnectionParams::Vnc(p) => {
+                        p.hostname = final_addr.ip().to_string();
+                        p.port = final_addr.port();
+                    }
+                    guacd::ConnectionParams::Spice(p) => {
                         p.hostname = final_addr.ip().to_string();
                         p.port = final_addr.port();
                     }

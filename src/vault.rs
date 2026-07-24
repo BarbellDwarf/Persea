@@ -220,6 +220,21 @@ pub struct AddressBookEntry {
     /// reappear when the pointer nears the left edge of the display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autohide_side_tabs: Option<bool>,
+    /// SPICE: connect using TLS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spice_tls: Option<bool>,
+    /// SPICE: TLS port (if the encrypted port differs from `port`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spice_tls_port: Option<u16>,
+    /// SPICE: PEM CA certificate for verifying the server TLS (e.g. a Proxmox cluster CA).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spice_ca_cert: Option<String>,
+    /// SPICE: expected TLS certificate subject (Proxmox "host-subject").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spice_cert_subject: Option<String>,
+    /// SPICE: proxy URL, e.g. a Proxmox SPICE proxy "http://host:3128".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spice_proxy: Option<String>,
 }
 
 impl AddressBookEntry {
@@ -373,6 +388,16 @@ pub struct EntryInfo {
     /// Auto-hide the clipboard/files side tabs when idle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autohide_side_tabs: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spice_tls: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spice_tls_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spice_ca_cert: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spice_cert_subject: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spice_proxy: Option<String>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -440,6 +465,11 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             auto_open_if_singleton: e.auto_open_if_singleton,
             fullscreen_on_connect: e.fullscreen_on_connect,
             autohide_side_tabs: e.autohide_side_tabs,
+            spice_tls: e.spice_tls,
+            spice_tls_port: e.spice_tls_port,
+            spice_ca_cert: e.spice_ca_cert.clone(),
+            spice_cert_subject: e.spice_cert_subject.clone(),
+            spice_proxy: e.spice_proxy.clone(),
         }
     }
 }

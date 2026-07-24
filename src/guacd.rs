@@ -73,6 +73,38 @@ pub struct VncParams {
     pub disable_paste: bool,
 }
 
+/// SPICE connection parameters to pass to guacd.
+///
+/// SPICE reads credentials from an `argv` stream (guacd's `GUAC_SPICE_ARGV_*`),
+/// not the connect args, so `password`/`username` are streamed separately after
+/// `connect` (see `send_argv`). The TLS + proxy + cert-subject fields lay the
+/// groundwork for brokered Proxmox VE consoles (which connect via a SPICE proxy
+/// with a one-time ticket and cluster-CA TLS).
+pub struct SpiceParams {
+    pub hostname: String,
+    pub port: u16,
+    /// SPICE ticket / password, delivered via argv (not connect args).
+    pub password: Option<String>,
+    /// Optional SPICE username, delivered via argv.
+    pub username: Option<String>,
+    pub tls: bool,
+    pub tls_port: Option<u16>,
+    /// PEM CA certificate for verifying the SPICE server's TLS (Proxmox cluster CA).
+    pub ca_cert: Option<String>,
+    /// Expected TLS certificate subject (Proxmox "host-subject").
+    pub cert_subject: Option<String>,
+    pub ignore_cert: bool,
+    /// SPICE proxy URL, e.g. "http://proxy.example.com:3128" (Proxmox SPICE proxy).
+    pub proxy: Option<String>,
+    pub color_depth: Option<u8>,
+    pub width: u32,
+    pub height: u32,
+    pub dpi: u32,
+    pub disable_copy: bool,
+    pub disable_paste: bool,
+    pub enable_audio: bool,
+}
+
 /// RDP connection parameters to pass to guacd.
 pub struct RdpParams {
     pub hostname: String,
@@ -125,6 +157,7 @@ pub enum ConnectionParams {
     Ssh(SshParams),
     Vnc(VncParams),
     Rdp(Box<RdpParams>),
+    Spice(Box<SpiceParams>),
 }
 
 /// Connect to guacd and perform the Guacamole protocol handshake.
@@ -158,6 +191,7 @@ pub async fn connect_and_handshake(
         ConnectionParams::Ssh(_) => "ssh",
         ConnectionParams::Vnc(_) => "vnc",
         ConnectionParams::Rdp(_) => "rdp",
+        ConnectionParams::Spice(_) => "spice",
     };
     let select = Instruction::new("select", vec![protocol.into()]);
     stream
@@ -322,6 +356,28 @@ pub async fn connect_and_handshake(
                     String::new()
                 }
             },
+            // Note: SPICE has no width/height/dpi connect args (it sizes via the
+            // `size` instruction) and no `password` arg (delivered via argv below).
+            ConnectionParams::Spice(p) => match name.as_str() {
+                "hostname" => p.hostname.clone(),
+                "port" => p.port.to_string(),
+                "tls" => if p.tls { "true" } else { "false" }.into(),
+                "tls-port" => p.tls_port.map(|x| x.to_string()).unwrap_or_default(),
+                "ca-cert" => p.ca_cert.clone().unwrap_or_default(),
+                "cert-subject" => p.cert_subject.clone().unwrap_or_default(),
+                "ignore-cert" => if p.ignore_cert { "true" } else { "false" }.into(),
+                "proxy" => p.proxy.clone().unwrap_or_default(),
+                "color-depth" => p.color_depth.map_or("24".into(), |d| d.to_string()),
+                "read-only" => "false".into(),
+                "swap-red-blue" => "false".into(),
+                "enable-audio" => if p.enable_audio { "true" } else { "false" }.into(),
+                "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
+                "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
+                _ => {
+                    tracing::debug!("Unknown guacd SPICE parameter '{}', sending empty", name);
+                    String::new()
+                }
+            },
         })
         .collect();
 
@@ -330,6 +386,7 @@ pub async fn connect_and_handshake(
         ConnectionParams::Ssh(p) => (p.width, p.height, p.dpi, false),
         ConnectionParams::Vnc(p) => (p.width, p.height, p.dpi, false),
         ConnectionParams::Rdp(p) => (p.width, p.height, p.dpi, p.enable_h264),
+        ConnectionParams::Spice(p) => (p.width, p.height, p.dpi, false),
     };
     send_handshake(&mut stream, width, height, dpi, h264).await?;
 
@@ -340,6 +397,19 @@ pub async fn connect_and_handshake(
         .map_err(|e| GuacdError::Io(e.to_string()))?;
 
     tracing::debug!("Sent handshake instructions");
+
+    // SPICE reads credentials from an argv stream, not the connect args. Send
+    // them immediately after connect so guacd's SPICE client thread has them
+    // set before it configures the session and connects to the server (guacd's
+    // SPICE handler does not guac_argv_await, so earliest delivery is safest).
+    if let ConnectionParams::Spice(p) = params {
+        if let Some(u) = p.username.as_deref().filter(|s| !s.is_empty()) {
+            send_argv(&mut stream, "username", u).await?;
+        }
+        if let Some(pw) = p.password.as_deref().filter(|s| !s.is_empty()) {
+            send_argv(&mut stream, "password", pw).await?;
+        }
+    }
 
     // Read the ready instruction — confirms connection is established
     let ready = read_instruction(&mut stream).await?;
@@ -359,6 +429,27 @@ pub async fn connect_and_handshake(
     tracing::info!("guacd handshake complete, connection_id={}", connection_id);
 
     Ok((stream, connection_id))
+}
+
+/// Send an `argv` stream carrying a single named argument value. guacd's SPICE
+/// client reads credentials (`username`/`password`) from argv rather than the
+/// connect args, so these are streamed separately after `connect`. The value is
+/// sent as a single base64 blob on a dedicated stream index.
+async fn send_argv(stream: &mut GuacdStream, name: &str, value: &str) -> Result<(), GuacdError> {
+    use base64::Engine;
+    // Stream index 1: index 0 is reserved for the browser-side internal ping pipe.
+    let idx = "1";
+    let open = Instruction::new("argv", vec![idx.into(), "text/plain".into(), name.into()]);
+    let data = base64::engine::general_purpose::STANDARD.encode(value.as_bytes());
+    let blob = Instruction::new("blob", vec![idx.into(), data]);
+    let end = Instruction::new("end", vec![idx.into()]);
+    for inst in [open, blob, end] {
+        stream
+            .write_all(inst.encode().as_bytes())
+            .await
+            .map_err(|e| GuacdError::Io(e.to_string()))?;
+    }
+    Ok(())
 }
 
 /// Join an existing guacd connection by its connection_id.
