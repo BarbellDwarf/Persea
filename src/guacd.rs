@@ -75,17 +75,17 @@ pub struct VncParams {
 
 /// SPICE connection parameters to pass to guacd.
 ///
-/// SPICE reads credentials from an `argv` stream (guacd's `GUAC_SPICE_ARGV_*`),
-/// not the connect args, so `password`/`username` are streamed separately after
-/// `connect` (see `send_argv`). The TLS + proxy + cert-subject fields lay the
-/// groundwork for brokered Proxmox VE consoles (which connect via a SPICE proxy
-/// with a one-time ticket and cluster-CA TLS).
+/// Credentials (`password`/`username`) are sent as connect args: guacd's SPICE
+/// client authenticates during `connect` without awaiting an `argv` stream, so
+/// argv delivery would race the auth. The TLS + proxy + cert-subject fields
+/// support brokered Proxmox VE consoles (which connect via a SPICE proxy with a
+/// one-time ticket and cluster-CA TLS).
 pub struct SpiceParams {
     pub hostname: String,
     pub port: u16,
-    /// SPICE ticket / password, delivered via argv (not connect args).
+    /// SPICE ticket / password, sent as the `password` connect arg.
     pub password: Option<String>,
-    /// Optional SPICE username, delivered via argv.
+    /// Optional SPICE username, sent as the `username` connect arg.
     pub username: Option<String>,
     pub tls: bool,
     pub tls_port: Option<u16>,
@@ -360,7 +360,23 @@ pub async fn connect_and_handshake(
             // `size` instruction) and no `password` arg (delivered via argv below).
             ConnectionParams::Spice(p) => match name.as_str() {
                 "hostname" => p.hostname.clone(),
-                "port" => p.port.to_string(),
+                // TLS SPICE (e.g. Proxmox) is TLS-only: send an empty plain
+                // port so guacd/spice-gtk connects via tls-port with TLS rather
+                // than plaintext against a TLS endpoint.
+                "port" => {
+                    if p.tls {
+                        String::new()
+                    } else {
+                        p.port.to_string()
+                    }
+                }
+                // Credentials go in the connect args (not a post-connect argv
+                // stream): guacd's SPICE client sets settings->password on the
+                // session and authenticates during connect without awaiting
+                // argv, so argv delivery races the auth. The connect arg is set
+                // before the server connection is opened.
+                "username" => p.username.clone().unwrap_or_default(),
+                "password" => p.password.clone().unwrap_or_default(),
                 "tls" => if p.tls { "true" } else { "false" }.into(),
                 "tls-port" => p.tls_port.map(|x| x.to_string()).unwrap_or_default(),
                 "ca-cert" => p.ca_cert.clone().unwrap_or_default(),
@@ -398,19 +414,6 @@ pub async fn connect_and_handshake(
 
     tracing::debug!("Sent handshake instructions");
 
-    // SPICE reads credentials from an argv stream, not the connect args. Send
-    // them immediately after connect so guacd's SPICE client thread has them
-    // set before it configures the session and connects to the server (guacd's
-    // SPICE handler does not guac_argv_await, so earliest delivery is safest).
-    if let ConnectionParams::Spice(p) = params {
-        if let Some(u) = p.username.as_deref().filter(|s| !s.is_empty()) {
-            send_argv(&mut stream, "username", u).await?;
-        }
-        if let Some(pw) = p.password.as_deref().filter(|s| !s.is_empty()) {
-            send_argv(&mut stream, "password", pw).await?;
-        }
-    }
-
     // Read the ready instruction — confirms connection is established
     let ready = read_instruction(&mut stream).await?;
     if ready.opcode != "ready" {
@@ -429,27 +432,6 @@ pub async fn connect_and_handshake(
     tracing::info!("guacd handshake complete, connection_id={}", connection_id);
 
     Ok((stream, connection_id))
-}
-
-/// Send an `argv` stream carrying a single named argument value. guacd's SPICE
-/// client reads credentials (`username`/`password`) from argv rather than the
-/// connect args, so these are streamed separately after `connect`. The value is
-/// sent as a single base64 blob on a dedicated stream index.
-async fn send_argv(stream: &mut GuacdStream, name: &str, value: &str) -> Result<(), GuacdError> {
-    use base64::Engine;
-    // Stream index 1: index 0 is reserved for the browser-side internal ping pipe.
-    let idx = "1";
-    let open = Instruction::new("argv", vec![idx.into(), "text/plain".into(), name.into()]);
-    let data = base64::engine::general_purpose::STANDARD.encode(value.as_bytes());
-    let blob = Instruction::new("blob", vec![idx.into(), data]);
-    let end = Instruction::new("end", vec![idx.into()]);
-    for inst in [open, blob, end] {
-        stream
-            .write_all(inst.encode().as_bytes())
-            .await
-            .map_err(|e| GuacdError::Io(e.to_string()))?;
-    }
-    Ok(())
 }
 
 /// Join an existing guacd connection by its connection_id.

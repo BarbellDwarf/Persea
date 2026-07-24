@@ -78,6 +78,15 @@ pub async fn create_session(
                 req.port.unwrap_or(5900)
             )
         }
+        crate::session::SessionType::Proxmox => {
+            format!(
+                "{}/{}",
+                req.proxmox_node.as_deref().unwrap_or("?"),
+                req.proxmox_vmid
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "?".into())
+            )
+        }
         crate::session::SessionType::Web => req.url.as_deref().unwrap_or("?").to_string(),
         crate::session::SessionType::Vdi => {
             req.container_image.as_deref().unwrap_or("?").to_string()
@@ -2420,6 +2429,7 @@ pub async fn ab_connect_entry(
         "rdp" => SessionType::Rdp,
         "vnc" => SessionType::Vnc,
         "spice" => SessionType::Spice,
+        "proxmox" => SessionType::Proxmox,
         "web" => SessionType::Web,
         "vdi" => SessionType::Vdi,
         other => {
@@ -2497,11 +2507,12 @@ pub async fn ab_connect_entry(
         spice_ca_cert: ab_entry.spice_ca_cert,
         spice_cert_subject: ab_entry.spice_cert_subject,
         spice_proxy: ab_entry.spice_proxy,
-        spice_pve_host: None,
-        spice_pve_node: None,
-        spice_pve_vmid: None,
-        spice_pve_token: None,
-        spice_pve_verify_tls: None,
+        proxmox_url: ab_entry.proxmox_url,
+        proxmox_node: ab_entry.proxmox_node,
+        proxmox_vmid: ab_entry.proxmox_vmid,
+        proxmox_token_id: ab_entry.proxmox_token_id,
+        proxmox_token_secret: ab_entry.proxmox_token_secret,
+        proxmox_verify_tls: ab_entry.proxmox_verify_tls,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -2982,6 +2993,7 @@ pub async fn ab_update_entry(
                 password: data.password.or(existing.password),
                 private_key: data.private_key.or(existing.private_key),
                 container_password: data.container_password.or(existing.container_password),
+                proxmox_token_secret: data.proxmox_token_secret.or(existing.proxmox_token_secret),
                 jump_hosts: merged_jump_hosts,
                 // Clear legacy flat fields — they've been migrated
                 jump_password: None,
@@ -4167,11 +4179,12 @@ pub async fn quick_connect(
             spice_ca_cert: ab_entry.spice_ca_cert,
             spice_cert_subject: ab_entry.spice_cert_subject,
             spice_proxy: ab_entry.spice_proxy,
-            spice_pve_host: None,
-            spice_pve_node: None,
-            spice_pve_vmid: None,
-            spice_pve_token: None,
-            spice_pve_verify_tls: None,
+            proxmox_url: None,
+            proxmox_node: None,
+            proxmox_vmid: None,
+            proxmox_token_id: None,
+            proxmox_token_secret: None,
+            proxmox_verify_tls: None,
         };
 
         tracing::info!(
@@ -4283,11 +4296,12 @@ pub async fn quick_connect(
         spice_ca_cert: None,
         spice_cert_subject: None,
         spice_proxy: None,
-        spice_pve_host: None,
-        spice_pve_node: None,
-        spice_pve_vmid: None,
-        spice_pve_token: None,
-        spice_pve_verify_tls: None,
+        proxmox_url: None,
+        proxmox_node: None,
+        proxmox_vmid: None,
+        proxmox_token_id: None,
+        proxmox_token_secret: None,
+        proxmox_verify_tls: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

@@ -18,7 +18,8 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
 
-/// Session type: SSH terminal, web browser, RDP, VNC, or VDI container.
+/// Session type: SSH terminal, web browser, RDP, VNC, VDI container, direct
+/// SPICE, or Proxmox VE console (SPICE brokered via the PVE spiceproxy API).
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionType {
@@ -29,6 +30,7 @@ pub enum SessionType {
     Vnc,
     Vdi,
     Spice,
+    Proxmox,
 }
 
 /// Parameters for creating a new session.
@@ -156,19 +158,24 @@ pub struct CreateSessionRequest {
     pub spice_cert_subject: Option<String>,
     /// SPICE: proxy URL, e.g. a Proxmox SPICE proxy "http://host:3128".
     pub spice_proxy: Option<String>,
-    /// SPICE Proxmox broker: PVE API base URL (e.g. "https://pve:8006"). When
-    /// set, rustguac fetches a just-in-time SPICE ticket + config from the PVE
-    /// spiceproxy API at connect and overrides the direct-connect SPICE fields.
-    pub spice_pve_host: Option<String>,
-    /// Proxmox node name for the broker call.
-    pub spice_pve_node: Option<String>,
-    /// Proxmox VM id (QEMU) for the broker call.
-    pub spice_pve_vmid: Option<u32>,
-    /// Proxmox API token, formatted "user@realm!tokenid=secret".
-    pub spice_pve_token: Option<String>,
+    /// Proxmox VE console (SessionType::Proxmox): PVE API base URL, a full URL
+    /// including scheme and port (e.g. "https://pve.example.com:8006"). rustguac
+    /// fetches a just-in-time SPICE ticket + config from the PVE spiceproxy API
+    /// at connect.
+    pub proxmox_url: Option<String>,
+    /// Proxmox node name hosting the VM (e.g. "pve").
+    pub proxmox_node: Option<String>,
+    /// Proxmox VM id (QEMU) whose console to open.
+    pub proxmox_vmid: Option<u32>,
+    /// Proxmox API token id ("user@realm!tokenname") — the non-secret half.
+    pub proxmox_token_id: Option<String>,
+    /// Proxmox API token secret (the UUID half). Joined with the id as
+    /// "id=secret" for the API. Kept separate so the id can be shown while the
+    /// secret stays masked.
+    pub proxmox_token_secret: Option<String>,
     /// Verify the PVE API server's TLS certificate (default false; PVE ships a
-    /// self-signed cluster cert).
-    pub spice_pve_verify_tls: Option<bool>,
+    /// self-signed cluster cert). Also controls SPICE-proxy cert verification.
+    pub proxmox_verify_tls: Option<bool>,
 }
 
 /// Session status in the lifecycle.
@@ -398,6 +405,25 @@ mod auth_pkg_tests {
         let c = cfg(Some("negotiate"));
         assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("negotiate".into()));
     }
+}
+
+/// Parse a host and port from a full URL ("https://host:8006") or a bare
+/// authority ("host:3128" / "host"), falling back to `default_port` when the
+/// input carries no explicit port. Used to tunnel Proxmox's PVE API and SPICE
+/// proxy endpoints through a jump-host chain.
+fn parse_host_port(input: &str, default_port: u16) -> Result<(String, u16), SessionError> {
+    let parsed = if input.contains("://") {
+        Url::parse(input)
+    } else {
+        Url::parse(&format!("tcp://{input}"))
+    }
+    .map_err(|e| SessionError::ValidationError(format!("invalid host/URL '{input}': {e}")))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| SessionError::ValidationError(format!("no host in '{input}'")))?
+        .to_string();
+    let port = parsed.port().unwrap_or(default_port);
+    Ok((host, port))
 }
 
 /// Check that a host resolves to an IP within the allowed CIDR networks.
@@ -648,6 +674,32 @@ impl SessionManager {
                 "Clamped session dimensions to safe range"
             );
         }
+
+        // Resolve jump hosts (SSH tunnel chain) up-front: the Proxmox branch
+        // needs them to tunnel its PVE API + SPICE-proxy connections in-branch,
+        // and the generic tunnel setup after the match uses them for the other
+        // session types.
+        let jump_hops: Vec<tunnel::JumpHost> = if let Some(hops) = req.jump_hosts {
+            hops
+        } else if let Some(ref jh) = req.jump_host {
+            if !jh.is_empty() {
+                vec![tunnel::JumpHost {
+                    hostname: jh.clone(),
+                    port: req.jump_port.unwrap_or(22),
+                    username: req.jump_username.clone().unwrap_or_default(),
+                    password: req.jump_password.clone(),
+                    private_key: req.jump_private_key.clone(),
+                    host_key: None,
+                }]
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        // Tunnels the Proxmox branch establishes in-branch (PVE API + SPICE
+        // proxy hops); merged into the session's tunnel list after the match.
+        let mut proxmox_tunnels: Vec<tunnel::SshTunnel> = Vec::new();
 
         let (
             mut conn_params,
@@ -907,11 +959,16 @@ impl SessionManager {
             SessionType::Spice => {
                 let username = req.username.clone().unwrap_or_default();
 
-                // Base SPICE params from the request (direct-connect fields).
-                // Credentials are streamed to guacd via argv, not connect args.
-                let mut spice = guacd::SpiceParams {
-                    hostname: String::new(),
-                    port: req.port.unwrap_or(5900),
+                // Direct SPICE connection to a SPICE server (e.g. libvirt/QEMU).
+                let hostname = req.hostname.clone().ok_or_else(|| {
+                    SessionError::ValidationError("hostname is required for SPICE sessions".into())
+                })?;
+                let port = req.port.unwrap_or(5900);
+                check_allowed_network(&hostname, port, &self.config.vnc_allowed_networks)?;
+
+                let spice = guacd::SpiceParams {
+                    hostname: hostname.clone(),
+                    port,
                     password: req.password.clone(),
                     username: req.username.clone(),
                     tls: req.spice_tls.unwrap_or(false),
@@ -928,70 +985,158 @@ impl SessionManager {
                     disable_paste: req.disable_paste.unwrap_or(false),
                     enable_audio: false,
                 };
+                tracing::info!(
+                    session_id = %session_id,
+                    hostname = %hostname,
+                    width, height, dpi,
+                    "Creating new SPICE session"
+                );
 
-                let hostname = if let Some(pve_url) = req.spice_pve_host.clone() {
-                    // Proxmox VE broker: PVE tickets are one-time and short-lived,
-                    // so fetch a just-in-time SPICE config at connect. Overrides
-                    // the direct-connect fields.
-                    let node = req.spice_pve_node.clone().unwrap_or_default();
-                    let vmid = req.spice_pve_vmid.unwrap_or(0);
-                    if node.is_empty() || vmid == 0 {
-                        return Err(SessionError::ValidationError(
-                            "Proxmox SPICE requires spice_pve_node and spice_pve_vmid".into(),
-                        ));
-                    }
-                    let broker = crate::pve::PveBroker {
-                        base_url: pve_url,
-                        api_token: req.spice_pve_token.clone().unwrap_or_default(),
-                        verify_tls: req.spice_pve_verify_tls.unwrap_or(false),
-                    };
-                    let cfg = broker
-                        .fetch_spice_config(&node, vmid, None)
-                        .await
-                        .map_err(|e| {
-                            SessionError::ValidationError(format!(
-                                "Proxmox SPICE broker failed: {e}"
-                            ))
-                        })?;
-                    tracing::info!(
-                        session_id = %session_id,
-                        node = %node,
-                        vmid,
-                        proxy = %cfg.proxy,
-                        "Creating Proxmox VE SPICE console session"
-                    );
-                    spice.hostname = cfg.host.clone();
-                    spice.port = cfg.tls_port;
-                    spice.tls = true;
-                    spice.tls_port = Some(cfg.tls_port);
-                    spice.ca_cert = Some(cfg.ca_cert);
-                    spice.cert_subject = Some(cfg.host_subject);
-                    spice.proxy = Some(cfg.proxy);
-                    // The one-time ticket is the SPICE password (sent via argv).
-                    spice.password = Some(cfg.ticket);
-                    cfg.host
+                let params = guacd::ConnectionParams::Spice(Box::new(spice));
+                (
+                    params, hostname, username, None, None, None, None, None, None,
+                )
+            }
+            SessionType::Proxmox => {
+                let username = req.username.clone().unwrap_or_default();
+
+                // Proxmox VE console: SPICE brokered through the PVE spiceproxy
+                // API. Tickets are one-time and short-lived, so fetch a
+                // just-in-time SPICE config at connect rather than storing it.
+                let pve_url = req.proxmox_url.clone().ok_or_else(|| {
+                    SessionError::ValidationError("Proxmox sessions require proxmox_url".into())
+                })?;
+                let vmid = req.proxmox_vmid.unwrap_or(0);
+                if vmid == 0 {
+                    return Err(SessionError::ValidationError(
+                        "Proxmox sessions require proxmox_vmid".into(),
+                    ));
+                }
+                let verify_tls = req.proxmox_verify_tls.unwrap_or(false);
+
+                // Join the token id and secret into PVE's "id=secret" form. If
+                // the secret is empty, treat the id as already-joined (lenient:
+                // allows pasting a full "id=secret" into the id field).
+                let token_id = req.proxmox_token_id.clone().unwrap_or_default();
+                let secret = req.proxmox_token_secret.clone().unwrap_or_default();
+                let api_token = if secret.is_empty() {
+                    token_id
                 } else {
-                    // Direct SPICE connection.
-                    let hostname = req.hostname.clone().ok_or_else(|| {
-                        SessionError::ValidationError(
-                            "hostname is required for SPICE sessions".into(),
-                        )
-                    })?;
-                    check_allowed_network(
-                        &hostname,
-                        spice.port,
-                        &self.config.vnc_allowed_networks,
-                    )?;
-                    spice.hostname = hostname.clone();
-                    tracing::info!(
-                        session_id = %session_id,
-                        hostname = %hostname,
-                        width, height, dpi,
-                        "Creating new SPICE session"
-                    );
-                    hostname
+                    format!("{token_id}={secret}")
                 };
 
+                // If jump hosts are configured, tunnel the PVE API endpoint so
+                // the broker call reaches it through the bastion. The tunnelled
+                // endpoint is 127.0.0.1, which no PVE cert matches, so cert
+                // verification is disabled for this hop (the SSH tunnel secures
+                // the transport). The SPICE server cert is still verified below.
+                let (broker_base, broker_verify) = if !jump_hops.is_empty() {
+                    let (api_host, api_port) = parse_host_port(&pve_url, 8006)?;
+                    let (mut tuns, api_local) =
+                        tunnel::start_chain(&jump_hops, &api_host, api_port)
+                            .await
+                            .map_err(|e| {
+                                SessionError::ValidationError(format!(
+                                    "Proxmox API tunnel failed: {e}"
+                                ))
+                            })?;
+                    proxmox_tunnels.append(&mut tuns);
+                    tracing::info!(
+                        session_id = %session_id,
+                        api_local = %api_local,
+                        hops = jump_hops.len(),
+                        "Tunnelled Proxmox PVE API through jump host(s)"
+                    );
+                    (format!("https://{api_local}"), false)
+                } else {
+                    (pve_url, verify_tls)
+                };
+
+                let broker = crate::pve::PveBroker {
+                    base_url: broker_base,
+                    api_token,
+                    verify_tls: broker_verify,
+                };
+
+                // The node is optional: if not given, resolve which node hosts
+                // the VM via /cluster/resources (as the PVE web UI does), so the
+                // node-scoped console API can be reached with only the VM id.
+                let node = match req.proxmox_node.clone().filter(|n| !n.trim().is_empty()) {
+                    Some(n) => n,
+                    None => broker.resolve_node(vmid).await.map_err(|e| {
+                        SessionError::ValidationError(format!("Proxmox node lookup failed: {e}"))
+                    })?,
+                };
+
+                let mut cfg = broker
+                    .fetch_spice_config(&node, vmid, None)
+                    .await
+                    .map_err(|e| {
+                        SessionError::ValidationError(format!("Proxmox SPICE broker failed: {e}"))
+                    })?;
+                tracing::info!(
+                    session_id = %session_id,
+                    node = %node,
+                    vmid,
+                    proxy = %cfg.proxy,
+                    "Creating Proxmox VE SPICE console session"
+                );
+
+                // Tunnel the SPICE proxy too, and point guacd at the local
+                // forward. The proxy hop is plain HTTP; the SPICE-over-TLS link
+                // is tunnelled transparently inside the proxy CONNECT, so the
+                // SPICE server cert still verifies.
+                if !jump_hops.is_empty() {
+                    let (proxy_host, proxy_port) = parse_host_port(&cfg.proxy, 3128)?;
+                    let (mut tuns, proxy_local) =
+                        tunnel::start_chain(&jump_hops, &proxy_host, proxy_port)
+                            .await
+                            .map_err(|e| {
+                                SessionError::ValidationError(format!(
+                                    "Proxmox SPICE proxy tunnel failed: {e}"
+                                ))
+                            })?;
+                    proxmox_tunnels.append(&mut tuns);
+                    tracing::info!(
+                        session_id = %session_id,
+                        proxy_local = %proxy_local,
+                        "Tunnelled Proxmox SPICE proxy through jump host(s)"
+                    );
+                    cfg.proxy = format!("http://{proxy_local}");
+                }
+
+                // Proxmox SPICE is TLS-only: no plaintext port (guacd sends an
+                // empty "port" arg whenever tls is set). The one-time ticket is
+                // the SPICE password. PVE ships a self-signed cluster cert; when
+                // verification is requested, verify against the returned cluster
+                // CA + host subject, otherwise skip verification entirely.
+                let spice = guacd::SpiceParams {
+                    hostname: cfg.host.clone(),
+                    port: 0,
+                    password: Some(cfg.ticket),
+                    username: req.username.clone(),
+                    tls: true,
+                    tls_port: Some(cfg.tls_port),
+                    ca_cert: if verify_tls { Some(cfg.ca_cert) } else { None },
+                    cert_subject: if verify_tls {
+                        Some(cfg.host_subject)
+                    } else {
+                        None
+                    },
+                    ignore_cert: !verify_tls,
+                    proxy: Some(cfg.proxy),
+                    color_depth: req.color_depth,
+                    width,
+                    height,
+                    dpi,
+                    disable_copy: req.disable_copy.unwrap_or(false),
+                    disable_paste: req.disable_paste.unwrap_or(false),
+                    enable_audio: false,
+                };
+
+                // `cfg.host` is an opaque PVE routing token, used as the display
+                // hostname for the session.
+                let hostname = cfg.host;
                 let params = guacd::ConnectionParams::Spice(Box::new(spice));
                 (
                     params, hostname, username, None, None, None, None, None, None,
@@ -1237,32 +1382,15 @@ impl SessionManager {
             }
         };
 
-        // Resolve jump hosts: prefer jump_hosts array, fall back to legacy flat fields
-        let jump_hops: Vec<tunnel::JumpHost> = if let Some(hops) = req.jump_hosts {
-            hops
-        } else if let Some(ref jh) = req.jump_host {
-            if !jh.is_empty() {
-                vec![tunnel::JumpHost {
-                    hostname: jh.clone(),
-                    port: req.jump_port.unwrap_or(22),
-                    username: req.jump_username.clone().unwrap_or_default(),
-                    password: req.jump_password.clone(),
-                    private_key: req.jump_private_key.clone(),
-                    host_key: None,
-                }]
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        };
-
         // Set up SSH tunnel chain if jump hosts are configured.
         // For SSH/RDP/VNC: overrides hostname/port in conn_params so guacd
         // connects to the local tunnel listener instead of the real target.
         // For Web: tunnels to the URL's host:port and rewrites the browser URL.
+        // Proxmox is excluded: it tunnels its own PVE API + SPICE-proxy hops
+        // in-branch (the routing token / proxy field don't fit this rewrite).
         let is_web = url.is_some() && browser_session.is_none();
-        let ssh_tunnels = if !jump_hops.is_empty() {
+        let is_proxmox = matches!(req.session_type, SessionType::Proxmox);
+        let ssh_tunnels = if !jump_hops.is_empty() && !is_proxmox {
             let (target_host, target_port) = if is_web {
                 // Web session: tunnel to the URL's host:port
                 let parsed = Url::parse(url.as_ref().unwrap())
@@ -1275,7 +1403,14 @@ impl SessionManager {
                     guacd::ConnectionParams::Ssh(p) => (p.hostname.clone(), p.port),
                     guacd::ConnectionParams::Rdp(p) => (p.hostname.clone(), p.port),
                     guacd::ConnectionParams::Vnc(p) => (p.hostname.clone(), p.port),
-                    guacd::ConnectionParams::Spice(p) => (p.hostname.clone(), p.port),
+                    // TLS SPICE connects on tls_port, so tunnel that port.
+                    guacd::ConnectionParams::Spice(p) => {
+                        if p.tls {
+                            (p.hostname.clone(), p.tls_port.unwrap_or(p.port))
+                        } else {
+                            (p.hostname.clone(), p.port)
+                        }
+                    }
                 }
             };
 
@@ -1300,7 +1435,14 @@ impl SessionManager {
                     }
                     guacd::ConnectionParams::Spice(p) => {
                         p.hostname = final_addr.ip().to_string();
-                        p.port = final_addr.port();
+                        // Rewrite the port guacd actually dials. Cert-subject
+                        // verification still holds (the server presents the same
+                        // cert regardless of the tunnel).
+                        if p.tls {
+                            p.tls_port = Some(final_addr.port());
+                        } else {
+                            p.port = final_addr.port();
+                        }
                     }
                 }
             }
@@ -1384,7 +1526,9 @@ impl SessionManager {
             browser_session = Some(browser);
         }
 
-        let ssh_tunnels = ssh_tunnels.map(|(t, _)| t).unwrap_or_default();
+        let mut ssh_tunnels = ssh_tunnels.map(|(t, _)| t).unwrap_or_default();
+        // Fold in any tunnels the Proxmox branch established in-branch.
+        ssh_tunnels.append(&mut proxmox_tunnels);
 
         // For ephemeral keypair sessions, defer the guacd connection until
         // the user dismisses the banner (i.e. when the WebSocket connects).

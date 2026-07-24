@@ -26,6 +26,7 @@ Depends: ${shlibs:Depends}, ${misc:Depends},
  libfreerdp3-3,
  libfreerdp-client3-3,
  libwinpr3-3,
+ libspice-client-glib-2.0-8,
  ca-certificates,
  tigervnc-standalone-server,
  chromium,
@@ -34,5 +35,6 @@ Depends: ${shlibs:Depends}, ${misc:Depends},
 Recommends: haproxy
 Description: Lightweight Rust replacement for Apache Guacamole webapp
  rustguac proxies the Guacamole protocol over WebSockets between web
- browsers and guacd. Supports SSH, VNC, RDP, and web browser sessions
- (headless Chromium on Xvnc). This package bundles both rustguac and guacd.
+ browsers and guacd. Supports SSH, VNC, RDP, SPICE, and web browser
+ sessions (headless Chromium on Xvnc). This package bundles both rustguac
+ and guacd.

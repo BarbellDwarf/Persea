@@ -52,9 +52,10 @@ pub struct PveBroker {
 pub enum PveError {
     /// Transport-level failure (connect, TLS, timeout). Never contains creds.
     Transport(String),
-    /// The API returned a non-success status. Carries the status only, never
-    /// the body (which contains the ticket).
-    Api(u16),
+    /// The API returned a non-success status. Carries the status and the
+    /// response body message. Safe to include: only a *successful* (2xx)
+    /// spiceproxy response carries a ticket; error bodies do not.
+    Api(u16, String),
     /// The response could not be parsed / was missing an expected field.
     Parse(String),
 }
@@ -63,14 +64,101 @@ impl std::fmt::Display for PveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PveError::Transport(m) => write!(f, "PVE API transport error: {m}"),
-            PveError::Api(code) => write!(f, "PVE spiceproxy returned HTTP {code}"),
+            PveError::Api(code, msg) if msg.is_empty() => {
+                write!(f, "PVE spiceproxy returned HTTP {code}")
+            }
+            PveError::Api(code, msg) => write!(f, "PVE spiceproxy returned HTTP {code}: {msg}"),
             PveError::Parse(m) => write!(f, "PVE spiceproxy response parse error: {m}"),
         }
     }
 }
 impl std::error::Error for PveError {}
 
+/// Render an error together with its `source()` chain. reqwest's top-level
+/// message is often opaque ("builder error"); the cause carries the detail.
+/// The chain contains the URL/kind at most, never the auth header.
+fn err_chain(e: &dyn std::error::Error) -> String {
+    let mut out = e.to_string();
+    let mut src = e.source();
+    while let Some(s) = src {
+        out.push_str(": ");
+        out.push_str(&s.to_string());
+        src = s.source();
+    }
+    out
+}
+
+/// Build a `PveError::Api` from a non-success response, surfacing PVE's
+/// human-readable reason. Safe: only a *successful* (2xx) spiceproxy response
+/// carries a ticket — error bodies do not. PVE puts the reason in
+/// `message`/`errors`; fall back to the raw body, truncated.
+async fn api_error(code: u16, resp: reqwest::Response) -> PveError {
+    let body = resp.text().await.unwrap_or_default();
+    let msg = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| {
+            v.get("message")
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+                .or_else(|| v.get("errors").map(|e| e.to_string()))
+        })
+        .unwrap_or_else(|| body.chars().take(200).collect());
+    PveError::Api(code, msg.trim().to_string())
+}
+
 impl PveBroker {
+    /// Build an HTTP client for PVE API calls. PVE ships a self-signed cluster
+    /// cert by default, so certificate verification follows `verify_tls`.
+    fn http_client(&self) -> Result<reqwest::Client, PveError> {
+        reqwest::Client::builder()
+            .danger_accept_invalid_certs(!self.verify_tls)
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(15))
+            .build()
+            .map_err(|e| PveError::Transport(err_chain(&e)))
+    }
+
+    /// Resolve which cluster node hosts a VM, via `/cluster/resources`. Lets a
+    /// caller omit the node — the PVE web UI resolves vmid→node the same way,
+    /// so the node-scoped console API can be reached with only the VM id.
+    pub async fn resolve_node(&self, vmid: u32) -> Result<String, PveError> {
+        let url = format!(
+            "{}/api2/json/cluster/resources?type=vm",
+            self.base_url.trim_end_matches('/')
+        );
+        let resp = self
+            .http_client()?
+            .get(&url)
+            .header("Authorization", format!("PVEAPIToken={}", self.api_token))
+            .send()
+            .await
+            .map_err(|e| PveError::Transport(err_chain(&e)))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(api_error(status.as_u16(), resp).await);
+        }
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| PveError::Transport(e.to_string()))?;
+        let wrap: serde_json::Value =
+            serde_json::from_str(&body).map_err(|e| PveError::Parse(e.to_string()))?;
+        let items = wrap
+            .get("data")
+            .and_then(|d| d.as_array())
+            .ok_or_else(|| PveError::Parse("cluster/resources missing 'data' array".into()))?;
+        for item in items {
+            if item.get("vmid").and_then(|v| v.as_u64()) == Some(vmid as u64) {
+                if let Some(node) = item.get("node").and_then(|n| n.as_str()) {
+                    return Ok(node.to_string());
+                }
+            }
+        }
+        Err(PveError::Parse(format!(
+            "VM {vmid} not found in the cluster (check the VM id, or that the token can see it)"
+        )))
+    }
+
     /// Fetch a just-in-time SPICE config for a VM console. `proxy` optionally
     /// overrides the SPICE proxy node (defaults to the node handling the
     /// request). This performs a live API call and should be invoked at
@@ -88,12 +176,7 @@ impl PveBroker {
             vmid
         );
 
-        let client = reqwest::Client::builder()
-            .danger_accept_invalid_certs(!self.verify_tls)
-            .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(15))
-            .build()
-            .map_err(|e| PveError::Transport(e.to_string()))?;
+        let client = self.http_client()?;
 
         let mut req = client
             .post(&url)
@@ -105,11 +188,10 @@ impl PveBroker {
         let resp = req
             .send()
             .await
-            .map_err(|e| PveError::Transport(e.to_string()))?;
+            .map_err(|e| PveError::Transport(err_chain(&e)))?;
         let status = resp.status();
         if !status.is_success() {
-            // Deliberately do NOT include the body: it may carry a ticket.
-            return Err(PveError::Api(status.as_u16()));
+            return Err(api_error(status.as_u16(), resp).await);
         }
 
         // Response shape: {"data": { "host": ..., "proxy": ..., "tls-port": ...,

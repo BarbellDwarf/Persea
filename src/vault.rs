@@ -235,6 +235,28 @@ pub struct AddressBookEntry {
     /// SPICE: proxy URL, e.g. a Proxmox SPICE proxy "http://host:3128".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spice_proxy: Option<String>,
+    /// Proxmox VE console: PVE API base URL, full URL incl. scheme + port
+    /// (e.g. "https://pve.example.com:8006").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxmox_url: Option<String>,
+    /// Proxmox node name hosting the VM.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxmox_node: Option<String>,
+    /// Proxmox VM id (QEMU) whose console to open.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxmox_vmid: Option<u32>,
+    /// Proxmox API token id ("user@realm!tokenname") — non-secret, shown in the
+    /// UI (User column).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxmox_token_id: Option<String>,
+    /// Proxmox API token secret (UUID). Credential — never returned to the
+    /// browser (see EntryInfo::has_proxmox_token_secret).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxmox_token_secret: Option<String>,
+    /// Verify the PVE API + SPICE-proxy TLS certificate (default false; PVE
+    /// ships a self-signed cluster cert).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proxmox_verify_tls: Option<bool>,
 }
 
 impl AddressBookEntry {
@@ -398,6 +420,20 @@ pub struct EntryInfo {
     pub spice_cert_subject: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spice_proxy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxmox_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxmox_node: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxmox_vmid: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxmox_verify_tls: Option<bool>,
+    /// Proxmox token id (non-secret; shown in the User column).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxmox_token_id: Option<String>,
+    /// Whether a Proxmox token secret is stored (the secret itself is never
+    /// returned; the UI shows "leave blank to keep").
+    pub has_proxmox_token_secret: bool,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -470,6 +506,15 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             spice_ca_cert: e.spice_ca_cert.clone(),
             spice_cert_subject: e.spice_cert_subject.clone(),
             spice_proxy: e.spice_proxy.clone(),
+            proxmox_url: e.proxmox_url.clone(),
+            proxmox_node: e.proxmox_node.clone(),
+            proxmox_vmid: e.proxmox_vmid,
+            proxmox_verify_tls: e.proxmox_verify_tls,
+            proxmox_token_id: e.proxmox_token_id.clone(),
+            has_proxmox_token_secret: e
+                .proxmox_token_secret
+                .as_ref()
+                .is_some_and(|t| !t.is_empty()),
         }
     }
 }

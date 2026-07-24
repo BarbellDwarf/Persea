@@ -140,6 +140,8 @@
             display: flex; gap: var(--s-1); align-items: center;
         }
         .session-card-info .card-meta .type-badge { font-size: 10px; min-width: 36px; }
+        /* Proxmox VE brand orange badge */
+        .type-badge.type-proxmox { background: #e57000; color: #000; padding: 1px 6px; border-radius: 3px; font-weight: 600; }
         .session-card.dormant { opacity: 0.75; }
         .session-card.dormant .session-card-thumb { filter: brightness(0.7); }
         .card-actions {
@@ -442,6 +444,7 @@
                     <option value="rdp">RDP</option>
                     <option value="vnc">VNC</option>
                     <option value="spice">SPICE</option>
+                    <option value="proxmox">Proxmox VE console</option>
                     <option value="web">Web</option>
                     <option value="vdi">VDI (Docker)</option>
                 </select>
@@ -577,7 +580,37 @@
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-spice-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
                 </label>
-                <div class="field-hint">SPICE displays (e.g. Proxmox VE / QEMU consoles). The TLS, CA, certificate-subject and proxy fields support connecting through a SPICE proxy such as Proxmox's.</div>
+                <div class="field-hint">Direct SPICE displays (e.g. libvirt/QEMU consoles). The TLS, CA, certificate-subject and proxy fields support connecting through a SPICE proxy. For Proxmox VE VMs, use the "Proxmox VE console" type instead (it brokers the one-time ticket automatically).</div>
+            </div>
+            <div id="em-proxmox-fields" style="display:none">
+                <label>PVE API URL
+                    <input type="text" id="em-proxmox-url" placeholder="https://pve.example.com:8006">
+                </label>
+                <label>Node <span style="color:var(--text-muted);font-size:0.85em">(optional — auto-detected from VM ID)</span>
+                    <input type="text" id="em-proxmox-node" placeholder="(auto-detect)">
+                </label>
+                <label>VM ID
+                    <input type="number" id="em-proxmox-vmid" placeholder="100">
+                </label>
+                <label>Token ID
+                    <input type="text" id="em-proxmox-token-id" placeholder="user@realm!tokenname">
+                </label>
+                <label>Token secret
+                    <div class="pw-wrap"><input type="password" id="em-proxmox-token-secret" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
+                </label>
+                <label>Color depth
+                    <select id="em-proxmox-color-depth">
+                        <option value="">Default (24-bit)</option>
+                        <option value="8">8-bit</option>
+                        <option value="16">16-bit</option>
+                        <option value="24">24-bit</option>
+                        <option value="32">32-bit</option>
+                    </select>
+                </label>
+                <label style="margin-top:0.8em">
+                    <input type="checkbox" id="em-proxmox-verify-tls" style="display:inline;width:auto;margin-right:0.4em"> Verify the PVE cluster TLS certificate
+                </label>
+                <div class="field-hint">Opens a Proxmox VE VM console via SPICE. rustguac calls the PVE <code>spiceproxy</code> API at connect to fetch a one-time ticket, so nothing sensitive is stored beyond the API token. Leave <strong>Node</strong> blank to auto-detect which cluster node hosts the VM. The token needs <code>VM.Console</code> (and <code>VM.Audit</code> for node auto-detect) on the target VM. PVE ships a self-signed cluster certificate, so leave TLS verification off unless the cluster CA is trusted.</div>
             </div>
             <div id="em-web-fields" style="display:none">
                 <label>URL
@@ -1806,12 +1839,14 @@
                     var label = e.display_name || e.name;
                     var host = e.session_type === 'web' ? (e.url || '')
                              : e.session_type === 'vdi' ? (e.container_image || '')
+                             : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
                              : (e.hostname || '');
                     var haystack = [
                         e.name,
                         e.display_name || '',
                         host,
                         e.username || '',
+                        e.proxmox_token_id || '',
                         e.url || '',
                         e.domain || '',
                         e.session_type,
@@ -1909,9 +1944,11 @@
                 var typeLabel = e.session_type.toUpperCase();
                 if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
                 var typeCls = 'type-' + e.session_type;
-                var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web';
+                var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
                 var connectLabel = needsPrompt ? 'Login...' : 'Connect';
-                var userCol = e.username ? highlight(e.username, tokens) : '';
+                var userCol = e.session_type === 'proxmox'
+                    ? highlight(e.proxmox_token_id || '', tokens)
+                    : (e.username ? highlight(e.username, tokens) : '');
                 if (needsPrompt && userCol) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials prompted at connect">[prompt]</span>';
                 var scopeIcon = r.scope === 'shared' ? '⊕' : '▣';
                 html += '<tr>';
@@ -2058,6 +2095,7 @@
                 var label = e.display_name || e.name;
                 var hostBase = e.session_type === 'web' ? (e.url || '')
                              : e.session_type === 'vdi' ? (e.container_image || '')
+                             : e.session_type === 'proxmox' ? ((e.proxmox_url || '') + (e.proxmox_vmid ? ' · VM ' + e.proxmox_vmid : ''))
                              : (e.hostname || '');
                 if (e.port && e.session_type !== 'web' && e.session_type !== 'vdi') hostBase += ':' + e.port;
                 var hostSuffix = '';
@@ -2073,8 +2111,10 @@
                 if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
                 html += '<td><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
                 html += '<td>' + escapeHtml(hostBase) + hostSuffix + '</td>';
-                var userCol = e.username ? escapeHtml(e.username) : '';
-                var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web';
+                var userCol = e.session_type === 'proxmox'
+                    ? escapeHtml(e.proxmox_token_id || '')
+                    : (e.username ? escapeHtml(e.username) : '');
+                var needsPrompt = (e.prompt_credentials || !e.has_credentials) && e.session_type !== 'web' && e.session_type !== 'proxmox';
                 if (needsPrompt) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials will be prompted at connect time">[prompt]</span>';
                 html += '<td>' + userCol + '</td>';
                 var connectLabel = needsPrompt ? 'Login...' : 'Connect';
@@ -2246,7 +2286,7 @@
 
                 // Prompt for credentials if prompt_credentials is set or no stored creds
                 // (RDP and SSH entries without passwords/keys)
-                if (entry && (entry.prompt_credentials || !entry.has_credentials) && entry.session_type !== 'web' && entry.session_type !== 'vdi') {
+                if (entry && (entry.prompt_credentials || !entry.has_credentials) && entry.session_type !== 'web' && entry.session_type !== 'vdi' && entry.session_type !== 'proxmox') {
                     showCredPrompt(entry, scope, folder, btn);
                 } else {
                     doConnect(scope, folder, name, btn);
@@ -2540,6 +2580,7 @@
             document.getElementById('em-rdp-fields').style.display = 'none';
             document.getElementById('em-vnc-fields').style.display = 'none';
             document.getElementById('em-spice-fields').style.display = 'none';
+            document.getElementById('em-proxmox-fields').style.display = 'none';
             document.getElementById('em-web-fields').style.display = 'none';
             document.getElementById('em-vdi-fields').style.display = 'none';
             var val = entryTypeSelect.value;
@@ -2547,6 +2588,7 @@
             else if (val === 'rdp') document.getElementById('em-rdp-fields').style.display = '';
             else if (val === 'vnc') document.getElementById('em-vnc-fields').style.display = '';
             else if (val === 'spice') document.getElementById('em-spice-fields').style.display = '';
+            else if (val === 'proxmox') document.getElementById('em-proxmox-fields').style.display = '';
             else if (val === 'web') {
                 document.getElementById('em-web-fields').style.display = '';
                 loadLoginScripts(function() { populateLoginScriptDropdown(''); });
@@ -2913,6 +2955,9 @@
             } else if (type === 'spice') {
                 targetHost = document.getElementById('em-spice-hostname').value || '???';
                 targetPort = document.getElementById('em-spice-port').value || '5900';
+            } else if (type === 'proxmox') {
+                targetHost = document.getElementById('em-proxmox-node').value || '???';
+                targetPort = document.getElementById('em-proxmox-vmid').value || '???';
             } else if (type === 'web') {
                 try {
                     var u = new URL(document.getElementById('em-url').value);
@@ -2990,6 +3035,14 @@
             document.getElementById('em-spice-cert-subject').value = '';
             document.getElementById('em-spice-proxy').value = '';
             document.getElementById('em-spice-prompt-creds').checked = false;
+            document.getElementById('em-proxmox-url').value = '';
+            document.getElementById('em-proxmox-node').value = '';
+            document.getElementById('em-proxmox-vmid').value = '';
+            document.getElementById('em-proxmox-token-id').value = '';
+            document.getElementById('em-proxmox-token-secret').value = '';
+            document.getElementById('em-proxmox-token-secret').placeholder = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
+            document.getElementById('em-proxmox-color-depth').value = '';
+            document.getElementById('em-proxmox-verify-tls').checked = false;
             document.getElementById('em-url').value = '';
             document.getElementById('em-banner').value = '';
             document.getElementById('em-web-username').value = '';
@@ -3128,6 +3181,17 @@
                     document.getElementById('em-spice-cert-subject').value = entryData.spice_cert_subject || '';
                     document.getElementById('em-spice-proxy').value = entryData.spice_proxy || '';
                     document.getElementById('em-spice-prompt-creds').checked = !!entryData.prompt_credentials;
+                } else if (type === 'proxmox') {
+                    document.getElementById('em-proxmox-url').value = entryData.proxmox_url || '';
+                    document.getElementById('em-proxmox-node').value = entryData.proxmox_node || '';
+                    document.getElementById('em-proxmox-vmid').value = entryData.proxmox_vmid || '';
+                    document.getElementById('em-proxmox-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
+                    document.getElementById('em-proxmox-verify-tls').checked = !!entryData.proxmox_verify_tls;
+                    document.getElementById('em-proxmox-token-id').value = entryData.proxmox_token_id || '';
+                    // Secret is never returned; show a hint if one is stored.
+                    var secEl = document.getElementById('em-proxmox-token-secret');
+                    secEl.value = '';
+                    secEl.placeholder = entryData.has_proxmox_token_secret ? '(leave blank to keep existing)' : 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
                 } else if (type === 'web') {
                     document.getElementById('em-url').value = entryData.url || '';
                     document.getElementById('em-banner').value = entryData.banner || '';
@@ -3335,6 +3399,21 @@
                 var px = document.getElementById('em-spice-proxy').value.trim();
                 if (px) entry.spice_proxy = px;
                 if (document.getElementById('em-spice-prompt-creds').checked) entry.prompt_credentials = true;
+            } else if (type === 'proxmox') {
+                var purl = document.getElementById('em-proxmox-url').value.trim();
+                if (purl) entry.proxmox_url = purl;
+                var pnode = document.getElementById('em-proxmox-node').value.trim();
+                if (pnode) entry.proxmox_node = pnode;
+                var pvmid = parseInt(document.getElementById('em-proxmox-vmid').value);
+                if (pvmid) entry.proxmox_vmid = pvmid;
+                var ptid = document.getElementById('em-proxmox-token-id').value.trim();
+                if (ptid) entry.proxmox_token_id = ptid;
+                // Only send the secret if the user entered one (blank = keep existing).
+                var psec = document.getElementById('em-proxmox-token-secret').value.trim();
+                if (psec) entry.proxmox_token_secret = psec;
+                var pcd = document.getElementById('em-proxmox-color-depth').value;
+                if (pcd) entry.color_depth = parseInt(pcd);
+                entry.proxmox_verify_tls = document.getElementById('em-proxmox-verify-tls').checked;
             } else if (type === 'web') {
                 var url = document.getElementById('em-url').value.trim();
                 if (url) entry.url = url;
