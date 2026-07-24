@@ -1,0 +1,18 @@
+diff --git a/src/protocols/spice/auth.c b/src/protocols/spice/auth.c
+index e6d19481..ac89c90a 100644
+--- a/src/protocols/spice/auth.c
++++ b/src/protocols/spice/auth.c
+@@ -35,8 +35,11 @@ void guac_spice_session_configure(guac_client* client, SpiceSession* session) {
+     /* Always configure the target host */
+     g_object_set(session, "host", settings->hostname, NULL);
+ 
+-    /* Configure plaintext port, if provided */
+-    if (settings->port != NULL)
++    /* Configure plaintext port, if a non-empty one is provided. An empty
++     * string (sent for TLS-only connections, e.g. Proxmox) would make
++     * spice-gtk log "Invalid port value" while parsing it; skip it so only
++     * tls-port is used. */
++    if (settings->port != NULL && settings->port[0] != '\0')
+         g_object_set(session, "port", settings->port, NULL);
+ 
+     /* Connect through a proxy, if one was specified */
