@@ -441,6 +441,7 @@
                     <option value="ssh">SSH</option>
                     <option value="rdp">RDP</option>
                     <option value="vnc">VNC</option>
+                    <option value="spice">SPICE</option>
                     <option value="web">Web</option>
                     <option value="vdi">VDI (Docker)</option>
                 </select>
@@ -535,6 +536,48 @@
                     <input type="checkbox" id="em-vnc-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
                 </label>
                 <div class="field-hint">When enabled, users will be asked for a password even if one is stored.</div>
+            </div>
+            <div id="em-spice-fields" style="display:none">
+                <label>Hostname
+                    <input type="text" id="em-spice-hostname" placeholder="10.0.3.1">
+                </label>
+                <label>Port
+                    <input type="number" id="em-spice-port" value="5900">
+                </label>
+                <label>Password
+                    <div class="pw-wrap"><input type="password" id="em-spice-password"><button type="button" class="pw-toggle" onclick="togglePw(this)" title="Show/hide">&#9679;</button></div>
+                </label>
+                <label>Color depth
+                    <select id="em-spice-color-depth">
+                        <option value="">Default (24-bit)</option>
+                        <option value="8">8-bit</option>
+                        <option value="16">16-bit</option>
+                        <option value="24">24-bit</option>
+                        <option value="32">32-bit</option>
+                    </select>
+                </label>
+                <label style="margin-top:0.8em">
+                    <input type="checkbox" id="em-spice-tls" style="display:inline;width:auto;margin-right:0.4em"> Connect using TLS
+                </label>
+                <label>TLS port <span style="color:var(--text-muted);font-size:0.85em">(optional, if different from Port)</span>
+                    <input type="number" id="em-spice-tls-port" placeholder="(same as Port)">
+                </label>
+                <label>Ignore certificate
+                    <input type="checkbox" id="em-spice-ignore-cert" style="display:inline;width:auto;margin-right:0.4em"> Accept any TLS certificate (insecure)
+                </label>
+                <label>CA certificate <span style="color:var(--text-muted);font-size:0.85em">(PEM, optional)</span>
+                    <textarea id="em-spice-ca-cert" rows="3" placeholder="-----BEGIN CERTIFICATE-----" style="font-family:monospace;font-size:0.85em"></textarea>
+                </label>
+                <label>Certificate subject <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="text" id="em-spice-cert-subject" placeholder="OU=..., CN=...">
+                </label>
+                <label>Proxy <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
+                    <input type="text" id="em-spice-proxy" placeholder="http://proxy.example.com:3128">
+                </label>
+                <label style="margin-top:0.8em">
+                    <input type="checkbox" id="em-spice-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
+                </label>
+                <div class="field-hint">SPICE displays (e.g. Proxmox VE / QEMU consoles). The TLS, CA, certificate-subject and proxy fields support connecting through a SPICE proxy such as Proxmox's.</div>
             </div>
             <div id="em-web-fields" style="display:none">
                 <label>URL
@@ -2496,12 +2539,14 @@
             document.getElementById('em-ssh-fields').style.display = 'none';
             document.getElementById('em-rdp-fields').style.display = 'none';
             document.getElementById('em-vnc-fields').style.display = 'none';
+            document.getElementById('em-spice-fields').style.display = 'none';
             document.getElementById('em-web-fields').style.display = 'none';
             document.getElementById('em-vdi-fields').style.display = 'none';
             var val = entryTypeSelect.value;
             if (val === 'ssh') document.getElementById('em-ssh-fields').style.display = '';
             else if (val === 'rdp') document.getElementById('em-rdp-fields').style.display = '';
             else if (val === 'vnc') document.getElementById('em-vnc-fields').style.display = '';
+            else if (val === 'spice') document.getElementById('em-spice-fields').style.display = '';
             else if (val === 'web') {
                 document.getElementById('em-web-fields').style.display = '';
                 loadLoginScripts(function() { populateLoginScriptDropdown(''); });
@@ -2865,6 +2910,9 @@
             } else if (type === 'vnc') {
                 targetHost = document.getElementById('em-vnc-hostname').value || '???';
                 targetPort = document.getElementById('em-vnc-port').value || '5900';
+            } else if (type === 'spice') {
+                targetHost = document.getElementById('em-spice-hostname').value || '???';
+                targetPort = document.getElementById('em-spice-port').value || '5900';
             } else if (type === 'web') {
                 try {
                     var u = new URL(document.getElementById('em-url').value);
@@ -2931,6 +2979,17 @@
             document.getElementById('em-vnc-password').value = '';
             document.getElementById('em-vnc-color-depth').value = '';
             document.getElementById('em-vnc-prompt-creds').checked = false;
+            document.getElementById('em-spice-hostname').value = '';
+            document.getElementById('em-spice-port').value = '5900';
+            document.getElementById('em-spice-password').value = '';
+            document.getElementById('em-spice-color-depth').value = '';
+            document.getElementById('em-spice-tls').checked = false;
+            document.getElementById('em-spice-tls-port').value = '';
+            document.getElementById('em-spice-ignore-cert').checked = false;
+            document.getElementById('em-spice-ca-cert').value = '';
+            document.getElementById('em-spice-cert-subject').value = '';
+            document.getElementById('em-spice-proxy').value = '';
+            document.getElementById('em-spice-prompt-creds').checked = false;
             document.getElementById('em-url').value = '';
             document.getElementById('em-banner').value = '';
             document.getElementById('em-web-username').value = '';
@@ -3058,6 +3117,17 @@
                     document.getElementById('em-vnc-port').value = entryData.port || '5900';
                     document.getElementById('em-vnc-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
                     document.getElementById('em-vnc-prompt-creds').checked = !!entryData.prompt_credentials;
+                } else if (type === 'spice') {
+                    document.getElementById('em-spice-hostname').value = entryData.hostname || '';
+                    document.getElementById('em-spice-port').value = entryData.port || '5900';
+                    document.getElementById('em-spice-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
+                    document.getElementById('em-spice-tls').checked = !!entryData.spice_tls;
+                    document.getElementById('em-spice-tls-port').value = entryData.spice_tls_port || '';
+                    document.getElementById('em-spice-ignore-cert').checked = !!entryData.ignore_cert;
+                    document.getElementById('em-spice-ca-cert').value = entryData.spice_ca_cert || '';
+                    document.getElementById('em-spice-cert-subject').value = entryData.spice_cert_subject || '';
+                    document.getElementById('em-spice-proxy').value = entryData.spice_proxy || '';
+                    document.getElementById('em-spice-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'web') {
                     document.getElementById('em-url').value = entryData.url || '';
                     document.getElementById('em-banner').value = entryData.banner || '';
@@ -3245,6 +3315,26 @@
                 var cd = document.getElementById('em-vnc-color-depth').value;
                 if (cd) entry.color_depth = parseInt(cd);
                 if (document.getElementById('em-vnc-prompt-creds').checked) entry.prompt_credentials = true;
+            } else if (type === 'spice') {
+                var h = document.getElementById('em-spice-hostname').value.trim();
+                if (h) entry.hostname = h;
+                var p = parseInt(document.getElementById('em-spice-port').value);
+                if (p) entry.port = p;
+                var pw = document.getElementById('em-spice-password').value;
+                if (pw) entry.password = pw;
+                var cd = document.getElementById('em-spice-color-depth').value;
+                if (cd) entry.color_depth = parseInt(cd);
+                entry.spice_tls = document.getElementById('em-spice-tls').checked;
+                var tp = parseInt(document.getElementById('em-spice-tls-port').value);
+                if (tp) entry.spice_tls_port = tp;
+                entry.ignore_cert = document.getElementById('em-spice-ignore-cert').checked;
+                var ca = document.getElementById('em-spice-ca-cert').value.trim();
+                if (ca) entry.spice_ca_cert = ca;
+                var cs = document.getElementById('em-spice-cert-subject').value.trim();
+                if (cs) entry.spice_cert_subject = cs;
+                var px = document.getElementById('em-spice-proxy').value.trim();
+                if (px) entry.spice_proxy = px;
+                if (document.getElementById('em-spice-prompt-creds').checked) entry.prompt_credentials = true;
             } else if (type === 'web') {
                 var url = document.getElementById('em-url').value.trim();
                 if (url) entry.url = url;
