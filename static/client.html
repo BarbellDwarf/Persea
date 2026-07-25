@@ -255,6 +255,11 @@
         var urlParams = new URLSearchParams(window.location.search);
         var shareToken = urlParams.get('token');
         var apiKey = sessionStorage.getItem('rustguac_api_key');
+        // Pre-minted single-use WebSocket ticket passed in the URL. Lets a
+        // headless API integration authenticate the owner connection without an
+        // OIDC session or a stored API key: the backend mints it via
+        // POST /api/ws-ticket and hands the browser /client/{id}?ticket=...
+        var urlTicket = urlParams.get('ticket');
         var entryName = urlParams.get('name');
         // Populated from /api/sessions/:id when the session is backed by a
         // Connections entry. Used by the Reconnect button to launch a fresh
@@ -311,7 +316,13 @@
             });
         }
 
-        if (shareToken) {
+        if (urlTicket) {
+            // Headless API integration: the pre-minted ticket authenticates the
+            // WebSocket directly. Skip the /api/sessions metadata fetch — it
+            // needs its own auth, and routing the one-shot ticket through it
+            // would consume it before the WebSocket. Connect straight away.
+            startGuacamole();
+        } else if (shareToken) {
             fetch('/api/sessions/' + sessionId + '/banner?token=' + encodeURIComponent(shareToken))
             .then(function(res) { return res.ok ? res.json() : null; })
             .then(function(data) { return showBanner(data && data.banner); })
@@ -356,6 +367,13 @@
 
         function startGuacamole() {
             statusEl.textContent = 'Connecting to session ' + sessionId.substring(0, 8) + '...';
+
+            // Pre-minted WebSocket ticket from the URL (headless API integration)
+            // takes priority: use it directly as the owner credential.
+            if (urlTicket) {
+                connectWebSocket(urlTicket);
+                return;
+            }
 
             // API key users: exchange key for a single-use ticket before connecting.
             // This keeps the API key out of the WebSocket URL (visible in logs).
