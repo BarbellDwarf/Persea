@@ -203,7 +203,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 
 | Field | Type | Used by | Description |
 |-------|------|---------|-------------|
-| `session_type` | string | All | `ssh`, `rdp`, `vnc`, or `web` (required) |
+| `session_type` | string | All | `ssh`, `rdp`, `vnc`, `spice`, `proxmox`, `web`, or `vdi` (required) |
 | `hostname` | string | SSH, RDP, VNC | Target hostname or IP |
 | `port` | integer | SSH, RDP, VNC | Target port (defaults: SSH=22, RDP=3389, VNC=5900) |
 | `username` | string | SSH, RDP | Username for authentication |
@@ -230,6 +230,34 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `dpi` | integer | All | Display DPI |
 | `banner` | string | All | Banner message shown before session starts |
 
+**SPICE fields** (`session_type: spice`, direct connection to a SPICE server):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `hostname` | string | SPICE server hostname or IP (required) |
+| `port` | integer | SPICE port (default 5900) |
+| `password` | string | SPICE password / ticket |
+| `spice_tls` | boolean | Connect using TLS |
+| `spice_tls_port` | integer | TLS port, when different from `port` |
+| `spice_ca_cert` | string | PEM CA certificate for TLS verification |
+| `spice_cert_subject` | string | Expected TLS certificate subject |
+| `spice_proxy` | string | SPICE proxy URL, e.g. `http://host:3128` |
+| `ignore_cert` | boolean | Accept any TLS certificate (insecure) |
+| `color_depth` | integer | Color depth in bits |
+
+**Proxmox VE console fields** (`session_type: proxmox`, SPICE brokered through the PVE API):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `proxmox_url` | string | PVE API base URL including scheme and port, e.g. `https://pve.example.com:8006` (required) |
+| `proxmox_vmid` | integer | VM id whose console to open (required) |
+| `proxmox_node` | string | Cluster node hosting the VM. Optional: auto-resolved from the VM id (via `/cluster/resources`) when left blank |
+| `proxmox_token_id` | string | API token id, formatted `user@realm!tokenname` |
+| `proxmox_token_secret` | string | API token secret (the UUID half) |
+| `proxmox_verify_tls` | boolean | Verify the PVE / SPICE-proxy TLS certificate (default false; PVE ships a self-signed cluster cert) |
+
+The token needs `VM.Console` (and `VM.Audit` for node auto-detect) on the target VM. rustguac calls the PVE `spiceproxy` API at connect to fetch a one-time SPICE ticket, so nothing sensitive is stored beyond the token.
+
 **Jump host object fields:**
 
 | Field | Type | Required | Description |
@@ -245,10 +273,16 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 ```json
 {
   "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "pending",
   "client_url": "/client/550e8400-e29b-41d4-a716-446655440000",
-  "share_url": "/client/550e8400-e29b-41d4-a716-446655440000&key=abc123"
+  "ws_url": "/ws/550e8400-e29b-41d4-a716-446655440000",
+  "share_url": "/client/550e8400-e29b-41d4-a716-446655440000?token=abc123"
 }
 ```
+
+- `client_url` opens the session in the built-in client (see [Connecting to a session](#connecting-to-a-session)).
+- `ws_url` is the raw WebSocket endpoint for a custom client.
+- `share_url` is present only when sharing is allowed; its `token` lets a second viewer **join** an active session (it is not owner access).
 
 ### `GET /api/sessions`
 
@@ -265,6 +299,54 @@ Terminate a session. Requires **operator** role or higher. Non-admins can only d
 ### `GET /api/sessions/:id/banner`
 
 Get session banner text. Authenticates via share token (not credentials). Used for the ephemeral keypair banner display.
+
+## Connecting to a session
+
+Creating a session (`POST /api/sessions`) only opens the connection to the target; it does **not** display anything. A browser then attaches over a WebSocket to stream the session. Understanding the two connection roles avoids the most common integration mistake.
+
+### Owner vs. join
+
+- The **first** connection to a freshly created session is the **owner** connection. It requires an authenticated identity with the **operator** role or higher.
+- A **share token** (`share_url`) only lets a second viewer **join** a session that is already active. It is not an identity and cannot open the owner connection.
+
+If the owner connection is not authenticated, rustguac rejects the WebSocket with `403`, no browser attaches, and guacd eventually reports `User is not responding` (its timeout for a session whose client never arrived, roughly 15 seconds after creation). If you see `User is not responding`, the browser did not connect as an authenticated owner.
+
+### Authenticating the owner connection
+
+The built-in client (`client_url`) authenticates the owner WebSocket one of three ways:
+
+1. **OIDC session cookie** — the user is logged into rustguac in that browser. Open `client_url` and the cookie authenticates.
+2. **`sessionStorage.rustguac_api_key`** — the client exchanges the key for a single-use ticket before connecting.
+3. **A ws-ticket in the URL** — `client_url?ticket=<ticket>`. Used for headless integrations (below).
+
+### `POST /api/ws-ticket`
+
+Exchange an API key or OIDC session for a **single-use, short-lived** WebSocket ticket. Requires an authenticated identity with **operator** role or higher.
+
+```
+POST /api/ws-ticket
+Authorization: Bearer <api-key>
+```
+
+```json
+{ "ticket": "wst_1a2b3c..." }
+```
+
+The ticket is valid for 30 seconds, may be used once, and inherits the caller's role. Present it on the WebSocket as `/ws/{id}?ticket=<ticket>`, or on the built-in client as `/client/{id}?ticket=<ticket>` (the page GET does not consume it; the WebSocket does).
+
+### Headless API integration
+
+When the browser has no rustguac login of its own (no OIDC cookie), a backend that holds an API key can still hand off a ready-to-open session without exposing that key to the browser:
+
+1. `POST /api/sessions` (Bearer API key) to create the session.
+2. `POST /api/ws-ticket` (Bearer API key) to mint a ticket.
+3. Send the browser to `client_url?ticket=<ticket>` (i.e. `/client/{id}?ticket=wst_...`).
+
+The single-use, 30-second ticket is safe to place in a URL; the durable API key never leaves the backend. Because guacd drops a session whose client has not attached within ~15 seconds, mint the ticket and open the browser promptly after creating the session (on a reload, mint a fresh ticket).
+
+### Custom clients
+
+To build your own client, open the WebSocket at `ws_url` with the `guacamole` sub-protocol and a `?ticket=<ticket>` query parameter, then speak the [Guacamole protocol](https://guacamole.apache.org/doc/gug/guacamole-protocol.html). This is the same endpoint the built-in client uses.
 
 ## Recordings
 
@@ -426,7 +508,7 @@ Create a connection entry. The body includes a `name` field plus all entry field
 
 | Field | Type | Used by | Description |
 |-------|------|---------|-------------|
-| `type` | string | All | `ssh`, `rdp`, `vnc`, or `web` |
+| `type` | string | All | `ssh`, `rdp`, `vnc`, `spice`, `proxmox`, `web`, or `vdi` |
 | `hostname` | string | SSH, RDP, VNC | Target hostname or IP |
 | `port` | integer | SSH, RDP, VNC | Target port |
 | `username` | string | SSH, RDP | Username |
@@ -448,6 +530,8 @@ Create a connection entry. The body includes a `name` field plus all entry field
 | `display_name` | string | All | Friendly display name (shown as banner) |
 | `prompt_credentials` | boolean | All | Prompt user for credentials at connect time |
 | `jump_hosts` | array | All | Multi-hop SSH tunnel chain (same format as session creation) |
+
+For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed under [`POST /api/sessions`](#post-apisessions) apply here too. The `proxmox_token_secret` is write-only: it is never returned by the read endpoints (a `has_proxmox_token_secret` boolean indicates whether one is stored), and it is preserved on update when omitted.
 
 ### `PUT /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 
