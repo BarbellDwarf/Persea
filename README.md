@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/github/license/sol1/rustguac)](LICENSE)
 [![Docker](https://img.shields.io/docker/pulls/sol1/rustguac)](https://hub.docker.com/r/sol1/rustguac)
 
-A lightweight Rust replacement for the Apache Guacamole Java webapp. Browser-based SSH, RDP, VNC, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
+A lightweight Rust replacement for the Apache Guacamole Java webapp. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
 
 No Java. No Tomcat. Single binary + guacd.
 
@@ -25,6 +25,8 @@ guacd (C, from guacamole-server)
     +---> SSH server
     +---> RDP server
     +---> VNC server
+    +---> SPICE server (libvirt/QEMU displays)
+    +---> Proxmox VE VM console (SPICE via the PVE spiceproxy API)
     +---> Xvnc + Chromium (web browser sessions)
     +---> Docker container + xrdp (VDI desktop sessions)
 ```
@@ -38,37 +40,40 @@ guacd (C, from guacamole-server)
 | **SSH** | Browser-based terminal with password, private key, or ephemeral keypair auth. SFTP file transfer. |
 | **RDP** | Windows/Linux RDP with auto-fit resize, Kerberos NLA, RemoteApp/RAIL, H.264 passthrough, GFX pipeline. |
 | **VNC** | Connect to any VNC server (KVM/IPMI consoles, remote desktops, VM displays). |
+| **SPICE** | Direct SPICE displays (libvirt/QEMU consoles) with TLS, CA verification, certificate-subject pinning, and SPICE-proxy support. |
+| **Proxmox VE** | VM consoles brokered through the Proxmox API. One-time SPICE tickets fetched just-in-time at connect (only the API token is stored), node auto-detected from the VM ID, and SSH-tunnel aware. |
 | **Web** | Headless Chromium on Xvnc with native autofill, domain allowlisting, login script automation. |
 | **VDI** | Ephemeral Docker desktop containers per user. Persist after disconnect, auto-cleanup on idle. |
 
 ### Security & authentication
 
-- **OIDC single sign-on** — Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
-- **4-tier role system** — admin, poweruser, operator, viewer with OIDC group mapping
-- **API key auth** — SHA-256 hashed keys with IP allowlists and expiry
-- **Vault-backed connections** — credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
-- **TLS everywhere** — HTTPS for clients, TLS between rustguac and guacd
-- **CIDR allowlists** — per-protocol network restrictions for session targets
-- **Per-entry clipboard control** — disable copy and/or paste for data loss prevention
-- **Rate limiting** — per-IP, per-endpoint via tower_governor
-- **Session recording** — Guacamole format with playback UI, disk rotation, per-entry limits
+- **OIDC single sign-on**: Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
+- **4-tier role system**: admin, poweruser, operator, viewer with OIDC group mapping
+- **API key auth**: SHA-256 hashed keys with IP allowlists and expiry
+- **Vault-backed connections**: credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
+- **TLS everywhere**: HTTPS for clients, TLS between rustguac and guacd
+- **CIDR allowlists**: per-protocol network restrictions for session targets
+- **Per-entry clipboard control**: disable copy and/or paste for data loss prevention
+- **Rate limiting**: per-IP, per-endpoint via tower_governor
+- **Session recording**: Guacamole format with playback UI, disk rotation, per-entry limits
 
 ### Connectivity
 
-- **Multi-hop SSH tunnels** — chain jump hosts/bastions to reach isolated networks (all session types)
-- **Session sharing** — share tokens for read-only or collaborative access
-- **Encrypted file transfer** — LUKS-encrypted per-session drive storage (RDP), SFTP (SSH)
-- **Credential variables** — shared credentials across connections entries
+- **Multi-hop SSH tunnels**: chain jump hosts/bastions to reach isolated networks (all session types, including the Proxmox API and console hops)
+- **Session sharing**: share tokens for read-only or collaborative access
+- **Headless API integration**: create a session over the REST API and hand a browser a ready-to-open URL via a single-use WebSocket ticket, with no OIDC login and no API key in the browser (see [Connecting to a session](docs/api.md#connecting-to-a-session))
+- **Encrypted file transfer**: LUKS-encrypted per-session drive storage (RDP), SFTP (SSH)
+- **Credential variables**: shared credentials across connections entries
 
 ### VDI desktop containers
 
-- **Docker-based** — one container per user, deterministic naming, BYO image
-- **Persist after disconnect** — reconnect to the same desktop within idle timeout
-- **Logout detection** — desktop logout stops the container, tab close preserves it
-- **Session thumbnails** — live preview in the connections, click to reconnect
-- **Persistent home directories** — bind-mounted user data survives container restarts
-- **Per-entry resource limits** — CPU, memory, idle timeout per connections entry
-- **VdiDriver trait** — extensible for downstream forks (Nomad, Proxmox, cloud)
+- **Docker-based**: one container per user, deterministic naming, BYO image
+- **Persist after disconnect**: reconnect to the same desktop within idle timeout
+- **Logout detection**: desktop logout stops the container, tab close preserves it
+- **Session thumbnails**: live preview in the connections, click to reconnect
+- **Persistent home directories**: bind-mounted user data survives container restarts
+- **Per-entry resource limits**: CPU, memory, idle timeout per connections entry
+- **VdiDriver trait**: extensible for downstream forks (Nomad, Proxmox, cloud)
 
 ### UI
 
@@ -141,24 +146,24 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 ## Documentation
 
 ### Getting started
-- [Installation](docs/installation.md) — Debian packages, Docker, bare-metal, development builds
-- [Configuration](docs/configuration.md) — TOML config reference with all sections
-- [Deployment Guide](docs/deployment-guide.md) — step-by-step production setup
+- [Installation](docs/installation.md): Debian packages, Docker, bare-metal, development builds
+- [Configuration](docs/configuration.md): TOML config reference with all sections
+- [Deployment Guide](docs/deployment-guide.md): step-by-step production setup
 
 ### Features
-- [Roles & Access Control](docs/roles-and-access-control.md) — OIDC, roles, group mappings, API tokens
-- [Web Browser Sessions](docs/web-sessions.md) — autofill, domain allowlisting, login scripts
-- [VDI Desktop Containers](docs/vdi.md) — Docker desktops, image requirements, persistent homes
-- [RDP Video Performance](docs/rdp-video-performance.md) — H.264 passthrough, GFX pipeline, xrdp tuning
-- [Credential Variables](docs/credential-variables.md) — shared credentials across entries
-- [Reports](docs/reports.md) — session analytics, history, CSV export
+- [Roles & Access Control](docs/roles-and-access-control.md): OIDC, roles, group mappings, API tokens
+- [Web Browser Sessions](docs/web-sessions.md): autofill, domain allowlisting, login scripts
+- [VDI Desktop Containers](docs/vdi.md): Docker desktops, image requirements, persistent homes
+- [RDP Video Performance](docs/rdp-video-performance.md): H.264 passthrough, GFX pipeline, xrdp tuning
+- [Credential Variables](docs/credential-variables.md): shared credentials across entries
+- [Reports](docs/reports.md): session analytics, history, CSV export
 
 ### Integration & reference
-- [Integrations](docs/integrations.md) — Vault, LUKS drives, SSH tunnels, Kerberos, HAProxy, Knocknoc
-- [NetBox](docs/netbox.md) — connections sync via custom fields and webhooks
-- [Security](docs/security.md) — TLS, rate limiting, headers, audit logging, hardening
-- [API Reference](docs/api.md) — REST API endpoints
-- [Migration from Apache Guacamole](docs/migration.md) — MySQL/MariaDB to Vault
+- [Integrations](docs/integrations.md): Vault, LUKS drives, SSH tunnels, Kerberos, HAProxy, Knocknoc
+- [NetBox](docs/netbox.md): connections sync via custom fields and webhooks
+- [Security](docs/security.md): TLS, rate limiting, headers, audit logging, hardening
+- [API Reference](docs/api.md): REST API endpoints, the session connection flow, and headless ws-ticket integration
+- [Migration from Apache Guacamole](docs/migration.md): MySQL/MariaDB to Vault
 
 ## Commercial support
 
@@ -166,4 +171,4 @@ Commercial support for rustguac is available from [Sol1](https://www.sol1.com.au
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) for details.
+Apache License 2.0. See [LICENSE](LICENSE) for details.
