@@ -9666,10 +9666,10 @@ index 00000000..f6638394
 +
 diff --git a/src/protocols/spice/display.c b/src/protocols/spice/display.c
 new file mode 100644
-index 00000000..c00e0e7e
+index 00000000..55970c69
 --- /dev/null
 +++ b/src/protocols/spice/display.c
-@@ -0,0 +1,619 @@
+@@ -0,0 +1,646 @@
 +/*
 + * Licensed to the Apache Software Foundation (ASF) under one
 + * or more contributor license agreements.  See the NOTICE file
@@ -9910,6 +9910,17 @@ index 00000000..c00e0e7e
 +    int written = 0;
 +    int index = 0;
 +
++    /* Count active display channels. Multiple channels means each channel's
++     * surface is a single monitor (e.g. a Windows multi-QXL guest); a single
++     * channel may instead carry several monitor regions within one combined
++     * surface (e.g. a Linux multi-head QXL). These need opposite positioning. */
++    int active = 0;
++    for (int i = 0; i < GUAC_SPICE_MAX_MONITORS; i++) {
++        guac_spice_display_state* d = &spice_client->displays[i];
++        if (d->channel != NULL && d->data != NULL && d->width > 0 && d->height > 0)
++            active++;
++    }
++
 +    json[pos++] = '{';
 +
 +    for (int i = 0; i < GUAC_SPICE_MAX_MONITORS; i++) {
@@ -9919,8 +9930,24 @@ index 00000000..c00e0e7e
 +                || display->width <= 0 || display->height <= 0)
 +            continue;
 +
-+        /* Prefer the guest's actual monitor regions within this channel's
-+         * surface, but only once a surface exists to validate them against */
++        /* Multiple display channels: each channel's surface IS one monitor,
++         * placed at its composited origin (exactly where the compositor blits
++         * it). The guest's per-channel monitor x/y describe its OWN desktop
++         * arrangement, which need not match our left-to-right tiling and can
++         * even fall outside the channel's own surface — adding them on top of
++         * the origin sends a rearranged secondary head far off-canvas with a
++         * clamped sliver width. So publish the whole surface at the origin. */
++        if (active > 1) {
++            int next = guac_spice_layout_append(json, pos, sizeof(json),
++                    written, index, display->origin_x, display->origin_y,
++                    display->width, display->height);
++            if (next >= 0) { pos = next; written++; index++; }
++            continue;
++        }
++
++        /* Single display channel: its combined surface may itself hold several
++         * monitor regions — split it using the guest-reported regions, which in
++         * this case ARE offsets within this one surface. */
 +        GArray* monitors = NULL;
 +        g_object_get(SPICE_DISPLAY_CHANNEL(display->channel), "monitors",
 +                &monitors, NULL);
