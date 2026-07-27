@@ -19,6 +19,19 @@
         }
         .main { flex: 1; min-width: 0; }
 
+        /* Compact "open in new window" companion to the Connect button — a small
+           icon, not a full-size button */
+        .btn-connect-win {
+            margin-left: var(--s-1);
+            min-width: 0; width: auto; flex: none;
+            padding: 0 var(--s-1);
+            font-size: var(--fz-md); line-height: 1;
+            vertical-align: middle;
+        }
+        /* Keep Connect + its icon sibling on one line, same centerline */
+        .connect-cell { white-space: nowrap; }
+        .connect-cell .btn-connect { vertical-align: middle; }
+
         .sidebar-header {
             display: flex; align-items: center; gap: var(--s-2);
             margin-bottom: var(--s-3); padding-bottom: var(--s-2);
@@ -1960,7 +1973,8 @@
                 html += '<td>' + highlight(r.host || '', tokens) + '</td>';
                 html += '<td>' + userCol + '</td>';
                 html += '<td><span class="search-folder-cell"><span class="folder-scope">' + scopeIcon + '</span> ' + highlight(r.folderPath, tokens) + '</span></td>';
-                html += '<td><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">' + connectLabel + '</button></td>';
+                html += '<td class="connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">' + connectLabel + '</button>'
+                    + '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(r.scope) + '" data-folder="' + escapeAttr(r.folderPath) + '">&#x29c9;</button></td>';
                 html += '<td><a href="#" class="search-open-folder" data-open-scope="' + escapeAttr(r.scope) + '" data-open-folder="' + escapeAttr(r.folderPath) + '" title="Open this folder">↗ open folder</a></td>';
                 html += '</tr>';
             });
@@ -2121,7 +2135,8 @@
                 if (needsPrompt) userCol += ' <span style="color:#888;font-size:0.8em" title="Credentials will be prompted at connect time">[prompt]</span>';
                 html += '<td>' + userCol + '</td>';
                 var connectLabel = needsPrompt ? 'Login...' : 'Connect';
-                html += '<td><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">' + connectLabel + '</button></td>';
+                html += '<td class="connect-cell"><button class="btn-connect" data-connect="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">' + connectLabel + '</button>'
+                    + '<button class="btn-connect btn-connect-win" title="Open in a new window" data-connect-win="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">&#x29c9;</button></td>';
                 if (isAdmin) {
                     html += '<td><button class="btn-small" data-edit-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '" data-type="' + escapeAttr(e.session_type) + '">edit</button></td>';
                     html += '<td><button class="btn-small" data-clone-entry="' + escapeAttr(e.name) + '" data-scope="' + escapeAttr(scope) + '" data-folder="' + escapeAttr(folder) + '">clone</button></td>';
@@ -2147,10 +2162,19 @@
         // Connect to an entry (with optional credential prompt)
         var pendingConnect = null; // { scope, folder, name, btn }
 
-        function doConnect(scope, folder, name, btn, extraBody) {
+        function doConnect(scope, folder, name, btn, extraBody, newWindow) {
+            var isWinBtn = !!(btn.getAttribute && btn.getAttribute('data-connect-win'));
             btn.disabled = true;
-            btn.textContent = 'Connecting...';
+            if (!isWinBtn) btn.textContent = 'Connecting...';
             clearError();
+            // A window opened AFTER the async connect fetch is popup-blocked (no
+            // user gesture), so open it synchronously now (we are still inside the
+            // click gesture) and navigate it once the session exists.
+            var targetWin = null;
+            if (newWindow) {
+                targetWin = window.open('', '_blank',
+                    'width=1280,height=800,menubar=no,toolbar=no,location=no,status=no');
+            }
             var body = extraBody || {};
             // Send browser dimensions so RDP sessions start at correct resolution
             var bw = window.innerWidth, bh = window.innerHeight;
@@ -2180,9 +2204,11 @@
             })
             .then(function(data) {
                 var url = data.client_url + '?name=' + encodeURIComponent(name);
-                window.open(url, '_blank');
+                if (targetWin && !targetWin.closed) targetWin.location.href = url;
+                else window.open(url, '_blank');
             })
             .catch(function(err) {
+                if (targetWin && !targetWin.closed) targetWin.close();
                 if (err.message === 'missing_credentials') {
                     showError('Missing credentials: ' + (err.missing || []).join(', ') + '. Set them in My Credentials (⚙ menu).');
                     openMyCredentials();
@@ -2192,12 +2218,12 @@
             })
             .finally(function() {
                 btn.disabled = false;
-                btn.textContent = 'Connect';
+                if (!isWinBtn) btn.textContent = 'Connect';
             });
         }
 
-        function showCredPrompt(entry, scope, folder, btn) {
-            pendingConnect = { scope: scope, folder: folder, name: entry.name, btn: btn };
+        function showCredPrompt(entry, scope, folder, btn, newWindow) {
+            pendingConnect = { scope: scope, folder: folder, name: entry.name, btn: btn, newWindow: !!newWindow };
             var label = entry.display_name || entry.name;
             document.getElementById('cred-modal-title').textContent = 'Credentials for ' + label;
             var isRdp = entry.session_type === 'rdp';
@@ -2223,7 +2249,8 @@
             document.getElementById('cred-modal').classList.remove('active');
             if (pendingConnect && pendingConnect.btn) {
                 pendingConnect.btn.disabled = false;
-                pendingConnect.btn.textContent = 'Connect';
+                if (!pendingConnect.btn.getAttribute('data-connect-win'))
+                    pendingConnect.btn.textContent = 'Connect';
             }
             pendingConnect = null;
         });
@@ -2241,7 +2268,7 @@
             var d = document.getElementById('cred-domain').value.trim();
             if (d) body.domain = d;
             document.getElementById('cred-modal').classList.remove('active');
-            doConnect(pendingConnect.scope, pendingConnect.folder, pendingConnect.name, pendingConnect.btn, body);
+            doConnect(pendingConnect.scope, pendingConnect.folder, pendingConnect.name, pendingConnect.btn, body, pendingConnect.newWindow);
             pendingConnect = null;
         });
 
@@ -2264,8 +2291,9 @@
                 return;
             }
 
-            if (btn.getAttribute('data-connect')) {
-                var name = btn.getAttribute('data-connect');
+            if (btn.getAttribute('data-connect') || btn.getAttribute('data-connect-win')) {
+                var newWindow = !!btn.getAttribute('data-connect-win');
+                var name = btn.getAttribute('data-connect') || btn.getAttribute('data-connect-win');
                 var scope = btn.getAttribute('data-scope');
                 var folder = btn.getAttribute('data-folder');
                 clearError();
@@ -2290,9 +2318,9 @@
                 // Prompt for credentials if prompt_credentials is set or no stored creds
                 // (RDP and SSH entries without passwords/keys)
                 if (entry && (entry.prompt_credentials || !entry.has_credentials) && entry.session_type !== 'web' && entry.session_type !== 'vdi' && entry.session_type !== 'proxmox') {
-                    showCredPrompt(entry, scope, folder, btn);
+                    showCredPrompt(entry, scope, folder, btn, newWindow);
                 } else {
-                    doConnect(scope, folder, name, btn);
+                    doConnect(scope, folder, name, btn, undefined, newWindow);
                 }
                 return;
             }
