@@ -635,6 +635,9 @@
                 // windows read monitorLayout[index] each frame, so no per-window
                 // update is needed here.
                 if (typeof renderMonitorControls === 'function') renderMonitorControls();
+                // Re-crop/scale the main window to monitor 0 now that the layout
+                // (and hence which region the main window shows) may have changed.
+                if (typeof scaleDisplay === 'function') scaleDisplay();
             };
 
             // ── Receive clipboard from remote ──
@@ -849,12 +852,18 @@
                     return;
                 }
                 win.document.title = 'Monitor ' + (index + 1);
-                win.document.body.style.cssText = 'margin:0;background:#000;overflow:hidden;cursor:none;';
+                win.document.body.style.cssText = 'margin:0;background:#000;overflow:hidden;';
                 var canvas = win.document.createElement('canvas');
-                canvas.style.cssText = 'display:block;width:100vw;height:100vh;';
+                // Stretch the monitor to fill the popup window. The mouse maps
+                // from the canvas's live on-screen rect (getBoundingClientRect),
+                // so whatever size the window is, clicks map correctly; the guest
+                // is asked (via sendSize below) to adopt the window's resolution,
+                // which keeps the aspect ratio right.
+                canvas.style.cssText = 'display:block;width:100%;height:100%;';
                 win.document.body.appendChild(canvas);
                 var ctx = canvas.getContext('2d');
-                var rec = { win: win, canvas: canvas, ctx: ctx, running: true, mouse: null, keyboard: null };
+                var rec = { win: win, canvas: canvas, ctx: ctx, running: true,
+                            mouse: null, keyboard: null };
                 monitorWindows[index] = rec;
 
                 // Ask the server for this monitor at the window's inner size
@@ -868,37 +877,102 @@
                 client.sendSize(reqW, reqH, index, 0);
 
                 // Per-frame blit of this monitor's region from the combined
-                // framebuffer (the default layer's canvas).
+                // framebuffer (the default layer's canvas). During a resize the
+                // client can briefly hold a new layout rect while the source
+                // canvas is still the old size (or vice versa); blitting the
+                // out-of-range region then produces garbage. Guard by only
+                // drawing the portion of this monitor's rect that actually lies
+                // within the current source canvas, and skip the frame entirely
+                // if the layout and source are momentarily inconsistent.
                 var srcLayer = client.getDisplay().getDefaultLayer();
                 (function frame() {
                     if (!rec.running || win.closed) return;
                     win.requestAnimationFrame(frame);
                     var rect = monitorLayout[index];
-                    if (!rect) return;
+                    if (!rect || rect.width <= 0 || rect.height <= 0) return;
                     var src = srcLayer && srcLayer.getCanvas ? srcLayer.getCanvas() : null;
-                    if (!src) return;
+                    if (!src || !src.width || !src.height) return;
+                    if (rect.left < 0 || rect.top < 0) return;
+
+                    // Portion of this monitor's rect available in the source now.
+                    var sw = Math.min(rect.width, src.width - rect.left);
+                    var sh = Math.min(rect.height, src.height - rect.top);
+                    if (sw <= 0 || sh <= 0) return; // rect not yet within source
+
                     if (canvas.width !== rect.width || canvas.height !== rect.height) {
                         canvas.width = rect.width;
                         canvas.height = rect.height;
                     }
                     try {
-                        ctx.drawImage(src, rect.left, rect.top, rect.width, rect.height,
-                            0, 0, rect.width, rect.height);
+                        ctx.drawImage(src, rect.left, rect.top, sw, sh, 0, 0, sw, sh);
                     } catch (e) { /* source not ready this frame */ }
                 })();
 
-                // Mouse: translate window coords -> monitor native res -> combined
-                // framebuffer offset, and send without display-scale conversion.
-                var mouse = new Guacamole.Mouse(win.document.body);
-                mouse.onEach(['mousedown', 'mousemove', 'mouseup'], function(e) {
+                // Re-fit on popup resize and, after a short debounce, ask the
+                // server for this monitor at the new size (a resizable guest
+                // adopts it; a fixed-resolution console just keeps scaling to fit).
+                var popResizeTimer = null;
+                win.addEventListener('resize', function() {
+                    if (popResizeTimer) win.clearTimeout(popResizeTimer);
+                    popResizeTimer = win.setTimeout(function() {
+                        var w = (win.innerWidth || 0) & ~0x7;
+                        var h = win.innerHeight || 0;
+                        if (w >= 8 && h >= 8) client.sendSize(w, h, index, 0);
+                    }, 300);
+                });
+
+                // Mouse: map the pointer from popup-window pixels to this
+                // monitor's native pixels using the canvas's LIVE on-screen
+                // geometry (getBoundingClientRect), then offset into the combined
+                // framebuffer. Reading the live rect each event avoids any stale
+                // cached scale/offset. Sent raw; guacd maps the combined
+                // coordinate back to this head.
+                // Native pointer handling (bypasses Guacamole.Mouse, which does
+                // not track the X axis correctly in a popup window). Map the raw
+                // client coordinate into the canvas's live on-screen rect as a
+                // 0..1 fraction, then into this monitor's native pixels and the
+                // combined framebuffer. Fraction-based, so it self-recalibrates
+                // on any resize.
+                function popupPointer(ev) {
                     var rect = monitorLayout[index];
                     if (!rect) return;
-                    var iw = win.innerWidth || rect.width, ih = win.innerHeight || rect.height;
-                    e.state.x = rect.left + e.state.x * (rect.width / iw);
-                    e.state.y = rect.top + e.state.y * (rect.height / ih);
-                    client.sendMouseState(e.state, false);
-                });
-                rec.mouse = mouse;
+                    var cr = canvas.getBoundingClientRect();
+                    var fx = cr.width > 0 ? (ev.clientX - cr.left) / cr.width : 0;
+                    var fy = cr.height > 0 ? (ev.clientY - cr.top) / cr.height : 0;
+                    if (fx < 0) fx = 0; else if (fx > 1) fx = 1;
+                    if (fy < 0) fy = 0; else if (fy > 1) fy = 1;
+                    client.sendMouseState(new Guacamole.Mouse.State({
+                        x: rect.left + fx * rect.width,
+                        y: rect.top + fy * rect.height,
+                        left:   (ev.buttons & 1) !== 0,
+                        middle: (ev.buttons & 4) !== 0,
+                        right:  (ev.buttons & 2) !== 0,
+                        up: false, down: false
+                    }), false);
+                    ev.preventDefault();
+                }
+                canvas.addEventListener('mousedown', popupPointer);
+                canvas.addEventListener('mousemove', popupPointer);
+                canvas.addEventListener('mouseup', popupPointer);
+                canvas.addEventListener('contextmenu', function(ev) { ev.preventDefault(); });
+                // Scroll wheel -> momentary up/down button.
+                canvas.addEventListener('wheel', function(ev) {
+                    var rect = monitorLayout[index];
+                    if (!rect) return;
+                    var cr = canvas.getBoundingClientRect();
+                    var fx = cr.width > 0 ? (ev.clientX - cr.left) / cr.width : 0;
+                    var fy = cr.height > 0 ? (ev.clientY - cr.top) / cr.height : 0;
+                    if (fx < 0) fx = 0; else if (fx > 1) fx = 1;
+                    if (fy < 0) fy = 0; else if (fy > 1) fy = 1;
+                    var base = { x: rect.left + fx * rect.width, y: rect.top + fy * rect.height,
+                                 left: false, middle: false, right: false, up: false, down: false };
+                    var dir = ev.deltaY < 0 ? 'up' : 'down';
+                    base[dir] = true;
+                    client.sendMouseState(new Guacamole.Mouse.State(base), false);
+                    base[dir] = false;
+                    client.sendMouseState(new Guacamole.Mouse.State(base), false);
+                    ev.preventDefault();
+                }, { passive: false });
 
                 // Keyboard: forward to the same client (combined session).
                 var keyboard = new Guacamole.Keyboard(win.document);
@@ -1694,18 +1768,58 @@
                 client.sendMouseState(e.state, true);
             });
 
-            // Auto-scale display
+            // Auto-scale display. When a multi-monitor layout is active, the
+            // main window shows only monitor 0 (always at the origin of the
+            // combined framebuffer); the other heads are available as pop-out
+            // windows via the Controls sidebar. Otherwise the whole framebuffer
+            // is scaled to fit.
             function scaleDisplay() {
                 var display = client.getDisplay();
                 var dw = display.getWidth();
                 var dh = display.getHeight();
+                if (dw <= 0 || dh <= 0) return;
+
                 var anyPanelOpen = panelOpen || filePanelOpen;
-                if (dw > 0 && dh > 0) {
-                    var aw = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
-                    display.scale(Math.min(aw / dw, window.innerHeight / dh));
+                var panelOffset = anyPanelOpen ? 380 : 0;
+                var availW = window.innerWidth - panelOffset;
+                var availH = window.innerHeight;
+                var el = display.getElement();
+
+                var m0 = monitorLayout && monitorLayout['0'];
+                var multimon = m0 && Object.keys(monitorLayout).length > 1
+                        && m0.width > 0 && m0.height > 0;
+
+                if (multimon) {
+                    // Fit monitor 0 into the available area and clip away the
+                    // rest of the combined framebuffer (the other heads).
+                    var factor = Math.min(availW / m0.width, availH / m0.height);
+                    display.scale(factor);
+                    var cw = Math.round(m0.width * factor);
+                    var ch = Math.round(m0.height * factor);
+                    displayEl.style.overflow = 'hidden';
+                    displayEl.style.position = 'absolute';
+                    displayEl.style.width = cw + 'px';
+                    displayEl.style.height = ch + 'px';
+                    displayEl.style.left = (panelOffset + Math.max(0, (availW - cw) / 2)) + 'px';
+                    displayEl.style.top = Math.max(0, (availH - ch) / 2) + 'px';
+                    // Monitor 0 is at combined (0,0); no negative offset needed.
+                    el.style.marginLeft = '0';
+                    el.style.marginTop = '0';
                 }
-                // Offset display to the right when left panel is open
-                displayEl.style.marginLeft = anyPanelOpen ? '380px' : '0';
+                else {
+                    // Single display: scale the whole framebuffer to fit.
+                    display.scale(Math.min(availW / dw, availH / dh));
+                    displayEl.style.overflow = '';
+                    displayEl.style.position = '';
+                    displayEl.style.width = '';
+                    displayEl.style.height = '';
+                    displayEl.style.top = '';
+                    displayEl.style.left = '';
+                    el.style.marginLeft = '';
+                    el.style.marginTop = '';
+                    // Offset display to the right when left panel is open
+                    displayEl.style.marginLeft = anyPanelOpen ? '380px' : '0';
+                }
             }
 
             client.getDisplay().onresize = function() { scaleDisplay(); };
