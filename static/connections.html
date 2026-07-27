@@ -524,6 +524,9 @@
                     <input type="text" id="em-rdp-kdc-url" placeholder="e.g. https://dc.example.com/KdcProxy">
                 </label>
                 <div class="field-hint">Optional. Kerberos Key Distribution Center proxy URL.</div>
+                <label>Monitors <span style="color:var(--text-muted);font-size:0.85em">(RDP Display Control; the host must allow multiple monitors)</span>
+                    <input type="number" id="em-rdp-monitors" min="1" max="4" value="1">
+                </label>
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-rdp-prompt-creds" style="display:inline;width:auto;margin-right:0.4em"> Prompt for credentials at connect time
                 </label>
@@ -3196,6 +3199,7 @@
                     document.getElementById('em-rdp-ignore-cert').checked = !!entryData.ignore_cert;
                     document.getElementById('em-rdp-auth-pkg').value = entryData.auth_pkg || '';
                     document.getElementById('em-rdp-kdc-url').value = entryData.kdc_url || '';
+                    document.getElementById('em-rdp-monitors').value = entryData.max_monitors || 1;
                     document.getElementById('em-rdp-prompt-creds').checked = !!entryData.prompt_credentials;
                 } else if (type === 'vnc') {
                     document.getElementById('em-vnc-hostname').value = entryData.hostname || '';
@@ -3401,6 +3405,8 @@
                 if (authPkg) entry.auth_pkg = authPkg;
                 var kdcUrl = document.getElementById('em-rdp-kdc-url').value.trim();
                 if (kdcUrl) entry.kdc_url = kdcUrl;
+                var rmon = parseInt(document.getElementById('em-rdp-monitors').value);
+                if (rmon > 1) entry.max_monitors = rmon;
                 if (document.getElementById('em-rdp-prompt-creds').checked) entry.prompt_credentials = true;
             } else if (type === 'vnc') {
                 var h = document.getElementById('em-vnc-hostname').value.trim();

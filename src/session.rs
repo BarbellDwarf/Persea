@@ -916,6 +916,7 @@ impl SessionManager {
                     enable_full_window_drag: req.enable_full_window_drag.unwrap_or(false),
                     force_lossless: req.force_lossless.unwrap_or(false),
                     enable_h264: req.enable_h264.unwrap_or(false),
+                    secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                 }));
                 (
                     params,
@@ -1375,6 +1376,7 @@ impl SessionManager {
                     enable_full_window_drag: false,
                     force_lossless: false,
                     enable_h264: true,
+                    secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                 }));
                 (
                     params,

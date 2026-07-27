@@ -1,0 +1,483 @@
+diff --git a/src/protocols/rdp/channels/disp.c b/src/protocols/rdp/channels/disp.c
+index b6e1c36c..1acad6ed 100644
+--- a/src/protocols/rdp/channels/disp.c
++++ b/src/protocols/rdp/channels/disp.c
+@@ -28,9 +28,13 @@
+ #include <freerdp/event.h>
+ #include <guacamole/client.h>
+ #include <guacamole/mem.h>
++#include <guacamole/protocol.h>
++#include <guacamole/protocol-constants.h>
+ #include <guacamole/rect.h>
++#include <guacamole/socket.h>
+ #include <guacamole/timestamp.h>
+ 
++#include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+ 
+@@ -47,6 +51,7 @@ guac_rdp_disp* guac_rdp_disp_alloc(guac_client* client) {
+     disp->requested_width  = 0;
+     disp->requested_height = 0;
+     disp->reconnect_needed = 0;
++    disp->monitor_count = 0;
+ 
+     return disp;
+ 
+@@ -209,6 +214,143 @@ void guac_rdp_disp_set_size(guac_rdp_disp* disp, guac_rdp_settings* settings,
+ 
+ }
+ 
++/**
++ * The size, in bytes, of the buffer used to build the "multimon-layout" JSON.
++ * A handful of small integer rects, so this fixed bound is sufficient.
++ */
++#define GUAC_RDP_MULTIMON_LAYOUT_SIZE 512
++
++/**
++ * Recomputes the left offset of each active monitor (tiled left-to-right,
++ * top-aligned), clamping and rounding each dimension to comply with the
++ * Display Control channel restrictions, and stores the resulting combined
++ * desktop dimensions as the requested size.
++ */
++static void guac_rdp_disp_recalc(guac_rdp_disp* disp) {
++
++    int left = 0;
++    int max_height = 0;
++
++    for (int i = 0; i < disp->monitor_count; i++) {
++
++        int width  = disp->monitors[i].width;
++        int height = disp->monitors[i].height;
++
++        /* Clamp to the allowed range and round down to a multiple of 16 (RDP
++         * requires even monitor widths; mod-16 also avoids H.264 macroblock
++         * padding artifacts along the bottom/right edges) */
++        if (width  > GUAC_RDP_DISP_MAX_SIZE) width  = GUAC_RDP_DISP_MAX_SIZE;
++        if (height > GUAC_RDP_DISP_MAX_SIZE) height = GUAC_RDP_DISP_MAX_SIZE;
++        width  -= width  % 16;
++        height -= height % 16;
++        if (width  < GUAC_RDP_DISP_MIN_SIZE) width  = GUAC_RDP_DISP_MIN_SIZE;
++        if (height < GUAC_RDP_DISP_MIN_SIZE) height = GUAC_RDP_DISP_MIN_SIZE;
++
++        disp->monitors[i].width  = width;
++        disp->monitors[i].height = height;
++        disp->monitors[i].left   = left;
++
++        left += width;
++        if (height > max_height) max_height = height;
++
++    }
++
++    /* The combined desktop is the bounding box of all monitors */
++    disp->requested_width  = left;
++    disp->requested_height = max_height;
++
++}
++
++/**
++ * Publishes the current monitor layout to the connected client as a JSON
++ * "multimon-layout" parameter on the default layer, so a multi-monitor client
++ * can split the combined framebuffer into per-monitor windows.
++ */
++static void guac_rdp_disp_publish_layout(guac_rdp_disp* disp) {
++
++    guac_client* client = disp->client;
++
++    if (disp->monitor_count <= 0)
++        return;
++
++    char json[GUAC_RDP_MULTIMON_LAYOUT_SIZE];
++    int pos = 0;
++
++    pos += snprintf(json + pos, sizeof(json) - pos, "{");
++    for (int i = 0; i < disp->monitor_count && pos < (int) sizeof(json) - 1; i++) {
++        pos += snprintf(json + pos, sizeof(json) - pos,
++                "%s\"%d\":{\"left\":%d,\"top\":0,\"width\":%d,\"height\":%d}",
++                (i ? "," : ""), i, disp->monitors[i].left,
++                disp->monitors[i].width, disp->monitors[i].height);
++    }
++    if (pos < (int) sizeof(json) - 1)
++        snprintf(json + pos, sizeof(json) - pos, "}");
++
++    guac_protocol_send_set(client->socket, GUAC_DEFAULT_LAYER,
++            GUAC_PROTOCOL_LAYER_PARAMETER_MULTIMON_LAYOUT, json);
++    guac_socket_flush(client->socket);
++
++    guac_client_log(client, GUAC_LOG_DEBUG,
++            "multimon-layout published (%d monitor(s)): %s",
++            disp->monitor_count, json);
++
++}
++
++void guac_rdp_disp_set_monitor(guac_rdp_disp* disp, guac_rdp_settings* settings,
++        freerdp* rdp_inst, int index, int width, int height) {
++
++    if (disp == NULL)
++        return;
++
++    /* Number of monitors permitted (primary plus configured secondaries),
++     * capped at the number of heads supported */
++    int max_monitors = settings->max_secondary_monitors + 1;
++    if (max_monitors > GUAC_RDP_MAX_MONITORS)
++        max_monitors = GUAC_RDP_MAX_MONITORS;
++
++    /* Ensure the primary monitor exists before any secondary is referenced */
++    if (disp->monitor_count < 1)
++        disp->monitor_count = 1;
++
++    /* A positive size adds or updates the monitor at the given index */
++    if (width > 0 && height > 0) {
++
++        /* Ignore out-of-range indexes and refuse to create a gap in the
++         * (contiguous) layout */
++        if (index < 0 || index >= max_monitors || index > disp->monitor_count)
++            return;
++
++        disp->monitors[index].width  = width;
++        disp->monitors[index].height = height;
++
++        /* Grow the active count if this request adds a new monitor */
++        if (index == disp->monitor_count)
++            disp->monitor_count = index + 1;
++
++    }
++
++    /* A non-positive size removes the secondary monitor at the given index,
++     * shifting any monitors to its right down to keep the layout contiguous.
++     * The primary monitor (index 0) cannot be removed. */
++    else {
++
++        if (index <= 0 || index >= disp->monitor_count)
++            return;
++
++        for (int i = index; i < disp->monitor_count - 1; i++)
++            disp->monitors[i] = disp->monitors[i + 1];
++
++        disp->monitor_count--;
++
++    }
++
++    guac_rdp_disp_recalc(disp);
++
++    /* Send the updated layout to the server (and republish to the client) */
++    guac_rdp_disp_update_size(disp, settings, rdp_inst);
++
++}
++
+ void guac_rdp_disp_update_size(guac_rdp_disp* disp,
+         guac_rdp_settings* settings, freerdp* rdp_inst) {
+ 
+@@ -245,29 +387,69 @@ void guac_rdp_disp_update_size(guac_rdp_disp* disp,
+     }
+ 
+     else if (settings->resize_method == GUAC_RESIZE_DISPLAY_UPDATE) {
+-        DISPLAY_CONTROL_MONITOR_LAYOUT monitors[1] = {{
+-            .Flags  = 0x1, /* DISPLAYCONTROL_MONITOR_PRIMARY */
+-            .Left = 0,
+-            .Top = 0,
+-            .Width  = width,
+-            .Height = height,
+-            .PhysicalWidth = 0,
+-            .PhysicalHeight = 0,
+-            .Orientation = 0,
+-            .DesktopScaleFactor = 0,
+-            .DeviceScaleFactor = 0
+-        }};
+-
+-        /* Send display update notification if display channel is connected */
+-        if (disp->disp != NULL) {
+-
+-            guac_client* client = disp->client;
+-            guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
+-
+-            pthread_mutex_lock(&(rdp_client->message_lock));
+-            disp->disp->SendMonitorLayout(disp->disp, 1, monitors);
+-            pthread_mutex_unlock(&(rdp_client->message_lock));
+ 
++        /* Multi-monitor: send the full client-requested monitor layout and
++         * republish it to the client so it can split the combined framebuffer */
++        if (disp->monitor_count > 1) {
++
++            int count = disp->monitor_count;
++            if (count > GUAC_RDP_MAX_MONITORS)
++                count = GUAC_RDP_MAX_MONITORS;
++
++            DISPLAY_CONTROL_MONITOR_LAYOUT monitors[GUAC_RDP_MAX_MONITORS];
++            for (int i = 0; i < count; i++) {
++                monitors[i] = (DISPLAY_CONTROL_MONITOR_LAYOUT) {
++                    .Flags  = (i == 0) ? 0x1 : 0x0, /* PRIMARY on monitor 0 */
++                    .Left = disp->monitors[i].left,
++                    .Top = 0,
++                    .Width  = disp->monitors[i].width,
++                    .Height = disp->monitors[i].height,
++                    .PhysicalWidth = 0,
++                    .PhysicalHeight = 0,
++                    .Orientation = 0,
++                    .DesktopScaleFactor = 0,
++                    .DeviceScaleFactor = 0
++                };
++            }
++
++            if (disp->disp != NULL) {
++                guac_client* client = disp->client;
++                guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
++                pthread_mutex_lock(&(rdp_client->message_lock));
++                disp->disp->SendMonitorLayout(disp->disp, count, monitors);
++                pthread_mutex_unlock(&(rdp_client->message_lock));
++            }
++
++            guac_rdp_disp_publish_layout(disp);
++
++        }
++
++        /* Single monitor */
++        else {
++            DISPLAY_CONTROL_MONITOR_LAYOUT monitors[1] = {{
++                .Flags  = 0x1, /* DISPLAYCONTROL_MONITOR_PRIMARY */
++                .Left = 0,
++                .Top = 0,
++                .Width  = width,
++                .Height = height,
++                .PhysicalWidth = 0,
++                .PhysicalHeight = 0,
++                .Orientation = 0,
++                .DesktopScaleFactor = 0,
++                .DeviceScaleFactor = 0
++            }};
++
++            /* Send display update notification if display channel is connected */
++            if (disp->disp != NULL) {
++
++                guac_client* client = disp->client;
++                guac_rdp_client* rdp_client = (guac_rdp_client*) client->data;
++
++                pthread_mutex_lock(&(rdp_client->message_lock));
++                disp->disp->SendMonitorLayout(disp->disp, 1, monitors);
++                pthread_mutex_unlock(&(rdp_client->message_lock));
++
++            }
+         }
+ 
+     }
+diff --git a/src/protocols/rdp/channels/disp.h b/src/protocols/rdp/channels/disp.h
+index 54fe4ccf..71b74400 100644
+--- a/src/protocols/rdp/channels/disp.h
++++ b/src/protocols/rdp/channels/disp.h
+@@ -43,6 +43,32 @@
+  */
+ #define GUAC_RDP_DISP_UPDATE_INTERVAL 500
+ 
++/**
++ * The maximum number of monitors (primary plus secondaries) supported for a
++ * single RDP connection.
++ */
++#define GUAC_RDP_MAX_MONITORS 4
++
++/**
++ * A single monitor within the client-requested multi-monitor layout.
++ */
++typedef struct guac_rdp_monitor {
++
++    /**
++     * The width and height of this monitor, in pixels.
++     */
++    int width;
++    int height;
++
++    /**
++     * The X offset of this monitor's left edge within the combined desktop, in
++     * pixels (the sum of the widths of all monitors to its left). Monitors are
++     * tiled left-to-right and top-aligned.
++     */
++    int left;
++
++} guac_rdp_monitor;
++
+ /**
+  * Display size update module.
+  */
+@@ -80,6 +106,20 @@ typedef struct guac_rdp_disp {
+      */
+     int reconnect_needed;
+ 
++    /**
++     * The per-monitor layout requested by the client, tiled left-to-right.
++     * monitors[0] is the primary. Only the first monitor_count entries are
++     * valid. Used only when multi-monitor is enabled (max_secondary_monitors
++     * greater than 0).
++     */
++    guac_rdp_monitor monitors[GUAC_RDP_MAX_MONITORS];
++
++    /**
++     * The number of currently-active monitors, or 0 if no multi-monitor
++     * request has been received (single-monitor mode).
++     */
++    int monitor_count;
++
+ } guac_rdp_disp;
+ 
+ /**
+@@ -158,6 +198,37 @@ void guac_rdp_disp_load_plugin(rdpContext* context);
+ void guac_rdp_disp_set_size(guac_rdp_disp* disp, guac_rdp_settings* settings,
+         freerdp* rdp_inst, int width, int height);
+ 
++/**
++ * Adds, resizes, or removes a monitor within the client-requested
++ * multi-monitor layout, then sends the resulting layout to the RDP server via
++ * the Display Control channel (and republishes the layout to the client). A
++ * positive size adds or updates the monitor at the given contiguous index; a
++ * non-positive size removes the (secondary) monitor at that index. The primary
++ * monitor (index 0) cannot be removed. Monitors are tiled left-to-right and
++ * top-aligned; widths are rounded to comply with RDP restrictions.
++ *
++ * @param disp
++ *     The display update module.
++ *
++ * @param settings
++ *     The RDP client settings for the current or pending session.
++ *
++ * @param rdp_inst
++ *     The FreeRDP instance for the current session, or NULL if none.
++ *
++ * @param index
++ *     The contiguous monitor index (0 = primary).
++ *
++ * @param width
++ *     The desired monitor width in pixels, or a non-positive value to remove
++ *     the monitor.
++ *
++ * @param height
++ *     The desired monitor height in pixels.
++ */
++void guac_rdp_disp_set_monitor(guac_rdp_disp* disp, guac_rdp_settings* settings,
++        freerdp* rdp_inst, int index, int width, int height);
++
+ /**
+  * Sends an actual display update request to the RDP server based on previous
+  * calls to guac_rdp_disp_set_size(). If an update was recently sent, the
+diff --git a/src/protocols/rdp/input.c b/src/protocols/rdp/input.c
+index 90b36cee..6cc788c6 100644
+--- a/src/protocols/rdp/input.c
++++ b/src/protocols/rdp/input.c
+@@ -112,12 +112,22 @@ int guac_rdp_user_size_handler(guac_user* user, int width, int height,
+     guac_rdp_settings* settings = rdp_client->settings;
+     freerdp* rdp_inst = rdp_client->rdp_inst;
+ 
+-    /* Convert client pixels to remote pixels */
+-    width  = width  * settings->resolution / user->info.optimal_resolution;
+-    height = height * settings->resolution / user->info.optimal_resolution;
+-
+-    /* Send display update */
+-    guac_rdp_disp_set_size(rdp_client->disp, settings, rdp_inst, width, height);
++    /* Convert client pixels to remote pixels (a non-positive size is a
++     * monitor-close request and is passed through unchanged) */
++    if (width > 0)
++        width  = width  * settings->resolution / user->info.optimal_resolution;
++    if (height > 0)
++        height = height * settings->resolution / user->info.optimal_resolution;
++
++    /* When multi-monitor is enabled, the x_position carries the (contiguous)
++     * monitor index; update that monitor within the layout. Otherwise perform
++     * a plain single-monitor resize. */
++    if (settings->max_secondary_monitors > 0)
++        guac_rdp_disp_set_monitor(rdp_client->disp, settings, rdp_inst,
++                x_position, width, height);
++    else
++        guac_rdp_disp_set_size(rdp_client->disp, settings, rdp_inst,
++                width, height);
+ 
+     return 0;
+ 
+diff --git a/src/protocols/rdp/settings.c b/src/protocols/rdp/settings.c
+index 4bc27a88..41475118 100644
+--- a/src/protocols/rdp/settings.c
++++ b/src/protocols/rdp/settings.c
+@@ -156,6 +156,7 @@ const char* GUAC_RDP_CLIENT_ARGS[] = {
+ 
+     "force-lossless",
+     "normalize-clipboard",
++    "secondary-monitors",
+     NULL
+ };
+ 
+@@ -767,6 +768,13 @@ enum RDP_ARGS_IDX {
+      */
+     IDX_NORMALIZE_CLIPBOARD,
+ 
++    /**
++     * The maximum number of secondary monitors the client may request (in
++     * addition to the primary), enabling RDP multi-monitor. 0 (the default)
++     * disables multi-monitor.
++     */
++    IDX_SECONDARY_MONITORS,
++
+     RDP_ARGS_COUNT
+ };
+ 
+@@ -1307,6 +1315,11 @@ guac_rdp_settings* guac_rdp_parse_args(guac_user* user,
+         settings->resize_method = GUAC_RESIZE_NONE;
+     }
+ 
++    /* Maximum secondary monitors (default 0 = multi-monitor disabled) */
++    settings->max_secondary_monitors =
++        guac_user_parse_args_int(user, GUAC_RDP_CLIENT_ARGS, argv,
++                IDX_SECONDARY_MONITORS, 0);
++
+     /* RDP Graphics Pipeline enable/disable */
+     settings->enable_gfx =
+         !guac_user_parse_args_boolean(user, GUAC_RDP_CLIENT_ARGS, argv,
+diff --git a/src/protocols/rdp/settings.h b/src/protocols/rdp/settings.h
+index 57e3a834..75cc014b 100644
+--- a/src/protocols/rdp/settings.h
++++ b/src/protocols/rdp/settings.h
+@@ -653,11 +653,18 @@ typedef struct guac_rdp_settings {
+      */
+     int recording_write_existing;
+ 
+-    /** 
++    /**
+      * The method to apply when the user's display changes size.
+      */
+     guac_rdp_resize_method resize_method;
+ 
++    /**
++     * The maximum number of secondary monitors the client may request (in
++     * addition to the primary), enabling RDP multi-monitor via the Display
++     * Control channel. 0 disables multi-monitor.
++     */
++    int max_secondary_monitors;
++
+     /**
+      * Whether audio input (microphone) is enabled.
+      */
+diff --git a/src/protocols/rdp/user.c b/src/protocols/rdp/user.c
+index 095686d6..9cd876ef 100644
+--- a/src/protocols/rdp/user.c
++++ b/src/protocols/rdp/user.c
+@@ -41,6 +41,7 @@
+ 
+ #include <pthread.h>
+ #include <stddef.h>
++#include <stdio.h>
+ 
+ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
+ 
+@@ -102,6 +103,17 @@ int guac_rdp_user_join_handler(guac_user* user, int argc, char** argv) {
+         /* Display size change events */
+         user->size_handler = guac_rdp_user_size_handler;
+ 
++        /* Advertise the maximum number of secondary monitors permitted so a
++         * multi-monitor client can offer the right number of monitor windows */
++        if (settings->max_secondary_monitors > 0) {
++            char max_monitors[16];
++            snprintf(max_monitors, sizeof(max_monitors), "%d",
++                    settings->max_secondary_monitors);
++            guac_client_stream_argv(user->client, user->socket, "text/plain",
++                    "secondary-monitors", max_monitors);
++            guac_socket_flush(user->socket);
++        }
++
+         /* Set generic (non-filesystem) file upload handler */
+         user->file_handler = guac_rdp_user_file_handler;
+ 

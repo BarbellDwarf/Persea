@@ -154,6 +154,10 @@ pub struct RdpParams {
     pub force_lossless: bool,
     /// Enable H.264 passthrough. Raw H.264 NAL units sent to browser WebCodecs decoder.
     pub enable_h264: bool,
+    /// Number of secondary monitors to allow (beyond the primary). guacd
+    /// advertises this to the client as `secondary-monitors` and drives RDP
+    /// multi-monitor via the Display Control channel. 0 = single monitor.
+    pub secondary_monitors: u32,
 }
 
 /// Connection parameters — SSH, VNC, or RDP.
@@ -326,6 +330,7 @@ pub async fn connect_and_handshake(
                 "disable-bitmap-caching" => "false".into(),
                 "disable-offscreen-caching" => "false".into(),
                 "resize-method" => "display-update".into(),
+                "secondary-monitors" => p.secondary_monitors.to_string(),
                 "read-only" => "false".into(),
                 "gateway-hostname" => String::new(),
                 "gateway-port" => String::new(),
