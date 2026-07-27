@@ -615,6 +615,8 @@
                     if (!isNaN(secondary)) maxMonitors = secondary + 1;
                     console.log('[rustguac] multimon: server allows ' + maxMonitors
                         + ' monitor(s) (secondary-monitors=' + buf.trim() + ')');
+                    // Refresh the Controls panel's monitor section if it's built.
+                    if (typeof renderMonitorControls === 'function') renderMonitorControls();
                 };
             };
             // Current monitor layout (each monitor's rect within the combined
@@ -716,6 +718,87 @@
             fileTab.addEventListener('click', function() { toggleFilePanel(); });
             document.body.appendChild(fileTab);
 
+            // ── Controls side panel (send-keys now; monitor selection next) ──
+            var controlsTab = document.createElement('div');
+            controlsTab.textContent = '⌨ Controls';
+            controlsTab.title = 'Send key combinations and select monitors';
+            controlsTab.style.cssText = 'position:fixed;left:-1px;top:calc(50% + 120px);transform:translateY(-50%);writing-mode:vertical-rl;background:var(--primary);color:var(--text-on-primary);padding:0.6em 0.3em;font-family:monospace;font-size:0.75em;cursor:pointer;z-index:3001;border-radius:0 4px 4px 0;opacity:0.6;letter-spacing:0.1em;';
+            controlsTab.addEventListener('mouseenter', function() { controlsTab.style.opacity = '1'; });
+            controlsTab.addEventListener('mouseleave', function() { controlsTab.style.opacity = '0.6'; });
+            controlsTab.addEventListener('click', function() { toggleControlsPanel(); });
+            document.body.appendChild(controlsTab);
+
+            var controlsPanel = null, controlsPanelOpen = false;
+
+            // Press each keysym in order, then release in reverse. Used for
+            // combos the browser/OS would otherwise intercept (Ctrl+Alt+Del).
+            function sendKeyCombo(keys) {
+                if (!client) return;
+                for (var i = 0; i < keys.length; i++) client.sendKeyEvent(1, keys[i]);
+                for (var j = keys.length - 1; j >= 0; j--) client.sendKeyEvent(0, keys[j]);
+            }
+
+            // X11 keysyms for the send-keys buttons (Guacamole uses keysyms).
+            var SEND_KEYS = [
+                { label: 'Ctrl+Alt+Del', keys: [0xFFE3, 0xFFE9, 0xFFFF] },
+                { label: 'Ctrl+Alt+Bksp', keys: [0xFFE3, 0xFFE9, 0xFF08] },
+                { label: 'Alt+F4', keys: [0xFFE9, 0xFFC1] },
+                { label: 'Alt+Tab', keys: [0xFFE9, 0xFF09] },
+                { label: 'Win', keys: [0xFFEB] },
+                { label: 'Esc', keys: [0xFF1B] },
+                { label: 'PrtSc', keys: [0xFF61] }
+            ];
+
+            function buildControlsPanel() {
+                if (controlsPanel) return;
+                controlsPanel = document.createElement('div');
+                controlsPanel.style.cssText = 'display:none;position:fixed;top:0;left:0;bottom:0;width:300px;background:var(--bg);border-right:2px solid var(--primary);z-index:3000;font-family:monospace;color:var(--text);flex-direction:column;overflow-y:auto;';
+                controlsPanel.innerHTML =
+                    '<div style="display:flex;align-items:center;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
+                        '<h3 style="margin:0;flex:1;color:var(--primary);font-size:1.1em;">Controls</h3>' +
+                        '<button id="ctrl-close" style="background:none;border:none;color:var(--text-dim);font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
+                    '</div>' +
+                    '<div style="padding:0.8em 1em;">' +
+                        '<div style="color:var(--text-muted);font-size:0.85em;margin-bottom:0.5em;letter-spacing:0.05em;">SEND KEYS</div>' +
+                        '<div id="ctrl-keys" style="display:flex;flex-wrap:wrap;gap:0.4em;"></div>' +
+                    '</div>' +
+                    '<div style="padding:0.8em 1em;border-top:1px solid var(--border);">' +
+                        '<div style="color:var(--text-muted);font-size:0.85em;margin-bottom:0.5em;letter-spacing:0.05em;">MONITORS</div>' +
+                        '<div id="ctrl-monitors"></div>' +
+                    '</div>';
+                document.body.appendChild(controlsPanel);
+                document.getElementById('ctrl-close').addEventListener('click', function() { toggleControlsPanel(); });
+                var keysEl = document.getElementById('ctrl-keys');
+                SEND_KEYS.forEach(function(k) {
+                    var b = document.createElement('button');
+                    b.textContent = k.label;
+                    b.style.cssText = 'padding:0.4em 0.7em;background:var(--input);color:var(--primary);border:1px solid var(--border);font-family:monospace;font-size:0.85em;border-radius:3px;cursor:pointer;';
+                    b.addEventListener('click', function() { sendKeyCombo(k.keys); });
+                    keysEl.appendChild(b);
+                });
+                renderMonitorControls();
+            }
+
+            function toggleControlsPanel() {
+                buildControlsPanel();
+                controlsPanelOpen = !controlsPanelOpen;
+                controlsPanel.style.display = controlsPanelOpen ? 'flex' : 'none';
+                if (controlsPanelOpen) renderMonitorControls();
+            }
+
+            // Monitors section — reflects the server-advertised count (A1). The
+            // per-monitor tick-boxes + request/render wiring land in the next
+            // increment once the guacd resize semantics are confirmed.
+            function renderMonitorControls() {
+                if (!controlsPanel) return;
+                var el = document.getElementById('ctrl-monitors');
+                if (!el) return;
+                if (maxMonitors <= 1)
+                    el.innerHTML = '<div style="color:var(--text-dim);font-size:0.85em;">This connection offers a single monitor.</div>';
+                else
+                    el.innerHTML = '<div style="color:var(--text-dim);font-size:0.85em;">' + maxMonitors + ' monitors available. Per-monitor selection is coming in the next update.</div>';
+            }
+
             // ── Auto-hide side tabs (per-entry autohide_side_tabs) ──
             // When enabled, the Clipboard/Files tabs slide off the left edge
             // when idle and reappear when the pointer nears the left edge.
@@ -725,21 +808,23 @@
                 var sideTabsShown = true, sideTabsHideTimer = null;
                 toggleTab.style.transition = 'left 0.2s ease, opacity 0.2s';
                 fileTab.style.transition = 'left 0.2s ease, opacity 0.2s';
+                controlsTab.style.transition = 'left 0.2s ease, opacity 0.2s';
                 var applySideTabs = function(show) {
                     var l = show ? '-1px' : '-64px';
                     toggleTab.style.left = l;
                     fileTab.style.left = l;
+                    controlsTab.style.left = l;
                     sideTabsShown = show;
                 };
                 var scheduleSideTabsHide = function() {
                     if (sideTabsHideTimer) return; // do not reset an in-flight timer
                     sideTabsHideTimer = setTimeout(function() {
                         sideTabsHideTimer = null;
-                        if (!panelOpen && !filePanelOpen) applySideTabs(false);
+                        if (!panelOpen && !filePanelOpen && !controlsPanelOpen) applySideTabs(false);
                     }, SIDE_HIDE_MS);
                 };
                 document.addEventListener('mousemove', function(e) {
-                    if (panelOpen || filePanelOpen) return; // panels manage tab visibility
+                    if (panelOpen || filePanelOpen || controlsPanelOpen) return; // panels manage tab visibility
                     if (e.clientX <= SIDE_EDGE_PX) {
                         if (sideTabsHideTimer) { clearTimeout(sideTabsHideTimer); sideTabsHideTimer = null; }
                         if (!sideTabsShown) applySideTabs(true);
