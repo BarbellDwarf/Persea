@@ -257,6 +257,11 @@ pub struct AddressBookEntry {
     /// ships a self-signed cluster cert).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub proxmox_verify_tls: Option<bool>,
+    /// Total number of monitors to offer for SPICE/Proxmox multi-monitor
+    /// (default 1 = single monitor). guacd is told `secondary-monitors =
+    /// max_monitors - 1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_monitors: Option<u32>,
 }
 
 impl AddressBookEntry {
@@ -434,6 +439,9 @@ pub struct EntryInfo {
     /// Whether a Proxmox token secret is stored (the secret itself is never
     /// returned; the UI shows "leave blank to keep").
     pub has_proxmox_token_secret: bool,
+    /// Total monitors offered (SPICE/Proxmox multi-monitor); 1 = single.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_monitors: Option<u32>,
 }
 
 impl From<(&str, &AddressBookEntry)> for EntryInfo {
@@ -515,6 +523,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
                 .proxmox_token_secret
                 .as_ref()
                 .is_some_and(|t| !t.is_empty()),
+            max_monitors: e.max_monitors,
         }
     }
 }

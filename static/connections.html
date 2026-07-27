@@ -607,6 +607,9 @@
                         <option value="32">32-bit</option>
                     </select>
                 </label>
+                <label>Monitors <span style="color:var(--text-muted);font-size:0.85em">(the guest must support multiple SPICE heads)</span>
+                    <input type="number" id="em-proxmox-monitors" min="1" max="4" value="1">
+                </label>
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-proxmox-verify-tls" style="display:inline;width:auto;margin-right:0.4em"> Verify the PVE cluster TLS certificate
                 </label>
@@ -3042,6 +3045,7 @@
             document.getElementById('em-proxmox-token-secret').value = '';
             document.getElementById('em-proxmox-token-secret').placeholder = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
             document.getElementById('em-proxmox-color-depth').value = '';
+            document.getElementById('em-proxmox-monitors').value = '1';
             document.getElementById('em-proxmox-verify-tls').checked = false;
             document.getElementById('em-url').value = '';
             document.getElementById('em-banner').value = '';
@@ -3186,6 +3190,7 @@
                     document.getElementById('em-proxmox-node').value = entryData.proxmox_node || '';
                     document.getElementById('em-proxmox-vmid').value = entryData.proxmox_vmid || '';
                     document.getElementById('em-proxmox-color-depth').value = entryData.color_depth ? String(entryData.color_depth) : '';
+                    document.getElementById('em-proxmox-monitors').value = entryData.max_monitors || 1;
                     document.getElementById('em-proxmox-verify-tls').checked = !!entryData.proxmox_verify_tls;
                     document.getElementById('em-proxmox-token-id').value = entryData.proxmox_token_id || '';
                     // Secret is never returned; show a hint if one is stored.
@@ -3413,6 +3418,8 @@
                 if (psec) entry.proxmox_token_secret = psec;
                 var pcd = document.getElementById('em-proxmox-color-depth').value;
                 if (pcd) entry.color_depth = parseInt(pcd);
+                var pmon = parseInt(document.getElementById('em-proxmox-monitors').value);
+                if (pmon > 1) entry.max_monitors = pmon;
                 entry.proxmox_verify_tls = document.getElementById('em-proxmox-verify-tls').checked;
             } else if (type === 'web') {
                 var url = document.getElementById('em-url').value.trim();

@@ -137,6 +137,7 @@ pub async fn cmd_import_guacamole(
             proxmox_token_id: None,
             proxmox_token_secret: None,
             proxmox_verify_tls: None,
+            max_monitors: None,
         };
 
         // Place the entry into a subfolder matching its parent group path.
@@ -742,6 +743,7 @@ mod tests {
             proxmox_token_id: None,
             proxmox_token_secret: None,
             proxmox_verify_tls: None,
+            max_monitors: None,
         };
         let mut entries = vec![
             (("".into(), "web".into()), entry()),

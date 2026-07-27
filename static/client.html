@@ -605,6 +605,8 @@
             // Max monitors the server allows, delivered via a "secondary-monitors"
             // argv stream. secondary-monitors = N means N+1 monitors total.
             var maxMonitors = 1;
+            var monitorLayout = {};   // index -> {left, top, width, height} in the combined framebuffer
+            var monitorWindows = {};  // index -> { win, canvas, ctx, mouse, keyboard, running }
             client.onargv = function(stream, mimetype, name) {
                 var reader = new Guacamole.StringReader(stream);
                 var buf = '';
@@ -623,11 +625,16 @@
             // framebuffer), JSON via a "multimon-layout" set param.
             client.onmultimonlayout = function(layer, value) {
                 try {
-                    var layout = JSON.parse(value);
-                    console.log('[rustguac] multimon-layout:', layout);
+                    monitorLayout = JSON.parse(value);
                 } catch (e) {
                     console.warn('[rustguac] multimon-layout parse error:', e, value);
+                    return;
                 }
+                console.log('[rustguac] multimon-layout:', monitorLayout);
+                // Reflect the newly-active monitors in the Controls panel. Open
+                // windows read monitorLayout[index] each frame, so no per-window
+                // update is needed here.
+                if (typeof renderMonitorControls === 'function') renderMonitorControls();
             };
 
             // ── Receive clipboard from remote ──
@@ -786,17 +793,135 @@
                 if (controlsPanelOpen) renderMonitorControls();
             }
 
-            // Monitors section — reflects the server-advertised count (A1). The
-            // per-monitor tick-boxes + request/render wiring land in the next
-            // increment once the guacd resize semantics are confirmed.
+            // Monitors section — one tick-box per allowed monitor. Monitor 1 is
+            // the primary (always on, in this window). Ticking a secondary opens
+            // it in its own window; monitors must stay contiguous, so monitor N
+            // can only be toggled when monitor N-1 is active.
             function renderMonitorControls() {
                 if (!controlsPanel) return;
                 var el = document.getElementById('ctrl-monitors');
                 if (!el) return;
-                if (maxMonitors <= 1)
+                if (maxMonitors <= 1) {
                     el.innerHTML = '<div style="color:var(--text-dim);font-size:0.85em;">This connection offers a single monitor.</div>';
-                else
-                    el.innerHTML = '<div style="color:var(--text-dim);font-size:0.85em;">' + maxMonitors + ' monitors available. Per-monitor selection is coming in the next update.</div>';
+                    return;
+                }
+                el.innerHTML = '';
+                var isActive = function(i) { return i === 0 || !!monitorWindows[i]; };
+                for (var i = 0; i < maxMonitors; i++) {
+                    (function(idx) {
+                        var row = document.createElement('label');
+                        row.style.cssText = 'display:flex;align-items:center;gap:0.5em;padding:0.25em 0;font-size:0.9em;cursor:pointer;';
+                        var cb = document.createElement('input');
+                        cb.type = 'checkbox';
+                        cb.checked = isActive(idx);
+                        cb.disabled = (idx === 0) || !isActive(idx - 1);
+                        cb.addEventListener('change', function() { toggleMonitor(idx, cb.checked); });
+                        row.appendChild(cb);
+                        var span = document.createElement('span');
+                        span.textContent = (idx === 0) ? 'Monitor 1 (primary)' : ('Monitor ' + (idx + 1));
+                        row.appendChild(span);
+                        el.appendChild(row);
+                    })(i);
+                }
+                var hint = document.createElement('div');
+                hint.style.cssText = 'color:var(--text-dim);font-size:0.75em;margin-top:0.4em;';
+                hint.textContent = 'Extra monitors open in their own window. Drag each to a physical display and press F11 to fullscreen.';
+                el.appendChild(hint);
+            }
+
+            function toggleMonitor(index, enable) {
+                if (index === 0) return; // primary is always on, in this window
+                if (enable) openMonitorWindow(index);
+                else closeMonitorWindow(index);
+            }
+
+            // Open a secondary monitor in its own browser window: request the
+            // monitor from the server, blit its region of the combined
+            // framebuffer each frame, and forward mouse/keyboard in combined
+            // coordinates.
+            function openMonitorWindow(index) {
+                if (monitorWindows[index]) return;
+                var win = window.open('', 'rustguac-mon-' + index,
+                    'width=1280,height=800,menubar=no,toolbar=no,location=no,status=no');
+                if (!win) {
+                    alert('Popup blocked. Allow popups for this site to open an extra monitor.');
+                    renderMonitorControls();
+                    return;
+                }
+                win.document.title = 'Monitor ' + (index + 1);
+                win.document.body.style.cssText = 'margin:0;background:#000;overflow:hidden;cursor:none;';
+                var canvas = win.document.createElement('canvas');
+                canvas.style.cssText = 'display:block;width:100vw;height:100vh;';
+                win.document.body.appendChild(canvas);
+                var ctx = canvas.getContext('2d');
+                var rec = { win: win, canvas: canvas, ctx: ctx, running: true, mouse: null, keyboard: null };
+                monitorWindows[index] = rec;
+
+                // Ask the server for this monitor at the window's inner size
+                // (SPICE wants width as a multiple of 8). Contiguous index. Guard
+                // against a not-yet-laid-out popup reporting 0 (a positive size is
+                // required or the server reads it as a monitor-close).
+                var reqW = ((win.innerWidth || 1280) & ~0x7) || 1280;
+                var reqH = win.innerHeight || 800;
+                if (reqW < 8) reqW = 1280;
+                if (reqH < 8) reqH = 800;
+                client.sendSize(reqW, reqH, index, 0);
+
+                // Per-frame blit of this monitor's region from the combined
+                // framebuffer (the default layer's canvas).
+                var srcLayer = client.getDisplay().getDefaultLayer();
+                (function frame() {
+                    if (!rec.running || win.closed) return;
+                    win.requestAnimationFrame(frame);
+                    var rect = monitorLayout[index];
+                    if (!rect) return;
+                    var src = srcLayer && srcLayer.getCanvas ? srcLayer.getCanvas() : null;
+                    if (!src) return;
+                    if (canvas.width !== rect.width || canvas.height !== rect.height) {
+                        canvas.width = rect.width;
+                        canvas.height = rect.height;
+                    }
+                    try {
+                        ctx.drawImage(src, rect.left, rect.top, rect.width, rect.height,
+                            0, 0, rect.width, rect.height);
+                    } catch (e) { /* source not ready this frame */ }
+                })();
+
+                // Mouse: translate window coords -> monitor native res -> combined
+                // framebuffer offset, and send without display-scale conversion.
+                var mouse = new Guacamole.Mouse(win.document.body);
+                mouse.onEach(['mousedown', 'mousemove', 'mouseup'], function(e) {
+                    var rect = monitorLayout[index];
+                    if (!rect) return;
+                    var iw = win.innerWidth || rect.width, ih = win.innerHeight || rect.height;
+                    e.state.x = rect.left + e.state.x * (rect.width / iw);
+                    e.state.y = rect.top + e.state.y * (rect.height / ih);
+                    client.sendMouseState(e.state, false);
+                });
+                rec.mouse = mouse;
+
+                // Keyboard: forward to the same client (combined session).
+                var keyboard = new Guacamole.Keyboard(win.document);
+                keyboard.onkeydown = function(sym) { client.sendKeyEvent(1, sym); };
+                keyboard.onkeyup = function(sym) { client.sendKeyEvent(0, sym); };
+                rec.keyboard = keyboard;
+
+                // Closing the window (or the tab) releases the monitor.
+                win.addEventListener('beforeunload', function() {
+                    if (monitorWindows[index]) closeMonitorWindow(index);
+                });
+                renderMonitorControls();
+            }
+
+            function closeMonitorWindow(index) {
+                var rec = monitorWindows[index];
+                if (!rec) return;
+                rec.running = false;
+                delete monitorWindows[index];
+                // Tell the server to close this monitor (non-positive size).
+                client.sendSize(0, 0, index, 0);
+                try { if (rec.win && !rec.win.closed) rec.win.close(); } catch (e) {}
+                renderMonitorControls();
             }
 
             // ── Auto-hide side tabs (per-entry autohide_side_tabs) ──
