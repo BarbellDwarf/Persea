@@ -998,6 +998,46 @@
                 renderMonitorControls();
             }
 
+            // Tear down all pop-out monitor windows when the main session ends.
+            // A pop-out is only a satellite of this window (it blits from this
+            // window's canvas and sends input through this window's client), so
+            // it cannot outlive it. mode 'close' (this window is unloading)
+            // closes the pop-outs; mode 'disconnect' (the session dropped but
+            // this window is still open) stops the now-stale live blit and shows
+            // a "Disconnected" overlay so the pop-out is not a frozen live image.
+            function teardownMonitorWindows(mode) {
+                Object.keys(monitorWindows).forEach(function(idx) {
+                    var rec = monitorWindows[idx];
+                    if (!rec) return;
+                    rec.running = false; // stop the per-frame blit
+                    try {
+                        if (!rec.win || rec.win.closed) return;
+                        if (mode === 'close') {
+                            rec.win.close();
+                        }
+                        else {
+                            var doc = rec.win.document;
+                            if (doc && doc.body && !doc.getElementById('mon-disconnected')) {
+                                var ov = doc.createElement('div');
+                                ov.id = 'mon-disconnected';
+                                ov.textContent = 'Disconnected';
+                                ov.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;'
+                                    + 'display:flex;align-items:center;justify-content:center;'
+                                    + 'background:rgba(0,0,0,0.72);color:#fff;'
+                                    + 'font:600 1.6em monospace;letter-spacing:0.05em;z-index:99999;';
+                                doc.body.appendChild(ov);
+                                doc.body.style.cursor = 'default';
+                            }
+                        }
+                    } catch (e) { /* cross-window access may throw during teardown */ }
+                });
+            }
+
+            // When this (main) window closes, take its pop-out monitors with it.
+            window.addEventListener('beforeunload', function() {
+                teardownMonitorWindows('close');
+            });
+
             // ── Auto-hide side tabs (per-entry autohide_side_tabs) ──
             // When enabled, the Clipboard/Files tabs slide off the left edge
             // when idle and reappear when the pointer nears the left edge.
@@ -1524,6 +1564,29 @@
                     case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; break;
                     case Guacamole.Client.State.CONNECTED:
                         statusEl.textContent = 'Connected'; statusEl.className = 'connected';
+                        // Fit the session to the actual window on connect. The session
+                        // may have been created at different dimensions (e.g. opened in a
+                        // new window at a fixed size), and the client otherwise only sends
+                        // a size on a window-resize event, so the user has to resize
+                        // manually to get the right fit on first connect. A single early
+                        // send loses a race: right after CONNECTED the resize path is not
+                        // ready yet (RDP's Display Control channel may not be connected;
+                        // SPICE's agent/display-ready gate may be unmet), so the size is
+                        // silently dropped. Retry a few times past that window — guacd
+                        // coalesces to a single resize since the requested size is
+                        // unchanged, so the redundant sends are cheap no-ops.
+                        (function() {
+                            var fitToWindow = function() {
+                                scaleDisplay();
+                                var anyPanelOpen = panelOpen || filePanelOpen;
+                                var sw = anyPanelOpen ? window.innerWidth - 380 : window.innerWidth;
+                                var sh = window.innerHeight;
+                                if (sw > 0 && sh > 0) client.sendSize(sw, sh);
+                            };
+                            setTimeout(fitToWindow, 800);
+                            setTimeout(fitToWindow, 2000);
+                            setTimeout(fitToWindow, 4000);
+                        })();
                         // Start thumbnail capture for session owner
                         if (!shareToken && !_thumbInterval) {
                             _thumbInterval = setInterval(captureAndUploadThumbnail, 10000);
@@ -1548,6 +1611,9 @@
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                         document.getElementById('disconnected-overlay').className = 'visible';
                         if (rgFullscreenEl()) rgExitFullscreen();
+                        // Reflect the disconnect in any open monitor pop-outs
+                        // (freeze the stale blit + show a "Disconnected" overlay).
+                        teardownMonitorWindows('disconnect');
                         break;
                 }
             };
