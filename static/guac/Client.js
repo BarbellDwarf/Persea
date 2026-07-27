@@ -343,13 +343,20 @@ Guacamole.Client = function(tunnel) {
      * @param {!number} height
      *     The height of the screen.
      */
-    this.sendSize = function(width, height) {
+    this.sendSize = function(width, height, x_position, top_offset) {
 
         // Do not send requests if not connected
         if (!isConnected())
             return;
 
-        tunnel.sendMessage("size", width, height);
+        // Include the optional per-monitor position (x_position, top_offset)
+        // when provided, so multi-monitor clients can declare where each
+        // monitor sits within the combined framebuffer. Single-monitor
+        // callers omit them and the server treats the monitor as primary.
+        if (x_position !== undefined && top_offset !== undefined)
+            tunnel.sendMessage("size", width, height, x_position, top_offset);
+        else
+            tunnel.sendMessage("size", width, height);
 
     };
 
@@ -861,8 +868,25 @@ Guacamole.Client = function(tunnel) {
     this.onargv = null;
 
     /**
+     * Fired when the server sends an updated multi-monitor layout via the
+     * "multimon-layout" parameter on a visible layer. The value is a JSON
+     * string mapping monitor index to its rectangle within the combined
+     * framebuffer, e.g. {"0":{"left":0,"top":0,"width":1920,"height":1080}}.
+     * Used by multi-monitor clients to split the framebuffer into per-monitor
+     * windows.
+     *
+     * @event
+     * @param {!Guacamole.Display.VisibleLayer} layer
+     *     The layer the layout applies to (typically the default layer).
+     *
+     * @param {!string} value
+     *     The multimon-layout JSON string.
+     */
+    this.onmultimonlayout = null;
+
+    /**
      * Fired when the clipboard of the remote client is changing.
-     * 
+     *
      * @event
      * @param {!Guacamole.InputStream} stream
      *     The stream that will receive clipboard data from the server.
@@ -1044,6 +1068,14 @@ Guacamole.Client = function(tunnel) {
             // Process "multi-touch" property only for true visible layers (not off-screen buffers)
             if (guac_client.onmultitouch && layer instanceof Guacamole.Display.VisibleLayer)
                 guac_client.onmultitouch(layer, parseInt(value));
+
+        },
+
+        "multimon-layout" : function layerMultimonLayout(layer, value) {
+
+            // Expose the multi-monitor layout only for true visible layers
+            if (guac_client.onmultimonlayout && layer instanceof Guacamole.Display.VisibleLayer)
+                guac_client.onmultimonlayout(layer, value);
 
         }
 

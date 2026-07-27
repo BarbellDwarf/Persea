@@ -2513,6 +2513,9 @@ pub async fn ab_connect_entry(
         proxmox_token_id: ab_entry.proxmox_token_id,
         proxmox_token_secret: ab_entry.proxmox_token_secret,
         proxmox_verify_tls: ab_entry.proxmox_verify_tls,
+        // Entry-stored monitor count comes with the connections UI in a later
+        // phase; ad-hoc/API sessions set max_monitors directly on the request.
+        max_monitors: None,
     };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -4185,6 +4188,7 @@ pub async fn quick_connect(
             proxmox_token_id: None,
             proxmox_token_secret: None,
             proxmox_verify_tls: None,
+            max_monitors: None,
         };
 
         tracing::info!(
@@ -4302,6 +4306,7 @@ pub async fn quick_connect(
         proxmox_token_id: None,
         proxmox_token_secret: None,
         proxmox_verify_tls: None,
+        max_monitors: None,
     };
 
     match manager.create_session(create_req, admin_name).await {

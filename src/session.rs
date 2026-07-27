@@ -176,6 +176,10 @@ pub struct CreateSessionRequest {
     /// Verify the PVE API server's TLS certificate (default false; PVE ships a
     /// self-signed cluster cert). Also controls SPICE-proxy cert verification.
     pub proxmox_verify_tls: Option<bool>,
+    /// Total number of monitors to offer (SPICE/Proxmox multi-monitor). guacd
+    /// is told `secondary-monitors = max_monitors - 1`, which it advertises to
+    /// the client. Default 1 (single monitor).
+    pub max_monitors: Option<u32>,
 }
 
 /// Session status in the lifecycle.
@@ -984,6 +988,8 @@ impl SessionManager {
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
                     enable_audio: false,
+                    // Secondary monitors = total requested minus the primary.
+                    secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                 };
                 tracing::info!(
                     session_id = %session_id,
@@ -1132,6 +1138,8 @@ impl SessionManager {
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
                     enable_audio: false,
+                    // Secondary monitors = total requested minus the primary.
+                    secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                 };
 
                 // `cfg.host` is an opaque PVE routing token, used as the display

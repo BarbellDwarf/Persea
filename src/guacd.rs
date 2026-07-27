@@ -103,6 +103,10 @@ pub struct SpiceParams {
     pub disable_copy: bool,
     pub disable_paste: bool,
     pub enable_audio: bool,
+    /// Number of secondary monitors to allow (beyond the primary). guacd
+    /// advertises this to the client as `secondary-monitors` so a multi-monitor
+    /// client can offer the right number of monitor windows. 0 = single monitor.
+    pub secondary_monitors: u32,
 }
 
 /// RDP connection parameters to pass to guacd.
@@ -389,6 +393,7 @@ pub async fn connect_and_handshake(
                 "enable-audio" => if p.enable_audio { "true" } else { "false" }.into(),
                 "disable-copy" => if p.disable_copy { "true" } else { "false" }.into(),
                 "disable-paste" => if p.disable_paste { "true" } else { "false" }.into(),
+                "secondary-monitors" => p.secondary_monitors.to_string(),
                 _ => {
                     tracing::debug!("Unknown guacd SPICE parameter '{}', sending empty", name);
                     String::new()

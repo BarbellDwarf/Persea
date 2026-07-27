@@ -601,6 +601,33 @@
             toggleTab.addEventListener('click', function() { toggleClipboardPanel(); });
             document.body.appendChild(toggleTab);
 
+            // ── Multi-monitor (A1: receive + log; per-monitor windows are A2) ──
+            // Max monitors the server allows, delivered via a "secondary-monitors"
+            // argv stream. secondary-monitors = N means N+1 monitors total.
+            var maxMonitors = 1;
+            client.onargv = function(stream, mimetype, name) {
+                var reader = new Guacamole.StringReader(stream);
+                var buf = '';
+                reader.ontext = function(t) { buf += t; };
+                reader.onend = function() {
+                    if (name !== 'secondary-monitors') return;
+                    var secondary = parseInt(buf, 10);
+                    if (!isNaN(secondary)) maxMonitors = secondary + 1;
+                    console.log('[rustguac] multimon: server allows ' + maxMonitors
+                        + ' monitor(s) (secondary-monitors=' + buf.trim() + ')');
+                };
+            };
+            // Current monitor layout (each monitor's rect within the combined
+            // framebuffer), JSON via a "multimon-layout" set param.
+            client.onmultimonlayout = function(layer, value) {
+                try {
+                    var layout = JSON.parse(value);
+                    console.log('[rustguac] multimon-layout:', layout);
+                } catch (e) {
+                    console.warn('[rustguac] multimon-layout parse error:', e, value);
+                }
+            };
+
             // ── Receive clipboard from remote ──
             client.onclipboard = function(stream, mimetype) {
                 if (mimetype !== 'text/plain') {
