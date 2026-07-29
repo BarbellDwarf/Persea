@@ -882,6 +882,7 @@
         <div class="modal" style="max-width:500px">
             <h3 id="my-creds-title">My Credentials</h3>
             <p id="my-creds-desc" style="color:var(--text-muted);font-size:0.85em;margin-top:0">Store your credentials securely in Vault. Connections entries that use credential variables will auto-fill from these values.</p>
+            <input id="my-creds-search" type="text" placeholder="Filter credentials..." autocomplete="off" style="display:none">
             <div id="my-creds-loading" style="color:var(--text-muted)">Loading...</div>
             <div id="my-creds-empty" style="display:none;color:var(--text-muted);font-style:italic;margin:1em 0">No credential variables configured in connections entries yet.</div>
             <div id="my-creds-list"></div>
@@ -3861,6 +3862,24 @@
             credsOnlyVars = null;
         });
         document.getElementById('my-creds-save').addEventListener('click', saveMyCredentials);
+        var _mcSearch = document.getElementById('my-creds-search');
+        if (_mcSearch) _mcSearch.addEventListener('input', function() { filterMyCreds(this.value); });
+
+        // Live-filter the credential list by variable name / domain, hiding
+        // empty groups and force-expanding matching ones while a query is active.
+        function filterMyCreds(q) {
+            q = (q || '').trim().toLowerCase();
+            document.querySelectorAll('#my-creds-list .cred-group').forEach(function(group) {
+                var anyVisible = false;
+                group.querySelectorAll('.cred-item').forEach(function(item) {
+                    var match = !q || item.getAttribute('data-cred-search').indexOf(q) !== -1;
+                    item.style.display = match ? '' : 'none';
+                    if (match) anyVisible = true;
+                });
+                group.style.display = anyVisible ? '' : 'none';
+                if (q) group.classList.remove('collapsed');
+            });
+        }
 
         // opts (all optional): { onlyVars: [names], heading: "...", onSaved: fn }
         // onlyVars focuses the editor on specific variables; onSaved runs after
@@ -3908,9 +3927,11 @@
                     return;
                 }
 
-                // Group by domain prefix
+                // Group by domain prefix. Each domain is a collapsible group and
+                // each credential a .cred-item carrying search text, so the
+                // filter box and group folds keep long lists navigable.
                 var domainKeys = Object.keys(domains).sort();
-                var renderedAny = false;
+                var totalVars = 0;
                 domainKeys.forEach(function(domain) {
                     // In focused mode, keep only the requested variables and skip
                     // domains that end up empty.
@@ -3918,11 +3939,7 @@
                         return !credsOnlyVars || credsOnlyVars.indexOf(v.name) !== -1;
                     });
                     if (vars.length === 0) return;
-
-                    var heading = document.createElement('div');
-                    heading.style.cssText = 'color:var(--accent);font-weight:bold;margin-top:1em;margin-bottom:0.3em;font-size:0.95em;text-transform:uppercase';
-                    heading.textContent = domain;
-                    list.appendChild(heading);
+                    totalVars += vars.length;
 
                     vars.sort(function(a, b) {
                         // username before password before key before other
@@ -3936,13 +3953,44 @@
                         var oa = suffixOrder(a.name), ob = suffixOrder(b.name);
                         return oa !== ob ? oa - ob : a.name.localeCompare(b.name);
                     });
-                    renderedAny = true;
+
+                    var group = document.createElement('div');
+                    group.className = 'cred-group';
+
+                    var head = document.createElement('div');
+                    head.className = 'cred-group-head';
+                    var caret = document.createElement('span');
+                    caret.className = 'cred-group-caret';
+                    caret.textContent = '▾';
+                    head.appendChild(caret);
+                    var headText = document.createElement('span');
+                    headText.textContent = domain;
+                    head.appendChild(headText);
+                    var headCount = document.createElement('span');
+                    headCount.className = 'cred-group-count';
+                    headCount.textContent = vars.length;
+                    head.appendChild(headCount);
+                    head.addEventListener('click', function() {
+                        group.classList.toggle('collapsed');
+                    });
+                    group.appendChild(head);
+
+                    var body = document.createElement('div');
+                    body.className = 'cred-group-body';
+                    group.appendChild(body);
+
                     vars.forEach(function(v) {
                         var name = v.name;
                         var isSecret = name.endsWith('_password') || name.endsWith('_key');
+                        var displayName = name.replace(domain + '_', '');
+
+                        var item = document.createElement('div');
+                        item.className = 'cred-item';
+                        item.setAttribute('data-cred-search',
+                            (name + ' ' + displayName + ' ' + domain).toLowerCase());
+
                         var row = document.createElement('label');
                         row.style.cssText = 'display:block;margin-top:0.5em;color:var(--text-muted);font-size:0.9em';
-                        var displayName = name.replace(domain + '_', '');
                         row.textContent = displayName;
                         var hint = document.createElement('span');
                         hint.style.cssText = 'color:var(--text-dim);font-size:0.8em;margin-left:0.5em';
@@ -3973,7 +4021,7 @@
                         }
 
                         row.appendChild(input);
-                        list.appendChild(row);
+                        item.appendChild(row);
 
                         // Per-credential shared/local toggle (multi-Vault only).
                         if (credsSplit) {
@@ -3995,10 +4043,22 @@
                             scopeTxt.title = 'Store this credential in the shared Vault so it propagates to every site. Unchecked keeps it local to this instance (survives a central-Vault outage).';
                             scopeLabel.appendChild(scopeTxt);
                             scopeRow.appendChild(scopeLabel);
-                            list.appendChild(scopeRow);
+                            item.appendChild(scopeRow);
                         }
+
+                        body.appendChild(item);
                     });
+
+                    list.appendChild(group);
                 });
+
+                // Reveal the filter box once the list is long enough to warrant
+                // it (never in focused single-connect mode).
+                var searchEl = document.getElementById('my-creds-search');
+                if (searchEl) {
+                    searchEl.value = '';
+                    searchEl.style.display = (!credsOnlyVars && totalVars > 6) ? '' : 'none';
+                }
             }).catch(function(err) {
                 loading.style.display = 'none';
                 errEl.textContent = 'Failed to load: ' + err.message;

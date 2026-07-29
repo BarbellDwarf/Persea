@@ -497,6 +497,61 @@ tbody tr:last-child td { border-bottom: none; }
     color: var(--text);
 }
 
+/* My Credentials modal: pin the header (title/description/filter) and the
+   Save/Close footer, and scroll only the credential list, so the modal stays
+   usable no matter how many credential variables exist. Scoped by #id so the
+   generic `.modal { overflow-y:auto }` is overridden only here. */
+#my-creds-modal .modal {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+#my-creds-modal #my-creds-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    /* room so focus rings / scrollbar don't clip against the padding edge */
+    margin: 0 calc(var(--s-2) * -1);
+    padding: 0 var(--s-2);
+}
+#my-creds-search {
+    /* filter box lives in the pinned header */
+    margin: var(--s-1) 0 var(--s-2);
+}
+.cred-group {
+    border-top: 1px solid var(--border);
+}
+.cred-group-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4em;
+    cursor: pointer;
+    user-select: none;
+    color: var(--accent);
+    font-weight: bold;
+    font-size: 0.9em;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0.55em 0 0.35em;
+}
+.cred-group-caret {
+    display: inline-block;
+    width: 1em;
+    transition: transform 0.12s ease;
+}
+.cred-group.collapsed .cred-group-caret {
+    transform: rotate(-90deg);
+}
+.cred-group.collapsed .cred-group-body {
+    display: none;
+}
+.cred-group-count {
+    margin-left: auto;
+    color: var(--text-dim);
+    font-weight: normal;
+    font-size: 0.85em;
+}
+
 .field-hint {
     font-size: var(--fz-xs);
     color: var(--text-dim);
