@@ -1158,7 +1158,27 @@ impl VaultClient {
         &self,
         email: &str,
     ) -> Result<HashMap<String, String>, VaultError> {
-        let key = sanitize_email_key(email);
+        self.get_user_credentials_by_key(&sanitize_email_key(email))
+            .await
+    }
+
+    /// Write a user's credential variables to Vault (full replace).
+    /// Path: `<base_path>/users/<sanitized_email>`
+    pub async fn put_user_credentials(
+        &self,
+        email: &str,
+        creds: &HashMap<String, String>,
+    ) -> Result<(), VaultError> {
+        self.put_user_credentials_by_key(&sanitize_email_key(email), creds)
+            .await
+    }
+
+    /// Read credential variables by the already-sanitised users key. Used by
+    /// `vault-migrate` (which enumerates raw keys and must not re-sanitise).
+    pub async fn get_user_credentials_by_key(
+        &self,
+        key: &str,
+    ) -> Result<HashMap<String, String>, VaultError> {
         let path = format!("/v1/{}/data/{}/users/{}", self.mount, self.base_path, key);
         let resp = self.request(reqwest::Method::GET, &path, None).await?;
 
@@ -1185,14 +1205,13 @@ impl VaultClient {
         }
     }
 
-    /// Write a user's credential variables to Vault (full replace).
-    /// Path: `<base_path>/users/<sanitized_email>`
-    pub async fn put_user_credentials(
+    /// Write credential variables by the already-sanitised users key (full
+    /// replace). Companion to [`get_user_credentials_by_key`] for migration.
+    pub async fn put_user_credentials_by_key(
         &self,
-        email: &str,
+        key: &str,
         creds: &HashMap<String, String>,
     ) -> Result<(), VaultError> {
-        let key = sanitize_email_key(email);
         let path = format!("/v1/{}/data/{}/users/{}", self.mount, self.base_path, key);
         let body = serde_json::json!({ "data": creds });
         let resp = self
@@ -1209,6 +1228,17 @@ impl VaultClient {
                     s, text
                 )))
             }
+        }
+    }
+
+    /// List the raw key names under `<base_path>/users/` (each a sanitised
+    /// email). Empty when no credentials have been stored yet.
+    pub async fn list_user_keys(&self) -> Result<Vec<String>, VaultError> {
+        let path = format!("/v1/{}/metadata/{}/users/", self.mount, self.base_path);
+        match self.kv_list(&path).await {
+            Ok(keys) => Ok(keys.into_iter().filter(|k| !k.ends_with('/')).collect()),
+            Err(VaultError::NotFound) => Ok(Vec::new()),
+            Err(e) => Err(e),
         }
     }
 

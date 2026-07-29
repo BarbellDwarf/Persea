@@ -6,6 +6,7 @@ mod db;
 mod drive;
 mod guacd;
 mod import;
+mod migrate;
 mod oidc;
 mod protocol;
 mod pve;
@@ -151,6 +152,33 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Copy an address-book scope subtree between configured Vault backends
+    /// (for the multi-Vault DR split). Copies entries and every folder's
+    /// `.config`; run with --dry-run first.
+    VaultMigrate {
+        /// Scope to migrate: "shared" or "instance"
+        #[arg(long)]
+        scope: String,
+        /// Source backend: "vault", "vault_shared", or "vault_local"
+        #[arg(long)]
+        from: String,
+        /// Destination backend: "vault", "vault_shared", or "vault_local"
+        #[arg(long)]
+        to: String,
+        /// Also copy ALL per-user credential secrets (users/*). This makes
+        /// those credentials shared; normally you toggle per-credential in the
+        /// My Credentials UI instead.
+        #[arg(long)]
+        users: bool,
+        /// Overwrite entries that already exist in the destination
+        /// (default: skip existing).
+        #[arg(long)]
+        overwrite: bool,
+        /// Preview without writing to the destination
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -202,6 +230,17 @@ async fn main() {
             dry_run,
         }) => {
             import::cmd_import_guacamole(&config, &file, &folder, &scope, &allowed_groups, dry_run)
+                .await;
+        }
+        Some(Command::VaultMigrate {
+            scope,
+            from,
+            to,
+            users,
+            overwrite,
+            dry_run,
+        }) => {
+            migrate::cmd_vault_migrate(&config, &scope, &from, &to, users, overwrite, dry_run)
                 .await;
         }
     }
