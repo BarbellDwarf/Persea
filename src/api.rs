@@ -1505,7 +1505,7 @@ pub async fn me(
 ) -> impl IntoResponse {
     match identity {
         Some(Extension(id)) => {
-            let vault_available = vault.default.read().await.is_some();
+            let vault_available = vault.any_connected().await;
             Json(json!({
                 "name": id.display_name(),
                 "role": id.role(),
@@ -1877,24 +1877,185 @@ pub struct VaultBackends {
 }
 
 impl VaultBackends {
-    /// Single-backend construction: every scope shares one cell (today's
-    /// behaviour). Multi-backend construction lands with the config wiring.
-    pub fn single(cell: VaultCell) -> Self {
-        Self {
-            default: cell.clone(),
-            shared: cell.clone(),
-            local: cell,
-        }
-    }
-
     /// The backend cell serving a given address-book scope (`"shared"` or
     /// `"instance"`). Anything else falls back to the shared backend.
-    #[allow(dead_code)] // wired in once scope-aware routing lands (step 2)
     pub fn cell_for_scope(&self, scope: &str) -> &VaultCell {
         match scope {
             "instance" => &self.local,
             _ => &self.shared,
         }
+    }
+
+    /// Resolve the connected client for `scope`, or `Unavailable` if that
+    /// backend is down / not yet connected.
+    async fn scoped(&self, scope: &str) -> Result<Arc<VaultClient>, VaultError> {
+        self.cell_for_scope(scope)
+            .read()
+            .await
+            .clone()
+            .ok_or(VaultError::Unavailable)
+    }
+
+    /// Resolve the connected default (`[vault]`) client — home of unscoped
+    /// secrets and, for now, per-user credential variables.
+    async fn default_client(&self) -> Result<Arc<VaultClient>, VaultError> {
+        self.default
+            .read()
+            .await
+            .clone()
+            .ok_or(VaultError::Unavailable)
+    }
+
+    /// True if at least one configured backend is currently connected.
+    pub async fn any_connected(&self) -> bool {
+        self.default.read().await.is_some()
+            || self.shared.read().await.is_some()
+            || self.local.read().await.is_some()
+    }
+
+    // ── Scope-routed address-book operations (dispatch to the scope's backend) ──
+
+    pub async fn list_subfolders(
+        &self,
+        scope: &str,
+        parent: &str,
+    ) -> Result<Vec<crate::vault::FolderInfo>, VaultError> {
+        self.scoped(scope)
+            .await?
+            .list_subfolders(scope, parent)
+            .await
+    }
+
+    pub async fn list_entries(&self, scope: &str, folder: &str) -> Result<Vec<String>, VaultError> {
+        self.scoped(scope).await?.list_entries(scope, folder).await
+    }
+
+    pub async fn get_entry(
+        &self,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+    ) -> Result<AddressBookEntry, VaultError> {
+        self.scoped(scope)
+            .await?
+            .get_entry(scope, folder, entry)
+            .await
+    }
+
+    pub async fn put_entry(
+        &self,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+        data: &AddressBookEntry,
+    ) -> Result<(), VaultError> {
+        self.scoped(scope)
+            .await?
+            .put_entry(scope, folder, entry, data)
+            .await
+    }
+
+    pub async fn delete_entry(
+        &self,
+        scope: &str,
+        folder: &str,
+        entry: &str,
+    ) -> Result<(), VaultError> {
+        self.scoped(scope)
+            .await?
+            .delete_entry(scope, folder, entry)
+            .await
+    }
+
+    pub async fn get_folder_config(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<FolderConfig, VaultError> {
+        self.scoped(scope)
+            .await?
+            .get_folder_config(scope, folder)
+            .await
+    }
+
+    pub async fn put_folder_config(
+        &self,
+        scope: &str,
+        folder: &str,
+        config: &FolderConfig,
+    ) -> Result<(), VaultError> {
+        self.scoped(scope)
+            .await?
+            .put_folder_config(scope, folder, config)
+            .await
+    }
+
+    pub async fn delete_folder(
+        &self,
+        scope: &str,
+        folder: &str,
+    ) -> Result<(usize, usize), VaultError> {
+        self.scoped(scope).await?.delete_folder(scope, folder).await
+    }
+
+    pub async fn resolve_folder_access(
+        &self,
+        scope: &str,
+        folder: &str,
+        user_groups: &[String],
+    ) -> Result<bool, VaultError> {
+        self.scoped(scope)
+            .await?
+            .resolve_folder_access(scope, folder, user_groups)
+            .await
+    }
+
+    // ── Unscoped operations (default backend) ──
+
+    pub async fn get_user_credentials(
+        &self,
+        email: &str,
+    ) -> Result<std::collections::HashMap<String, String>, VaultError> {
+        self.default_client()
+            .await?
+            .get_user_credentials(email)
+            .await
+    }
+
+    pub async fn put_user_credentials(
+        &self,
+        email: &str,
+        creds: &std::collections::HashMap<String, String>,
+    ) -> Result<(), VaultError> {
+        self.default_client()
+            .await?
+            .put_user_credentials(email, creds)
+            .await
+    }
+
+    // ── Fan-out across scopes ──
+
+    /// List top-level folders across every scope, routing each to its backend.
+    /// Tolerant of a down backend: a scope whose backend is unavailable simply
+    /// contributes nothing, unless NO backend is connected at all, in which
+    /// case `Unavailable` is returned so callers surface the outage.
+    pub async fn list_all_folders(&self) -> Result<Vec<crate::vault::FolderInfo>, VaultError> {
+        let mut folders = Vec::new();
+        let mut any = false;
+        for scope in ["shared", "instance"] {
+            if let Some(client) = self.cell_for_scope(scope).read().await.clone() {
+                any = true;
+                match client.list_folders_in_scope(scope).await {
+                    Ok(fs) => folders.extend(fs),
+                    Err(VaultError::NotFound) => {}
+                    Err(e) => tracing::warn!(scope, error = %e, "listing folders for scope failed"),
+                }
+            }
+        }
+        if !any {
+            return Err(VaultError::Unavailable);
+        }
+        Ok(folders)
     }
 }
 
@@ -1913,24 +2074,12 @@ pub async fn get_docs() -> impl IntoResponse {
     Json(json!(sections))
 }
 
-/// Helper: require Vault to be available, or return an appropriate error.
-async fn require_vault(vault: &VaultState) -> Result<Arc<VaultClient>, Response> {
-    let guard = vault.default.read().await;
-    guard.clone().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({"error": "Vault is not available — address book is temporarily offline"})),
-        )
-            .into_response()
-    })
-}
-
 /// Helper: check if the identity has group access to a folder, honouring
 /// `inherit_from_parent` on the folder's config (a subfolder may inherit
 /// access from any ancestor whose `allowed_groups` matches the caller's
 /// OIDC groups). Admin role bypasses all checks.
 async fn check_folder_access(
-    vault: &VaultClient,
+    vault: &VaultBackends,
     scope: &str,
     folder: &str,
     identity: &AuthIdentity,
@@ -1973,7 +2122,7 @@ async fn check_folder_access(
 /// practice; folders the user CAN access return immediately without
 /// descending.
 fn folder_or_descendant_accessible<'a>(
-    vault: &'a VaultClient,
+    vault: &'a VaultBackends,
     scope: &'a str,
     path: &'a str,
     user_groups: &'a [String],
@@ -2004,10 +2153,6 @@ pub async fn ab_list_folders(
     identity: Option<Extension<AuthIdentity>>,
     Extension(vault): Extension<VaultState>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id,
         _ => {
@@ -2019,7 +2164,7 @@ pub async fn ab_list_folders(
         }
     };
 
-    let folders = match vault.list_folders().await {
+    let folders = match vault.list_all_folders().await {
         Ok(f) => f,
         Err(e) => {
             return (
@@ -2056,10 +2201,6 @@ pub async fn ab_list_subfolders(
     Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id,
         _ => {
@@ -2111,10 +2252,6 @@ pub async fn ab_list_all(
     identity: Option<Extension<AuthIdentity>>,
     Extension(vault): Extension<VaultState>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id,
         _ => {
@@ -2126,7 +2263,7 @@ pub async fn ab_list_all(
         }
     };
 
-    let folders = match vault.list_folders().await {
+    let folders = match vault.list_all_folders().await {
         Ok(f) => f,
         Err(e) => {
             return (
@@ -2194,10 +2331,6 @@ pub async fn ab_search_index(
     identity: Option<Extension<AuthIdentity>>,
     Extension(vault): Extension<VaultState>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id,
         _ => {
@@ -2212,7 +2345,7 @@ pub async fn ab_search_index(
     let user_groups = id.groups();
     let is_admin = id.has_role("admin");
 
-    let top = match vault.list_folders().await {
+    let top = match vault.list_all_folders().await {
         Ok(f) => f,
         Err(e) => {
             return (
@@ -2270,10 +2403,6 @@ pub async fn ab_list_entries(
     Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id,
         _ => {
@@ -2394,10 +2523,6 @@ pub async fn ab_connect_entry(
     Path((scope, folder, entry)): Path<(String, String, String)>,
     Json(req): Json<ConnectRequest>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id.clone(),
         _ => {
@@ -2673,10 +2798,6 @@ pub async fn ab_create_folder(
     Extension(vault): Extension<VaultState>,
     Json(req): Json<CreateFolderRequest>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
         _ => {
@@ -2749,10 +2870,6 @@ pub async fn ab_update_folder(
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<UpdateFolderRequest>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
         _ => {
@@ -2809,10 +2926,6 @@ pub async fn ab_get_folder_config(
     Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     if !identity
         .as_ref()
         .map(|Extension(id)| id.has_role("admin"))
@@ -2856,10 +2969,6 @@ pub async fn ab_delete_folder(
     Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
         _ => {
@@ -2924,10 +3033,6 @@ pub async fn ab_create_entry(
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<CreateEntryRequest>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
         _ => {
@@ -2983,10 +3088,6 @@ pub async fn ab_update_entry(
     Path((scope, folder, entry)): Path<(String, String, String)>,
     Json(data): Json<AddressBookEntry>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
         _ => {
@@ -3085,10 +3186,6 @@ pub async fn ab_delete_entry(
     Extension(vault): Extension<VaultState>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
         _ => {
@@ -3444,11 +3541,6 @@ pub async fn get_my_credentials(
         }
     };
 
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-
     match vault.get_user_credentials(&email).await {
         Ok(creds) => {
             // Return variable names with masked values (indicate set vs unset)
@@ -3504,11 +3596,6 @@ pub async fn put_my_credentials(
             )
                 .into_response()
         }
-    };
-
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
     };
 
     // Expect { "credentials": { "corp_user": "alice", "corp_password": "secret", ... } }
@@ -3599,14 +3686,9 @@ pub async fn list_credential_variables(
         }
     };
 
-    let vault = match require_vault(&vault).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-
     // Scan all accessible folders and entries for variable references,
     // recursing into subfolders so vars inside nested trees surface too.
-    let folders = match vault.list_folders().await {
+    let folders = match vault.list_all_folders().await {
         Ok(f) => f,
         Err(e) => {
             return (
@@ -4062,15 +4144,12 @@ pub async fn quick_connect(
             );
         }
 
-        let vault = match require_vault(&vault).await {
-            Ok(v) => v,
-            Err(_) => {
-                return quick_connect_error(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "Address book is temporarily unavailable (Vault offline).",
-                );
-            }
-        };
+        if !vault.any_connected().await {
+            return quick_connect_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Address book is temporarily unavailable (Vault offline).",
+            );
+        }
 
         if check_folder_access(&vault, scope, folder, &id)
             .await

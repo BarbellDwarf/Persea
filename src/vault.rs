@@ -26,6 +26,10 @@ pub enum VaultError {
     Http(reqwest::Error),
     Parse(String),
     BadName(String),
+    /// The backend serving this scope is configured but not currently
+    /// connected (initial connect pending or the Vault is down). Distinct from
+    /// a Vault that returns an error: the request never left rustguac.
+    Unavailable,
 }
 
 impl std::fmt::Display for VaultError {
@@ -37,6 +41,7 @@ impl std::fmt::Display for VaultError {
             Self::Http(e) => write!(f, "vault HTTP error: {}", e),
             Self::Parse(msg) => write!(f, "vault response parse error: {}", msg),
             Self::BadName(msg) => write!(f, "invalid name: {}", msg),
+            Self::Unavailable => write!(f, "vault backend not available"),
         }
     }
 }
@@ -735,15 +740,6 @@ impl VaultClient {
 
     // ── Path helpers ──
 
-    /// Returns the path prefixes to scan: ["shared"] and optionally ["instance/<name>"].
-    fn scope_prefixes(&self) -> Vec<(&str, String)> {
-        let mut prefixes = vec![("shared", "shared".to_string())];
-        if let Some(ref name) = self.instance_name {
-            prefixes.push(("instance", format!("instance/{}", name)));
-        }
-        prefixes
-    }
-
     fn data_path(&self, scope_prefix: &str, rest: &str) -> String {
         format!(
             "/v1/{}/data/{}/{}/{}",
@@ -760,31 +756,39 @@ impl VaultClient {
 
     // ── KV v2 operations ──
 
-    /// List top-level folders visible across all scopes (shared + instance).
-    pub async fn list_folders(&self) -> Result<Vec<FolderInfo>, VaultError> {
-        let mut folders = Vec::new();
+    /// List top-level folders for a single scope (`"shared"` or `"instance"`).
+    ///
+    /// Returns an empty vec (not an error) when the scope isn't applicable to
+    /// this client — e.g. `"instance"` with no `instance_name` configured — so
+    /// the multi-backend fan-out can call it unconditionally.
+    pub async fn list_folders_in_scope(&self, scope: &str) -> Result<Vec<FolderInfo>, VaultError> {
+        let prefix = match scope {
+            "shared" => "shared".to_string(),
+            "instance" => match &self.instance_name {
+                Some(name) => format!("instance/{}", name),
+                None => return Ok(Vec::new()),
+            },
+            _ => return Err(VaultError::BadName(format!("invalid scope: {}", scope))),
+        };
 
-        for (scope_label, prefix) in self.scope_prefixes() {
-            let path = format!("/v1/{}/metadata/{}/{}/", self.mount, self.base_path, prefix);
-            match self.kv_list(&path).await {
-                Ok(keys) => {
-                    let has_subfolders: Vec<&str> =
-                        keys.iter().filter_map(|k| k.strip_suffix('/')).collect();
-                    for name in &has_subfolders {
-                        folders.push(FolderInfo {
-                            name: name.to_string(),
-                            description: String::new(),
-                            scope: scope_label.to_string(),
-                            path: Some(name.to_string()),
-                            has_children: None, // enriched below
-                        });
-                    }
+        let mut folders = Vec::new();
+        let path = format!("/v1/{}/metadata/{}/{}/", self.mount, self.base_path, prefix);
+        match self.kv_list(&path).await {
+            Ok(keys) => {
+                for name in keys.iter().filter_map(|k| k.strip_suffix('/')) {
+                    folders.push(FolderInfo {
+                        name: name.to_string(),
+                        description: String::new(),
+                        scope: scope.to_string(),
+                        path: Some(name.to_string()),
+                        has_children: None, // enriched below
+                    });
                 }
-                Err(VaultError::NotFound) => {
-                    // No folders in this scope — that's fine
-                }
-                Err(e) => return Err(e),
             }
+            Err(VaultError::NotFound) => {
+                // No folders in this scope — that's fine
+            }
+            Err(e) => return Err(e),
         }
 
         // Enrich with descriptions and child detection

@@ -419,7 +419,20 @@ pub struct Config {
 
     pub tls: Option<TlsConfig>,
     pub oidc: Option<OidcConfig>,
+    /// Primary/default Vault backend. Serves any address-book scope that does
+    /// not have a dedicated backend below, and is the home of unscoped secrets
+    /// (the LUKS key). A bare `[vault]` with no overrides behaves exactly as a
+    /// single-Vault deployment always has.
     pub vault: Option<VaultConfig>,
+    /// Optional dedicated backend for the `shared` scope (e.g. a central,
+    /// fleet-wide Vault). When set, shared-scope folders/entries route here
+    /// instead of `[vault]`. Secret ID via `VAULT_SHARED_SECRET_ID`.
+    pub vault_shared: Option<VaultConfig>,
+    /// Optional dedicated backend for the `instance` (local) scope (e.g. a
+    /// per-host Vault that stays reachable during a central outage). When set,
+    /// instance-scope folders/entries route here. Secret ID via
+    /// `VAULT_LOCAL_SECRET_ID`.
+    pub vault_local: Option<VaultConfig>,
     pub drive: Option<DriveConfig>,
     pub theme: Option<ThemeConfig>,
     pub recording: Option<RecordingConfig>,
@@ -1146,6 +1159,8 @@ impl Default for Config {
             tls: None,
             oidc: None,
             vault: None,
+            vault_shared: None,
+            vault_local: None,
             drive: None,
             theme: None,
             recording: None,

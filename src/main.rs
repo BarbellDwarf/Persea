@@ -455,6 +455,83 @@ async fn security_headers(
     response
 }
 
+/// Connect a single Vault backend into `cell`. On a failed initial connect,
+/// spawns a background 30s retry loop; the cell stays `None` (and that scope's
+/// address book stays unavailable) until a connect succeeds. `luks_drive` is
+/// `Some` only for the default backend, so the LUKS volume mounts as soon as
+/// that backend comes up on a retry (the initial-boot mount happens in the
+/// drive-init block once the awaited connect below has populated the cell).
+async fn connect_vault_backend(
+    label: &'static str,
+    cell: VaultCell,
+    config: crate::config::VaultConfig,
+    secret_id: String,
+    luks_drive: Option<crate::config::DriveConfig>,
+) {
+    match vault::VaultClient::new(&config, &secret_id).await {
+        Ok(client) => {
+            let client = Arc::new(client);
+            client.spawn_renewal_task();
+            tracing::info!("Vault backend '{}' initialized: {}", label, config.addr);
+            *cell.write().await = Some(client);
+        }
+        Err(e) => {
+            tracing::error!(
+                "Vault backend '{}' connect to {} failed: {} \
+                 — that scope's address book is unavailable; retrying every 30s",
+                label,
+                config.addr,
+                e
+            );
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                interval.tick().await; // skip immediate tick
+                loop {
+                    interval.tick().await;
+                    tracing::debug!(
+                        "Retrying Vault backend '{}' connect to {}...",
+                        label,
+                        config.addr
+                    );
+                    match vault::VaultClient::new(&config, &secret_id).await {
+                        Ok(client) => {
+                            let client = Arc::new(client);
+                            client.spawn_renewal_task();
+                            tracing::info!(
+                                "Vault backend '{}' connected (retry succeeded): {}",
+                                label,
+                                config.addr
+                            );
+                            *cell.write().await = Some(client.clone());
+
+                            // Mount LUKS now that the default backend is available.
+                            if let Some(ref dc) = luks_drive {
+                                if dc.enabled && drive::luks_configured(dc) {
+                                    match drive::mount_luks(dc, &client).await {
+                                        Ok(_) => {
+                                            tracing::info!("LUKS drive volume mounted (deferred)")
+                                        }
+                                        Err(e) => tracing::error!(
+                                            "Failed to mount LUKS drive volume: {}",
+                                            e
+                                        ),
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        Err(e) => tracing::warn!(
+                            "Vault backend '{}' retry failed: {} — will retry in 30s",
+                            label,
+                            e
+                        ),
+                    }
+                }
+            });
+        }
+    }
+}
+
 async fn run_server(config: Config, database: Db) {
     // Initialize logging
     tracing_subscriber::fmt()
@@ -484,93 +561,61 @@ async fn run_server(config: Config, database: Db) {
         None
     };
 
-    // Initialize Vault client if configured.
+    // Initialize Vault backend(s) if configured.
     //
-    // `vault_cell` is the single backend connection cell used throughout setup
-    // (initial connect, background retry, LUKS mount). It is wrapped into the
-    // shared `VaultBackends` state after drive init below; in the single-Vault
-    // configuration every address-book scope aliases this one cell.
-    let vault_cell: VaultCell = Arc::new(tokio::sync::RwLock::new(None));
+    // `[vault]` is the default/primary backend and the home of unscoped secrets
+    // (the LUKS key). Optional `[vault_shared]` / `[vault_local]` route the
+    // shared / instance address-book scopes to dedicated Vaults so one being
+    // down cannot take the others with it. Each backend gets its own connection
+    // cell, background retry, and token renewal. A bare `[vault]` behaves
+    // exactly as a single-Vault deployment: shared and local alias the default
+    // cell, so every scope resolves to the one connection.
+    let default_cell: VaultCell = Arc::new(tokio::sync::RwLock::new(None));
+    let mut shared_cell = default_cell.clone();
+    let mut local_cell = default_cell.clone();
 
     if let Some(ref vault_config) = config.vault {
-        let secret_id = match std::env::var("VAULT_SECRET_ID") {
-            Ok(s) => s,
-            Err(_) => {
+        match std::env::var("VAULT_SECRET_ID") {
+            Ok(sid) if !sid.is_empty() => {
+                connect_vault_backend(
+                    "default",
+                    default_cell.clone(),
+                    vault_config.clone(),
+                    sid,
+                    config.drive.clone(),
+                )
+                .await;
+            }
+            _ => {
                 tracing::error!("VAULT_SECRET_ID env var required when [vault] is configured");
                 tracing::error!("Address book and drive features will be unavailable");
-                String::new()
             }
-        };
+        }
+    }
 
-        if !secret_id.is_empty() {
-            match vault::VaultClient::new(vault_config, &secret_id).await {
-                Ok(client) => {
-                    let client = Arc::new(client);
-                    client.spawn_renewal_task();
-                    tracing::info!("Vault client initialized: {}", vault_config.addr);
-                    *vault_cell.write().await = Some(client);
-                }
-                Err(e) => {
-                    tracing::error!("=============================================");
-                    tracing::error!("VAULT CONNECTION FAILED");
-                    tracing::error!("  Address: {}", vault_config.addr);
-                    tracing::error!("  Error: {}", e);
-                    tracing::error!("  Address book and drive features are UNAVAILABLE");
-                    tracing::error!("  Sessions (SSH/RDP/VNC) will still work normally");
-                    tracing::error!("  Retrying Vault connection every 30s in background");
-                    tracing::error!("=============================================");
-
-                    // Spawn background retry task
-                    let retry_vault_config = vault_config.clone();
-                    let retry_secret_id = secret_id.clone();
-                    let retry_vault_state = vault_cell.clone();
-                    let retry_drive_config = config.drive.clone();
-                    tokio::spawn(async move {
-                        let mut interval =
-                            tokio::time::interval(std::time::Duration::from_secs(30));
-                        interval.tick().await; // skip immediate tick
-                        loop {
-                            interval.tick().await;
-                            tracing::debug!(
-                                "Retrying Vault connection to {}...",
-                                retry_vault_config.addr
-                            );
-                            match vault::VaultClient::new(&retry_vault_config, &retry_secret_id)
-                                .await
-                            {
-                                Ok(client) => {
-                                    let client = Arc::new(client);
-                                    client.spawn_renewal_task();
-                                    tracing::info!(
-                                        "Vault client connected (retry succeeded): {}",
-                                        retry_vault_config.addr
-                                    );
-                                    *retry_vault_state.write().await = Some(client.clone());
-
-                                    // Mount LUKS now that Vault is available
-                                    if let Some(ref dc) = retry_drive_config {
-                                        if dc.enabled && drive::luks_configured(dc) {
-                                            match drive::mount_luks(dc, &client).await {
-                                                Ok(_) => tracing::info!(
-                                                    "LUKS drive volume mounted (deferred)"
-                                                ),
-                                                Err(e) => tracing::error!(
-                                                    "Failed to mount LUKS drive volume: {}",
-                                                    e
-                                                ),
-                                            }
-                                        }
-                                    }
-                                    break;
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Vault retry failed: {} — will retry in 30s", e);
-                                }
-                            }
-                        }
-                    });
-                }
+    if let Some(ref vc) = config.vault_shared {
+        match std::env::var("VAULT_SHARED_SECRET_ID") {
+            Ok(sid) if !sid.is_empty() => {
+                let cell: VaultCell = Arc::new(tokio::sync::RwLock::new(None));
+                connect_vault_backend("shared", cell.clone(), vc.clone(), sid, None).await;
+                shared_cell = cell;
             }
+            _ => tracing::error!(
+                "VAULT_SHARED_SECRET_ID required for [vault_shared]; shared-scope connections unavailable"
+            ),
+        }
+    }
+
+    if let Some(ref vc) = config.vault_local {
+        match std::env::var("VAULT_LOCAL_SECRET_ID") {
+            Ok(sid) if !sid.is_empty() => {
+                let cell: VaultCell = Arc::new(tokio::sync::RwLock::new(None));
+                connect_vault_backend("local", cell.clone(), vc.clone(), sid, None).await;
+                local_cell = cell;
+            }
+            _ => tracing::error!(
+                "VAULT_LOCAL_SECRET_ID required for [vault_local]; instance-scope connections unavailable"
+            ),
         }
     }
 
@@ -579,7 +624,7 @@ async fn run_server(config: Config, database: Db) {
         if drive_config.enabled {
             // Mount LUKS volume if configured and Vault is available now
             if drive::luks_configured(drive_config) {
-                let vc = vault_cell.read().await;
+                let vc = default_cell.read().await;
                 if let Some(ref client) = *vc {
                     match drive::mount_luks(drive_config, client).await {
                         Ok(_) => tracing::info!("LUKS drive volume mounted"),
@@ -598,10 +643,13 @@ async fn run_server(config: Config, database: Db) {
         }
     }
 
-    // Wrap the backend cell into the shared VaultBackends state. Single-Vault
-    // for now: `shared` and `local` scopes both alias this one cell. The
-    // multi-backend split adds dedicated cells here without touching handlers.
-    let vault_client: VaultState = Arc::new(VaultBackends::single(vault_cell));
+    // Assemble the shared VaultBackends state. `shared`/`local` alias the
+    // default cell unless a dedicated backend was configured above.
+    let vault_client: VaultState = Arc::new(VaultBackends {
+        default: default_cell,
+        shared: shared_cell,
+        local: local_cell,
+    });
 
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
     let vault_configured = VaultConfigured(config.vault.is_some());
