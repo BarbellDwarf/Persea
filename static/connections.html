@@ -993,6 +993,7 @@
         var currentUserRole = 'viewer';
         var selectedFolder = null; // { name, scope, description, path, has_children }
         var folders = []; // top-level folders from batch load
+        var unavailableScopes = []; // scopes whose Vault backend is down (multi-Vault DR); greyed in the tree
         var folderEntryCounts = {}; // "scope|path" -> count
         var folderEntries = {};    // "scope|path" -> entries array
         var subfolderCache = {};   // "scope|path" -> [FolderInfo] (lazy-loaded children)
@@ -1599,6 +1600,7 @@
             .then(function(data) {
                 if (!data) return;
                 var allFolders = data.folders || [];
+                unavailableScopes = data.unavailable_scopes || [];
                 // Populate folder list and entry cache from batch response
                 folders = allFolders.map(function(f) {
                     return {
@@ -1616,7 +1618,7 @@
                     folderEntries[key] = f.entries || [];
                     folderEntryCounts[key] = (f.entries || []).length;
                 });
-                if (folders.length === 0 && isAdmin) {
+                if (folders.length === 0 && unavailableScopes.length === 0 && isAdmin) {
                     document.getElementById('empty-state').style.display = '';
                     document.getElementById('main-content').style.display = 'none';
                 } else if (folders.length === 0) {
@@ -1668,13 +1670,52 @@
         function renderFolders() {
             var ul = document.getElementById('folder-list');
             ul.innerHTML = '';
+            // Greyed placeholders for scopes whose Vault backend is unreachable
+            // (multi-Vault DR). Empty in a healthy single-Vault deployment, so
+            // this adds nothing to the quick-start experience.
+            (unavailableScopes || []).forEach(function(scope) {
+                ul.appendChild(buildUnavailableScopeNode(scope));
+            });
             if (folders.length === 0) {
-                ul.innerHTML = '<li style="color:#666;cursor:default;padding:1em 0.8em">No folders visible to your account.</li>';
+                if (!unavailableScopes || unavailableScopes.length === 0) {
+                    var empty = document.createElement('li');
+                    empty.style.cssText = 'color:#666;cursor:default;padding:1em 0.8em';
+                    empty.textContent = 'No folders visible to your account.';
+                    ul.appendChild(empty);
+                }
                 return;
             }
             folders.forEach(function(f) {
                 ul.appendChild(buildFolderNode(f, true));
             });
+        }
+
+        // A non-interactive, greyed tree node shown when a scope's Vault backend
+        // is down, so the outage is visible instead of the scope silently
+        // vanishing. The page's /api/me poll re-runs init() every 15s, which
+        // refreshes this state.
+        function buildUnavailableScopeNode(scope) {
+            var label = scope === 'instance'
+                ? 'Local'
+                : (scope.charAt(0).toUpperCase() + scope.slice(1));
+            var li = document.createElement('li');
+            li.className = 'folder-unavailable';
+            li.title = 'The Vault serving ' + label.toLowerCase()
+                + ' connections is unreachable. Retrying automatically.';
+            var row = document.createElement('div');
+            row.className = 'folder-row';
+            row.style.cssText = 'opacity:0.55;cursor:default';
+            var icon = document.createElement('span');
+            icon.className = 'tree-chevron';
+            icon.style.color = 'var(--status-error)';
+            icon.textContent = '⚠'; // warning sign
+            row.appendChild(icon);
+            var name = document.createElement('span');
+            name.className = 'folder-name';
+            name.textContent = label + ' connections unavailable';
+            row.appendChild(name);
+            li.appendChild(row);
+            return li;
         }
 
         function buildFolderNode(f, showScope) {

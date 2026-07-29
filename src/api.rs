@@ -2036,26 +2036,38 @@ impl VaultBackends {
     // ── Fan-out across scopes ──
 
     /// List top-level folders across every scope, routing each to its backend.
-    /// Tolerant of a down backend: a scope whose backend is unavailable simply
-    /// contributes nothing, unless NO backend is connected at all, in which
-    /// case `Unavailable` is returned so callers surface the outage.
-    pub async fn list_all_folders(&self) -> Result<Vec<crate::vault::FolderInfo>, VaultError> {
+    /// Returns `(folders, unavailable_scopes)`: a scope whose dedicated backend
+    /// is down (or errors) is reported in `unavailable_scopes` rather than
+    /// failing the whole call, so the UI can grey it while other scopes stay
+    /// live. Only when NO backend is connected at all is `Unavailable` returned
+    /// (full outage → 503). In a single-Vault deployment every scope aliases
+    /// the one backend, so `unavailable_scopes` is empty whenever it is up.
+    pub async fn list_all_folders(
+        &self,
+    ) -> Result<(Vec<crate::vault::FolderInfo>, Vec<String>), VaultError> {
         let mut folders = Vec::new();
+        let mut unavailable = Vec::new();
         let mut any = false;
         for scope in ["shared", "instance"] {
-            if let Some(client) = self.cell_for_scope(scope).read().await.clone() {
-                any = true;
-                match client.list_folders_in_scope(scope).await {
-                    Ok(fs) => folders.extend(fs),
-                    Err(VaultError::NotFound) => {}
-                    Err(e) => tracing::warn!(scope, error = %e, "listing folders for scope failed"),
+            match self.cell_for_scope(scope).read().await.clone() {
+                Some(client) => {
+                    any = true;
+                    match client.list_folders_in_scope(scope).await {
+                        Ok(fs) => folders.extend(fs),
+                        Err(VaultError::NotFound) => {}
+                        Err(e) => {
+                            tracing::warn!(scope, error = %e, "listing folders for scope failed");
+                            unavailable.push(scope.to_string());
+                        }
+                    }
                 }
+                None => unavailable.push(scope.to_string()),
             }
         }
         if !any {
             return Err(VaultError::Unavailable);
         }
-        Ok(folders)
+        Ok((folders, unavailable))
     }
 }
 
@@ -2165,7 +2177,7 @@ pub async fn ab_list_folders(
     };
 
     let folders = match vault.list_all_folders().await {
-        Ok(f) => f,
+        Ok((f, _)) => f,
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,
@@ -2263,8 +2275,8 @@ pub async fn ab_list_all(
         }
     };
 
-    let folders = match vault.list_all_folders().await {
-        Ok(f) => f,
+    let (folders, unavailable_scopes) = match vault.list_all_folders().await {
+        Ok(fu) => fu,
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,
@@ -2316,7 +2328,10 @@ pub async fn ab_list_all(
         }));
     }
 
-    Json(json!({"folders": result})).into_response()
+    // `unavailable_scopes` lists scopes whose dedicated backend is down (empty
+    // in a healthy single-Vault deploy). The UI greys those scopes rather than
+    // silently hiding them.
+    Json(json!({"folders": result, "unavailable_scopes": unavailable_scopes})).into_response()
 }
 
 /// GET /api/addressbook/search-index — Flat list of every entry the user has access to,
@@ -2346,7 +2361,7 @@ pub async fn ab_search_index(
     let is_admin = id.has_role("admin");
 
     let top = match vault.list_all_folders().await {
-        Ok(f) => f,
+        Ok((f, _)) => f,
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,
@@ -3689,7 +3704,7 @@ pub async fn list_credential_variables(
     // Scan all accessible folders and entries for variable references,
     // recursing into subfolders so vars inside nested trees surface too.
     let folders = match vault.list_all_folders().await {
-        Ok(f) => f,
+        Ok((f, _)) => f,
         Err(e) => {
             return (
                 StatusCode::BAD_GATEWAY,

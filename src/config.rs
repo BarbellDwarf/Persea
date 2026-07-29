@@ -1385,6 +1385,28 @@ mod tests {
     }
 
     #[test]
+    fn test_single_vault_is_sufficient() {
+        // Quick-start invariant: a lone [vault] block is all anyone needs; the
+        // optional multi-Vault backends default to absent, so a single local
+        // Vault "just works" with no extra config or env vars.
+        let toml_str = r#"
+            [vault]
+            addr = "https://127.0.0.1:8200"
+            role_id = "quickstart"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.vault.is_some());
+        assert!(
+            config.vault_shared.is_none(),
+            "[vault_shared] must be optional"
+        );
+        assert!(
+            config.vault_local.is_none(),
+            "[vault_local] must be optional"
+        );
+    }
+
+    #[test]
     fn oidc_config_parses_without_client_secret() {
         // Regression for #121: omitting client_secret from config.toml used
         // to fail TOML parsing before OIDC_CLIENT_SECRET could fill it in.
