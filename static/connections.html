@@ -331,6 +331,7 @@
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
         <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
+        <a href="#" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
         <span id="user-menu-wrapper">
             <a href="#" id="logout-item">Logout</a>
             <span id="user-menu-btn" title="Preferences">&#9881; Settings</span>
@@ -873,8 +874,8 @@
     <!-- Credential prompt modal -->
     <div class="modal-overlay" id="my-creds-modal">
         <div class="modal" style="max-width:500px">
-            <h3>My Credentials</h3>
-            <p style="color:var(--text-muted);font-size:0.85em;margin-top:0">Store your credentials securely in Vault. Connections entries that use credential variables will auto-fill from these values.</p>
+            <h3 id="my-creds-title">My Credentials</h3>
+            <p id="my-creds-desc" style="color:var(--text-muted);font-size:0.85em;margin-top:0">Store your credentials securely in Vault. Connections entries that use credential variables will auto-fill from these values.</p>
             <div id="my-creds-loading" style="color:var(--text-muted)">Loading...</div>
             <div id="my-creds-empty" style="display:none;color:var(--text-muted);font-style:italic;margin:1em 0">No credential variables configured in connections entries yet.</div>
             <div id="my-creds-list"></div>
@@ -2257,8 +2258,16 @@
             .catch(function(err) {
                 if (targetWin && !targetWin.closed) targetWin.close();
                 if (err.message === 'missing_credentials') {
-                    showError('Missing credentials: ' + (err.missing || []).join(', ') + '. Set them in My Credentials (⚙ menu).');
-                    openMyCredentials();
+                    // Guided, resumable flow: prompt only the missing variables,
+                    // then re-run this exact connect on save instead of
+                    // dead-ending the user in the full credential editor.
+                    openMyCredentials({
+                        onlyVars: err.missing || [],
+                        heading: 'Enter the credentials needed to connect to "' + name + '".',
+                        onSaved: function() {
+                            doConnect(scope, folder, name, btn, extraBody, newWindow);
+                        }
+                    });
                 } else {
                     showError(err.message);
                 }
@@ -3748,21 +3757,46 @@
         });
 
         // ── My Credentials ──
+        // Callback to run after a successful credential save (used by the
+        // resumable connect flow); cleared whenever the modal opens/closes.
+        var credsSavedCallback = null;
+        // When set, restrict the editor to just these variable names (focused
+        // "credentials needed to connect" mode).
+        var credsOnlyVars = null;
+
         document.getElementById('my-creds-item').addEventListener('click', function() {
             document.getElementById('user-menu').style.display = 'none';
             openMyCredentials();
         });
+        var _mcNav = document.getElementById('my-creds-nav');
+        if (_mcNav) _mcNav.addEventListener('click', function(e) {
+            e.preventDefault();
+            openMyCredentials();
+        });
         document.getElementById('my-creds-close').addEventListener('click', function() {
             document.getElementById('my-creds-modal').classList.remove('active');
+            credsSavedCallback = null;
+            credsOnlyVars = null;
         });
         document.getElementById('my-creds-save').addEventListener('click', saveMyCredentials);
 
-        function openMyCredentials() {
+        // opts (all optional): { onlyVars: [names], heading: "...", onSaved: fn }
+        // onlyVars focuses the editor on specific variables; onSaved runs after
+        // a successful save (the resumable connect flow).
+        function openMyCredentials(opts) {
+            opts = opts || {};
+            credsSavedCallback = opts.onSaved || null;
+            credsOnlyVars = opts.onlyVars || null;
             var modal = document.getElementById('my-creds-modal');
             var list = document.getElementById('my-creds-list');
             var loading = document.getElementById('my-creds-loading');
             var empty = document.getElementById('my-creds-empty');
             var errEl = document.getElementById('my-creds-error');
+            var descEl = document.getElementById('my-creds-desc');
+            if (descEl) {
+                descEl.textContent = opts.heading
+                    || 'Store your credentials securely in Vault. Connections entries that use credential variables will auto-fill from these values.';
+            }
             list.innerHTML = '';
             loading.style.display = '';
             empty.style.display = 'none';
@@ -3794,13 +3828,21 @@
 
                 // Group by domain prefix
                 var domainKeys = Object.keys(domains).sort();
+                var renderedAny = false;
                 domainKeys.forEach(function(domain) {
+                    // In focused mode, keep only the requested variables and skip
+                    // domains that end up empty.
+                    var vars = domains[domain].filter(function(v) {
+                        return !credsOnlyVars || credsOnlyVars.indexOf(v.name) !== -1;
+                    });
+                    if (vars.length === 0) return;
+
                     var heading = document.createElement('div');
                     heading.style.cssText = 'color:var(--accent);font-weight:bold;margin-top:1em;margin-bottom:0.3em;font-size:0.95em;text-transform:uppercase';
                     heading.textContent = domain;
                     list.appendChild(heading);
 
-                    var vars = domains[domain].sort(function(a, b) {
+                    vars.sort(function(a, b) {
                         // username before password before key before other
                         function suffixOrder(n) {
                             if (n.endsWith('_username')) return 0;
@@ -3812,6 +3854,7 @@
                         var oa = suffixOrder(a.name), ob = suffixOrder(b.name);
                         return oa !== ob ? oa - ob : a.name.localeCompare(b.name);
                     });
+                    renderedAny = true;
                     vars.forEach(function(v) {
                         var name = v.name;
                         var isSecret = name.endsWith('_password') || name.endsWith('_key');
@@ -3928,6 +3971,11 @@
             })
             .then(function() {
                 document.getElementById('my-creds-modal').classList.remove('active');
+                // Resume whatever was blocked on credentials (e.g. a connect).
+                var cb = credsSavedCallback;
+                credsSavedCallback = null;
+                credsOnlyVars = null;
+                if (cb) cb();
             })
             .catch(function(err) {
                 errEl.textContent = err.message;
