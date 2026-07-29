@@ -365,6 +365,12 @@
     </div>
 
     <div id="main-content" style="display:none">
+        <div id="creds-banner" style="display:none;background:var(--input);border:1px solid var(--border);border-left:3px solid var(--status-pending);border-radius:var(--radius);padding:0.6em 0.9em;margin:0 0 0.8em 0;font-size:0.9em;display:none;align-items:center;gap:0.8em">
+            <span>&#128273;</span>
+            <span id="creds-banner-text" style="flex:1"></span>
+            <button class="btn-small" id="creds-banner-setup">Set up now</button>
+            <span id="creds-banner-dismiss" title="Dismiss" style="cursor:pointer;color:var(--text-dim);padding:0 0.3em">&times;</span>
+        </div>
         <div id="active-sessions" class="active-sessions" style="display:none">
             <div class="section-head">
                 <strong>Active Sessions</strong>
@@ -995,6 +1001,9 @@
         var selectedFolder = null; // { name, scope, description, path, has_children }
         var folders = []; // top-level folders from batch load
         var unavailableScopes = []; // scopes whose Vault backend is down (multi-Vault DR); greyed in the tree
+        var setCredVars = null;     // Set of credential variable names the user has set (null = not yet loaded)
+        var credsBannerDismissed = false;
+        var lastEntriesRender = null; // { entries, scope, folder } — re-render when cred status arrives
         var folderEntryCounts = {}; // "scope|path" -> count
         var folderEntries = {};    // "scope|path" -> entries array
         var subfolderCache = {};   // "scope|path" -> [FolderInfo] (lazy-loaded children)
@@ -1381,6 +1390,7 @@
                     return;
                 }
                 loadFolders();
+                loadCredStatus();
                 loadActiveSessions();
                 setInterval(loadActiveSessions, 10000);
                 startOnboarding(currentUserRole);
@@ -1929,6 +1939,9 @@
                 input.placeholder = 'Search ' + searchIndex.length + ' connection' + (searchIndex.length === 1 ? '' : 's') + '... (press / )';
                 input.disabled = false;
                 if (searchQuery) runSearch();
+                // The full entry set is now known — refresh the proactive
+                // "credentials to set up" banner against it.
+                updateCredBanner();
             })
             .catch(function(err) {
                 searchIndexLoading = false;
@@ -2134,7 +2147,65 @@
             });
         }
 
+        // Credential variables an entry references that the user hasn't set
+        // yet. Empty until the cred status has loaded (setCredVars !== null).
+        function entryUnsetVars(e) {
+            if (!setCredVars || !e || !e.credential_variables) return [];
+            return e.credential_variables.filter(function(v) { return !setCredVars.has(v); });
+        }
+
+        // Fetch which credential variables the user has set, then refresh the
+        // proactive banner and re-render the entry list so pills appear.
+        function loadCredStatus() {
+            fetch('/api/me/credentials', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) {
+                    if (!data || !data.credentials) return;
+                    setCredVars = new Set();
+                    Object.keys(data.credentials).forEach(function(k) {
+                        if (data.credentials[k] && data.credentials[k].set) setCredVars.add(k);
+                    });
+                    updateCredBanner();
+                    refreshEntriesView();
+                })
+                .catch(function() {});
+        }
+
+        // Distinct credential variables referenced by any visible entry that the
+        // user hasn't set. Prefer the (comprehensive) search index; fall back to
+        // whatever folder entries are cached.
+        function updateCredBanner() {
+            var banner = document.getElementById('creds-banner');
+            if (!banner) return;
+            if (credsBannerDismissed || !setCredVars) { banner.style.display = 'none'; return; }
+            var entries = [];
+            if (searchIndex) {
+                entries = searchIndex.map(function(r) { return r.entry; });
+            } else {
+                Object.keys(folderEntries).forEach(function(k) {
+                    (folderEntries[k] || []).forEach(function(e) { entries.push(e); });
+                });
+            }
+            var unset = {};
+            entries.forEach(function(e) {
+                entryUnsetVars(e).forEach(function(v) { unset[v] = true; });
+            });
+            var count = Object.keys(unset).length;
+            if (count === 0) { banner.style.display = 'none'; return; }
+            document.getElementById('creds-banner-text').textContent =
+                'You have ' + count + ' credential' + (count === 1 ? '' : 's')
+                + ' to set up before some connections will work.';
+            banner.style.display = 'flex';
+        }
+
+        function refreshEntriesView() {
+            if (lastEntriesRender && !searchActive) {
+                renderEntries(lastEntriesRender.entries, lastEntriesRender.scope, lastEntriesRender.folder);
+            }
+        }
+
         function renderEntries(entries, scope, folder) {
+            lastEntriesRender = { entries: entries, scope: scope, folder: folder };
             var content = document.getElementById('entries-content');
             if (entries.length === 0) {
                 if (isAdmin) {
@@ -2171,7 +2242,11 @@
                 var typeCls = 'type-' + e.session_type;
 
                 html += '<tr>';
-                html += '<td>' + escapeHtml(label) + '</td>';
+                var unsetVars = entryUnsetVars(e);
+                var credPill = unsetVars.length > 0
+                    ? ' <span title="Set these first: ' + escapeAttr(unsetVars.join(', ')) + '" style="background:var(--status-pending);color:var(--bg);border-radius:8px;padding:0.05em 0.5em;font-size:0.72em;font-weight:bold;white-space:nowrap;vertical-align:middle">credentials needed</span>'
+                    : '';
+                html += '<td>' + escapeHtml(label) + credPill + '</td>';
                 var typeLabel = e.session_type.toUpperCase();
                 if (e.auth_pkg) typeLabel += ' <span style="font-size:0.75em;color:#888">(' + escapeHtml(e.auth_pkg) + ')</span>';
                 html += '<td><span class="type-badge ' + typeCls + '">' + typeLabel + '</span></td>';
@@ -3773,6 +3848,13 @@
             e.preventDefault();
             openMyCredentials();
         });
+        var _cbSetup = document.getElementById('creds-banner-setup');
+        if (_cbSetup) _cbSetup.addEventListener('click', function() { openMyCredentials(); });
+        var _cbDismiss = document.getElementById('creds-banner-dismiss');
+        if (_cbDismiss) _cbDismiss.addEventListener('click', function() {
+            credsBannerDismissed = true;
+            document.getElementById('creds-banner').style.display = 'none';
+        });
         document.getElementById('my-creds-close').addEventListener('click', function() {
             document.getElementById('my-creds-modal').classList.remove('active');
             credsSavedCallback = null;
@@ -3971,6 +4053,8 @@
             })
             .then(function() {
                 document.getElementById('my-creds-modal').classList.remove('active');
+                // Refresh the "credentials to set up" banner and per-entry pills.
+                loadCredStatus();
                 // Resume whatever was blocked on credentials (e.g. a connect).
                 var cb = credsSavedCallback;
                 credsSavedCallback = null;
