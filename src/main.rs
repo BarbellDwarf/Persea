@@ -17,7 +17,8 @@ mod vdi;
 mod websocket;
 
 use crate::api::{
-    AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultConfigured, VaultState,
+    AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultBackends, VaultCell,
+    VaultConfigured, VaultState,
 };
 use crate::config::Config;
 use crate::db::Db;
@@ -483,8 +484,13 @@ async fn run_server(config: Config, database: Db) {
         None
     };
 
-    // Initialize Vault client if configured
-    let vault_client: VaultState = Arc::new(tokio::sync::RwLock::new(None));
+    // Initialize Vault client if configured.
+    //
+    // `vault_cell` is the single backend connection cell used throughout setup
+    // (initial connect, background retry, LUKS mount). It is wrapped into the
+    // shared `VaultBackends` state after drive init below; in the single-Vault
+    // configuration every address-book scope aliases this one cell.
+    let vault_cell: VaultCell = Arc::new(tokio::sync::RwLock::new(None));
 
     if let Some(ref vault_config) = config.vault {
         let secret_id = match std::env::var("VAULT_SECRET_ID") {
@@ -502,7 +508,7 @@ async fn run_server(config: Config, database: Db) {
                     let client = Arc::new(client);
                     client.spawn_renewal_task();
                     tracing::info!("Vault client initialized: {}", vault_config.addr);
-                    *vault_client.write().await = Some(client);
+                    *vault_cell.write().await = Some(client);
                 }
                 Err(e) => {
                     tracing::error!("=============================================");
@@ -517,7 +523,7 @@ async fn run_server(config: Config, database: Db) {
                     // Spawn background retry task
                     let retry_vault_config = vault_config.clone();
                     let retry_secret_id = secret_id.clone();
-                    let retry_vault_state = vault_client.clone();
+                    let retry_vault_state = vault_cell.clone();
                     let retry_drive_config = config.drive.clone();
                     tokio::spawn(async move {
                         let mut interval =
@@ -573,7 +579,7 @@ async fn run_server(config: Config, database: Db) {
         if drive_config.enabled {
             // Mount LUKS volume if configured and Vault is available now
             if drive::luks_configured(drive_config) {
-                let vc = vault_client.read().await;
+                let vc = vault_cell.read().await;
                 if let Some(ref client) = *vc {
                     match drive::mount_luks(drive_config, client).await {
                         Ok(_) => tracing::info!("LUKS drive volume mounted"),
@@ -591,6 +597,11 @@ async fn run_server(config: Config, database: Db) {
             }
         }
     }
+
+    // Wrap the backend cell into the shared VaultBackends state. Single-Vault
+    // for now: `shared` and `local` scopes both alias this one cell. The
+    // multi-backend split adds dedicated cells here without touching handlers.
+    let vault_client: VaultState = Arc::new(VaultBackends::single(vault_cell));
 
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
     let vault_configured = VaultConfigured(config.vault.is_some());

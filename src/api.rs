@@ -1505,7 +1505,7 @@ pub async fn me(
 ) -> impl IntoResponse {
     match identity {
         Some(Extension(id)) => {
-            let vault_available = vault.read().await.is_some();
+            let vault_available = vault.default.read().await.is_some();
             Json(json!({
                 "name": id.display_name(),
                 "role": id.role(),
@@ -1854,7 +1854,51 @@ pub async fn delete_group_mapping(
 
 // ── Address Book endpoints (Vault-backed) ──
 
-pub type VaultState = Arc<tokio::sync::RwLock<Option<Arc<VaultClient>>>>;
+/// One Vault backend connection cell — `None` until connected / while down.
+pub type VaultCell = Arc<tokio::sync::RwLock<Option<Arc<VaultClient>>>>;
+
+/// The set of Vault backends rustguac talks to.
+///
+/// In the single-Vault default, `shared` and `local` both alias `default`, so
+/// behaviour is identical to a single `VaultClient`. A multi-Vault split (see
+/// `[vault_shared]` / `[vault_local]`) routes the `shared` and `instance`
+/// address-book scopes to dedicated backends, each with its own connection and
+/// retry lifecycle, so one backend being down cannot take the others with it.
+pub struct VaultBackends {
+    /// `[vault]`: fallback for any scope without a dedicated backend, and home
+    /// of unscoped secrets (the LUKS key; user credential variables for now).
+    pub default: VaultCell,
+    /// Serves the `shared` scope. Aliases `default` unless `[vault_shared]` is
+    /// configured.
+    pub shared: VaultCell,
+    /// Serves the `instance` (local) scope. Aliases `default` unless
+    /// `[vault_local]` is configured.
+    pub local: VaultCell,
+}
+
+impl VaultBackends {
+    /// Single-backend construction: every scope shares one cell (today's
+    /// behaviour). Multi-backend construction lands with the config wiring.
+    pub fn single(cell: VaultCell) -> Self {
+        Self {
+            default: cell.clone(),
+            shared: cell.clone(),
+            local: cell,
+        }
+    }
+
+    /// The backend cell serving a given address-book scope (`"shared"` or
+    /// `"instance"`). Anything else falls back to the shared backend.
+    #[allow(dead_code)] // wired in once scope-aware routing lands (step 2)
+    pub fn cell_for_scope(&self, scope: &str) -> &VaultCell {
+        match scope {
+            "instance" => &self.local,
+            _ => &self.shared,
+        }
+    }
+}
+
+pub type VaultState = Arc<VaultBackends>;
 
 // ── Docs endpoint ──
 
@@ -1871,7 +1915,7 @@ pub async fn get_docs() -> impl IntoResponse {
 
 /// Helper: require Vault to be available, or return an appropriate error.
 async fn require_vault(vault: &VaultState) -> Result<Arc<VaultClient>, Response> {
-    let guard = vault.read().await;
+    let guard = vault.default.read().await;
     guard.clone().ok_or_else(|| {
         (
             StatusCode::SERVICE_UNAVAILABLE,
