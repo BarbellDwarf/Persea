@@ -1694,7 +1694,10 @@
             chevron.className = 'tree-chevron';
             var isExpanded = !!expandedPaths[key];
             if (f.has_children) {
-                chevron.textContent = isExpanded ? '\u25BE' : '\u25B8';
+                // Full-size triangles (U+25BC/U+25B6), matching every other
+                // collapsible on the page; the small variants (U+25BE/U+25B8)
+                // rendered as faint, hard-to-see ink even at 20px.
+                chevron.textContent = isExpanded ? '\u25BC' : '\u25B6';
                 if (isExpanded) chevron.classList.add('expanded');
                 chevron.addEventListener('click', function(ev) {
                     ev.stopPropagation();
@@ -1702,7 +1705,7 @@
                 });
             } else {
                 chevron.classList.add('leaf');
-                chevron.textContent = '\u25B8';
+                chevron.textContent = '\u25B6';
             }
             row.appendChild(chevron);
 
