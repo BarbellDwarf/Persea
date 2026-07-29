@@ -1003,7 +1003,6 @@
         var folders = []; // top-level folders from batch load
         var unavailableScopes = []; // scopes whose Vault backend is down (multi-Vault DR); greyed in the tree
         var setCredVars = null;     // Set of credential variable names the user has set (null = not yet loaded)
-        var credsBannerDismissed = false;
         var lastEntriesRender = null; // { entries, scope, folder } — re-render when cred status arrives
         var folderEntryCounts = {}; // "scope|path" -> count
         var folderEntries = {};    // "scope|path" -> entries array
@@ -2175,10 +2174,23 @@
         // Distinct credential variables referenced by any visible entry that the
         // user hasn't set. Prefer the (comprehensive) search index; fall back to
         // whatever folder entries are cached.
+        // localStorage remembers which unset credentials the user dismissed, so
+        // the banner stays gone across refreshes. It only re-appears if a
+        // genuinely NEW unset credential shows up (not merely because the set
+        // shrank after a partial save) — dismissing silences today's set, not
+        // future needs.
+        var CREDS_DISMISS_KEY = 'rustguac_creds_banner_dismissed';
+        var currentUnsetCreds = []; // names behind the banner right now (for dismiss)
+        function getDismissedCreds() {
+            try {
+                return new Set((localStorage.getItem(CREDS_DISMISS_KEY) || '').split(',').filter(Boolean));
+            } catch (e) { return new Set(); }
+        }
+
         function updateCredBanner() {
             var banner = document.getElementById('creds-banner');
             if (!banner) return;
-            if (credsBannerDismissed || !setCredVars) { banner.style.display = 'none'; return; }
+            if (!setCredVars) { banner.style.display = 'none'; return; }
             var entries = [];
             if (searchIndex) {
                 entries = searchIndex.map(function(r) { return r.entry; });
@@ -2191,10 +2203,18 @@
             entries.forEach(function(e) {
                 entryUnsetVars(e).forEach(function(v) { unset[v] = true; });
             });
-            var count = Object.keys(unset).length;
-            if (count === 0) { banner.style.display = 'none'; return; }
+            var names = Object.keys(unset);
+            currentUnsetCreds = names;
+            if (names.length === 0) { banner.style.display = 'none'; return; }
+            // Stay hidden only if every currently-unset credential was already
+            // dismissed; a new one re-alerts.
+            var dismissed = getDismissedCreds();
+            if (names.every(function(n) { return dismissed.has(n); })) {
+                banner.style.display = 'none';
+                return;
+            }
             document.getElementById('creds-banner-text').textContent =
-                'You have ' + count + ' credential' + (count === 1 ? '' : 's')
+                'You have ' + names.length + ' credential' + (names.length === 1 ? '' : 's')
                 + ' to set up before some connections will work.';
             banner.style.display = 'flex';
         }
@@ -3853,7 +3873,9 @@
         if (_cbSetup) _cbSetup.addEventListener('click', function() { openMyCredentials(); });
         var _cbDismiss = document.getElementById('creds-banner-dismiss');
         if (_cbDismiss) _cbDismiss.addEventListener('click', function() {
-            credsBannerDismissed = true;
+            // Persist the dismissal so it survives refresh; remember exactly
+            // which credentials were silenced so a new one can still re-alert.
+            try { localStorage.setItem(CREDS_DISMISS_KEY, currentUnsetCreds.join(',')); } catch (e) {}
             document.getElementById('creds-banner').style.display = 'none';
         });
         document.getElementById('my-creds-close').addEventListener('click', function() {
