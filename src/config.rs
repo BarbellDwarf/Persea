@@ -312,6 +312,10 @@ fn default_vault_mount() -> String {
     "secret".into()
 }
 
+fn default_user_credentials_scope() -> String {
+    "local".into()
+}
+
 fn default_vault_base_path() -> String {
     "rustguac".into()
 }
@@ -416,6 +420,14 @@ pub struct Config {
     /// the first address in X-Forwarded-For is used as the real client IP.
     #[serde(default)]
     pub trusted_proxies: Vec<String>,
+
+    /// Default scope for a NEW per-user credential variable when more than one
+    /// Vault backend is configured: "local" (default — stays on this instance's
+    /// Vault, survives a central outage) or "shared" (propagates fleet-wide via
+    /// `[vault_shared]`). Ignored in a single-Vault deployment: with one store
+    /// the shared/local distinction is meaningless and the UI hides the toggle.
+    #[serde(default = "default_user_credentials_scope")]
+    pub user_credentials_default_scope: String,
 
     pub tls: Option<TlsConfig>,
     pub oidc: Option<OidcConfig>,
@@ -1156,6 +1168,7 @@ impl Default for Config {
             session_cleanup_delay_secs: default_session_cleanup_delay_secs(),
             rate_limit: false,
             trusted_proxies: Vec::new(),
+            user_credentials_default_scope: default_user_credentials_scope(),
             tls: None,
             oidc: None,
             vault: None,

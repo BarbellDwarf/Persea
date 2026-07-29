@@ -807,6 +807,12 @@ pub struct VaultConfigured(pub bool);
 #[derive(Clone)]
 pub struct DriveConfigured(pub bool);
 
+/// Default scope ("local" | "shared") for a new per-user credential variable
+/// (from `[user_credentials_default_scope]`). Only meaningful when more than
+/// one Vault backend is configured.
+#[derive(Clone)]
+pub struct CredentialDefaultScope(pub String);
+
 /// GET /api/recordings — List all recording files. Requires poweruser+ role.
 pub async fn list_recordings(
     State(manager): State<AppState>,
@@ -1896,16 +1902,6 @@ impl VaultBackends {
             .ok_or(VaultError::Unavailable)
     }
 
-    /// Resolve the connected default (`[vault]`) client — home of unscoped
-    /// secrets and, for now, per-user credential variables.
-    async fn default_client(&self) -> Result<Arc<VaultClient>, VaultError> {
-        self.default
-            .read()
-            .await
-            .clone()
-            .ok_or(VaultError::Unavailable)
-    }
-
     /// True if at least one configured backend is currently connected.
     pub async fn any_connected(&self) -> bool {
         self.default.read().await.is_some()
@@ -2010,27 +2006,76 @@ impl VaultBackends {
             .await
     }
 
-    // ── Unscoped operations (default backend) ──
+    // ── Per-user credential variables ──
+    //
+    // Credentials live in the "local" backend (cell_for_scope("instance")) or
+    // the "shared" backend (cell_for_scope("shared")) — location is the scope.
+    // In single-Vault those cells alias the default, so there is one physical
+    // store and the shared/local distinction collapses (see `creds_split`),
+    // preserving the quick-start behaviour exactly.
 
-    pub async fn get_user_credentials(
+    /// Whether the shared and local credential backends are physically
+    /// distinct. False in single-Vault (one store); the per-credential
+    /// shared/local choice is only meaningful when this is true.
+    pub fn creds_split(&self) -> bool {
+        !Arc::ptr_eq(&self.shared, &self.local)
+    }
+
+    async fn cred_client(&self, shared: bool) -> Result<Arc<VaultClient>, VaultError> {
+        let cell = if shared { &self.shared } else { &self.local };
+        cell.read().await.clone().ok_or(VaultError::Unavailable)
+    }
+
+    pub async fn get_user_credentials_scoped(
         &self,
         email: &str,
+        shared: bool,
     ) -> Result<std::collections::HashMap<String, String>, VaultError> {
-        self.default_client()
+        self.cred_client(shared)
             .await?
             .get_user_credentials(email)
             .await
     }
 
-    pub async fn put_user_credentials(
+    pub async fn put_user_credentials_scoped(
         &self,
         email: &str,
+        shared: bool,
         creds: &std::collections::HashMap<String, String>,
     ) -> Result<(), VaultError> {
-        self.default_client()
+        self.cred_client(shared)
             .await?
             .put_user_credentials(email, creds)
             .await
+    }
+
+    /// Merged view (local wins on a name collision) for connect-time
+    /// resolution. Tolerant of a down backend — it contributes nothing, so a
+    /// credential on the reachable backend still resolves. Single read in
+    /// single-Vault.
+    pub async fn get_user_credentials(
+        &self,
+        email: &str,
+    ) -> Result<std::collections::HashMap<String, String>, VaultError> {
+        let local = self
+            .get_user_credentials_scoped(email, false)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "reading local credentials failed");
+                std::collections::HashMap::new()
+            });
+        if !self.creds_split() {
+            return Ok(local);
+        }
+        let mut merged = self
+            .get_user_credentials_scoped(email, true)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "reading shared credentials failed");
+                std::collections::HashMap::new()
+            });
+        merged.extend(local); // local wins
+        Ok(merged)
     }
 
     // ── Fan-out across scopes ──
@@ -3540,10 +3585,82 @@ pub async fn revoke_my_token(
 
 // ── User credential variables ──
 
-/// GET /api/me/credentials — List own credential variables (names and masked values).
+/// Mask a credential value for the UI: never echo a stored secret back.
+fn mask_credential(name: &str, value: &str, scope: &str) -> serde_json::Value {
+    let display = if value.is_empty() {
+        String::new()
+    } else if name.ends_with("_password") || name.ends_with("_key") {
+        "••••••••".to_string()
+    } else {
+        value.to_string()
+    };
+    json!({ "set": !value.is_empty(), "display": display, "scope": scope })
+}
+
+/// Compute the (local, shared) credential maps to persist from a save batch,
+/// preserving untouched keys and honouring "leave blank = keep".
+///
+/// - `existing_local` / `existing_shared`: current stored maps. Single-Vault
+///   passes the one store as `existing_local` with an empty `existing_shared`.
+/// - `incoming`: name -> value for the keys being saved (blank value = keep the
+///   existing value, moving it to the target scope if that changed).
+/// - `scopes`: name -> "shared"|"local" target for touched keys.
+/// - `default_scope`: fallback when a touched key has no explicit scope.
+/// - `split`: false in single-Vault — everything lands in the returned local
+///   map (the caller writes it once) and the shared map stays empty.
+fn partition_credential_writes(
+    mut existing_local: std::collections::HashMap<String, String>,
+    mut existing_shared: std::collections::HashMap<String, String>,
+    incoming: &std::collections::HashMap<String, String>,
+    scopes: &std::collections::HashMap<String, String>,
+    default_scope: &str,
+    split: bool,
+) -> (
+    std::collections::HashMap<String, String>,
+    std::collections::HashMap<String, String>,
+) {
+    for (name, val) in incoming {
+        // Resolve the value: keep the existing one when left blank.
+        let value = if !val.is_empty() {
+            val.clone()
+        } else {
+            existing_local
+                .get(name)
+                .or_else(|| existing_shared.get(name))
+                .cloned()
+                .unwrap_or_default()
+        };
+        // Blank with no existing value: nothing to store.
+        if value.is_empty() {
+            existing_local.remove(name);
+            existing_shared.remove(name);
+            continue;
+        }
+        let to_shared = split
+            && scopes
+                .get(name)
+                .map(String::as_str)
+                .unwrap_or(default_scope)
+                == "shared";
+        if to_shared {
+            existing_shared.insert(name.clone(), value);
+            existing_local.remove(name);
+        } else {
+            existing_local.insert(name.clone(), value);
+            existing_shared.remove(name);
+        }
+    }
+    (existing_local, existing_shared)
+}
+
+/// GET /api/me/credentials — List own credential variables (names and masked
+/// values). Also reports whether the shared/local scope choice is available
+/// (`creds_split`) and the default scope for new variables, so the UI can show
+/// or hide the per-credential toggle.
 pub async fn get_my_credentials(
     identity: Option<Extension<AuthIdentity>>,
     Extension(vault): Extension<VaultState>,
+    Extension(default_scope): Extension<CredentialDefaultScope>,
 ) -> impl IntoResponse {
     let email = match identity {
         Some(Extension(AuthIdentity::User { ref email, .. })) => email.clone(),
@@ -3556,39 +3673,57 @@ pub async fn get_my_credentials(
         }
     };
 
-    match vault.get_user_credentials(&email).await {
-        Ok(creds) => {
-            // Return variable names with masked values (indicate set vs unset)
-            let masked: serde_json::Map<String, serde_json::Value> = creds
-                .iter()
-                .map(|(k, v)| {
-                    let display = if v.is_empty() {
-                        "".to_string()
-                    } else if k.ends_with("_password") || k.ends_with("_key") {
-                        "••••••••".to_string()
-                    } else {
-                        v.clone()
-                    };
-                    (
-                        k.clone(),
-                        json!({ "set": !v.is_empty(), "display": display }),
-                    )
-                })
-                .collect();
-            Json(json!({ "credentials": masked })).into_response()
+    let split = vault.creds_split();
+    let local = match vault.get_user_credentials_scoped(&email, false).await {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("Failed to read credentials: {}", e)})),
+            )
+                .into_response()
         }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": format!("Failed to read credentials: {}", e)})),
-        )
-            .into_response(),
+    };
+    // Shared backend errors are tolerated (its creds just don't show); a
+    // central-Vault blip shouldn't block editing local credentials.
+    let shared = if split {
+        vault
+            .get_user_credentials_scoped(&email, true)
+            .await
+            .unwrap_or_default()
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    // Build masked entries; local wins on a name collision, and `scope`
+    // reflects where each value currently lives.
+    let mut masked = serde_json::Map::new();
+    for (k, v) in &shared {
+        masked.insert(k.clone(), mask_credential(k, v, "shared"));
     }
+    for (k, v) in &local {
+        masked.insert(k.clone(), mask_credential(k, v, "local"));
+    }
+
+    Json(json!({
+        "credentials": masked,
+        "creds_split": split,
+        "default_scope": default_scope.0,
+    }))
+    .into_response()
 }
 
 /// PUT /api/me/credentials — Save credential variables. Operator+ required.
+///
+/// Body: `{ "credentials": { name: value }, "scopes": { name: "shared"|"local" } }`.
+/// A blank value keeps the existing value (moving it to the target scope if
+/// `scopes` changed it); untouched keys are preserved. When only one Vault
+/// backend is configured the scope is ignored and everything is written to the
+/// single store, so the quick-start path is unchanged.
 pub async fn put_my_credentials(
     identity: Option<Extension<AuthIdentity>>,
     Extension(vault): Extension<VaultState>,
+    Extension(default_scope): Extension<CredentialDefaultScope>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     let email = match identity {
@@ -3613,31 +3748,20 @@ pub async fn put_my_credentials(
         }
     };
 
-    // Expect { "credentials": { "corp_user": "alice", "corp_password": "secret", ... } }
-    let creds_val = match body.get("credentials") {
-        Some(v) => v,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({"error": "missing 'credentials' field"})),
-            )
-                .into_response()
-        }
-    };
-
-    let creds_obj = match creds_val.as_object() {
+    // Expect { "credentials": { "corp_user": "alice", ... } }
+    let creds_obj = match body.get("credentials").and_then(|v| v.as_object()) {
         Some(obj) => obj,
         None => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(json!({"error": "'credentials' must be an object"})),
+                Json(json!({"error": "missing or invalid 'credentials' object"})),
             )
                 .into_response()
         }
     };
 
     // Validate variable names: [a-z0-9_-]+
-    let mut creds = std::collections::HashMap::new();
+    let mut incoming = std::collections::HashMap::new();
     for (k, v) in creds_obj {
         if !k
             .chars()
@@ -3649,39 +3773,86 @@ pub async fn put_my_credentials(
             )
                 .into_response();
         }
-        let val = v.as_str().unwrap_or("").to_string();
-        creds.insert(k.clone(), val);
+        incoming.insert(k.clone(), v.as_str().unwrap_or("").to_string());
     }
 
-    // Merge with existing credentials (so partial updates work)
-    match vault.get_user_credentials(&email).await {
-        Ok(mut existing) => {
-            for (k, v) in &creds {
-                if v.is_empty() {
-                    existing.remove(k); // Empty value = delete
-                } else {
-                    existing.insert(k.clone(), v.clone());
+    // Optional per-key target scope: { "scopes": { name: "shared"|"local" } }.
+    let mut scopes = std::collections::HashMap::new();
+    if let Some(obj) = body.get("scopes").and_then(|v| v.as_object()) {
+        for (k, v) in obj {
+            if let Some(s) = v.as_str() {
+                if s == "shared" || s == "local" {
+                    scopes.insert(k.clone(), s.to_string());
                 }
             }
-            creds = existing;
-        }
-        Err(VaultError::NotFound) => {} // No existing, use new
-        Err(e) => {
-            tracing::warn!("Failed to read existing credentials: {}", e);
         }
     }
 
-    match vault.put_user_credentials(&email, &creds).await {
-        Ok(()) => {
-            tracing::info!(user = %email, count = creds.len(), "User credentials updated");
-            Json(json!({"ok": true, "count": creds.len()})).into_response()
+    let split = vault.creds_split();
+
+    // Read existing maps. Abort on a hard read error rather than risk writing a
+    // partial set (which would drop untouched keys).
+    let existing_local = match vault.get_user_credentials_scoped(&email, false).await {
+        Ok(m) => m,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("Failed to read existing credentials: {}", e)})),
+            )
+                .into_response()
         }
-        Err(e) => (
+    };
+    let existing_shared = if split {
+        match vault.get_user_credentials_scoped(&email, true).await {
+            Ok(m) => m,
+            Err(e) => return (
+                StatusCode::BAD_GATEWAY,
+                Json(
+                    json!({"error": format!("Failed to read existing shared credentials: {}", e)}),
+                ),
+            )
+                .into_response(),
+        }
+    } else {
+        std::collections::HashMap::new()
+    };
+
+    let (new_local, new_shared) = partition_credential_writes(
+        existing_local,
+        existing_shared,
+        &incoming,
+        &scopes,
+        &default_scope.0,
+        split,
+    );
+
+    // Write the local store first (in single-Vault this is the only store).
+    if let Err(e) = vault
+        .put_user_credentials_scoped(&email, false, &new_local)
+        .await
+    {
+        return (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": format!("Failed to save credentials: {}", e)})),
         )
-            .into_response(),
+            .into_response();
     }
+    if split {
+        if let Err(e) = vault
+            .put_user_credentials_scoped(&email, true, &new_shared)
+            .await
+        {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": format!("Failed to save shared credentials: {}", e)})),
+            )
+                .into_response();
+        }
+    }
+
+    let count = new_local.len() + new_shared.len();
+    tracing::info!(user = %email, count, "User credentials updated");
+    Json(json!({"ok": true, "count": count})).into_response()
 }
 
 /// GET /api/credential-variables — List all unique credential variables across address book entries.
@@ -4608,6 +4779,102 @@ mod tests {
     fn test_html_escape_passthrough() {
         assert_eq!(html_escape("hello world"), "hello world");
         assert_eq!(html_escape(""), "");
+    }
+
+    fn hm(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn test_partition_single_vault_writes_one_store() {
+        // Quick-start invariant: with split=false everything lands in the local
+        // map and shared stays empty, so the caller writes the one store once.
+        let existing = hm(&[("corp_user", "alice"), ("corp_password", "old")]);
+        let incoming = hm(&[("corp_password", "new")]);
+        let scopes = hm(&[("corp_password", "shared")]); // ignored when !split
+        let (local, shared) = partition_credential_writes(
+            existing,
+            std::collections::HashMap::new(),
+            &incoming,
+            &scopes,
+            "local",
+            false,
+        );
+        assert_eq!(local.get("corp_user").unwrap(), "alice"); // untouched kept
+        assert_eq!(local.get("corp_password").unwrap(), "new"); // updated
+        assert!(shared.is_empty(), "single store must not populate shared");
+    }
+
+    #[test]
+    fn test_partition_blank_keeps_existing() {
+        // Blank value = keep existing (the "leave blank to keep" secret path).
+        let existing = hm(&[("corp_password", "secret")]);
+        let incoming = hm(&[("corp_password", "")]);
+        let (local, _shared) = partition_credential_writes(
+            existing,
+            std::collections::HashMap::new(),
+            &incoming,
+            &std::collections::HashMap::new(),
+            "local",
+            false,
+        );
+        assert_eq!(local.get("corp_password").unwrap(), "secret");
+    }
+
+    #[test]
+    fn test_partition_split_routes_by_scope() {
+        let incoming = hm(&[("shared_pw", "s"), ("local_pw", "l")]);
+        let scopes = hm(&[("shared_pw", "shared"), ("local_pw", "local")]);
+        let (local, shared) = partition_credential_writes(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            &incoming,
+            &scopes,
+            "local",
+            true,
+        );
+        assert_eq!(shared.get("shared_pw").unwrap(), "s");
+        assert!(!shared.contains_key("local_pw"));
+        assert_eq!(local.get("local_pw").unwrap(), "l");
+        assert!(!local.contains_key("shared_pw"));
+    }
+
+    #[test]
+    fn test_partition_split_moves_between_scopes_keeping_value() {
+        // A key currently local, re-saved with scope=shared and a blank value,
+        // moves to shared carrying its existing value and leaves local.
+        let existing_local = hm(&[("corp_pw", "keepme")]);
+        let incoming = hm(&[("corp_pw", "")]); // blank = keep value
+        let scopes = hm(&[("corp_pw", "shared")]);
+        let (local, shared) = partition_credential_writes(
+            existing_local,
+            std::collections::HashMap::new(),
+            &incoming,
+            &scopes,
+            "local",
+            true,
+        );
+        assert!(!local.contains_key("corp_pw"), "must leave the local store");
+        assert_eq!(shared.get("corp_pw").unwrap(), "keepme");
+    }
+
+    #[test]
+    fn test_partition_split_default_scope_applies() {
+        // No explicit scope for the key → falls back to default_scope.
+        let incoming = hm(&[("corp_pw", "v")]);
+        let (local, shared) = partition_credential_writes(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            &incoming,
+            &std::collections::HashMap::new(),
+            "shared",
+            true,
+        );
+        assert_eq!(shared.get("corp_pw").unwrap(), "v");
+        assert!(local.is_empty());
     }
 
     #[test]

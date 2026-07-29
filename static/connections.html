@@ -3780,6 +3780,11 @@
                 var allVars = varsData.variables || {};
                 var domains = varsData.domains || {};
                 var saved = credsData.credentials || {};
+                // Multi-Vault: when creds_split, each credential can be stored
+                // shared (fleet-wide) or local (this instance). Single-Vault
+                // deployments report creds_split=false and get no toggle.
+                var credsSplit = !!credsData.creds_split;
+                var credDefaultScope = credsData.default_scope || 'local';
                 var varNames = Object.keys(allVars).sort();
 
                 if (varNames.length === 0) {
@@ -3844,6 +3849,29 @@
 
                         row.appendChild(input);
                         list.appendChild(row);
+
+                        // Per-credential shared/local toggle (multi-Vault only).
+                        if (credsSplit) {
+                            var origScope = (sv && sv.scope) ? sv.scope : credDefaultScope;
+                            var scopeRow = document.createElement('div');
+                            scopeRow.style.cssText = 'margin:0.2em 0 0.4em 0.2em;font-size:0.8em;color:var(--text-dim)';
+                            var scopeLabel = document.createElement('label');
+                            scopeLabel.style.cssText = 'display:inline-flex;align-items:center;gap:0.35em;cursor:pointer';
+                            var cb = document.createElement('input');
+                            cb.type = 'checkbox';
+                            cb.className = 'my-cred-scope';
+                            cb.setAttribute('data-var', name);
+                            cb.setAttribute('data-scope-orig', origScope);
+                            cb.checked = (origScope === 'shared');
+                            cb.style.cssText = 'width:auto;margin:0';
+                            scopeLabel.appendChild(cb);
+                            var scopeTxt = document.createElement('span');
+                            scopeTxt.textContent = 'Shared across sites';
+                            scopeTxt.title = 'Store this credential in the shared Vault so it propagates to every site. Unchecked keeps it local to this instance (survives a central-Vault outage).';
+                            scopeLabel.appendChild(scopeTxt);
+                            scopeRow.appendChild(scopeLabel);
+                            list.appendChild(scopeRow);
+                        }
                     });
                 });
             }).catch(function(err) {
@@ -3855,12 +3883,26 @@
         function saveMyCredentials() {
             var inputs = document.querySelectorAll('.my-cred-input');
             var creds = {};
+            var scopes = {};
+            // Current toggle state per variable (present only in multi-Vault).
+            var scopeState = {};    // name -> 'shared' | 'local'
+            var scopeMoved = {};    // name -> true if toggled from its original
+            document.querySelectorAll('.my-cred-scope').forEach(function(cb) {
+                var n = cb.getAttribute('data-var');
+                var cur = cb.checked ? 'shared' : 'local';
+                scopeState[n] = cur;
+                scopeMoved[n] = (cur !== cb.getAttribute('data-scope-orig'));
+            });
             var hasChanges = false;
             inputs.forEach(function(el) {
                 var name = el.getAttribute('data-var');
                 var val = el.value.trim();
-                if (val) {
+                // Send when the value was entered OR only the scope moved (a
+                // blank value tells the backend to keep the existing value and
+                // just move it to the new scope).
+                if (val || scopeMoved[name]) {
                     creds[name] = val;
+                    if (name in scopeState) scopes[name] = scopeState[name];
                     hasChanges = true;
                 }
             });
@@ -3878,7 +3920,7 @@
                 method: 'PUT',
                 headers: apiHeaders({ 'Content-Type': 'application/json' }),
                 credentials: 'same-origin',
-                body: JSON.stringify({ credentials: creds })
+                body: JSON.stringify({ credentials: creds, scopes: scopes })
             })
             .then(function(res) {
                 if (!res.ok) return res.json().then(function(j) { throw new Error(j.error || 'Save failed'); });

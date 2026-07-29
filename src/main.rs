@@ -18,8 +18,8 @@ mod vdi;
 mod websocket;
 
 use crate::api::{
-    AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultBackends, VaultCell,
-    VaultConfigured, VaultState,
+    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, ThemeData,
+    VaultBackends, VaultCell, VaultConfigured, VaultState,
 };
 use crate::config::Config;
 use crate::db::Db;
@@ -692,6 +692,8 @@ async fn run_server(config: Config, database: Db) {
 
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
     let vault_configured = VaultConfigured(config.vault.is_some());
+    let credential_default_scope =
+        CredentialDefaultScope(config.user_credentials_default_scope.clone());
     let drive_configured = DriveConfigured(config.drive.is_some());
     let site_title = SiteTitle(config.site_title.clone());
     let theme_data = {
@@ -1084,6 +1086,7 @@ async fn run_server(config: Config, database: Db) {
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
+        .layer(Extension(credential_default_scope.clone()))
         .layer(Extension(database.clone()));
 
     // WebSocket route with optional auth
