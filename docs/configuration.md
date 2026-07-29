@@ -134,6 +134,49 @@ Enables the Vault-backed connections. Requires `VAULT_SECRET_ID` environment var
 | `client_cert` | — | Path to client certificate (PEM) for mTLS |
 | `client_key` | — | Path to client private key (PEM) for mTLS (required if `client_cert` is set) |
 
+### Multiple Vault backends (disaster recovery)
+
+By default the single `[vault]` serves both the shared and instance (local)
+address-book scopes. For DR across a fleet you can give each scope its own Vault
+so that one being unreachable cannot take the other down with it. Add either or
+both of the optional blocks below; each takes the same keys as `[vault]`.
+
+| Block | Serves | Secret ID env var |
+|-------|--------|-------------------|
+| `[vault]` | Default/fallback for any scope without a dedicated backend; also the home of the LUKS key | `VAULT_SECRET_ID` |
+| `[vault_shared]` | The `shared` scope | `VAULT_SHARED_SECRET_ID` |
+| `[vault_local]` | The `instance` (local) scope | `VAULT_LOCAL_SECRET_ID` |
+
+A bare `[vault]` with no overrides behaves exactly as a single-Vault deployment,
+so nothing changes for existing installs. Each backend connects, retries, and
+renews its token independently. If a dedicated backend is unreachable, that
+scope is shown as temporarily unavailable in the Connections tree while the
+other scopes keep working.
+
+When `[vault_local]` is used, set its `instance_name` to the value the data was
+originally stored under, so the `instance/<name>/` paths line up. Splitting an
+existing single-Vault deployment is a one-time copy with the `vault-migrate`
+subcommand (see the [migration guide](migration.md)).
+
+```toml
+# Primary/local Vault (always reachable on this instance)
+[vault]
+addr = "https://127.0.0.1:8200"
+role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+instance_name = "dc1"
+
+# Optional central Vault shared across the fleet
+[vault_shared]
+addr = "https://vault-central.example.com:8200"
+role_id = "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
+```
+
+Related top-level setting:
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `user_credentials_default_scope` | `local` | Where a new per-user credential variable is stored when more than one backend is configured: `local` (stays on this instance, survives a central outage) or `shared` (propagates fleet-wide). Ignored with a single Vault. |
+
 ## `[drive]` section
 
 Enables file transfer for RDP (drive redirection) and SSH (SFTP).
@@ -327,7 +370,9 @@ home_base = "/vdi-homes"
 | Variable | Description |
 |----------|-------------|
 | `OIDC_CLIENT_SECRET` | Override OIDC client secret from config file |
-| `VAULT_SECRET_ID` | Vault AppRole secret ID |
+| `VAULT_SECRET_ID` | Vault AppRole secret ID for `[vault]` |
+| `VAULT_SHARED_SECRET_ID` | Vault AppRole secret ID for `[vault_shared]` (only if configured) |
+| `VAULT_LOCAL_SECRET_ID` | Vault AppRole secret ID for `[vault_local]` (only if configured) |
 | `RUST_LOG` | Log level (e.g., `info`, `debug`, `rustguac=debug`) |
 
 ### Setting environment variables for systemd

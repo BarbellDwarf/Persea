@@ -1,6 +1,6 @@
 # Credential Variables
 
-Credential variables let connections entries reference shared credentials by name instead of storing passwords directly. Users maintain their own credential values in Vault via the **My Credentials** dialog (gear menu). When a session launches, rustguac substitutes the variables from the user's saved values.
+Credential variables let connections entries reference shared credentials by name instead of storing passwords directly. Users maintain their own credential values in Vault via the **My Credentials** dialog (the **Credentials** link in the top navigation, or the gear menu). When a session launches, rustguac substitutes the variables from the user's saved values.
 
 This gives a similar experience to LDAP credential passthrough in Apache Guacamole — users log in once and sessions just work — without rustguac needing to bind to LDAP. Credentials stay in Vault, never on disk or in the browser.
 
@@ -53,19 +53,48 @@ VDI entries that auto-derive credentials (the default for images that honour `VD
 
 ## My Credentials dialog
 
-Access via the gear icon in the top-right corner of the connections page. The dialog:
+Open it from the **Credentials** link in the top navigation bar, or from the
+gear menu. The dialog:
 
 - Shows all credential variables used across entries the user has access to
-- Groups variables by domain prefix
+- Groups variables by domain prefix, with each group collapsible
+- Provides a filter box (shown once the list is long) to find a variable by name or domain
 - Indicates how many entries use each variable
 - Masks password and key fields (saved values are not shown, but a placeholder confirms they exist)
-- Partial saves work — fill in what you have now, come back later for the rest
+- Scrolls its body while the title and the Save/Close buttons stay pinned, so it stays usable with many variables
+- Supports partial saves: fill in what you have now, come back later for the rest
+
+### Finding what needs setting up
+
+The Connections page surfaces missing credentials before a connection fails:
+
+- A **"credentials needed"** pill marks entries that reference a variable you have not set yet.
+- A dismissible banner reports how many credentials are still to set up. The dismissal is remembered across refreshes and only reappears if a genuinely new unset credential shows up.
 
 ## Graceful degradation
 
-- **All variables set** — session launches immediately, no prompting
-- **Some missing** — credential prompt appears with known values pre-filled; user only needs to fill gaps
-- **None set** — full credential prompt (same as entries without variables)
+- **All variables set:** the session launches immediately, no prompting.
+- **Some missing:** the connect opens My Credentials focused on just the missing variables, and the connection resumes automatically once you save them.
+- **None set:** full credential prompt (same as entries without variables).
+
+## Shared and local credentials (multiple Vaults)
+
+When more than one Vault backend is configured (see
+[Multiple Vault backends](configuration.md)), each credential can be stored in
+the **shared** Vault (propagates to every site) or kept **local** to this
+instance. My Credentials shows a **"Shared across sites"** checkbox per
+credential; the default for a new credential comes from
+`user_credentials_default_scope`. Reads merge both backends (a local value wins
+over a shared one of the same name), and toggling a credential moves it between
+the two.
+
+With a single Vault there is only one store, so the checkbox is hidden and every
+credential is simply stored there.
+
+Trade-off to be aware of: a credential kept in the shared Vault will not resolve
+while that Vault is unreachable, so a connection that references it fails even if
+the target and the local Vault are up. Keep credentials a site must never lose
+(for example break-glass logins) **local**.
 
 ## Vault storage
 
@@ -75,7 +104,9 @@ User credentials are stored in Vault KV v2 at:
 <base_path>/users/<sanitized_email>
 ```
 
-Each user gets a single Vault secret containing all their credential key-value pairs. Variable names are the keys, plaintext values are the values. The Vault policy must allow read/write to this path for authenticated users.
+Each user gets a single Vault secret (per backend) containing their credential key-value pairs. Variable names are the keys, plaintext values are the values. The Vault policy must allow read/write to this path for authenticated users.
+
+With multiple Vault backends configured, a user's credentials are split by scope: local credentials live at this path in the local backend, shared credentials at the same path in the shared backend. The `users/*` policy is needed on whichever backends hold credentials.
 
 ### Required Vault policy
 

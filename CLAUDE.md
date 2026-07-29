@@ -59,6 +59,21 @@ Vault KV v2 path structure:
 - `<base_path>/shared/<folder>/<entry>` — shared across all instances
 - `<base_path>/instance/<name>/<folder>/<entry>` — instance-specific
 - `<folder>/.config` — folder metadata: `{"allowed_groups":["group1"], "description":"..."}`
+- `<base_path>/users/<sanitized_email>` — per-user credential variables
+
+#### Multiple Vault backends (DR)
+
+Optional `[vault_shared]` / `[vault_local]` blocks (same keys as `[vault]`) give
+the `shared` / `instance` scopes their own Vault so one being down can't take the
+other with it. A bare `[vault]` is unchanged (shared+local both alias it). Secret
+IDs: `VAULT_SECRET_ID`, `VAULT_SHARED_SECRET_ID`, `VAULT_LOCAL_SECRET_ID`. Each
+backend connects/retries/renews independently; a down backend greys that scope in
+the UI. Per-credential scope: a credential variable can be stored shared or local
+(location = truth), toggled per-row in My Credentials (hidden with a single
+Vault); `user_credentials_default_scope` (default `local`) seeds new ones. Split
+an existing single-Vault deployment with `rustguac vault-migrate` (copy subtree +
+.config, then add the block + restart — routing is single-source, no read
+fallback). Implemented on branch `feature/multi-vault-dr` (see project memory).
 
 ### OIDC
 

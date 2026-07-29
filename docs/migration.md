@@ -125,3 +125,56 @@ Once imported, connections appear in the connections UI. You can:
 - The import is additive: existing entries in the target folder are not deleted or overwritten. If you re-run the import, entries with the same name will be updated.
 - Guacamole user/group permissions are not imported. Use rustguac's OIDC group mappings and folder `allowed_groups` instead.
 - Credentials (passwords, private keys) are imported into Vault where they are stored encrypted at rest and never touch disk.
+
+# Splitting to multiple Vaults (disaster recovery)
+
+If you already run a single Vault serving both the `shared` and `instance`
+scopes and want to move a scope onto a dedicated Vault (see
+[Multiple Vault backends](configuration.md)), the `vault-migrate` subcommand
+copies a scope's whole subtree between two configured backends. Because the
+scope-to-path layout is identical in every backend, this is a same-identity
+copy, not a rewrite: it moves the entries **and** each folder's access config
+(`.config`), so `allowed_groups` and inheritance travel with them.
+
+## Step 1: Preview
+
+Configure the new backend block (e.g. `[vault_shared]`) and its
+`VAULT_SHARED_SECRET_ID`, then dry-run the copy:
+
+```bash
+VAULT_SECRET_ID=... VAULT_SHARED_SECRET_ID=... \
+rustguac --config /opt/rustguac/config.toml \
+  vault-migrate --scope shared --from vault --to vault_shared --dry-run
+```
+
+## Step 2: Copy
+
+```bash
+VAULT_SECRET_ID=... VAULT_SHARED_SECRET_ID=... \
+rustguac --config /opt/rustguac/config.toml \
+  vault-migrate --scope shared --from vault --to vault_shared
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--scope` | (required) | `shared` or `instance` |
+| `--from` / `--to` | (required) | Backend names: `vault`, `vault_shared`, or `vault_local` |
+| `--dry-run` | off | Preview without writing to the destination |
+| `--overwrite` | off | Overwrite entries that already exist at the destination (default: skip existing) |
+| `--users` | off | Also copy every per-user credential secret (`users/*`). This makes those credentials shared; normally you toggle per-credential in My Credentials instead. |
+
+## Step 3: Cut over
+
+Routing is deterministic and single-source: once `[vault_shared]` is configured,
+the `shared` scope reads only from it, with no fall-back to `[vault]`. So the
+order matters:
+
+1. Copy the subtree first (Step 2).
+2. Then add the `[vault_shared]` block and restart rustguac.
+
+Doing it the other way round makes shared connections briefly disappear (the
+data is safe in the old Vault, just not being read). Entries and folders are
+single-source; only per-user credentials merge across backends, so those never
+have a gap.
