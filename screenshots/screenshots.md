@@ -1,12 +1,18 @@
 # Screenshots
 
-Screenshots of rustguac v1.6.1 with the default **aurora** theme, OIDC authentication, Vault-backed Connections, and session recording. User-identifying data has been sanitised.
+Screenshots of rustguac with the default **aurora** theme, OIDC authentication, Vault-backed Connections, and session recording. User-identifying data has been sanitised.
 
 ## Connections
 
 ![Connections](connections.png)
 
 Vault-backed connection list (previously "Address Book", renamed in v1.6.0). The left sidebar shows the folder tree with lazy-loaded subfolders; scope icons indicate **⊕** shared or **▣** instance-only. Each folder has its own group access control via `allowed_groups`. Entries support SSH, RDP, VNC, Web (headless Chromium) and VDI (Docker container) session types — the type badge is colour-coded. **Login...** prompts for credentials at connect time; **Connect** launches immediately with stored credentials.
+
+## My Credentials
+
+![My Credentials](my_credentials.png)
+
+Per-user credential store, opened from the **Credentials** nav link (or the Settings menu). Credential variables referenced across entries are grouped by domain in collapsible sections, with a filter box for long lists; password and key fields are masked. When more than one Vault backend is configured, each credential gains a **Shared across sites** toggle (central shared Vault vs local instance). Values live per-user in Vault, never on disk or in the browser.
 
 ## RDP Connection Editor
 
