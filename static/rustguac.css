@@ -537,6 +537,8 @@ tbody tr:last-child td { border-bottom: none; }
 .cred-group-caret {
     display: inline-block;
     width: 1em;
+    font-size: 1.15em;
+    line-height: 1;
     transition: transform 0.12s ease;
 }
 .cred-group.collapsed .cred-group-caret {

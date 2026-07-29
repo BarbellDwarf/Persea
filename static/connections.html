@@ -3961,7 +3961,7 @@
                     head.className = 'cred-group-head';
                     var caret = document.createElement('span');
                     caret.className = 'cred-group-caret';
-                    caret.textContent = '▾';
+                    caret.textContent = '▼'; // full-size triangle (U+25BC); rotates to ▶ when collapsed
                     head.appendChild(caret);
                     var headText = document.createElement('span');
                     headText.textContent = domain;
