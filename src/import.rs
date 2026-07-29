@@ -299,12 +299,112 @@ struct Group {
     name: String,
 }
 
+/// Split a SQL dump into individual statements on top-level (unquoted)
+/// semicolons.
+///
+/// mysqldump / mariadb-dump emit multi-row INSERTs with the `VALUES` keyword on
+/// one line and each row tuple on its own subsequent line, so a line-by-line
+/// scan never sees a tuple attached to its `INSERT INTO`. Reconstructing whole
+/// statements first fixes that. String literals (`'...'`, with backslash
+/// escapes), backtick identifiers, and `--` / `#` / `/* */` comments are
+/// skipped so their contents (semicolons, apostrophes) can neither split a
+/// statement early nor corrupt quote tracking.
+fn split_statements(sql: &str) -> Vec<String> {
+    let chars: Vec<char> = sql.chars().collect();
+    let n = chars.len();
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut i = 0;
+    let mut in_quote = false; // inside a '...' string literal
+    let mut in_ident = false; // inside a `...` backtick identifier
+
+    while i < n {
+        let ch = chars[i];
+
+        if in_quote {
+            current.push(ch);
+            if ch == '\\' && i + 1 < n {
+                // Preserve the escaped char verbatim; unescape_sql decodes later.
+                current.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            if ch == '\'' {
+                in_quote = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_ident {
+            current.push(ch);
+            if ch == '`' {
+                in_ident = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Line comment: `#` or `-- ` (dash-dash followed by whitespace/EOL).
+        if ch == '#' {
+            while i < n && chars[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if ch == '-' && i + 1 < n && chars[i + 1] == '-' {
+            let after = chars.get(i + 2).copied();
+            if matches!(
+                after,
+                None | Some(' ') | Some('\t') | Some('\r') | Some('\n')
+            ) {
+                while i < n && chars[i] != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        // Block comment: `/* ... */` (includes MySQL `/*! ... */` executable
+        // comments — none of the tables we import live inside one).
+        if ch == '/' && i + 1 < n && chars[i + 1] == '*' {
+            i += 2;
+            while i + 1 < n && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
+            i = (i + 2).min(n); // consume the closing */
+            continue;
+        }
+
+        match ch {
+            '\'' => {
+                in_quote = true;
+                current.push(ch);
+            }
+            '`' => {
+                in_ident = true;
+                current.push(ch);
+            }
+            ';' => {
+                if !current.trim().is_empty() {
+                    statements.push(current.clone());
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+        i += 1;
+    }
+    if !current.trim().is_empty() {
+        statements.push(current);
+    }
+    statements
+}
+
 /// Parse `INSERT INTO `guacamole_connection`` rows.
 /// Expected columns: (connection_id, connection_name, parent_id, protocol, ...)
 fn parse_connections(sql: &str) -> Vec<Connection> {
     let mut results = Vec::new();
-    for line in sql.lines() {
-        let trimmed = line.trim();
+    for stmt in split_statements(sql) {
+        let trimmed = stmt.trim();
         if !matches_insert(trimmed, "guacamole_connection")
             || matches_insert(trimmed, "guacamole_connection_parameter")
             || matches_insert(trimmed, "guacamole_connection_group")
@@ -337,8 +437,8 @@ fn parse_connections(sql: &str) -> Vec<Connection> {
 /// Expected columns: (connection_id, parameter_name, parameter_value)
 fn parse_parameters(sql: &str) -> HashMap<i64, Vec<(String, String)>> {
     let mut results: HashMap<i64, Vec<(String, String)>> = HashMap::new();
-    for line in sql.lines() {
-        let trimmed = line.trim();
+    for stmt in split_statements(sql) {
+        let trimmed = stmt.trim();
         if !matches_insert(trimmed, "guacamole_connection_parameter") {
             continue;
         }
@@ -365,8 +465,8 @@ fn parse_parameters(sql: &str) -> HashMap<i64, Vec<(String, String)>> {
 /// Expected columns: (connection_group_id, parent_id, connection_group_name, type, ...)
 fn parse_groups(sql: &str) -> Vec<Group> {
     let mut results = Vec::new();
-    for line in sql.lines() {
-        let trimmed = line.trim();
+    for stmt in split_statements(sql) {
+        let trimmed = stmt.trim();
         if !matches_insert(trimmed, "guacamole_connection_group") {
             continue;
         }
@@ -845,5 +945,82 @@ mod tests {
         assert_eq!(unescape_sql("hello\\nworld"), "hello\nworld");
         assert_eq!(unescape_sql("it\\'s"), "it's");
         assert_eq!(unescape_sql("back\\\\slash"), "back\\slash");
+    }
+
+    #[test]
+    fn test_split_statements_basic() {
+        let sql = "CREATE TABLE `t` (`a` int);\nINSERT INTO `t` VALUES (1),(2);\n";
+        let stmts = split_statements(sql);
+        assert_eq!(stmts.len(), 2);
+        assert!(stmts[1].contains("INSERT INTO `t` VALUES (1),(2)"));
+    }
+
+    #[test]
+    fn test_split_statements_skips_comments_and_semicolons_in_strings() {
+        // `--` and `/*! */` comments (each ending in `;`) must not become
+        // statements, and a `;` inside a quoted value must not split.
+        let sql = "-- a comment; with a semicolon\n\
+                   /*!40101 SET NAMES utf8mb4 */;\n\
+                   INSERT INTO `t` VALUES (1,'a;b');\n";
+        let stmts = split_statements(sql);
+        assert_eq!(stmts.len(), 1);
+        assert!(stmts[0].contains("INSERT INTO `t` VALUES (1,'a;b')"));
+    }
+
+    #[test]
+    fn test_split_statements_comment_apostrophe_does_not_corrupt() {
+        // A stray apostrophe inside a `--` comment must not open a string that
+        // swallows the following INSERT.
+        let sql = "-- it's a dump\nINSERT INTO `t` VALUES (1,'ok');\n";
+        let stmts = split_statements(sql);
+        assert_eq!(stmts.len(), 1);
+        assert!(stmts[0].contains("(1,'ok')"));
+    }
+
+    #[test]
+    fn test_parse_connections_multiline_dump() {
+        // mariadb-dump format: VALUES on its own line, one tuple per line,
+        // trailing `;` after the last tuple. This is the format that regressed.
+        let sql = "INSERT INTO `guacamole_connection` VALUES\n\
+                   (1,'web-server',1,'ssh',NULL,NULL,NULL,0,0,NULL,0),\n\
+                   (3,'app-desktop',3,'rdp',NULL,NULL,NULL,NULL,NULL,NULL,0),\n\
+                   (8,'db-shell',4,'ssh',NULL,NULL,NULL,16,16,NULL,0);\n";
+        let conns = parse_connections(sql);
+        assert_eq!(conns.len(), 3);
+        assert_eq!(conns[0].id, 1);
+        assert_eq!(conns[0].name, "web-server");
+        assert_eq!(conns[0].parent_id, Some(1));
+        assert_eq!(conns[1].protocol, "rdp");
+        assert_eq!(conns[2].parent_id, Some(4));
+    }
+
+    #[test]
+    fn test_parse_parameters_multiline_with_semicolons_in_value() {
+        // The `color-scheme` value contains both `;` and escaped `\n`; neither
+        // may break tuple extraction across the multi-line INSERT.
+        let sql = "INSERT INTO `guacamole_connection_parameter` VALUES\n\
+                   (2,'color-scheme','fg: rgb:11/22/33;\\nbg: rgb:44/55/66;'),\n\
+                   (2,'hostname','192.0.2.10'),\n\
+                   (2,'port','22');\n";
+        let params = parse_parameters(sql);
+        let p = params.get(&2).unwrap();
+        assert_eq!(p.len(), 3);
+        assert!(p.contains(&("hostname".into(), "192.0.2.10".into())));
+        assert!(p.contains(&("port".into(), "22".into())));
+        let scheme = &p.iter().find(|(k, _)| k == "color-scheme").unwrap().1;
+        assert!(scheme.contains("fg: rgb:11/22/33;"));
+        assert!(scheme.contains('\n')); // \n was unescaped to a real newline
+    }
+
+    #[test]
+    fn test_parse_groups_multiline_dump() {
+        let sql = "INSERT INTO `guacamole_connection_group` VALUES\n\
+                   (1,NULL,'Production','ORGANIZATIONAL',NULL,NULL,0),\n\
+                   (4,NULL,'Staging','ORGANIZATIONAL',12,6,0);\n";
+        let groups = parse_groups(sql);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].name, "Production");
+        assert_eq!(groups[1].id, 4);
+        assert_eq!(groups[1].name, "Staging");
     }
 }

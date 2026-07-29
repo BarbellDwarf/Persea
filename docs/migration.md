@@ -20,7 +20,7 @@ mysqldump -u guacamole_user -p guacamole_db \
   > guacamole-dump.sql
 ```
 
-Only these three tables are needed. The dump must contain `INSERT INTO` statements (the default for mysqldump).
+Only these three tables are needed. Both the default multi-row dump format and `--skip-extended-insert` single-row dumps are supported; the dump just needs `INSERT INTO` statements for those tables.
 
 ## Step 2: Preview the import
 
