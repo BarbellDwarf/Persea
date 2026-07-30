@@ -19,7 +19,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
-GUACD_SRC="${SCRIPT_DIR}/../guacamole-server"
+# Pinned guacamole-server commit. The patches in patches/ are rebased onto this
+# EXACT commit, so it MUST stay in sync with release.yml (GUACD_COMMIT) and
+# install.sh (GUACD_COMMIT). Do not bump it without re-rebasing the patch set.
+GUACD_COMMIT="6719b20d"
 STAGING="${SCRIPT_DIR}/debian/staging"
 PREFIX="/opt/rustguac"
 
@@ -66,19 +69,32 @@ apply_guacd_patches() {
 
     for patch in "$patch_dir"/*.patch; do
         [[ -f "$patch" ]] || continue
-        if git -C "$src" apply --check "$patch" 2>/dev/null; then
-            info "Applying patch: $(basename "$patch")"
-            git -C "$src" apply "$patch"
-        else
-            info "Patch already applied or N/A: $(basename "$patch")"
+        info "Applying patch: $(basename "$patch")"
+        if ! git -C "$src" apply "$patch"; then
+            error "Patch FAILED to apply: $(basename "$patch")"
+            error "guacamole-server pin ($GUACD_COMMIT) and patches/ are out of sync."
+            error "Re-rebase the patches onto $GUACD_COMMIT (or fix the pin). Aborting."
+            exit 1
         fi
     done
 }
 
 build_guacd() {
-    if [[ ! -d "$GUACD_SRC/.git" ]]; then
-        info "guacamole-server not found at $GUACD_SRC — cloning..."
-        git clone --depth 1 "$GUACD_SRC_URL" "$GUACD_SRC"
+    # Reproducible by default: build guacd from a FRESH clone pinned to
+    # $GUACD_COMMIT, so the package never drifts with upstream master and the
+    # patch set always applies to the exact source it was rebased onto. For
+    # local patch iteration set GUACD_SRC_OVERRIDE=/path/to/guacamole-server to
+    # build from an existing (unpinned) working tree instead.
+    local GUACD_SRC guacd_src_tmp=""
+    if [[ -n "${GUACD_SRC_OVERRIDE:-}" ]]; then
+        GUACD_SRC="$GUACD_SRC_OVERRIDE"
+        warn "GUACD_SRC_OVERRIDE set — building guacd from $GUACD_SRC (UNPINNED; local dev only)"
+    else
+        GUACD_SRC=$(mktemp -d)
+        guacd_src_tmp="$GUACD_SRC"
+        info "Cloning guacamole-server, pinned to $GUACD_COMMIT..."
+        git clone -q "$GUACD_SRC_URL" "$GUACD_SRC"
+        git -C "$GUACD_SRC" -c advice.detachedHead=false checkout -q "$GUACD_COMMIT"
     fi
 
     apply_guacd_patches "$GUACD_SRC"
@@ -87,7 +103,7 @@ build_guacd() {
 
     local BUILD_DIR
     BUILD_DIR=$(mktemp -d)
-    trap "rm -rf '$BUILD_DIR'" EXIT
+    trap "rm -rf '$BUILD_DIR' '$guacd_src_tmp'" EXIT
 
     # Run autoreconf if needed
     if [[ ! -f "$GUACD_SRC/configure" ]]; then
