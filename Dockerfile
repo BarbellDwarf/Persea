@@ -74,7 +74,7 @@ RUN /build/guacamole-server/configure \
 # ---------------------------------------------------------------------------
 # Stage 2: Build rustguac
 # ---------------------------------------------------------------------------
-FROM rust:1-bookworm AS rust-builder
+FROM rust:1.96.1-bookworm AS rust-builder
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
