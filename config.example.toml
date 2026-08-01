@@ -198,6 +198,25 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # max_recordings = 0                 # global max recording count (0 = unlimited)
 # rotation_interval_secs = 300       # how often to check rotation (seconds, default: 300)
 
+# ─── VDI (Docker Container Sessions) ───────────────────────────────────────
+#
+# Ephemeral per-user Docker desktop containers. Each user gets an isolated
+# Linux desktop accessible via RDP through guacd. Containers persist for
+# idle_timeout_mins after disconnect for quick reconnect.
+#
+# Requires: rustguac user in docker group for socket access.
+# Test image: contrib/vdi-test-image/ (Debian trixie + xrdp + xfce4)
+
+# [vdi]
+# enabled = false
+# docker_socket = "/var/run/docker.sock"
+# default_cpu_limit = "1.0"              # CPU cores (Docker --cpus)
+# default_memory_limit = "512m"          # Memory limit (Docker --memory)
+# ready_timeout_secs = 120               # max wait for container ready
+# idle_timeout_mins = 30                 # destroy after idle period
+# allowed_images = []                    # empty = allow all images
+# home_base = "/opt/rustguac/vdi"        # base dir for user home mounts
+
 # ─── Theme ────────────────────────────────────────────────────────────────────
 #
 # Customize the web UI appearance. Pick a built-in preset and optionally
@@ -261,9 +280,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # luks_name = "rustguac-drives"                # device-mapper name
 # luks_key_path = "rustguac/luks-key"          # Vault KV path for encryption key
 
-# ──────────────────────────────────────────────────────────────────
-# RDP defaults
-# ──────────────────────────────────────────────────────────────────
+# ─── RDP Protocol Settings ──────────────────────────────────────────────────
 #
 # Applied to every RDP session unless the address book entry (or the
 # ad-hoc connect request) overrides the same field.

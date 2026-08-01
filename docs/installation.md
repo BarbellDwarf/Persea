@@ -80,6 +80,36 @@ sudo systemctl restart rustguac
 
 Then add a `[vdi]` section to your config — see [VDI Desktop Containers](vdi.md) for full setup.
 
+## Verification
+
+After installation, verify everything works:
+
+1. **Check services are running:**
+   ```bash
+   sudo systemctl status rustguac guacd
+   ```
+
+2. **Test the health endpoint:**
+   ```bash
+   curl -k https://localhost:8089/api/health
+   # Should return: {"status":"ok"}
+   ```
+
+3. **Check for errors in logs:**
+   ```bash
+   journalctl -u rustguac -n 20 --no-pager
+   journalctl -u guacd -n 20 --no-pager
+   ```
+
+4. **Create an admin user** (if not done during install):
+   ```bash
+   sudo -u rustguac /opt/rustguac/bin/rustguac add-admin --name admin
+   ```
+
+5. **Open the web interface** at `https://your-server:8089` and log in with the admin API key.
+
+6. **Test an SSH session** — create an ad-hoc SSH session to `localhost` or another machine on your network.
+
 ## Option B: Bare-metal install script
 
 For fresh Debian 13 systems, the install script builds everything from source:
@@ -313,7 +343,7 @@ sudo apt-get install -y \
     chromium-browser tigervnc-standalone-server cryptsetup \
     curl ca-certificates
 
-# Rust toolchain (1.96+ required for rusqlite 0.40 build)
+# Rust toolchain (1.80+ required for cfg_select support in libsqlite3-sys)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # Build guacd against system FreeRDP 3.5 (skip our 3.15+ patches)
@@ -357,7 +387,7 @@ For everything else, the Docker image is the path of least resistance.
 
 For bare-metal installs, rustguac requires:
 
-- **Rust toolchain** (1.75+)
+- **Rust toolchain** (1.80+)
 - **guacd** (built from guacamole-server source)
 - **Xvnc** (tigervnc-standalone-server) — for web browser sessions
 - **Chromium** — for web browser sessions

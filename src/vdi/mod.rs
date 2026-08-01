@@ -70,6 +70,7 @@ pub struct ContainerInfo {
 /// Errors specific to VDI operations.
 #[derive(Debug)]
 #[allow(dead_code)]
+#[must_use]
 pub enum VdiError {
     /// Docker API or communication error.
     Docker(String),

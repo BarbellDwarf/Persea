@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>rustguac - Recordings</title>
     <link rel="stylesheet" href="/rustguac.css">
     <style>
@@ -149,10 +150,10 @@
         <a href="/connections.html">Connections</a>
         <a href="/sessions.html" id="sessions-link">Sessions</a>
         <a href="/recordings.html" class="active">Recordings</a>
-        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
+        <a href="/reports.html" id="reports-link" style="display:none" aria-hidden="true">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
-        <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
+        <a href="/tokens.html" id="tokens-link" style="display:none" aria-hidden="true">Tokens</a>
+        <a href="/admin.html" id="admin-link" style="display:none" aria-hidden="true">Admin</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
 
@@ -177,7 +178,9 @@
     <div style="max-width:1200px;margin-bottom:1em">
         <input type="text" id="rec-search" placeholder="Search recordings (user, entry, folder...)" style="width:100%;padding:0.5em;background:var(--input);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:1em;border-radius:3px;box-sizing:border-box">
     </div>
-    <div id="recording-list"></div>
+    <div class="table-wrap">
+        <div id="recording-list"></div>
+    </div>
     <div id="rec-pagination" style="max-width:1200px;margin-top:0.8em;font-family:monospace;font-size:0.9em"></div>
 
     <div id="typescript-section" style="display:none;max-width:1200px;margin-top:2em">
@@ -193,12 +196,10 @@
         <div id="typescript-pagination" style="margin-top:0.8em;font-family:monospace;font-size:0.9em"></div>
     </div>
 
+    <script src="/js/utils.js"></script>
+    <script src="/js/auth.js"></script>
+    <script src="/js/theme.js"></script>
     <script>
-        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
-        var _themePresets={},_adminPreset='aurora';
-        var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',aurora:'Midnight blue with ambient glow',jaguar:'Racing green & gold'};
-        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'aurora';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){if(l.src!==t.logo_url&&!l.src.endsWith(t.logo_url))l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
-        var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             if(d.site_title){document.title=d.site_title+' - Recordings';document.querySelector('h1').textContent=d.site_title;}
             initTheme(d.theme);
@@ -239,12 +240,6 @@
             .finally(function() { window.location.href = '/'; });
         });
 
-        function apiHeaders() {
-            var h = {};
-            if (apiKey) h['Authorization'] = 'Bearer ' + apiKey;
-            return h;
-        }
-
         function formatBytes(bytes) {
             if (bytes < 1024) return bytes + ' B';
             if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
@@ -256,16 +251,6 @@
             var m = Math.floor(secs / 60);
             var s = secs % 60;
             return m + ':' + (s < 10 ? '0' : '') + s;
-        }
-
-        function escapeHtml(s) {
-            var d = document.createElement('div');
-            d.textContent = s;
-            return d.innerHTML;
-        }
-
-        function escapeAttr(s) {
-            return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         }
 
         function refreshRecordings() {

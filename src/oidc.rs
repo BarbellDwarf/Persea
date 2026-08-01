@@ -1,5 +1,6 @@
 //! OIDC authentication — login, callback, logout handlers.
 
+use crate::auth::extract_cookie;
 use crate::config::OidcConfig;
 use crate::db::{self, Db};
 use axum::{
@@ -212,7 +213,7 @@ pub async fn callback(
     };
 
     // Verify the state cookie matches the state query parameter (binds flow to browser)
-    let state_cookie = extract_cookie_from_headers(&headers, "rustguac_oidc_state");
+    let state_cookie = extract_cookie(&headers, "rustguac_oidc_state");
     if state_cookie.as_deref() != Some(&state) {
         tracing::warn!("OIDC callback state cookie mismatch");
         return (
@@ -411,7 +412,7 @@ pub async fn callback(
     tracing::info!(email = %email, role = %effective_role, "OIDC login successful");
 
     // Check for post-login redirect cookie
-    let redirect_to = extract_cookie_from_headers(&headers, "rustguac_next")
+    let redirect_to = extract_cookie(&headers, "rustguac_next")
         .filter(|n| n.starts_with('/') && !n.starts_with("//") && !n.contains("://"))
         .unwrap_or_else(|| "/addressbook.html".to_string());
 
@@ -442,7 +443,7 @@ pub async fn logout(
     request: axum::extract::Request,
 ) -> Response {
     // Try to delete the session from DB
-    if let Some(token) = extract_cookie_value(&request, "rustguac_session") {
+    if let Some(token) = extract_cookie(request.headers(), "rustguac_session") {
         let db_clone = database.clone();
         let _ =
             tokio::task::spawn_blocking(move || db::delete_auth_session(&db_clone, &token)).await;
@@ -516,28 +517,6 @@ fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
         groups.truncate(MAX_OIDC_GROUPS);
     }
     groups
-}
-
-/// Extract a cookie value from request headers.
-fn extract_cookie_value(request: &axum::extract::Request, name: &str) -> Option<String> {
-    extract_cookie_from_headers(request.headers(), name)
-}
-
-/// Extract a cookie value from a HeaderMap.
-fn extract_cookie_from_headers(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                let c = c.trim();
-                if let Some(val) = c.strip_prefix(name) {
-                    val.strip_prefix('=').map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
 }
 
 /// Reshape the openidconnect crate's discovery error into something an

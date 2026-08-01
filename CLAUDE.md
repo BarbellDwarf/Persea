@@ -117,6 +117,8 @@ To add a new patch: edit `../guacamole-server`, export with `git diff > patches/
 - **SSH** — connects guacd directly to target SSH server
 - **RDP** — connects guacd directly to target RDP server (same pattern as SSH, no browser spawning)
 - **VNC** — connects guacd directly to target VNC server
+- **SPICE** — connects guacd directly to target SPICE server (for KVM/QEMU virtual machines)
+- **Proxmox** — connects guacd via Proxmox VE API to manage and interact with virtual machines
 - **Web** — spawns Xvnc + Chromium, guacd connects via VNC to local Xvnc display
 - **VDI** — spawns Docker container with xrdp, guacd connects via RDP to container port 3389
 

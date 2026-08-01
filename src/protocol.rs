@@ -96,6 +96,7 @@ fn encode_element(s: &str) -> String {
 }
 
 #[derive(Debug)]
+#[must_use]
 pub enum ParseError {
     Empty,
     MalformedElement,

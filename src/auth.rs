@@ -123,6 +123,14 @@ pub fn role_level(role: &str) -> u8 {
     }
 }
 
+/// All valid role names.
+pub const VALID_ROLES: &[&str] = &["admin", "poweruser", "operator", "viewer"];
+
+/// Check if a role string is a valid role name.
+pub fn is_valid_role(role: &str) -> bool {
+    VALID_ROLES.contains(&role)
+}
+
 /// Compute the effective role for a user API token.
 /// Returns the lower of the user's current role and the token's max_role cap.
 pub fn compute_effective_role(user_role: &str, max_role: &Option<String>) -> String {
@@ -155,10 +163,9 @@ pub fn client_ip(headers: &HeaderMap, socket_addr: IpAddr, trusted_proxies: &[St
     socket_addr
 }
 
-/// Extract session cookie value from the Cookie header.
-fn extract_cookie(request: &Request, name: &str) -> Option<String> {
-    request
-        .headers()
+/// Extract a cookie value from a HeaderMap.
+pub(crate) fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
         .get("cookie")
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
@@ -270,7 +277,7 @@ pub async fn require_auth(
     }
 
     // Path 2: Session cookie
-    let session_token = extract_cookie(&request, "rustguac_session");
+    let session_token = extract_cookie(request.headers(), "rustguac_session");
     if let Some(token) = session_token {
         let db_clone = db.clone();
         let result =
@@ -371,79 +378,8 @@ pub async fn optional_auth(
         }
     }
 
-    // Path 1c: API key from ?key= query parameter (legacy fallback).
-    // Guacamole.WebSocketTunnel appends "?" + connect_data to the URL, so
-    // the raw query string may be "key=XXXX?GUAC_WIDTH=1024&...". Truncate
-    // the value at the first '?' to strip the Guacamole suffix.
-    let api_key = api_key.or_else(|| {
-        request.uri().query().and_then(|q| {
-            q.split('&').find_map(|pair| {
-                let (k, v) = pair.split_once('=')?;
-                if k == "key" {
-                    Some(v.split('?').next().unwrap_or(v).to_string())
-                } else {
-                    None
-                }
-            })
-        })
-    });
-
-    if let Some(key) = api_key {
-        let validate_ip = Some(ip);
-        let db_clone = db.clone();
-        let key_clone = key.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            db::validate_api_key(&db_clone, &key_clone, validate_ip)
-        })
-        .await
-        .unwrap_or(Err(AuthError::InvalidKey));
-
-        match result {
-            Ok(admin) => {
-                tracing::debug!(admin = %admin.name, "Optional auth: API key authenticated");
-                let mut request = request;
-                request
-                    .extensions_mut()
-                    .insert(AuthIdentity::ApiKey(admin.name));
-                return next.run(request).await;
-            }
-            Err(AuthError::InvalidKey) => {
-                // Not found in admins table — try user API tokens
-                let db_clone = db.clone();
-                let token_result =
-                    tokio::task::spawn_blocking(move || db::validate_user_token(&db_clone, &key))
-                        .await
-                        .unwrap_or(Err(AuthError::InvalidKey));
-
-                match token_result {
-                    Ok((user, token_meta)) => {
-                        let effective_role =
-                            compute_effective_role(&user.role, &token_meta.max_role);
-                        tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "Optional auth: user token authenticated");
-                        let groups = user.groups_vec();
-                        let mut request = request;
-                        request.extensions_mut().insert(AuthIdentity::User {
-                            email: user.email,
-                            role: effective_role,
-                            groups,
-                        });
-                        return next.run(request).await;
-                    }
-                    Err(_) => {
-                        tracing::warn!(client_ip = %ip, "Authentication failed: invalid API key/token (optional auth)");
-                        return next.run(request).await;
-                    }
-                }
-            }
-            Err(_) => {
-                tracing::warn!(client_ip = %ip, "Authentication failed: API key disabled/expired (optional auth)");
-                return next.run(request).await;
-            }
-        }
-    }
-
     // Path 2: Session cookie
-    let session_token = extract_cookie(&request, "rustguac_session");
+    let session_token = extract_cookie(request.headers(), "rustguac_session");
     if let Some(token) = session_token {
         let db_clone = db.clone();
         let result =

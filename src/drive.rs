@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 #[derive(Debug)]
+#[must_use]
 pub enum DriveError {
     Io(String),
     Luks(String),

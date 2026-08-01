@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>rustguac - SSH Session</title>
     <style>
-        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #888; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1a3a2a; --type-ssh-fg: #5bc0be; --type-rdp-bg: #2a1a3a; --type-rdp-fg: #a78bfa; --type-vnc-bg: #3a2a1a; --type-vnc-fg: #f0c040; --type-web-bg: #1a2a3a; --type-web-fg: #60a5fa; --hop-bg: #1e3a5f; --hop-fg: #7ec8e3; --bg-pattern: none; }
+        :root { --primary: #e94560; --primary-hover: #c73652; --accent: #5bc0be; --accent-hover: #4aa3a1; --bg: #1a1a2e; --surface: #16213e; --input: #0f3460; --text: #e0e0e0; --text-muted: #aaa; --border: #333; --text-dim: #888; --text-on-primary: #fff; --btn-disabled: #555; --status-pending: #f0c040; --status-active: #5bc0be; --status-completed: #888; --status-error: #e94560; --status-expired: #666; --type-ssh-bg: #1a3a2a; --type-ssh-fg: #5bc0be; --type-rdp-bg: #2a1a3a; --type-rdp-fg: #a78bfa; --type-vnc-bg: #3a2a1a; --type-vnc-fg: #f0c040; --type-web-bg: #1a2a3a; --type-web-fg: #60a5fa; --type-vdi-bg: #0e2a2a; --type-vdi-fg: #2dd4bf; --type-spice-bg: #3a1a1a; --type-spice-fg: #e06060; --type-proxmox-bg: #3d2800; --type-proxmox-fg: #e57000; --hop-bg: #1e3a5f; --hop-fg: #7ec8e3; --bg-pattern: none; }
         html, body {
             margin: 0;
             padding: 0;
@@ -175,6 +176,8 @@
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 
+    <script src="/js/theme.js"></script>
+
     <!-- Guacamole common JS modules -->
     <script src="/guac/Namespace.js"></script>
     <script src="/guac/Client.js"></script>
@@ -240,9 +243,6 @@
     <div id="display"></div>
 
     <script>
-        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
-        var _themePresets={},_adminPreset='aurora';
-        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'aurora';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);}
         var pathParts = window.location.pathname.split('/');
         var sessionId = pathParts[pathParts.length - 1];
 
@@ -272,6 +272,39 @@
         // Per-entry autohide of the clipboard/files side tabs; populated from
         // the same /api/sessions/:id fetch and read when the tabs are built.
         var wantAutohideTabs = false;
+
+        // ── Auto-reconnect state ──
+        var userDisconnected = false;
+        var reconnectAttempts = 0;
+        var maxReconnectAttempts = 5;
+        var reconnectDelays = [1000, 2000, 4000, 8000, 16000];
+        // Outer-scope reference to scaleDisplay — set by setupClient, read by
+        // the window resize handler. Needed because reconnection creates a new
+        // client/display inside a fresh setupClient closure, but the resize
+        // handler was bound to the original closure.
+        var _scaleDisplay = null;
+        var _rgFullscreenEl = null;
+        var _rgExitFullscreen = null;
+
+        function attemptReconnect() {
+            if (reconnectAttempts >= maxReconnectAttempts) {
+                document.getElementById('disconnected-title').textContent = 'Session Ended';
+                document.getElementById('disconnected-message').textContent =
+                    'Connection lost after ' + maxReconnectAttempts + ' attempts.';
+                document.getElementById('disconnected-overlay').className = 'visible';
+                return;
+            }
+            var delay = reconnectDelays[reconnectAttempts];
+            reconnectAttempts++;
+            statusEl.textContent = 'Reconnecting... (attempt ' + reconnectAttempts + '/' + maxReconnectAttempts + ')';
+            statusEl.className = '';
+            var overlay = document.getElementById('disconnected-overlay');
+            if (overlay) overlay.classList.remove('visible');
+            if (_rgFullscreenEl && _rgFullscreenEl()) _rgExitFullscreen();
+            setTimeout(function() {
+                connectWebSocket(urlTicket);
+            }, delay);
+        }
 
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             var siteTitle = d.site_title || 'rustguac';
@@ -525,22 +558,22 @@
                 if (clipboardPanel) return;
 
                 clipboardPanel = document.createElement('div');
-                clipboardPanel.style.cssText = 'display:none;position:fixed;top:0;left:0;bottom:0;width:380px;background:var(--bg);border-right:2px solid var(--primary);z-index:3000;font-family:monospace;color:var(--text);flex-direction:column;';
+                clipboardPanel.style.cssText = 'display:none;position:fixed;top:0;left:0;bottom:0;width:min(380px,90vw);background:var(--bg);border-right:2px solid var(--primary);z-index:3000;font-family:monospace;color:var(--text);flex-direction:column;';
 
                 clipboardPanel.innerHTML =
                     '<div style="display:flex;align-items:center;gap:0.6em;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
                         '<h3 style="margin:0;flex:1;color:var(--primary);font-size:1.1em;">Session</h3>' +
-                        '<button id="cp-home" style="background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.9em;padding:0.35em 0.8em;border-radius:3px;cursor:pointer;" title="Return to the Connections page">&#127968; Home</button>' +
-                        '<button id="cp-fullscreen" style="background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.9em;padding:0.35em 0.8em;border-radius:3px;cursor:pointer;" title="Enter fullscreen">&#9974; Fullscreen</button>' +
-                        '<button id="cp-close" style="background:none;border:none;color:var(--text-dim);font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
+                        '<button id="cp-home" aria-label="Home" style="background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.9em;padding:0.35em 0.8em;border-radius:3px;cursor:pointer;" title="Return to the Connections page">&#127968; Home</button>' +
+                        '<button id="cp-fullscreen" aria-label="Fullscreen" style="background:var(--input);border:1px solid var(--border);color:var(--accent);font-family:monospace;font-size:0.9em;padding:0.35em 0.8em;border-radius:3px;cursor:pointer;" title="Enter fullscreen">&#9974; Fullscreen</button>' +
+                        '<button id="cp-close" aria-label="Close clipboard" style="background:none;border:none;color:var(--text-dim);font-size:1.6em;cursor:pointer;font-family:monospace;padding:0 0.3em;">&times;</button>' +
                     '</div>' +
                     '<div style="flex:1;display:flex;flex-direction:column;padding:1em;gap:0.8em;overflow-y:auto;min-height:0;">' +
                         '<div style="color:var(--text-muted);font-size:0.95em;">Shared clipboard. Paste text below and click Send, or copy text received from the remote session.</div>' +
                         '<textarea id="cp-text" style="flex:1;min-height:150px;width:100%;background:var(--input);border:1px solid var(--border);color:var(--text);font-family:monospace;font-size:1em;padding:0.6em;resize:none;border-radius:3px;box-sizing:border-box;" placeholder="Paste text here..."></textarea>' +
                         '<div style="display:flex;gap:0.6em;flex-wrap:wrap;">' +
-                            '<button id="cp-send" style="padding:0.4em 0.8em;background:var(--accent);color:var(--bg);font-weight:bold;border:none;font-family:monospace;font-size:0.95em;border-radius:3px;cursor:pointer;">Send to session</button>' +
-                            '<button id="cp-copy" style="padding:0.4em 0.8em;background:var(--input);color:var(--accent);border:1px solid var(--border);font-family:monospace;font-size:0.95em;border-radius:3px;cursor:pointer;">Copy to clipboard</button>' +
-                            '<button id="cp-clear" style="padding:0.4em 0.8em;background:var(--border);color:var(--text-muted);border:none;font-family:monospace;font-size:0.95em;border-radius:3px;cursor:pointer;">Clear</button>' +
+                            '<button id="cp-send" aria-label="Send to remote" style="padding:0.4em 0.8em;background:var(--accent);color:var(--bg);font-weight:bold;border:none;font-family:monospace;font-size:0.95em;border-radius:3px;cursor:pointer;">Send to session</button>' +
+                            '<button id="cp-copy" aria-label="Copy from remote" style="padding:0.4em 0.8em;background:var(--input);color:var(--accent);border:1px solid var(--border);font-family:monospace;font-size:0.95em;border-radius:3px;cursor:pointer;">Copy to clipboard</button>' +
+                            '<button id="cp-clear" aria-label="Clear" style="padding:0.4em 0.8em;background:var(--border);color:var(--text-muted);border:none;font-family:monospace;font-size:0.95em;border-radius:3px;cursor:pointer;">Clear</button>' +
                         '</div>' +
                         '<div id="cp-status" style="color:var(--accent);font-size:0.9em;min-height:1.2em;"></div>' +
                         '<div style="color:var(--text-dim);font-size:0.85em;line-height:1.4;">Press <b>Ctrl+Alt+Shift</b> to toggle this panel.<br>Text copied in the remote session appears here automatically.</div>' +
@@ -593,7 +626,7 @@
 
             // ── Build toggle tab (always visible on right edge) ──
             var toggleTab = document.createElement('div');
-            toggleTab.textContent = '📋 Clipboard';
+            toggleTab.textContent = 'Clipboard';
             toggleTab.title = 'Toggle clipboard panel (Ctrl+Alt+Shift)';
             toggleTab.style.cssText = 'position:fixed;left:-1px;top:50%;transform:translateY(-50%);writing-mode:vertical-rl;background:var(--primary);color:var(--text-on-primary);padding:0.6em 0.3em;font-family:monospace;font-size:0.75em;cursor:pointer;z-index:3001;border-radius:0 4px 4px 0;opacity:0.6;letter-spacing:0.1em;';
             toggleTab.addEventListener('mouseenter', function() { toggleTab.style.opacity = '1'; });
@@ -762,7 +795,7 @@
             function buildControlsPanel() {
                 if (controlsPanel) return;
                 controlsPanel = document.createElement('div');
-                controlsPanel.style.cssText = 'display:none;position:fixed;top:0;left:0;bottom:0;width:300px;background:var(--bg);border-right:2px solid var(--primary);z-index:3000;font-family:monospace;color:var(--text);flex-direction:column;overflow-y:auto;';
+                controlsPanel.style.cssText = 'display:none;position:fixed;top:0;left:0;bottom:0;width:min(300px,90vw);background:var(--bg);border-right:2px solid var(--primary);z-index:3000;font-family:monospace;color:var(--text);flex-direction:column;overflow-y:auto;';
                 controlsPanel.innerHTML =
                     '<div style="display:flex;align-items:center;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
                         '<h3 style="margin:0;flex:1;color:var(--primary);font-size:1.1em;">Controls</h3>' +
@@ -1078,7 +1111,7 @@
             function buildFilePanel() {
                 if (filePanel) return;
                 filePanel = document.createElement('div');
-                filePanel.style.cssText = 'display:none;position:fixed;top:0;left:0;bottom:0;width:380px;background:var(--bg);border-right:2px solid var(--accent);z-index:3000;font-family:monospace;color:var(--text);flex-direction:column;';
+                filePanel.style.cssText = 'display:none;position:fixed;top:0;left:0;bottom:0;width:min(380px,90vw);background:var(--bg);border-right:2px solid var(--accent);z-index:3000;font-family:monospace;color:var(--text);flex-direction:column;';
                 filePanel.innerHTML =
                     '<div style="display:flex;align-items:center;padding:0.8em 1em;border-bottom:1px solid var(--border);background:var(--surface);">' +
                         '<h3 style="margin:0;flex:1;color:var(--accent);font-size:1.1em;">File Manager</h3>' +
@@ -1148,14 +1181,7 @@
                 }, 4000);
             }
 
-            function escapeHtml(s) {
-                var d = document.createElement('div');
-                d.textContent = s;
-                return d.innerHTML;
-            }
-
-            function escapeAttr(s) {
-                return s.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+            // escapeHtml and escapeAttr available from /js/utils.js
             }
 
             function fetchDirectoryListing(path) {
@@ -1490,6 +1516,8 @@
                 t.style.display = 'block';
                 setTimeout(function() { t.style.display = 'none'; }, 6000);
             }
+            _rgFullscreenEl = rgFullscreenEl;
+            _rgExitFullscreen = rgExitFullscreen;
             // Auto-hide top bar: show on enter for a few seconds, then
             // slide up out of view to free the remote's top edge (xfce4
             // panels, Windows taskbar, etc). Reveals again when the mouse
@@ -1553,6 +1581,7 @@
                 .forEach(function(ev){ document.addEventListener(ev, rgOnFullscreenChange); });
             document.getElementById('fs-exit').addEventListener('click', rgExitFullscreen);
             document.getElementById('fs-disconnect').addEventListener('click', function() {
+                userDisconnected = true;
                 rgExitFullscreen();
                 try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
                 window.location.href = '/connections.html';
@@ -1564,6 +1593,7 @@
                     case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; break;
                     case Guacamole.Client.State.CONNECTED:
                         statusEl.textContent = 'Connected'; statusEl.className = 'connected';
+                        reconnectAttempts = 0;
                         // Fit the session to the actual window on connect. The session
                         // may have been created at different dimensions (e.g. opened in a
                         // new window at a fixed size), and the client otherwise only sends
@@ -1609,7 +1639,13 @@
                     case Guacamole.Client.State.DISCONNECTED:
                         statusEl.textContent = 'Disconnected'; statusEl.className = '';
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
-                        document.getElementById('disconnected-overlay').className = 'visible';
+                        if (userDisconnected) {
+                            document.getElementById('disconnected-title').textContent = 'Session Ended';
+                            document.getElementById('disconnected-message').textContent = 'The remote session has been disconnected.';
+                            document.getElementById('disconnected-overlay').className = 'visible';
+                        } else {
+                            attemptReconnect();
+                        }
                         if (rgFullscreenEl()) rgExitFullscreen();
                         // Reflect the disconnect in any open monitor pop-outs
                         // (freeze the stale blit + show a "Disconnected" overlay).
@@ -1657,10 +1693,14 @@
                 if (state === Guacamole.Tunnel.State.CLOSED) {
                     if (typeof console !== 'undefined')
                         console.log('[rustguac] tunnel closed');
-                    if (client.onerror) client.onerror({
-                        code: 519,
-                        message: 'Connection lost'
-                    });
+                    if (!userDisconnected) {
+                        attemptReconnect();
+                    } else {
+                        if (client.onerror) client.onerror({
+                            code: 519,
+                            message: 'Connection lost'
+                        });
+                    }
                 } else if (state === Guacamole.Tunnel.State.UNSTABLE) {
                     if (typeof console !== 'undefined')
                         console.log('[rustguac] tunnel unstable');
@@ -1670,6 +1710,7 @@
 
             // Disconnected overlay buttons
             document.getElementById('btn-close-session').addEventListener('click', function() {
+                userDisconnected = true;
                 window.close();
                 // window.close() may be blocked if not opened by script — navigate away as fallback
                 window.location.href = '/';
@@ -1839,7 +1880,7 @@
             // combined framebuffer); the other heads are available as pop-out
             // windows via the Controls sidebar. Otherwise the whole framebuffer
             // is scaled to fit.
-            function scaleDisplay() {
+            scaleDisplay = function() {
                 var display = client.getDisplay();
                 var dw = display.getWidth();
                 var dh = display.getHeight();
@@ -1886,12 +1927,13 @@
                     // Offset display to the right when left panel is open
                     displayEl.style.marginLeft = anyPanelOpen ? '380px' : '0';
                 }
-            }
+            };
+            _scaleDisplay = scaleDisplay;
 
-            client.getDisplay().onresize = function() { scaleDisplay(); };
+            client.getDisplay().onresize = function() { if (_scaleDisplay) _scaleDisplay(); };
             var resizeTimer = null;
             window.addEventListener('resize', function() {
-                scaleDisplay();
+                if (_scaleDisplay) _scaleDisplay();
                 // Debounce sendSize — RDP display updates are expensive
                 clearTimeout(resizeTimer);
                 resizeTimer = setTimeout(function() {

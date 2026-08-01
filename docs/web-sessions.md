@@ -575,3 +575,19 @@ When creating entries via the Vault connections (UI or API), the same fields are
 
 **Certificate errors when using SSH tunnels:**
 - Expected behaviour. When tunnelling, the URL is rewritten to `127.0.0.1:{port}`, which won't match the target's TLS certificate. The user can click through the warning or use HTTP if the tunnel is trusted.
+
+## Terminal Emulation Notes
+
+guacd's built-in terminal emulator handles SSH sessions. It supports xterm-256color
+and most common escape sequences, but has limitations compared to full terminal
+emulators:
+
+- **256 colors** supported; truecolor (24-bit) not supported
+- **Bracketed paste** (`DECSET 2004`) not supported — applications like ble.sh
+  cannot distinguish pasted text from typed input
+- **modifyOtherKeys** keyboard protocol not supported — some Ctrl+key
+  combinations may not work as expected in advanced line editors
+
+For applications requiring full terminal emulation (ble.sh, fzf with advanced
+features, tmux with truecolor), consider using a desktop terminal emulator
+connected via SSH rather than the web interface.

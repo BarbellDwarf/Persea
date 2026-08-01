@@ -19,6 +19,7 @@ use crate::tunnel;
 // ── Error type ──
 
 #[derive(Debug)]
+#[must_use]
 pub enum VaultError {
     Auth(String),
     NotFound,
@@ -579,6 +580,12 @@ impl VaultClient {
             base_path: config.base_path.clone(),
             namespace: config.namespace.clone(),
             instance_name: config.instance_name.clone(),
+            // NOTE: The Vault token is stored as a plain String. For defense
+            // in depth, it should be wrapped in `zeroize::Zeroizing<String>` to
+            // ensure the memory is zeroed on drop. However, `zeroize` is not
+            // currently a direct dependency (only transitive). The token lives
+            // behind an RwLock and is refreshed periodically, so the practical
+            // risk of residual plaintext in freed memory is low but nonzero.
             token: Arc::new(RwLock::new(String::new())),
             role_id: config.role_id.clone(),
             secret_id: secret_id.to_string(),
@@ -1443,7 +1450,7 @@ impl rustls::client::danger::ServerCertVerifier for NoVerifier {
 }
 
 /// Validate that a folder or entry name is safe (alphanumeric, hyphens, underscores, dots — no path traversal).
-fn validate_name(name: &str) -> Result<(), VaultError> {
+pub fn validate_name(name: &str) -> Result<(), VaultError> {
     if name.is_empty() || name.len() > 64 {
         return Err(VaultError::BadName("name must be 1-64 characters".into()));
     }
@@ -1469,7 +1476,7 @@ fn validate_name(name: &str) -> Result<(), VaultError> {
 /// Validate a folder path that may contain subfolders (e.g. "Clients/Acme/Servers").
 /// Each segment is validated with the same rules as `validate_name`.
 /// Empty segments, trailing slashes, and leading slashes are rejected.
-fn validate_path(path: &str) -> Result<(), VaultError> {
+pub fn validate_path(path: &str) -> Result<(), VaultError> {
     if path.is_empty() {
         return Err(VaultError::BadName("path cannot be empty".into()));
     }
@@ -1581,6 +1588,7 @@ pub fn resolve_credential_variables(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn base_config() -> VaultConfig {
         VaultConfig {
@@ -2195,5 +2203,69 @@ mod tests {
     fn validate_path_rejects_overlong() {
         let overlong = "a".repeat(257);
         assert!(validate_path(&overlong).is_err());
+    }
+
+    // ── Property-based tests (proptest) ──────────────────────────────────
+
+    proptest! {
+        #[test]
+        fn prop_validate_name_rejects_reserved(name in prop_oneof![Just(".."), Just("."), Just(".config")]) {
+            prop_assert!(validate_name(&name).is_err(), "Should reject reserved name: {}", name);
+        }
+
+        #[test]
+        fn prop_validate_name_rejects_slashes(name in "[a-zA-Z0-9_.-]{0,30}/[a-zA-Z0-9_.-]{0,30}") {
+            prop_assert!(validate_name(&name).is_err(), "Should reject name with slash: {}", name);
+        }
+
+        #[test]
+        fn prop_validate_name_rejects_backslashes(name in "[a-zA-Z0-9_.-]{0,30}\\\\[a-zA-Z0-9_.-]{0,30}") {
+            prop_assert!(validate_name(&name).is_err(), "Should reject name with backslash: {}", name);
+        }
+
+        #[test]
+        fn prop_validate_name_accepts_alphanumeric(name in "[a-zA-Z0-9_-]{1,64}") {
+            prop_assert!(validate_name(&name).is_ok(), "Should accept valid name: {}", name);
+        }
+
+        #[test]
+        fn prop_validate_name_rejects_empty(name in Just("")) {
+            prop_assert!(validate_name(&name).is_err(), "Should reject empty name");
+        }
+
+        #[test]
+        fn prop_validate_path_rejects_leading_slash(path in "/[a-zA-Z0-9_-]{1,32}(/[a-zA-Z0-9_-]{1,32}){0,3}") {
+            prop_assert!(validate_path(&path).is_err(), "Should reject path starting with /: {}", path);
+        }
+
+        #[test]
+        fn prop_validate_path_rejects_trailing_slash(path in "[a-zA-Z0-9_-]{1,32}(/[a-zA-Z0-9_-]{1,32}){0,3}/") {
+            prop_assert!(validate_path(&path).is_err(), "Should reject path ending with /: {}", path);
+        }
+
+        #[test]
+        fn prop_validate_path_rejects_double_slash(prefix in "[a-zA-Z0-9_-]{1,16}", suffix in "[a-zA-Z0-9_-]{1,16}") {
+            let path = format!("{}//{}", prefix, suffix);
+            prop_assert!(validate_path(&path).is_err(), "Should reject path with empty segment: {}", path);
+        }
+
+        #[test]
+        fn prop_validate_path_rejects_traversal_segment(prefix in "[a-zA-Z0-9_-]{0,16}", suffix in "[a-zA-Z0-9_-]{0,16}") {
+            let path = if prefix.is_empty() && suffix.is_empty() {
+                "..".to_string()
+            } else if prefix.is_empty() {
+                format!("../{}", suffix)
+            } else if suffix.is_empty() {
+                format!("{}/..", prefix)
+            } else {
+                format!("{}/../{}", prefix, suffix)
+            };
+            prop_assert!(validate_path(&path).is_err(), "Should reject path with '..' segment: {}", path);
+        }
+
+        #[test]
+        fn prop_validate_path_accepts_valid(path in "[a-zA-Z0-9_-]{1,32}(/[a-zA-Z0-9_-]{1,32}){0,3}") {
+            prop_assert!(validate_path(&path).is_ok(), "Should accept valid path: {}", path);
+        }
     }
 }

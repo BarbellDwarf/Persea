@@ -42,6 +42,10 @@ pub fn disk_usage_percent(path: &Path) -> std::io::Result<f64> {
     let c_path = CString::new(path.to_string_lossy().as_bytes())
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
+    // SAFETY: statvfs(2) reads filesystem metadata for the given path.
+    // The path is a valid C string (CString), and stat is stack-allocated
+    // and zeroed before the call. The function returns 0 on success or
+    // sets errno on failure — we check the return value and propagate errors.
     unsafe {
         let mut stat: libc::statvfs = std::mem::zeroed();
         if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {

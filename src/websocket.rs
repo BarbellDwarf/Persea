@@ -540,10 +540,21 @@ async fn ws_to_guacd(
     mut guacd: tokio::io::WriteHalf<GuacdStream>,
     ws_sink: WsSink,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    /// Maximum allowed WebSocket message size (64 MiB).
+    const MAX_WS_MSG_SIZE: usize = 64 * 1024 * 1024;
+
     while let Some(msg) = ws_read.next().await {
         let msg = msg?;
         match msg {
             Message::Text(text) => {
+                if text.len() > MAX_WS_MSG_SIZE {
+                    tracing::warn!(
+                        len = text.len(),
+                        limit = MAX_WS_MSG_SIZE,
+                        "WebSocket message exceeds size limit, closing connection"
+                    );
+                    break;
+                }
                 // Empty-opcode instructions always start with "0.," — fast
                 // path skips the parse for normal traffic.
                 if text.starts_with("0.,") {
@@ -567,7 +578,15 @@ async fn ws_to_guacd(
                 }
                 guacd.write_all(text.as_bytes()).await?;
             }
-            Message::Binary(_) => {
+            Message::Binary(data) => {
+                if data.len() > MAX_WS_MSG_SIZE {
+                    tracing::warn!(
+                        len = data.len(),
+                        limit = MAX_WS_MSG_SIZE,
+                        "WebSocket binary message exceeds size limit, closing connection"
+                    );
+                    break;
+                }
                 continue;
             }
             Message::Close(_) => break,
@@ -581,9 +600,10 @@ async fn ws_to_guacd(
 /// Return true if the browser-supplied Origin and the request Host header
 /// refer to the same hostname (ports stripped). Extracted for test.
 ///
-/// If either value is missing or empty, the request is allowed — matches
-/// the prior `unwrap_or("")` behaviour where axum had no header and no
-/// CSWSH signal. The caller must still ensure auth is enforced separately.
+/// If Origin is missing or empty, the request is **rejected** — WebSocket
+/// upgrades without an Origin header are suspicious and likely from a
+/// non-browser client or a CSWSH attack vector. The caller must still
+/// ensure auth is enforced separately.
 pub(crate) fn origin_host_matches(origin: &str, host: &str) -> bool {
     let origin_host = origin
         .trim_start_matches("https://")
@@ -594,7 +614,7 @@ pub(crate) fn origin_host_matches(origin: &str, host: &str) -> bool {
         .unwrap_or("");
     let host_name = host.split(':').next().unwrap_or("");
     if host_name.is_empty() || origin_host.is_empty() {
-        return true;
+        return false;
     }
     origin_host.eq_ignore_ascii_case(host_name)
 }
@@ -654,12 +674,10 @@ mod tests {
     }
 
     #[test]
-    fn origin_empty_allowed_preserves_prior_behaviour() {
-        // No Origin header (rare — server-side fetches / Firefox in some
-        // contexts) must be allowed by this check; caller still enforces
-        // auth. Same for empty Host (shouldn't happen, but belt + braces).
-        assert!(origin_host_matches("", "console.example.com"));
-        assert!(origin_host_matches("https://console.example.com", ""));
+    fn origin_empty_rejected() {
+        // Missing Origin header is suspicious — reject to prevent CSWSH.
+        assert!(!origin_host_matches("", "console.example.com"));
+        assert!(!origin_host_matches("https://console.example.com", ""));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+//! TOML configuration loading and defaults.
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -380,6 +382,10 @@ pub struct Config {
 
     #[serde(default = "default_site_title")]
     pub site_title: String,
+
+    /// SSH terminal scrollback lines (default: 10000).
+    #[serde(default = "default_ssh_scrollback")]
+    pub ssh_scrollback: u32,
 
     /// CIDR allowlist for SSH session targets. Default: localhost only.
     #[serde(default = "default_localhost_networks")]
@@ -1135,7 +1141,17 @@ fn default_site_title() -> String {
 }
 
 fn default_localhost_networks() -> Vec<String> {
-    vec!["127.0.0.0/8".into(), "::1/128".into()]
+    vec![
+        "10.0.0.0/8".into(),
+        "172.16.0.0/12".into(),
+        "192.168.0.0/16".into(),
+        "127.0.0.0/8".into(),
+        "::1/128".into(),
+    ]
+}
+
+fn default_ssh_scrollback() -> u32 {
+    10000
 }
 
 impl Default for Config {
@@ -1159,6 +1175,7 @@ impl Default for Config {
             login_scripts_dir: default_login_scripts_dir(),
             site_title: default_site_title(),
             ssh_allowed_networks: default_localhost_networks(),
+            ssh_scrollback: default_ssh_scrollback(),
             rdp_allowed_networks: default_localhost_networks(),
             vnc_allowed_networks: default_localhost_networks(),
             web_allowed_networks: default_localhost_networks(),
@@ -1181,6 +1198,20 @@ impl Default for Config {
             rdp: None,
         }
     }
+}
+
+fn sanitize_cidr_list(proto: &str, list: &mut Vec<String>) {
+    list.retain(|cidr| {
+        if cidr.parse::<ipnetwork::IpNetwork>().is_err() {
+            eprintln!(
+                "WARNING: invalid {}_allowed_networks CIDR '{}', removing",
+                proto, cidr
+            );
+            false
+        } else {
+            true
+        }
+    });
 }
 
 /// Read and parse a TOML config file, returning a rich error message on failure.
@@ -1256,7 +1287,51 @@ impl Config {
             }
         }
 
+        // Validate config values
+        config.validate();
+
         config
+    }
+
+    fn validate(&mut self) {
+        // Fatal: can't start
+        if self.listen_addr.parse::<std::net::SocketAddr>().is_err() {
+            eprintln!("FATAL: invalid listen_addr: {}", self.listen_addr);
+            std::process::exit(1);
+        }
+        if self.guacd_addr.parse::<std::net::SocketAddr>().is_err() {
+            eprintln!("FATAL: invalid guacd_addr: {}", self.guacd_addr);
+            std::process::exit(1);
+        }
+
+        // Warnings: bad values
+        if self.display_range_start >= self.display_range_end {
+            eprintln!("WARNING: display_range_start ({}) >= display_range_end ({}), displays may not work",
+                self.display_range_start, self.display_range_end);
+        }
+        if self.session_pending_timeout_secs == 0 {
+            eprintln!("WARNING: session_pending_timeout_secs is 0, pending sessions will expire immediately");
+        }
+        if self.recording.as_ref().is_some_and(|r| r.max_disk_percent > 100) {
+            eprintln!("WARNING: recording.max_disk_percent ({}) > 100, capping at 100",
+                self.recording.as_ref().unwrap().max_disk_percent);
+        }
+
+        // Validate and sanitize CIDR entries in allowed_network lists
+        sanitize_cidr_list("ssh", &mut self.ssh_allowed_networks);
+        sanitize_cidr_list("rdp", &mut self.rdp_allowed_networks);
+        sanitize_cidr_list("vnc", &mut self.vnc_allowed_networks);
+        sanitize_cidr_list("web", &mut self.web_allowed_networks);
+
+        // Validate trusted_proxies
+        self.trusted_proxies.retain(|cidr| {
+            if cidr.parse::<ipnetwork::IpNetwork>().is_err() {
+                eprintln!("WARNING: invalid trusted_proxies CIDR '{}', removing", cidr);
+                false
+            } else {
+                true
+            }
+        });
     }
 
     /// Effective recording path: `[recording].path` overrides top-level `recording_path`.
@@ -1713,5 +1788,82 @@ mod tests {
         assert!(!is_valid_theme_name("with!bang"));
         assert!(!is_valid_theme_name(&"x".repeat(65)));
         assert!(is_valid_theme_name(&"x".repeat(64)));
+    }
+
+    // ── Config validation tests ──
+
+    #[test]
+    fn test_validate_removes_invalid_cidrs() {
+        let mut config = Config::default();
+        config.ssh_allowed_networks = vec![
+            "10.0.0.0/8".into(),
+            "not-a-cidr".into(),
+            "192.168.0.0/16".into(),
+            "".into(),
+        ];
+        config.validate();
+        assert_eq!(config.ssh_allowed_networks, vec!["10.0.0.0/8", "192.168.0.0/16"]);
+    }
+
+    #[test]
+    fn test_validate_keeps_valid_cidrs() {
+        let mut config = Config::default();
+        config.ssh_allowed_networks = vec![
+            "10.0.0.0/8".into(),
+            "172.16.0.0/12".into(),
+            "::1/128".into(),
+        ];
+        config.validate();
+        assert_eq!(config.ssh_allowed_networks.len(), 3);
+    }
+
+    #[test]
+    fn test_sanitize_cidr_list_removes_bad_entries() {
+        let mut list = vec!["valid/24".into(), "bad".into(), "10.0.0.0/8".into()];
+        sanitize_cidr_list("test", &mut list);
+        // "bad" removed, valid entries kept
+        assert!(!list.iter().any(|s| s == "bad"));
+        assert!(list.iter().any(|s| s == "10.0.0.0/8"));
+    }
+
+    #[test]
+    fn test_default_allowed_networks_includes_private_ranges() {
+        let defaults = default_localhost_networks();
+        assert!(defaults.contains(&"10.0.0.0/8".to_string()));
+        assert!(defaults.contains(&"172.16.0.0/12".to_string()));
+        assert!(defaults.contains(&"192.168.0.0/16".to_string()));
+        assert!(defaults.contains(&"127.0.0.0/8".to_string()));
+        assert!(defaults.contains(&"::1/128".to_string()));
+    }
+
+    #[test]
+    fn test_config_default_networks_use_private_ranges() {
+        let config = Config::default();
+        // All network lists should use the expanded private-range defaults
+        for networks in [
+            &config.ssh_allowed_networks,
+            &config.rdp_allowed_networks,
+            &config.vnc_allowed_networks,
+            &config.web_allowed_networks,
+        ] {
+            assert!(networks.contains(&"10.0.0.0/8".to_string()));
+            assert!(networks.contains(&"172.16.0.0/12".to_string()));
+            assert!(networks.contains(&"192.168.0.0/16".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_validate_trusted_proxies() {
+        let mut config = Config::default();
+        config.trusted_proxies = vec![
+            "10.0.0.0/8".into(),
+            "not-valid".into(),
+            "192.168.0.0/16".into(),
+        ];
+        config.validate();
+        assert_eq!(
+            config.trusted_proxies,
+            vec!["10.0.0.0/8", "192.168.0.0/16"]
+        );
     }
 }

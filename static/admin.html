@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>rustguac - Admin</title>
     <link rel="stylesheet" href="/rustguac.css">
     <style>
@@ -18,7 +19,7 @@
         <a href="/connections.html">Connections</a>
         <a href="/sessions.html" id="sessions-link">Sessions</a>
         <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
+        <a href="/reports.html" id="reports-link" style="display:none" aria-hidden="true">Reports</a>
         <a href="/docs.html">Docs</a>
         <a href="/tokens.html">Tokens</a>
         <a href="/admin.html" class="active">Admin</a>
@@ -38,21 +39,25 @@
     </div>
 
     <h2>Users</h2>
-    <table id="users-table">
-        <thead><tr>
-            <th>Email</th><th>Name</th><th>Role</th><th>Groups</th><th>Status</th><th>Last Login</th><th></th>
-        </tr></thead>
-        <tbody id="users-body"></tbody>
-    </table>
+    <div class="table-wrap">
+        <table id="users-table">
+            <thead><tr>
+                <th>Email</th><th>Name</th><th>Role</th><th>Groups</th><th>Status</th><th>Last Login</th><th></th>
+            </tr></thead>
+            <tbody id="users-body"></tbody>
+        </table>
+    </div>
 
     <h2>Group-to-Role Mappings</h2>
     <p style="color:#888;font-size:0.85em;margin:0.3em 0;">OIDC groups are matched to roles on every login. The highest matching role wins.</p>
-    <table id="mappings-table">
-        <thead><tr>
-            <th>Group</th><th>Role</th><th>Created</th><th></th>
-        </tr></thead>
-        <tbody id="mappings-body"></tbody>
-    </table>
+    <div class="table-wrap">
+        <table id="mappings-table">
+            <thead><tr>
+                <th>Group</th><th>Role</th><th>Created</th><th></th>
+            </tr></thead>
+            <tbody id="mappings-body"></tbody>
+        </table>
+    </div>
     <div class="add-form">
         <input type="text" id="new-group" placeholder="OIDC group name">
         <select id="new-role">
@@ -65,12 +70,14 @@
     </div>
     <h2>User API Tokens</h2>
     <p style="color:#888;font-size:0.85em;margin:0.3em 0;">Tokens issued to OIDC users for API access. Admins can create tokens for operators and revoke any token.</p>
-    <table id="tokens-table">
-        <thead><tr>
-            <th>User</th><th>Name</th><th>Max Role</th><th>Expires</th><th>Created</th><th>Last Used</th><th>Status</th><th></th>
-        </tr></thead>
-        <tbody id="tokens-body"></tbody>
-    </table>
+    <div class="table-wrap">
+        <table id="tokens-table">
+            <thead><tr>
+                <th>User</th><th>Name</th><th>Max Role</th><th>Expires</th><th>Created</th><th>Last Used</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody id="tokens-body"></tbody>
+        </table>
+    </div>
     <div id="no-tokens" style="display:none;color:var(--text-muted);margin-top:0.5em;font-size:0.9em;">No user tokens.</div>
     <h2 style="font-size:0.9em;">Create Token for User</h2>
     <div class="add-form" id="admin-token-form">
@@ -101,12 +108,14 @@
         <input type="text" id="audit-email-filter" placeholder="Filter by email" style="width:200px;">
         <button class="btn-primary" id="audit-filter-btn" style="padding:0.3em 0.8em;">Filter</button>
     </div>
-    <table id="audit-table">
-        <thead><tr>
-            <th>Time</th><th>User</th><th>Token</th><th>Action</th><th>IP</th><th>Details</th>
-        </tr></thead>
-        <tbody id="audit-body"></tbody>
-    </table>
+    <div class="table-wrap">
+        <table id="audit-table">
+            <thead><tr>
+                <th>Time</th><th>User</th><th>Token</th><th>Action</th><th>IP</th><th>Details</th>
+            </tr></thead>
+            <tbody id="audit-body"></tbody>
+        </table>
+    </div>
     <div id="no-audit" style="display:none;color:var(--text-muted);margin-top:0.5em;font-size:0.9em;">No audit events.</div>
 
     <h2>Connections Audit Log</h2>
@@ -117,35 +126,28 @@
         <input type="text" id="ab-audit-email-filter" placeholder="Filter by email" style="width:200px;">
         <button class="btn-primary" id="ab-audit-filter-btn" style="padding:0.3em 0.8em;">Filter</button>
     </div>
-    <table id="ab-audit-table">
-        <thead><tr>
-            <th>Time</th><th>User</th><th>Action</th><th>Scope</th><th>Folder</th><th>Entry</th><th>IP</th><th>Details</th>
-        </tr></thead>
-        <tbody id="ab-audit-body"></tbody>
-    </table>
+    <div class="table-wrap">
+        <table id="ab-audit-table">
+            <thead><tr>
+                <th>Time</th><th>User</th><th>Action</th><th>Scope</th><th>Folder</th><th>Entry</th><th>IP</th><th>Details</th>
+            </tr></thead>
+            <tbody id="ab-audit-body"></tbody>
+        </table>
+    </div>
     <div id="no-ab-audit" style="display:none;color:var(--text-muted);margin-top:0.5em;font-size:0.9em;">No connections audit events.</div>
 
-    <div id="error"></div>
+    <div id="error" aria-live="polite"></div>
 
+    <script src="/js/utils.js"></script>
+    <script src="/js/auth.js"></script>
+    <script src="/js/theme.js"></script>
     <script>
-        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
-        var _themePresets={},_adminPreset='aurora';
-        var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',aurora:'Midnight blue with ambient glow',jaguar:'Racing green & gold'};
-        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'aurora';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){if(l.src!==t.logo_url&&!l.src.endsWith(t.logo_url))l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
-        var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             if(d.site_title){document.title=d.site_title+' - Admin';document.querySelector('h1').textContent=d.site_title;}
             initTheme(d.theme);
         });
 
         var apiKey = sessionStorage.getItem('rustguac_api_key');
-
-        function apiHeaders(extra) {
-            var h = {};
-            if (apiKey) h['Authorization'] = 'Bearer ' + apiKey;
-            if (extra) { for (var k in extra) h[k] = extra[k]; }
-            return h;
-        }
 
         function checkAdmin() {
             fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
@@ -370,13 +372,14 @@
                     var delBtn = document.createElement('button');
                     delBtn.className = 'btn-small';
                     delBtn.textContent = 'delete';
-                    delBtn.addEventListener('click', (function(id) {
+                    delBtn.addEventListener('click', (function(id, group) {
                         return function() {
+                            if (!confirm('Delete group mapping for "' + group + '"?')) return;
                             fetch('/api/admin/group-mappings/' + id, {
                                 method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin'
                             }).then(function() { loadMappings(); });
                         };
-                    })(m.id));
+                    })(m.id, m.oidc_group));
                     actTd.appendChild(delBtn);
                     tr.appendChild(actTd);
 
@@ -651,5 +654,6 @@
         // Auto-refresh
         setInterval(function() { loadUsers(); loadMappings(); loadAllTokens(); }, 10000);
     </script>
+    <script src="/js/modal.js"></script>
 </body>
 </html>

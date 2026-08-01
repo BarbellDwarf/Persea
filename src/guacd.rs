@@ -46,6 +46,8 @@ pub struct SshParams {
     pub sftp_disable_upload: bool,
     pub disable_copy: bool,
     pub disable_paste: bool,
+    /// Terminal scrollback buffer size in lines.
+    pub scrollback: u32,
     /// SSH typescript recording (#159). guacd writes the raw terminal
     /// session to a plain-text file (compatible with `scriptreplay`).
     /// An empty `typescript_path` disables it (guacd records nothing).
@@ -242,7 +244,7 @@ pub async fn connect_and_handshake(
                 "font-size" => "12".into(),
                 "font-name" => "monospace".into(),
                 "terminal-type" => "xterm-256color".into(),
-                "scrollback" => "1000".into(),
+                "scrollback" => p.scrollback.to_string(),
                 "backspace" => "127".into(),
                 "enable-sftp" => if p.enable_sftp { "true" } else { "false" }.into(),
                 "sftp-disable-download" => if p.sftp_disable_download {
@@ -439,6 +441,17 @@ pub async fn connect_and_handshake(
         .cloned()
         .unwrap_or_else(|| "unknown".into());
 
+    // Send environ instruction for SSH sessions to set LANG.
+    // guacd applies these to the remote shell environment.
+    if matches!(params, ConnectionParams::Ssh(_)) {
+        let environ = Instruction::new("environ", vec!["LANG".into(), "en_US.UTF-8".into()]);
+        stream
+            .write_all(environ.encode().as_bytes())
+            .await
+            .map_err(|e| GuacdError::Io(e.to_string()))?;
+        tracing::debug!("Sent environ instruction: LANG=en_US.UTF-8");
+    }
+
     tracing::info!("guacd handshake complete, connection_id={}", connection_id);
 
     Ok((stream, connection_id))
@@ -628,6 +641,7 @@ async fn read_instruction(
 }
 
 #[derive(Debug)]
+#[must_use]
 pub enum GuacdError {
     Connection(String),
     Io(String),

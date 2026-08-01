@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>rustguac - Sessions</title>
     <link rel="stylesheet" href="/rustguac.css">
     <style>
@@ -58,10 +59,10 @@
         <a href="/connections.html">Connections</a>
         <a href="/sessions.html" class="active" id="sessions-link">Sessions</a>
         <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
+        <a href="/reports.html" id="reports-link" style="display:none" aria-hidden="true">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
-        <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
+        <a href="/tokens.html" id="tokens-link" style="display:none" aria-hidden="true">Tokens</a>
+        <a href="/admin.html" id="admin-link" style="display:none" aria-hidden="true">Admin</a>
         <span id="user-menu-wrapper"><a href="#" id="logout-item">Logout</a><span id="user-menu-btn" title="Preferences">&#9881; Settings</span><div id="user-menu"><div class="um-section-label">Theme</div><div id="um-theme-list"></div></div></span>
     </nav>
 
@@ -172,7 +173,7 @@
             <input type="text" id="banner" placeholder="e.g. Please enter your credentials when prompted">
         </label>
         <button type="submit" id="connect-btn">Connect</button>
-        <div id="error"></div>
+        <div id="error" aria-live="polite"></div>
         </div>
     </form>
 
@@ -181,21 +182,21 @@
             <strong>Sessions</strong>
             <span class="section-count" id="session-counts"></span>
         </div>
-        <table>
-            <thead><tr>
-                <th>ID</th><th>Type</th><th>Host</th><th>User</th><th>Owner</th><th>Status</th><th>Viewers</th><th></th><th></th>
-            </tr></thead>
-            <tbody id="session-list"></tbody>
-        </table>
+        <div class="table-wrap">
+            <table>
+                <thead><tr>
+                    <th>ID</th><th>Type</th><th>Host</th><th>User</th><th>Owner</th><th>Status</th><th>Viewers</th><th></th><th></th>
+                </tr></thead>
+                <tbody id="session-list"></tbody>
+            </table>
+        </div>
         <p id="session-empty" class="empty" style="display:none"></p>
     </div>
 
+    <script src="/js/utils.js"></script>
+    <script src="/js/auth.js"></script>
+    <script src="/js/theme.js"></script>
     <script>
-        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
-        var _themePresets={},_adminPreset='aurora';
-        var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',aurora:'Midnight blue with ambient glow',jaguar:'Racing green & gold'};
-        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'aurora';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){if(l.src!==t.logo_url&&!l.src.endsWith(t.logo_url))l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
-        var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             if(d.site_title){document.title=d.site_title+' - Sessions';document.querySelector('h1').textContent=d.site_title;}
             initTheme(d.theme);
@@ -258,13 +259,6 @@
             fetch('/auth/logout', { credentials: 'same-origin' })
             .finally(function() { window.location.href = '/'; });
         });
-
-        function apiHeaders(extra) {
-            var h = {};
-            if (apiKey) h['Authorization'] = 'Bearer ' + apiKey;
-            if (extra) { for (var k in extra) h[k] = extra[k]; }
-            return h;
-        }
 
         var form = document.getElementById('session-form');
         var errorEl = document.getElementById('error');
@@ -336,16 +330,6 @@
                 arrow.innerHTML = '&#9654;';
             }
         });
-
-        // ── Escape helpers ──
-        function escapeHtml(s) {
-            var d = document.createElement('div');
-            d.textContent = s;
-            return d.innerHTML;
-        }
-        function escapeAttr(s) {
-            return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
 
         // ── Multi-hop management ──
         var hopList = []; // Array of {hostname, port, username, password, private_key, expanded}
@@ -477,7 +461,7 @@
             // Show URL rewrite warning for web sessions with hops
             var warn = '';
             if (type === 'web' && hopList.length > 0) {
-                warn = '<div style="color:var(--primary);font-size:0.8em;margin-top:0.4em">Note: The URL will be rewritten to 127.0.0.1:{tunnel_port} inside the headless browser. TLS certificate errors are expected if the target uses HTTPS.</div>';
+                warn = '<div style="color:var(--primary);font-size:0.8em;margin-top:0.4em">URL rewritten to 127.0.0.1:{tunnel_port} inside the headless browser. TLS certificate errors are expected if the target uses HTTPS.</div>';
             }
             diag.innerHTML = hopList.length > 0 ? html + warn : '';
         }
@@ -578,13 +562,6 @@
         });
 
 
-        function h(tag, text, attrs) {
-            var el = document.createElement(tag);
-            if (text != null) el.textContent = text;
-            if (attrs) for (var k in attrs) el.setAttribute(k, attrs[k]);
-            return el;
-        }
-
         function refreshSessions() {
             // Admins get everyone's sessions; non-admins see only their own (see #102).
             fetch('/api/sessions?all=true', { headers: apiHeaders(), credentials: 'same-origin' })
@@ -618,7 +595,7 @@
                     tdId.appendChild(idLink);
                     tr.appendChild(tdId);
 
-                    tr.appendChild(h('td', s.session_type));
+                    tr.appendChild(h('td', s.session_type.toUpperCase(), { 'class': 'type-badge type-' + s.session_type }));
                     tr.appendChild(h('td', hostCol));
                     tr.appendChild(h('td', s.username));
                     tr.appendChild(h('td', s.created_by || '', { 'class': isOwn ? 'owner-self' : 'owner-other' }));
@@ -671,6 +648,7 @@
         document.getElementById('session-list').addEventListener('click', function(e) {
             if (e.target.getAttribute('data-delete')) {
                 var id = e.target.getAttribute('data-delete');
+                if (!confirm('Delete this session?')) return;
                 fetch('/api/sessions/' + id, { method: 'DELETE', headers: apiHeaders(), credentials: 'same-origin' })
                 .then(function() { refreshSessions(); });
             }
@@ -706,5 +684,6 @@
         refreshSessions();
         setInterval(refreshSessions, 5000);
     </script>
+    <script src="/js/modal.js"></script>
 </body>
 </html>

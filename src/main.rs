@@ -1,10 +1,14 @@
+//! rustguac — lightweight Guacamole proxy. CLI entry point and server setup.
+
 mod api;
 mod auth;
 mod browser;
 mod config;
 mod db;
 mod drive;
+mod error;
 mod guacd;
+mod metrics;
 mod import;
 mod migrate;
 mod oidc;
@@ -12,6 +16,8 @@ mod protocol;
 mod pve;
 mod recording;
 mod session;
+#[cfg(test)]
+mod testing;
 mod tunnel;
 mod vault;
 mod vdi;
@@ -415,7 +421,7 @@ fn cmd_list_users(database: &Db) {
 }
 
 fn cmd_set_role(database: &Db, email: &str, role: &str) {
-    if !["admin", "poweruser", "operator", "viewer"].contains(&role) {
+    if !auth::is_valid_role(role) {
         eprintln!("Role must be admin, poweruser, operator, or viewer.");
         std::process::exit(1);
     }
@@ -575,7 +581,9 @@ async fn run_server(config: Config, database: Db) {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                EnvFilter::new("info,tower_http=info")
+            }),
         )
         .init();
 
@@ -1116,9 +1124,18 @@ async fn run_server(config: Config, database: Db) {
         .layer(Extension(oidc_enabled.clone()))
         .layer(Extension(database.clone()));
 
+    // Health check with optional auth (deep check when authenticated)
+    let health_route = Router::new()
+        .route("/api/health", get(api::health))
+        .with_state(manager.clone())
+        .layer(middleware::from_fn(auth::optional_auth));
+
+    // Prometheus metrics endpoint
+    let metrics_route = Router::new()
+        .route("/metrics", get(api::metrics));
+
     // Unauthenticated stateful routes
     let unauth_routes = Router::new()
-        .route("/api/health", get(api::health))
         .route("/api/docs", get(api::get_docs))
         .route("/api/sessions/{id}/banner", get(api::get_session_banner))
         .route("/client/{session_id}", get(serve_client_page))
@@ -1146,6 +1163,8 @@ async fn run_server(config: Config, database: Db) {
     let mut app: Router<()> = Router::new()
         .route("/api/auth/status", get(api::auth_status))
         .merge(api_routes)
+        .merge(health_route)
+        .merge(metrics_route)
         .merge(ws_route)
         .merge(connect_route)
         .merge(unauth_routes)
@@ -1187,6 +1206,8 @@ async fn run_server(config: Config, database: Db) {
     });
     let tls_enabled = TlsEnabled(server_tls.is_some());
     app = app
+        .layer(tower_http::trace::TraceLayer::new_for_http())
+        .layer(metrics::MetricsLayer)
         .layer(DefaultBodyLimit::max(64 * 1024)) // 64 KB max request body
         .layer(middleware::from_fn(security_headers))
         .layer(Extension(tls_enabled))

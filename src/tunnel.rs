@@ -87,6 +87,7 @@ pub struct TunnelConfig {
 
 /// Errors from tunnel setup.
 #[derive(Debug)]
+#[must_use]
 pub enum TunnelError {
     Ssh(usize, String),
     Auth(usize, String),

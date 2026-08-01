@@ -89,10 +89,9 @@ trusted_proxies = ["127.0.0.1/32"]
 
 # Network allowlists — restrict what targets guacd can connect to.
 # Prevents SSRF via crafted session requests.
-[network]
-allowed_ssh_cidrs = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
-allowed_rdp_cidrs = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
-allowed_vnc_cidrs = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+ssh_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+rdp_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+vnc_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 ```
 
 See [configuration.md](configuration.md) for the full reference.
@@ -220,12 +219,13 @@ issuer_url = "https://your-idp.example.com"
 client_id = "rustguac"
 redirect_uri = "https://console.example.com/auth/callback"
 groups_claim = "groups"
-session_ttl_secs = 28800    # 8 hours
 
-[oidc.group_role_mappings]
-"RemoteConsoleAdmins" = "admin"
-"RemoteConsoleUsers" = "operator"
+# OIDC session TTL — re-authenticate after this period (default: 86400 = 24h)
+auth_session_ttl_secs = 28800
 ```
+
+Group-to-role mappings are configured via the Admin page (http://localhost:8089/admin.html)
+or the API endpoint `POST /api/admin/group-mappings`.
 
 Set the client secret in `/opt/rustguac/env`:
 
@@ -255,13 +255,25 @@ API keys are powerful (full admin, no MFA). For day-to-day use, OIDC with group-
 
 The connections stores connection entries in HashiCorp Vault or OpenBao. Credentials stay server-side — they never reach the browser.
 
-```toml
-[vault]
-addr = "https://vault.example.com:8200"
-mount = "secret"
-base_path = "rustguac"
-role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-```
+### Step 6: Configure Vault (optional, for Connections UI)
+
+If you want the Vault-backed Connections UI:
+
+1. **Install and initialize Vault** — see [Vault from Zero](integrations.md#vault-from-zero) in the integrations guide
+2. **Enable KV v2** at the `secret` mount path
+3. **Create the rustguac policy** with read/write access to `secret/data/rustguac/*`
+4. **Enable AppRole** and get role_id + secret_id
+5. **Add to config.toml:**
+   ```toml
+   [vault]
+   addr = "http://127.0.0.1:8200"
+   role_id = "<your-role-id>"
+   ```
+6. **Set the secret_id** in `/opt/rustguac/env`:
+   ```
+   VAULT_SECRET_ID=<your-secret-id>
+   ```
+7. **Verify:** restart rustguac and check logs for "Vault: authenticated via AppRole"
 
 ```bash
 echo 'VAULT_SECRET_ID=your-secret-id' | sudo tee -a /opt/rustguac/env
@@ -335,10 +347,10 @@ Session recordings are enabled by default and stored in `/opt/rustguac/recording
 ```toml
 recording_path = "/opt/rustguac/recordings"
 
-[recording_rotation]
+[recording]
 enabled = true
 max_disk_percent = 80    # Auto-delete oldest when disk usage exceeds 80%
-interval_secs = 300      # Check every 5 minutes
+rotation_interval_secs = 300   # Check every 5 minutes
 ```
 
 Recordings can be played back in the browser via the Sessions page, or exported for compliance.

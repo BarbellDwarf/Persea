@@ -49,6 +49,7 @@ pub struct PveBroker {
 }
 
 #[derive(Debug)]
+#[must_use]
 pub enum PveError {
     /// Transport-level failure (connect, TLS, timeout). Never contains creds.
     Transport(String),

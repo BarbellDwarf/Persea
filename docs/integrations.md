@@ -283,9 +283,137 @@ The script does **not** install the Vault or OpenBao binary itself — install o
 
 > **`--local` security caveat:** the unseal key is stored on disk at `/etc/vault.d/unseal-key` (or `/etc/openbao/unseal-key`) mode 0400 root:root, and a `SECURITY.txt` file is written next to it. Anyone with root or read access to that file owns the secret store. This trade is fine for single-host rustguac boxes (where root compromise already means total compromise) but unacceptable for higher-stakes deployments. For real production use cloud-KMS auto-unseal: [Vault](https://developer.hashicorp.com/vault/docs/configuration/seal) | [OpenBao](https://openbao.org/docs/configuration/seal/).
 
-### Vault setup
+### Vault from Zero — Complete Setup Guide
 
-The manual steps below are equivalent to what `vault-quickstart.sh` automates. Use them if you want to understand the moving parts or if you need to deviate from the defaults (mount path, policy name, AppRole TTLs).
+This section walks through every step from a bare server to a working rustguac + Vault integration. Skip sections that are already done.
+
+#### Installing Vault
+
+```bash
+# Debian/Ubuntu (HashiCorp APT repository)
+wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
+sudo apt update && sudo apt install vault
+
+# Verify installation
+vault --version
+```
+
+#### Initialize Vault
+
+For single-server deployments (dev/test):
+
+```bash
+# Initialize with 1 key share, 1 key threshold (NOT for production)
+vault operator init -key-shares=1 -key-threshold=1
+```
+
+Save the output — it contains:
+- Unseal Key (needed to unseal after restart)
+- Root Token (initial admin access)
+
+For production/HA: use 5 shares with threshold 3:
+
+```bash
+vault operator init -key-shares=5 -key-threshold=3
+```
+
+#### Unseal Vault
+
+Vault starts sealed. Unseal after each restart:
+
+```bash
+vault operator unseal <unseal-key>
+```
+
+Verify: `vault status` should show `Sealed: false`.
+
+#### Enable KV v2 secrets engine
+
+```bash
+vault secrets enable -path=secret kv-v2
+```
+
+#### Create rustguac policy
+
+Create a file `rustguac-policy.hcl`:
+
+```hcl
+path "secret/data/rustguac/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+path "secret/metadata/rustguac/*" {
+  capabilities = ["list"]
+}
+```
+
+Apply it:
+
+```bash
+vault policy write rustguac rustguac-policy.hcl
+```
+
+#### Enable AppRole authentication
+
+```bash
+vault auth enable approle
+```
+
+Create a role for rustguac:
+
+```bash
+vault write auth/approle/role/rustguac \
+    token_policies="rustguac" \
+    token_ttl=1h \
+    token_max_ttl=4h \
+    secret_id_ttl=0 \
+    token_num_uses=0
+```
+
+Get the role_id and secret_id:
+
+```bash
+vault read auth/approle/role/rustguac/role-id
+vault write -f auth/approle/role/rustguac/secret-id
+```
+
+#### Configure rustguac
+
+Add to `config.toml`:
+
+```toml
+[vault]
+addr = "http://127.0.0.1:8200"
+mount = "secret"
+base_path = "rustguac"
+role_id = "<role-id from above>"
+```
+
+Set the secret_id via environment variable:
+
+```bash
+export VAULT_SECRET_ID="<secret-id from above>"
+```
+
+#### Verify the setup
+
+```bash
+# Put a test entry
+vault kv put secret/rustguac/shared/test-folder/test-entry \
+    type=ssh hostname=localhost port=22 username=testuser
+
+# Check rustguac logs for successful Vault auth
+journalctl -u rustguac | grep -i vault
+# Expected: "Vault: authenticated via AppRole, token TTL=3600s"
+
+# Open the Connections page in the browser
+# You should see the "test-folder" with "test-entry" inside it
+```
+
+### Vault setup (reference)
+
+The manual steps above are equivalent to what `vault-quickstart.sh` automates. Use them if you want to understand the moving parts or if you need to deviate from the defaults (mount path, policy name, AppRole TTLs).
 
 **1. Enable KV v2** (skip if already enabled):
 
@@ -379,6 +507,27 @@ chown rustguac:rustguac /opt/rustguac/certs/*
 chmod 600 /opt/rustguac/certs/client-key.pem
 chmod 644 /opt/rustguac/certs/ca.pem /opt/rustguac/certs/client.pem
 ```
+
+### Vault Enterprise / OpenBao Namespaces
+
+If your Vault instance uses namespaces (Vault Enterprise or OpenBao), set the `namespace` field in your config:
+
+```toml
+[vault]
+namespace = "admin"
+```
+
+This adds an `X-Vault-Namespace` header to all Vault API requests. All Vault CLI commands must also target the namespace:
+
+```bash
+# Enable AppRole inside a namespace
+vault namespace exec -namespace=admin -- vault auth enable approle
+
+# Create policy inside a namespace
+vault namespace exec -namespace=admin -- vault policy write rustguac rustguac-policy.hcl
+```
+
+Without the namespace field, rustguac talks to the root namespace. If your AppRole is in a sub-namespace, authentication will fail with 403.
 
 ### KV v2 path structure
 

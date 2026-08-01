@@ -137,9 +137,9 @@ Per-IP rate limiting is applied to all endpoints using `tower_governor`:
 
 | Endpoint group | Rate | Burst |
 |---------------|------|-------|
-| API routes | 2/sec | 10 |
-| Session creation | 1/sec | 5 |
-| WebSocket connections | 2/sec | 20 |
+| API routes | 20/sec | 100 |
+| Session creation | 2/sec | 10 |
+| WebSocket connections | 5/sec | 50 |
 
 Rate limiting uses the resolved client IP (honoring `trusted_proxies` for X-Forwarded-For).
 

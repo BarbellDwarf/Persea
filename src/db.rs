@@ -1,5 +1,6 @@
 //! SQLite database layer for admin/API key management.
 
+use crate::auth::role_level;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rand::RngExt;
 use rusqlite::{params, Connection};
@@ -285,11 +286,46 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
     Ok(Arc::new(Mutex::new(conn)))
 }
 
-/// Hash an API key with SHA-256 and return hex.
+/// Hash an API key with SHA-256 and return hex (unsalted, legacy).
 fn hash_key(key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
     hex::encode(hasher.finalize())
+}
+
+/// Generate a salted API key hash: `hex(salt):hex(hash)`.
+/// Salt is 16 bytes of cryptographic randomness.
+fn hash_key_salt(key: &str) -> String {
+    let mut salt = [0u8; 16];
+    rand::rng().fill(&mut salt);
+    let mut hasher = Sha256::new();
+    hasher.update(&salt);
+    hasher.update(key.as_bytes());
+    format!("{}:{}", hex::encode(salt), hex::encode(hasher.finalize()))
+}
+
+/// Validate a key against a stored hash.
+/// Handles both salted (`hex:hex`) and legacy unsalted (bare hex) formats.
+fn validate_stored_hash(key: &str, stored: &str) -> bool {
+    use subtle::ConstantTimeEq;
+
+    if let Some((salt_hex, hash_hex)) = stored.split_once(':') {
+        // Salted format: recompute with extracted salt.
+        if let (Ok(salt), Ok(expected)) =
+            (hex::decode(salt_hex), hex::decode(hash_hex))
+        {
+            let mut hasher = Sha256::new();
+            hasher.update(&salt);
+            hasher.update(key.as_bytes());
+            let computed = hasher.finalize();
+            computed.as_slice().ct_eq(&expected).into()
+        } else {
+            false
+        }
+    } else {
+        // Legacy unsalted: compare raw SHA-256.
+        hash_key(key).as_bytes().ct_eq(stored.as_bytes()).into()
+    }
 }
 
 /// Generate a 256-bit random API key as hex (64 chars).
@@ -331,7 +367,7 @@ pub fn add_admin(
     expires_at: Option<&str>,
 ) -> rusqlite::Result<String> {
     let key = generate_key();
-    let key_hash = hash_key(&key);
+    let key_hash = hash_key_salt(&key);
     let conn = db.lock().unwrap();
     conn.execute(
         "INSERT INTO admins (name, api_key_hash, allowed_ips, expires_at) VALUES (?1, ?2, ?3, ?4)",
@@ -369,12 +405,9 @@ pub fn validate_api_key(
     key: &str,
     client_ip: Option<IpAddr>,
 ) -> Result<AdminInfo, AuthError> {
-    use subtle::ConstantTimeEq;
-
-    let key_hash = hash_key(key);
     let conn = db.lock().unwrap();
 
-    // Fetch all admins and compare hashes in constant time
+    // Fetch all admins and compare hashes (supports salted + legacy unsalted)
     let mut stmt = conn
         .prepare(
             "SELECT id, name, allowed_ips, expires_at, disabled, created_at, last_used_at, api_key_hash
@@ -399,7 +432,7 @@ pub fn validate_api_key(
         })
         .map_err(|_| AuthError::InvalidKey)?
         .filter_map(|r| r.ok())
-        .find(|(_, stored_hash)| key_hash.as_bytes().ct_eq(stored_hash.as_bytes()).into())
+        .find(|(_, stored_hash)| validate_stored_hash(key, stored_hash))
         .map(|(admin, _)| admin)
         .ok_or(AuthError::InvalidKey)?;
 
@@ -481,6 +514,7 @@ pub fn rotate_key(db: &Db, name: &str) -> rusqlite::Result<Option<String>> {
 }
 
 #[derive(Debug)]
+#[must_use]
 pub enum AuthError {
     InvalidKey,
     Disabled,
@@ -1427,16 +1461,6 @@ pub fn resolve_role_from_groups(db: &Db, groups: &[String]) -> rusqlite::Result<
         return Ok(None);
     }
 
-    fn role_level(role: &str) -> u8 {
-        match role {
-            "admin" => 4,
-            "poweruser" => 3,
-            "operator" => 2,
-            "viewer" => 1,
-            _ => 0,
-        }
-    }
-
     let mut best_level = 0u8;
     let mut best_role: Option<String> = None;
 
@@ -1468,6 +1492,30 @@ mod tests {
     #[test]
     fn test_hash_key_different_inputs() {
         assert_ne!(hash_key("key-a"), hash_key("key-b"));
+    }
+
+    #[test]
+    fn test_hash_key_salt_format_and_validation() {
+        let stored = hash_key_salt("test-api-key");
+        // Format: hex(16 bytes):hex(32 bytes) = 32:64 hex chars
+        let (salt_hex, hash_hex) = stored.split_once(':').unwrap();
+        assert_eq!(salt_hex.len(), 32);
+        assert_eq!(hash_hex.len(), 64);
+        // Correct key validates
+        assert!(validate_stored_hash("test-api-key", &stored));
+        // Wrong key does not
+        assert!(!validate_stored_hash("wrong-key", &stored));
+        // Two calls produce different salts (non-deterministic)
+        let stored2 = hash_key_salt("test-api-key");
+        assert_ne!(stored, stored2);
+        assert!(validate_stored_hash("test-api-key", &stored2));
+    }
+
+    #[test]
+    fn test_validate_stored_hash_legacy_unsalted() {
+        let legacy = hash_key("legacy-key");
+        assert!(validate_stored_hash("legacy-key", &legacy));
+        assert!(!validate_stored_hash("wrong", &legacy));
     }
 
     #[test]

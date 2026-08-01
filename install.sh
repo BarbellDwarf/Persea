@@ -501,6 +501,13 @@ ExecStart=$PREFIX/bin/rustguac --config $PREFIX/config.toml serve
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
+EnvironmentFile=-$PREFIX/env
+LimitNOFILE=65535
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+ReadWritePaths=$PREFIX
 
 [Install]
 WantedBy=multi-user.target

@@ -37,7 +37,7 @@ enabled = true
 # docker_socket = "/var/run/docker.sock"   # default
 # default_cpu_limit = 2.0                   # cores, 0 = no limit
 # default_memory_limit = 2048               # MB, 0 = no limit
-# ready_timeout_secs = 30                   # wait for xrdp to start
+# ready_timeout_secs = 120                  # wait for xrdp to start
 # port_range_start = 39000                  # optional localhost RDP port range
 # port_range_end = 39999
 # container_hook_script = "/opt/rustguac/vdi-container-hook.sh"

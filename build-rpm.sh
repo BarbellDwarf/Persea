@@ -20,6 +20,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
+# Pinned guacamole-server commit — must match build-deb.sh, install.sh, and release.yml
+GUACD_COMMIT="6719b20d"
 GUACD_SRC="${SCRIPT_DIR}/../guacamole-server"
 STAGING="${SCRIPT_DIR}/rpm/staging"
 PREFIX="/opt/rustguac"
@@ -67,8 +69,11 @@ apply_guacd_patches() {
 build_guacd() {
     if [[ ! -d "$GUACD_SRC/.git" ]]; then
         info "guacamole-server not found at $GUACD_SRC — cloning..."
-        git clone --depth 1 "$GUACD_SRC_URL" "$GUACD_SRC"
+        git clone "$GUACD_SRC_URL" "$GUACD_SRC"
     fi
+
+    info "Checking out guacd commit $GUACD_COMMIT..."
+    git -C "$GUACD_SRC" -c advice.detachedHead=false checkout -q "$GUACD_COMMIT"
 
     apply_guacd_patches "$GUACD_SRC"
 
@@ -92,10 +97,12 @@ build_guacd() {
         --with-ssh \
         --with-vnc \
         --with-rdp \
+        --with-spice \
         --without-telnet \
         --without-kubernetes \
         --disable-guacenc \
         --disable-guaclog \
+        --disable-guacclip \
         --disable-static
 
     info "Compiling guacd..."

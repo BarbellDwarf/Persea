@@ -321,6 +321,9 @@ impl BrowserManager {
         // Chromium refuses to start as root without this flag. The container
         // itself provides the security boundary in this case.
         let no_sandbox;
+        // SAFETY: geteuid() is a simple POSIX syscall that returns the
+        // effective user ID of the calling process. It is always safe to
+        // call and has no side effects or preconditions.
         if unsafe { libc::geteuid() } == 0 {
             no_sandbox = "--no-sandbox".to_string();
             chromium_args.push(&no_sandbox);
@@ -786,6 +789,7 @@ async fn collect_stderr(child: &mut Child) -> String {
 }
 
 #[derive(Debug)]
+#[must_use]
 pub enum BrowserError {
     NoDisplayAvailable,
     NoCdpPortAvailable,

@@ -1,7 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>rustguac - Connections</title>
     <link rel="stylesheet" href="/rustguac.css">
     <style>
@@ -18,6 +19,11 @@
             padding-right: var(--s-4);
         }
         .main { flex: 1; min-width: 0; }
+
+        @media (max-width: 768px) {
+            .layout { flex-direction: column; }
+            .sidebar { min-width: 100%; max-width: 100%; height: auto; max-height: 200px; overflow-y: auto; border-right: none; padding-right: 0; border-bottom: 1px solid var(--border); padding-bottom: var(--s-3); margin-bottom: var(--s-3); }
+        }
 
         /* Compact "open in new window" companion to the Connect button — a small
            icon, not a full-size button */
@@ -327,10 +333,10 @@
         <a href="/connections.html" class="active">Connections</a>
         <a href="/sessions.html" id="sessions-link">Sessions</a>
         <a href="/recordings.html">Recordings</a>
-        <a href="/reports.html" id="reports-link" style="display:none">Reports</a>
+        <a href="/reports.html" id="reports-link" style="display:none" aria-hidden="true">Reports</a>
         <a href="/docs.html">Docs</a>
-        <a href="/tokens.html" id="tokens-link" style="display:none">Tokens</a>
-        <a href="/admin.html" id="admin-link" style="display:none">Admin</a>
+        <a href="/tokens.html" id="tokens-link" style="display:none" aria-hidden="true">Tokens</a>
+        <a href="/admin.html" id="admin-link" style="display:none" aria-hidden="true">Admin</a>
         <a href="#" id="my-creds-nav" title="Manage your saved credential variables">&#128273; Credentials</a>
         <span id="user-menu-wrapper">
             <a href="#" id="logout-item">Logout</a>
@@ -345,7 +351,7 @@
         </span>
     </nav>
 
-    <div id="global-error"></div>
+    <div id="global-error" aria-live="polite"></div>
 
     <div id="no-vault" class="no-vault" style="display:none">
         Connections is not configured. A Vault/OpenBao backend is required.<br>
@@ -406,7 +412,7 @@
     </div>
 
     <!-- Folder create/edit modal -->
-    <div class="modal-overlay" id="folder-modal">
+    <div class="modal-overlay" id="folder-modal" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
         <div class="modal">
             <h3 id="folder-modal-title">New Folder</h3>
             <label>Name
@@ -448,7 +454,7 @@
     </div>
 
     <!-- Entry create/edit modal -->
-    <div class="modal-overlay" id="entry-modal">
+    <div class="modal-overlay" id="entry-modal" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title">
         <div class="modal">
             <h3 id="entry-modal-title">New Entry</h3>
             <label>Name
@@ -878,7 +884,7 @@
     </div>
 
     <!-- Credential prompt modal -->
-    <div class="modal-overlay" id="my-creds-modal">
+    <div class="modal-overlay" id="my-creds-modal" role="dialog" aria-modal="true">
         <div class="modal" style="max-width:500px">
             <h3 id="my-creds-title">My Credentials</h3>
             <p id="my-creds-desc" style="color:var(--text-muted);font-size:0.85em;margin-top:0">Store your credentials securely in Vault. Connections entries that use credential variables will auto-fill from these values.</p>
@@ -895,9 +901,9 @@
     </div>
 
     <!-- Share session modal -->
-    <div class="modal-overlay" id="share-modal">
+    <div class="modal-overlay" id="share-modal" role="dialog" aria-modal="true" aria-labelledby="share-modal-title">
         <div class="modal">
-            <h3>Share Session</h3>
+            <h3 id="share-modal-title">Share Session</h3>
             <p style="color:var(--text-muted);font-size:var(--fz-sm);margin:0 0 var(--s-3) 0">
                 Send this URL to someone to let them join your session as a read-only viewer.
             </p>
@@ -917,7 +923,7 @@
     </div>
 
     <!-- Onboarding wizard -->
-    <div class="modal-overlay" id="onboarding-modal">
+    <div class="modal-overlay" id="onboarding-modal" role="dialog" aria-modal="true">
         <div class="modal" style="max-width:520px;min-width:380px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.3em">
                 <h3 id="onboard-title" style="margin:0"></h3>
@@ -935,7 +941,7 @@
         </div>
     </div>
 
-    <div class="modal-overlay" id="cred-modal">
+    <div class="modal-overlay" id="cred-modal" role="dialog" aria-modal="true" aria-labelledby="cred-modal-title">
         <div class="modal">
             <h3 id="cred-modal-title">Enter Credentials</h3>
             <p style="color:var(--text-muted);font-size:0.9em;margin-top:0" id="cred-modal-desc">This entry requires credentials to connect.</p>
@@ -960,13 +966,10 @@
         </div>
     </div>
 
+    <script src="/js/utils.js"></script>
+    <script src="/js/auth.js"></script>
+    <script src="/js/theme.js"></script>
     <script>
-        function togglePw(btn){var inp=btn.previousElementSibling;if(inp.type==='password'){inp.type='text';btn.textContent='\u25CB'}else{inp.type='password';btn.textContent='\u25CF'}}
-        function applyThemeColors(colors){var r=document.documentElement.style;for(var k in colors)r.setProperty('--'+k.replace(/_/g,'-'),colors[k]);var s=document.getElementById('bg-pattern-style');if(!s){s=document.createElement('style');s.id='bg-pattern-style';document.head.appendChild(s)}s.textContent=colors.bg_pattern&&colors.bg_pattern!=='none'?'body{background-image:'+colors.bg_pattern+';background-attachment:fixed}':'';localStorage.setItem('rustguac_theme_colors',JSON.stringify(colors))}
-        var _themePresets={},_adminPreset='aurora';
-        var _themeDescriptions={dark:'Navy & cyan \u2014 the default',light:'Clean white & blue','high-contrast':'Maximum readability',terminal:'Retro green-on-black',nord:'Arctic, muted blues',corporate:'Slate & steel blue',aurora:'Midnight blue with ambient glow',jaguar:'Racing green & gold'};
-        function initTheme(t){if(!t)return;_themePresets=t.presets||{};_adminPreset=t.admin_preset||'aurora';var u=localStorage.getItem('rustguac_theme'),active=u&&_themePresets[u]?u:_adminPreset,colors=(active===_adminPreset)?t.admin_colors:_themePresets[active];if(colors)applyThemeColors(colors);if(t.logo_url){var l=document.getElementById('site-logo');if(l){if(l.src!==t.logo_url&&!l.src.endsWith(t.logo_url))l.src=t.logo_url;l.style.display=''}}var menu=document.getElementById('um-theme-list');if(menu){menu.innerHTML='';Object.keys(_themePresets).forEach(function(name){var item=document.createElement('div');item.className='um-item'+(name===active?' active':'');var sw=document.createElement('span');sw.className='um-swatch';var p=_themePresets[name];sw.style.background='linear-gradient(135deg,'+p.primary+' 50%,'+p.accent+' 50%)';item.appendChild(sw);var info=document.createElement('div');info.className='um-theme-info';var nm=document.createElement('span');nm.className='um-theme-name';nm.textContent=name;info.appendChild(nm);var desc=document.createElement('span');desc.className='um-theme-desc';desc.textContent=_themeDescriptions[name]||'';info.appendChild(desc);item.appendChild(info);item.addEventListener('click',function(){localStorage.setItem('rustguac_theme',name);applyThemeColors(_themePresets[name]);menu.querySelectorAll('.um-item').forEach(function(el){el.classList.remove('active')});item.classList.add('active');document.getElementById('user-menu').style.display='none'});menu.appendChild(item)})}}
-        var _ub=document.getElementById('user-menu-btn');if(_ub)_ub.addEventListener('click',function(e){e.stopPropagation();var m=document.getElementById('user-menu');m.style.display=m.style.display==='block'?'none':'block'});document.addEventListener('click',function(){var m=document.getElementById('user-menu');if(m)m.style.display='none'});
         var _driveConfigured = false;
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             if(d.site_title){document.title=d.site_title+' - Connections';document.querySelector('h1').textContent=d.site_title;}
@@ -988,13 +991,6 @@
             fetch('/auth/logout', { credentials: 'same-origin' })
             .finally(function() { window.location.href = '/'; });
         });
-
-        function apiHeaders(extra) {
-            var h = {};
-            if (apiKey) h['Authorization'] = 'Bearer ' + apiKey;
-            if (extra) { for (var k in extra) h[k] = extra[k]; }
-            return h;
-        }
 
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
         var isAdmin = false;
@@ -1719,7 +1715,7 @@
             var icon = document.createElement('span');
             icon.className = 'tree-chevron';
             icon.style.color = 'var(--status-error)';
-            icon.textContent = '⚠'; // warning sign
+            icon.textContent = '\u26A0';
             row.appendChild(icon);
             var name = document.createElement('span');
             name.className = 'folder-name';
@@ -1971,7 +1967,7 @@
             searchActive = true;
             if (!searchIndex) {
                 document.getElementById('entries-content').innerHTML =
-                    '<p class="empty">Indexing connections, please wait...</p>';
+                    '<p class="empty">Indexing connections...</p>';
                 return;
             }
             var tokens = q.split(/\s+/).filter(Boolean);
@@ -2293,14 +2289,7 @@
             content.innerHTML = html;
         }
 
-        function escapeHtml(s) {
-            var d = document.createElement('div');
-            d.textContent = s;
-            return d.innerHTML;
-        }
-
-        function escapeAttr(s) {
-            return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // escapeHtml and escapeAttr available from /js/utils.js
         }
 
         // Connect to an entry (with optional credential prompt)
@@ -3157,7 +3146,7 @@
             // Show URL rewrite warning for web sessions with hops
             var warn = '';
             if (type === 'web' && hopList.length > 0) {
-                warn = '<div style="color:var(--primary);font-size:0.8em;margin-top:0.4em">Note: The URL will be rewritten to 127.0.0.1:{tunnel_port} inside the headless browser. TLS certificate errors are expected if the target uses HTTPS.</div>';
+                warn = '<div style="color:var(--primary);font-size:0.8em;margin-top:0.4em">URL rewritten to 127.0.0.1:{tunnel_port} inside the headless browser. TLS certificate errors are expected if the target uses HTTPS.</div>';
             }
             diag.innerHTML = hopList.length > 0 ? html + warn : '';
         }
@@ -4254,5 +4243,6 @@
 
         init();
     </script>
+    <script src="/js/modal.js"></script>
 </body>
 </html>
