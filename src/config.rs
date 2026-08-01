@@ -1299,7 +1299,13 @@ impl Config {
             eprintln!("FATAL: invalid listen_addr: {}", self.listen_addr);
             std::process::exit(1);
         }
-        if self.guacd_addr.parse::<std::net::SocketAddr>().is_err() {
+        // guacd_addr accepts IP:port or hostname:port — validate port is numeric
+        if let Some(port_str) = self.guacd_addr.rsplit(':').next() {
+            if port_str.parse::<u16>().is_err() {
+                eprintln!("FATAL: invalid guacd_addr (bad port): {}", self.guacd_addr);
+                std::process::exit(1);
+            }
+        } else {
             eprintln!("FATAL: invalid guacd_addr: {}", self.guacd_addr);
             std::process::exit(1);
         }
