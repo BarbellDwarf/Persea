@@ -244,6 +244,42 @@ volumes:
   rustguac-recordings:
 ```
 
+### Sharing guacd with Apache Guacamole
+
+If you already run Apache Guacamole with its own guacd container, rustguac can share it. Override the entrypoint to skip the built-in guacd and point to the existing one:
+
+```yaml
+services:
+  # Your existing guacd (from Apache Guacamole)
+  guacd:
+    image: guacamole/guacd:latest
+    # ... your existing guacd config ...
+
+  rustguac:
+    image: sol1/rustguac:latest
+    entrypoint: ["/opt/rustguac/bin/rustguac"]
+    command: ["--config", "/opt/rustguac/config.toml", "serve"]
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./config.toml:/opt/rustguac/config.toml
+      - rustguac-data:/opt/rustguac/data
+      - rustguac-recordings:/opt/rustguac/recordings
+    environment:
+      - RUST_LOG=info
+    # Must be on the same Docker network as guacd
+    networks:
+      - guac-network
+```
+
+In your `config.toml`, set `guacd_addr` to the guacd container's hostname:
+
+```toml
+guacd_addr = "guacd:4822"
+```
+
+Both Apache Guacamole and rustguac will use the same guacd daemon. They can share recordings, but each maintains its own session state and user database.
+
 ## Option D: RPM package (build from source)
 
 Pre-built RPM packages are not currently provided. An RPM spec file (`rustguac.spec`) and build script (`build-rpm.sh`) are included for Red Hat / Fedora / Rocky Linux based systems. You will need FreeRDP 3.x development headers installed.

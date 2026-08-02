@@ -1,4 +1,5 @@
 use pulldown_cmark::{html, Options, Parser};
+use regex::Regex;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -57,6 +58,12 @@ fn main() {
         let mut html_output = String::new();
         html::push_html(&mut html_output, parser);
 
+        // Rewrite .md links for the docs viewer
+        // [text](integrations.md#section) → [text](#section) (same-doc)
+        // [text](other.md#section) → [text](#other) (cross-doc, no anchor)
+        // [text](docs/other.md) → [text](#other)
+        html_output = rewrite_doc_links(&html_output);
+
         // Escape for Rust string literal
         let escaped = html_output
             .replace('\\', "\\\\")
@@ -70,4 +77,19 @@ fn main() {
     }
 
     writeln!(out, "];").unwrap();
+}
+
+/// Rewrite markdown-style .md links to docs viewer hash routes.
+/// [text](integrations.md#section) → [text](#section)
+/// [text](other.md) → [text](#other)
+/// [text](docs/other.md) → [text](#other)
+fn rewrite_doc_links(html: &str) -> String {
+    let re = Regex::new(r#"href="(?:docs/)?([a-z0-9_-]+\.md)(?:#([^"]*))?""#).unwrap();
+    re.replace_all(html, |caps: &regex::Captures| {
+        let slug = caps[1].trim_end_matches(".md");
+        match caps.get(2) {
+            Some(anchor) => format!("href=\"#{}\"", anchor.as_str()),
+            None => format!("href=\"#{}\"", slug),
+        }
+    }).into_owned()
 }

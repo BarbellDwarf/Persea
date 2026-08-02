@@ -99,3 +99,4 @@ proptest = "1"
 
 [build-dependencies]
 pulldown-cmark = "0.13"
+regex = "1"
