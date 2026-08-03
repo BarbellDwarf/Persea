@@ -95,10 +95,14 @@
 </div>
 
 <script>
-    (function() {
+    document.addEventListener('DOMContentLoaded', function() {
         // Load current user info
+        if (typeof apiHeaders === 'undefined') { console.error('apiHeaders not defined'); return; }
         fetch('/api/me', { headers: apiHeaders() })
-            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
             .then(function(data) {
                 if (!data) return;
                 document.getElementById('display-name').value = data.name || '';
@@ -112,7 +116,7 @@
                     totpText.textContent = data.totp_enabled ? 'Enabled' : 'Not configured';
                 }
             })
-            .catch(function() {});
+            .catch(function(e) { console.error('Profile load failed:', e); });
 
         // Save profile
         document.getElementById('profile-form').addEventListener('submit', function(e) {

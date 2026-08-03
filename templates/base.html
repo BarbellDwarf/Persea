@@ -64,7 +64,7 @@
     (function() {
         var s = localStorage.getItem('theme');
         var d = s || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
-        document.documentElement.classList.add(d);
+        document.documentElement.className = d;
     })();
     </script>
 
