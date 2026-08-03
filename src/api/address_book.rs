@@ -113,7 +113,7 @@ pub(crate) async fn log_ab_event(
     let entry_name = entry_name.map(str::to_string);
     let ip = ip.to_string();
     let details = details.map(str::to_string);
-    let _ = tokio::task::spawn_blocking(move || {
+    if let Err(e) = tokio::task::spawn_blocking(move || {
         let _ = db::log_addressbook_event(
             &database,
             &email,
@@ -125,7 +125,10 @@ pub(crate) async fn log_ab_event(
             details.as_deref(),
         );
     })
-    .await;
+    .await
+    {
+        tracing::error!(error = %e, "audit task failed");
+    }
 }
 
 pub(crate) async fn check_folder_access(

@@ -93,7 +93,7 @@ pub async fn set_user_role(
                 .as_ref()
                 .map(|id| id.display_name().to_string())
                 .unwrap_or_default();
-            let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = tokio::task::spawn_blocking(move || {
                 let _ = audit::log_event(
                     &db_audit,
                     &mut audit::EventBuilder::new("admin.role.change", "success")
@@ -106,7 +106,10 @@ pub async fn set_user_role(
                         .build(),
                 );
             })
-            .await;
+            .await
+            {
+                tracing::error!(error = %e, "audit task failed");
+            }
         }
         Ok(Json(json!({"ok": true})))
     } else {
@@ -141,7 +144,7 @@ pub async fn delete_user(
                     .as_ref()
                     .map(|id| id.display_name().to_string())
                     .unwrap_or_default();
-                let _ = tokio::task::spawn_blocking(move || {
+                if let Err(e) = tokio::task::spawn_blocking(move || {
                     let _ = audit::log_event(
                         &db_audit,
                         &mut audit::EventBuilder::new("admin.user.delete", "success")
@@ -150,7 +153,10 @@ pub async fn delete_user(
                             .build(),
                     );
                 })
-                .await;
+                .await
+                {
+                    tracing::error!(error = %e, "audit task failed");
+                }
             }
             StatusCode::NO_CONTENT.into_response()
         }
@@ -244,7 +250,7 @@ pub async fn disable_user(
                 .as_ref()
                 .map(|id| id.display_name().to_string())
                 .unwrap_or_default();
-            let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = tokio::task::spawn_blocking(move || {
                 let _ = audit::log_event(
                     &db_audit,
                     &mut audit::EventBuilder::new("admin.user.disable", "success")
@@ -253,7 +259,10 @@ pub async fn disable_user(
                         .build(),
                 );
             })
-            .await;
+            .await
+            {
+                tracing::error!(error = %e, "audit task failed");
+            }
         }
         Ok(Json(json!({"ok": true})))
     } else {
@@ -288,7 +297,7 @@ pub async fn enable_user(
                 .as_ref()
                 .map(|id| id.display_name().to_string())
                 .unwrap_or_default();
-            let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = tokio::task::spawn_blocking(move || {
                 let _ = audit::log_event(
                     &db_audit,
                     &mut audit::EventBuilder::new("admin.user.enable", "success")
@@ -297,7 +306,10 @@ pub async fn enable_user(
                         .build(),
                 );
             })
-            .await;
+            .await
+            {
+                tracing::error!(error = %e, "audit task failed");
+            }
         }
         Ok(Json(json!({"ok": true})))
     } else {
@@ -387,7 +399,7 @@ pub async fn create_group_mapping(
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let _ = tokio::task::spawn_blocking(move || {
+        if let Err(e) = tokio::task::spawn_blocking(move || {
             let _ = audit::log_event(
                 &db_audit,
                 &mut audit::EventBuilder::new("admin.config.change", "success")
@@ -400,7 +412,10 @@ pub async fn create_group_mapping(
                     .build(),
             );
         })
-        .await;
+        .await
+        {
+            tracing::error!(error = %e, "audit task failed");
+        }
     }
     Ok(Json(json!(mapping)))
 }
@@ -473,7 +488,7 @@ pub async fn delete_group_mapping(
                     .as_ref()
                     .map(|id| id.display_name().to_string())
                     .unwrap_or_default();
-                let _ = tokio::task::spawn_blocking(move || {
+                if let Err(e) = tokio::task::spawn_blocking(move || {
                     let _ = audit::log_event(
                         &db_audit,
                         &mut audit::EventBuilder::new("admin.config.change", "success")
@@ -485,7 +500,10 @@ pub async fn delete_group_mapping(
                             .build(),
                     );
                 })
-                .await;
+                .await
+                {
+                    tracing::error!(error = %e, "audit task failed");
+                }
             }
             StatusCode::NO_CONTENT.into_response()
         }

@@ -647,3 +647,62 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     width: 18px; height: 18px;
     flex-shrink: 0;
 }
+
+/* ── Hamburger Menu ─────────────────────────────────────── */
+.hamburger {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+.hamburger:hover { background: var(--bg-hover); }
+.hamburger svg { width: 20px; height: 20px; }
+
+/* ── Mobile Overlay ─────────────────────────────────────── */
+.sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.5);
+    z-index: 45;
+}
+.sidebar-overlay.active { display: block; }
+
+/* ── Responsive: Tables ─────────────────────────────────── */
+.table-wrapper { -webkit-overflow-scrolling: touch; }
+
+/* ── Responsive: 768px ─────────────────────────────────── */
+@media (max-width: 768px) {
+    .sidebar { display: none; }
+    .sidebar.open { display: block; position: fixed; z-index: 50; }
+    .main-area { margin-left: 0; }
+    .hamburger { display: flex; align-items: center; justify-content: center; }
+
+    .grid-cols-2 { grid-template-columns: 1fr; }
+    .grid-cols-3 { grid-template-columns: 1fr; }
+    .grid-cols-4 { grid-template-columns: 1fr 1fr; }
+
+    table { font-size: 0.875rem; }
+
+    .content { padding: 16px; }
+
+    /* Connections: stack two-panel layout vertically */
+    .detail-panel-mobile-stack {
+        flex-direction: column !important;
+    }
+    .detail-panel-mobile-stack > div { flex: none !important; width: 100% !important; }
+}
+
+/* ── Responsive: 480px ─────────────────────────────────── */
+@media (max-width: 480px) {
+    .modal-content { min-width: min(340px, 95vw); }
+    .form-input { font-size: 16px; } /* prevent iOS zoom */
+
+    .grid-cols-4 { grid-template-columns: 1fr; }
+
+    .card { padding: 16px; }
+}

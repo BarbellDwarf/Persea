@@ -118,7 +118,7 @@ pub async fn create_session(
                 let sid = info.session_id.to_string();
                 let ip = client_ip.to_string();
                 let user_id = admin_name.clone();
-                let _ = tokio::task::spawn_blocking(move || {
+                if let Err(e) = tokio::task::spawn_blocking(move || {
                     let _ = audit::log_event(
                         &db_audit,
                         &mut audit::EventBuilder::new("session.start", "success")
@@ -128,7 +128,10 @@ pub async fn create_session(
                             .build(),
                     );
                 })
-                .await;
+                .await
+                {
+                    tracing::error!(error = %e, "audit task failed");
+                }
             }
             Ok(Json(json!(info)))
         }
@@ -263,7 +266,7 @@ pub async fn delete_session(
             let sid = id.to_string();
             let user_id = id_inner.display_name().to_string();
             let ip_audit = ip.to_string();
-            let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = tokio::task::spawn_blocking(move || {
                 let _ = audit::log_event(
                     &db_audit,
                     &mut audit::EventBuilder::new("session.end", "success")
@@ -273,7 +276,10 @@ pub async fn delete_session(
                         .build(),
                 );
             })
-            .await;
+            .await
+            {
+                tracing::error!(error = %e, "audit task failed");
+            }
         }
         StatusCode::NO_CONTENT.into_response()
     } else {
@@ -404,7 +410,7 @@ pub async fn shadow_session(
     );
     let db_clone = database.clone();
     let admin_for_audit = admin_email.clone();
-    let _ = tokio::task::spawn_blocking(move || {
+    if let Err(e) = tokio::task::spawn_blocking(move || {
         if let Err(e) = db::log_token_event(
             &db_clone,
             None,
@@ -417,7 +423,10 @@ pub async fn shadow_session(
             tracing::warn!(error = %e, "failed to write shadow audit log");
         }
     })
-    .await;
+    .await
+    {
+        tracing::error!(error = %e, "audit task failed");
+    }
 
     tracing::info!(
         admin = %admin_email,

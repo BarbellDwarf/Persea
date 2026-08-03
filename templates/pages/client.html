@@ -155,6 +155,23 @@
         .btn-secondary:hover { background: var(--border); }
 
         /* ── Theme from localStorage ─────────────────────────── */
+
+        /* ── Mobile responsive ──────────────────────────────── */
+        @media (max-width: 768px) {
+            .tb-btn { padding: 4px 6px; font-size: 12px; }
+            .tb-btn span:not(.tb-badge) { display: none; }
+            .tb-badge { font-size: 10px; padding: 1px 6px; }
+            .tb-info { font-size: 11px; max-width: 120px; }
+            .tb-duration { font-size: 11px; }
+            #paste-modal { width: min(340px, 95vw); }
+            #paste-textarea { font-size: 16px; } /* prevent iOS zoom */
+        }
+        @media (max-width: 480px) {
+            #toolbar { padding: 0 8px; }
+            .tb-left { gap: 6px; }
+            .tb-right { gap: 2px; }
+            .tb-btn { padding: 4px 4px; }
+        }
     </style>
     <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);}catch(e){}}})();</script>
 

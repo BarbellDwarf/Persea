@@ -3,6 +3,7 @@ use axum::Extension;
 
 use crate::api::SiteTitle;
 use crate::auth::AuthIdentity;
+use crate::CspNonce;
 use crate::templates;
 
 /// Determine if the current user has admin role.
@@ -17,6 +18,7 @@ fn is_admin(identity: &Option<Extension<AuthIdentity>>) -> bool {
 pub async fn profile_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     templates::ProfileTemplate {
         site_title: site_title.0.clone(),
@@ -31,6 +33,7 @@ pub async fn profile_page(
 pub async fn tokens_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     templates::AccountTokensTemplate {
         site_title: site_title.0.clone(),
@@ -45,6 +48,7 @@ pub async fn tokens_page(
 pub async fn totp_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     templates::AccountTotpTemplate {
         site_title: site_title.0.clone(),
@@ -59,6 +63,7 @@ pub async fn totp_page(
 pub async fn docs_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     templates::DocsTemplate {
         site_title: site_title.0.clone(),

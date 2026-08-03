@@ -3,7 +3,6 @@ use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 #[derive(Debug, thiserror::Error)]
-#[must_use]
 pub enum AppError {
     #[error("session error: {0}")]
     Session(String),
@@ -44,8 +43,46 @@ pub enum AppError {
     #[error("vsphere error: {0}")]
     Vsphere(String),
 
+    #[error("validation error: {0}")]
+    Validation(String),
+
     #[error("{0}")]
     Internal(String),
+}
+
+impl AppError {
+    fn status_for_response(status: StatusCode, message: &str) -> Response {
+        let error_code = match status {
+            StatusCode::NOT_FOUND => "NOT_FOUND",
+            StatusCode::BAD_REQUEST => "VALIDATION_ERROR",
+            StatusCode::CONFLICT => "CONFLICT",
+            StatusCode::BAD_GATEWAY => "BAD_GATEWAY",
+            StatusCode::UNAUTHORIZED => "UNAUTHORIZED",
+            StatusCode::FORBIDDEN => "FORBIDDEN",
+            StatusCode::SERVICE_UNAVAILABLE => "SERVICE_UNAVAILABLE",
+            StatusCode::GATEWAY_TIMEOUT => "GATEWAY_TIMEOUT",
+            StatusCode::PAYLOAD_TOO_LARGE => "PAYLOAD_TOO_LARGE",
+            StatusCode::INTERNAL_SERVER_ERROR => "INTERNAL_ERROR",
+            _ => "INTERNAL_ERROR",
+        };
+        let body = json!({
+            "error": message,
+            "code": status.as_u16(),
+            "error_code": error_code,
+        });
+        (status, axum::Json(body)).into_response()
+    }
+
+    pub fn internal_response(message: impl Into<String>) -> Response {
+        let msg = message.into();
+        tracing::error!(error = %msg, "internal error");
+        Self::status_for_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
+    }
+
+    pub fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
+        let msg = message.into();
+        Self::status_for_response(status, &msg)
+    }
 }
 
 impl IntoResponse for AppError {
@@ -76,11 +113,12 @@ impl IntoResponse for AppError {
             AppError::Drive(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             AppError::Pve(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Vsphere(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
-        let body = json!({ "error": message });
-        (status, axum::Json(body)).into_response()
+        tracing::error!(status = %status, error = %message, "request error");
+        Self::status_for_response(status, &message)
     }
 }
 
@@ -161,5 +199,18 @@ impl From<serde_json::Error> for AppError {
 impl From<rusqlite::Error> for AppError {
     fn from(e: rusqlite::Error) -> Self {
         AppError::Internal(format!("database error: {e}"))
+    }
+}
+
+impl From<tokio::task::JoinError> for AppError {
+    fn from(e: tokio::task::JoinError) -> Self {
+        tracing::error!(error = %e, "spawn_blocking task panicked or was cancelled");
+        AppError::Internal(format!("internal task error: {e}"))
+    }
+}
+
+impl From<String> for AppError {
+    fn from(s: String) -> Self {
+        AppError::Internal(s)
     }
 }
