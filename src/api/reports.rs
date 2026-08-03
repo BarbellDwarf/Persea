@@ -208,20 +208,16 @@ pub async fn report_sessions_csv(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
     axum::extract::Query(q): axum::extract::Query<ReportQuery>,
-) -> impl IntoResponse {
+) -> Result<axum::response::Response, AppError> {
     if !identity
         .as_ref()
         .map(|Extension(id)| id.has_role("poweruser"))
         .unwrap_or(false)
     {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "poweruser role required"})),
-        )
-            .into_response();
+        return Err(AppError::Forbidden("poweruser role required".into()));
     }
     let mut csv_buf = Vec::new();
-    match db::stream_session_history_csv(
+    db::stream_session_history_csv(
         &database,
         &mut csv_buf,
         q.user.as_deref(),
@@ -229,27 +225,24 @@ pub async fn report_sessions_csv(
         q.session_type.as_deref(),
         q.from.as_deref(),
         q.to.as_deref(),
-    ) {
-        Ok(_count) => {
-            let mut csv = String::from("Session ID,Type,Hostname,Username,User,Entry,Folder,Started,Ended,Duration (secs),Status,Recording\n");
-            csv.push_str(&String::from_utf8_lossy(&csv_buf));
-            axum::response::Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "text/csv; charset=utf-8")
-                .header(
-                    "Content-Disposition",
-                    "attachment; filename=\"session-history.csv\"",
-                )
-                .body(Body::from(csv))
-                .unwrap()
-                .into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
+    )
+    .map_err(|e| {
+        tracing::error!(error = %e, "Failed to query session history for CSV export");
+        AppError::Internal("failed to query session history".into())
+    })?;
+
+    let mut csv = String::from("Session ID,Type,Hostname,Username,User,Entry,Folder,Started,Ended,Duration (secs),Status,Recording\n");
+    csv.push_str(&String::from_utf8_lossy(&csv_buf));
+    Ok(axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header(
+            "Content-Disposition",
+            "attachment; filename=\"session-history.csv\"",
         )
-            .into_response(),
-    }
+        .body(Body::from(csv))
+        .unwrap()
+        .into_response())
 }
 
 pub async fn report_top_connections(
@@ -323,42 +316,30 @@ pub async fn serve_recording(
     State(manager): State<AppState>,
     Path(name): Path<String>,
     identity: Option<Extension<AuthIdentity>>,
-) -> impl IntoResponse {
+) -> Result<axum::response::Response, AppError> {
     match &identity {
         Some(Extension(id)) if id.has_role("poweruser") => {}
         _ => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "requires poweruser or admin role"})),
-            )
-                .into_response();
+            return Err(AppError::Forbidden(
+                "requires poweruser or admin role".into(),
+            ));
         }
     }
     if !is_safe_recording_name(&name, manager.recording_path()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "invalid recording name"})),
-        )
-            .into_response();
+        return Err(AppError::Internal("invalid recording name".into()));
     }
 
     let path = manager.recording_path().join(&name);
 
-    let file = match tokio::fs::File::open(&path).await {
-        Ok(f) => f,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "recording not found"})),
-            )
-                .into_response();
-        }
-    };
+    let file = tokio::fs::File::open(&path).await.map_err(|e| {
+        tracing::warn!(name = %name, error = %e, "Recording not found");
+        AppError::Session("recording not found".into())
+    })?;
 
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    axum::response::Response::builder()
+    Ok(axum::response::Response::builder()
         .header("content-type", "application/octet-stream")
         .header(
             "content-disposition",
@@ -366,7 +347,7 @@ pub async fn serve_recording(
         )
         .body(body)
         .unwrap()
-        .into_response()
+        .into_response())
 }
 
 pub async fn delete_recording(
