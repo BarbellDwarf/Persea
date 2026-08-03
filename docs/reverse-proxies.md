@@ -1,6 +1,6 @@
 # Reverse Proxy Configuration
 
-rustguac is designed to run behind a TLS-terminating reverse proxy. The
+persea is designed to run behind a TLS-terminating reverse proxy. The
 primary supported path is **HAProxy + Knocknoc** (see
 [`haproxy.example.cfg`](../haproxy.example.cfg) and
 [`integrations.md`](integrations.md)), which is what sol1 runs in
@@ -9,7 +9,7 @@ gotcha that affects nested folder paths across several of them.
 
 ## The `%2F` gotcha
 
-rustguac's connections tree uses URL path segments for folder names. When
+persea's connections tree uses URL path segments for folder names. When
 a folder is nested (e.g. `Clients/Acme/Prod`), the client encodes the
 internal `/` as `%2F` so the whole path fits one segment:
 
@@ -17,17 +17,17 @@ internal `/` as `%2F` so the whole path fits one segment:
 GET /api/addressbook/folders/shared/Clients%2FAcme%2FProd/subfolders
 ```
 
-rustguac's router captures `Clients%2FAcme%2FProd` as a single `{folder}`
+persea's router captures `Clients%2FAcme%2FProd` as a single `{folder}`
 parameter and percent-decodes it inside the handler. This works correctly
 when the reverse proxy passes the request URI through unchanged.
 
 Several reverse proxies **normalise the URI** before forwarding by
 default: they decode `%2F` to `/` in the path, which turns the single
-segment into three. rustguac's route definition doesn't match, and you get
+segment into three. persea's route definition doesn't match, and you get
 a 404 on every subfolder click. The top-level folders work fine because
 they have no `%2F` in the URL.
 
-If you see HTTP 404 responses from rustguac specifically for nested
+If you see HTTP 404 responses from persea specifically for nested
 subfolder operations (top-level folders work, subfolders don't), check
 your reverse proxy's URI handling first. The fix per proxy is below.
 
@@ -68,7 +68,7 @@ server {
         proxy_set_header Upgrade    $http_upgrade;
         proxy_set_header Connection "upgrade";
 
-        # Long-lived WebSocket sessions; match rustguac's session_max_duration_secs.
+        # Long-lived WebSocket sessions; match persea's session_max_duration_secs.
         proxy_read_timeout  8h;
         proxy_send_timeout  8h;
     }
@@ -90,7 +90,7 @@ so nested folders work out of the box.
 console.example.com {
     reverse_proxy https://localhost:8089 {
         transport http {
-            tls_insecure_skip_verify  # rustguac's self-signed loopback cert
+            tls_insecure_skip_verify  # persea's self-signed loopback cert
         }
         header_up X-Real-IP       {remote_host}
         header_up X-Forwarded-For {remote_host}
@@ -98,7 +98,7 @@ console.example.com {
 }
 ```
 
-rustguac `config.toml`:
+persea `config.toml`:
 
 ```toml
 trusted_proxies = ["127.0.0.1/32"]
@@ -123,7 +123,7 @@ WebSocket support is automatic in Caddy; no extra directives needed.
     ProxyPass        / https://localhost:8089/ nocanon
     ProxyPassReverse / https://localhost:8089/
 
-    # rustguac uses a self-signed cert on loopback.
+    # persea uses a self-signed cert on loopback.
     SSLProxyEngine on
     SSLProxyVerify none
     SSLProxyCheckPeerCN off
@@ -141,7 +141,7 @@ You may also need `AllowEncodedSlashes NoDecode` at the server or vhost
 level on some Apache versions to stop the core URI parser rejecting `%2F`
 before it reaches mod_proxy.
 
-rustguac `config.toml`:
+persea `config.toml`:
 
 ```toml
 trusted_proxies = ["127.0.0.1/32"]
@@ -156,15 +156,15 @@ without special configuration.
 # traefik dynamic config (file provider)
 http:
   routers:
-    rustguac:
+    persea:
       rule: "Host(`console.example.com`)"
       entryPoints: [websecure]
-      service: rustguac
+      service: persea
       tls:
         certResolver: letsencrypt
 
   services:
-    rustguac:
+    persea:
       loadBalancer:
         servers:
           - url: "https://localhost:8089"
@@ -175,7 +175,7 @@ http:
       insecureSkipVerify: true
 ```
 
-rustguac `config.toml`:
+persea `config.toml`:
 
 ```toml
 trusted_proxies = ["127.0.0.1/32"]
@@ -192,7 +192,7 @@ curl -sk -o /dev/null -w '%{http_code}\n' \
     'https://console.example.com/api/addressbook/folders/shared/nonexistent%2Fsub/subfolders'
 ```
 
-A correctly configured proxy returns **200** (empty array from rustguac,
+A correctly configured proxy returns **200** (empty array from persea,
 since the folder doesn't exist but the route matches). A broken proxy
 returns **404** from axum's router (because the URL got decoded to extra
 path segments along the way).
@@ -201,7 +201,7 @@ path segments along the way).
 
 Whichever proxy you use, set `trusted_proxies` in `config.toml` to match
 the source IP your proxy connects from (usually `127.0.0.1/32` on
-same-host deployments). rustguac then honours `X-Forwarded-For` from that
+same-host deployments). persea then honours `X-Forwarded-For` from that
 source, so client IPs appear correctly in audit logs, session history,
 and rate-limit decisions.
 

@@ -1,4 +1,4 @@
--- rustguac multi-auth schema v1
+-- persea multi-auth schema v1
 -- MySQL backend
 
 -- Unified users table across all auth sources
@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS auth_providers (
     updated_at      VARCHAR(32)
 );
 
--- Group mappings (external groups → rustguac roles)
+-- Group mappings (external groups → persea roles)
 CREATE TABLE IF NOT EXISTS group_mappings (
     id              VARCHAR(36) PRIMARY KEY,    -- UUIDv7
     auth_source     VARCHAR(32) NOT NULL,

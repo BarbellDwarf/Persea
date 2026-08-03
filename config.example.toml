@@ -1,10 +1,10 @@
-# rustguac — example configuration
+# persea — example configuration
 #
 # All settings are optional and have sensible defaults.
 # Copy this file to config.toml and adjust as needed.
 #
 # Usage:
-#   rustguac --config config.toml serve
+#   persea --config config.toml serve
 
 # ─── Server ───────────────────────────────────────────────────────────────────
 
@@ -28,12 +28,12 @@ recording_path = "./recordings"
 static_path = "./static"
 
 # Path to the SQLite database (admins, OIDC users, auth sessions).
-# Default: "./rustguac.db"
-db_path = "./rustguac.db"
+# Default: "./persea.db"
+db_path = "./persea.db"
 
 # Title shown in the browser tab and page header.
-# Default: "rustguac"
-site_title = "rustguac"
+# Default: "persea"
+site_title = "persea"
 
 # ─── Session Timeouts ─────────────────────────────────────────────────────────
 
@@ -98,8 +98,8 @@ display_range_end = 199
 # login_script_timeout_secs = 120
 
 # Directory containing login scripts for SSH sessions.
-# Default: "/opt/rustguac/scripts"
-# login_scripts_dir = "/opt/rustguac/scripts"
+# Default: "/opt/persea/scripts"
+# login_scripts_dir = "/opt/persea/scripts"
 
 # ─── Connection Allowlists (CIDR) ────────────────────────────────────────────
 #
@@ -141,18 +141,18 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # when behind a TLS-terminating reverse proxy).
 #
 # Generate a self-signed cert:
-#   rustguac generate-cert --hostname your-hostname.example.com --out-dir ./tls
+#   persea generate-cert --hostname your-hostname.example.com --out-dir ./tls
 
 # [tls]
 # # HTTPS certificate and private key
-# cert_path = "/opt/rustguac/tls/cert.pem"
-# key_path = "/opt/rustguac/tls/key.pem"
+# cert_path = "/opt/persea/tls/cert.pem"
+# key_path = "/opt/persea/tls/key.pem"
 #
 # # Trust this certificate for the guacd TLS connection (optional).
-# # When set, rustguac connects to guacd over TLS.
+# # When set, persea connects to guacd over TLS.
 # # The same self-signed cert can serve both purposes.
 # # Omit for plain TCP to guacd.
-# guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+# guacd_cert_path = "/opt/persea/tls/cert.pem"
 
 # ─── OIDC (Single Sign-On) ───────────────────────────────────────────────────
 #
@@ -167,7 +167,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # continues to work alongside OIDC.
 
 # [oidc]
-# issuer_url = "https://authentik.example.com/application/o/rustguac/"
+# issuer_url = "https://authentik.example.com/application/o/persea/"
 # client_id = "your-client-id"
 # client_secret = "your-client-secret"   # or set OIDC_CLIENT_SECRET env var
 # redirect_uri = "https://your-host/auth/callback"
@@ -208,7 +208,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # [vault]
 # addr = "https://vault.example.com:8200"
 # mount = "secret"            # KV v2 mount (default: "secret")
-# base_path = "rustguac"      # base path under mount (default: "rustguac")
+# base_path = "persea"      # base path under mount (default: "persea")
 # role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # # namespace = "my-ns"       # optional, Vault Enterprise / OpenBao namespaces
 # # instance_name = "prod-1"  # optional, enables instance-scoped entries
@@ -234,7 +234,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # Linux desktop accessible via RDP through guacd. Containers persist for
 # idle_timeout_mins after disconnect for quick reconnect.
 #
-# Requires: rustguac user in docker group for socket access.
+# Requires: persea user in docker group for socket access.
 # Test image: contrib/vdi-test-image/ (Debian trixie + xrdp + xfce4)
 
 # [vdi]
@@ -245,7 +245,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # ready_timeout_secs = 120               # max wait for container ready
 # idle_timeout_mins = 30                 # destroy after idle period
 # allowed_images = []                    # empty = allow all images
-# home_base = "/opt/rustguac/vdi"        # base dir for user home mounts
+# home_base = "/opt/persea/vdi"        # base dir for user home mounts
 
 # ─── Theme ────────────────────────────────────────────────────────────────────
 #
@@ -289,15 +289,15 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # RDP: A per-session directory under drive_path is mounted as a virtual drive
 #      visible in the remote Windows session (e.g. "Shared Drive" in Explorer).
 # SSH: SFTP file transfer directly between browser and target SSH server.
-#      No files stored on the rustguac server for SSH sessions.
+#      No files stored on the persea server for SSH sessions.
 #
 # SECURITY: For RDP drive storage, use the LUKS options below to encrypt the
 # drive_path volume. The encryption key is stored in Vault and the volume is
-# only unlocked while rustguac is running.
+# only unlocked while persea is running.
 
 # [drive]
 # enabled = true
-# drive_path = "/mnt/rustguac-drives"   # mount point / base dir for per-session storage
+# drive_path = "/mnt/persea-drives"   # mount point / base dir for per-session storage
 # drive_name = "Shared Drive"           # name shown in remote RDP session
 # allow_download = true                 # allow downloading files from remote
 # allow_upload = true                   # allow uploading files to remote
@@ -306,16 +306,16 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 #
 # # LUKS encryption (optional, requires Vault)
 # # The install script can set this up interactively.
-# luks_device = "/opt/rustguac/drives.luks"    # LUKS container file
-# luks_name = "rustguac-drives"                # device-mapper name
-# luks_key_path = "rustguac/luks-key"          # Vault KV path for encryption key
+# luks_device = "/opt/persea/drives.luks"    # LUKS container file
+# luks_name = "persea-drives"                # device-mapper name
+# luks_key_path = "persea/luks-key"          # Vault KV path for encryption key
 
 # ─── RDP Protocol Settings ──────────────────────────────────────────────────
 #
 # Applied to every RDP session unless the address book entry (or the
 # ad-hoc connect request) overrides the same field.
 #
-# default_auth_pkg: NLA/CredSSP authentication package. Rustguac
+# default_auth_pkg: NLA/CredSSP authentication package. Persea
 # defaults to "ntlm" because Kerberos requires a KDC reachable via
 # DNS (usually over TCP) and its failure mode is a silent hang.
 # Set to "kerberos" if you actually run AD-integrated hosts with

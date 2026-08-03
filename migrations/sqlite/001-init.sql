@@ -1,4 +1,4 @@
--- rustguac multi-auth schema v1
+-- persea multi-auth schema v1
 -- SQLite backend
 
 -- Unified users table across all auth sources
@@ -125,12 +125,12 @@ CREATE TABLE IF NOT EXISTS auth_providers (
     updated_at      TEXT
 );
 
--- Group mappings (external groups → rustguac roles)
+-- Group mappings (external groups → persea roles)
 CREATE TABLE IF NOT EXISTS group_mappings (
     id              TEXT PRIMARY KEY,           -- UUIDv7
     auth_source     TEXT NOT NULL,              -- 'oidc', 'ldap', 'saml'
     source_group    TEXT NOT NULL,              -- external group name/DN
-    target_role     TEXT NOT NULL,              -- rustguac role
+    target_role     TEXT NOT NULL,              -- persea role
     created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
     UNIQUE(auth_source, source_group)
 );

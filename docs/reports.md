@@ -1,6 +1,6 @@
 # Reports
 
-The reports page provides usage analytics and session history for your rustguac deployment. It is available to users with the **poweruser** role or higher.
+The reports page provides usage analytics and session history for your persea deployment. It is available to users with the **poweruser** role or higher.
 
 ## Summary cards
 

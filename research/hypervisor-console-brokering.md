@@ -182,11 +182,11 @@ VMware Horizon is a separate product for VDI brokering:
 
 ---
 
-## 3. Comparison: What rustguac Already Does for Proxmox
+## 3. Comparison: What persea Already Does for Proxmox
 
 ### Current Implementation (`src/pve.rs`)
 
-rustguac has a **SPICE-only** Proxmox integration:
+persea has a **SPICE-only** Proxmox integration:
 
 **What works:**
 - `PveBroker` struct holds PVE API URL + API token
@@ -278,12 +278,12 @@ The `guacamole-server` repo confirms: protocols are `rdp`, `ssh`, `vnc`, `telnet
 
 ### Guacamole + Hypervisors Pattern
 
-The standard pattern (used by Apache Guacamole itself and rustguac):
+The standard pattern (used by Apache Guacamole itself and persea):
 1. Hypervisor provides a proxy endpoint (SPICE proxy, VNC proxy, serial proxy)
 2. guacd connects to that proxy using the standard protocol
 3. The web client talks to guacd via the Guacamole protocol over WebSocket
 
-This is exactly what rustguac's `src/pve.rs` does for Proxmox.
+This is exactly what persea's `src/pve.rs` does for Proxmox.
 
 ---
 
@@ -341,7 +341,7 @@ impl VsphereBroker {
 
 If using VMware Horizon:
 - Horizon has its own brokering (PCoIP/Blast)
-- Not suitable for rustguac integration — it's a full VDI platform
+- Not suitable for persea integration — it's a full VDI platform
 - Horizon's value is desktop pools, not individual VM console access
 
 ### Recommendation

@@ -99,7 +99,7 @@ This approach avoids the socket contention issue that occurred when H.264 was se
 until something repaints them. `guac_rdp_gdi_desktop_resize()` resizes the
 FreeRDP GDI buffer and the guac display layer but never marks the layer dirty,
 so `guac_display_layer_close_raw()` flushes nothing and the client keeps its
-stale/blank canvas for the resized layer. See [sol1/rustguac#118](https://github.com/sol1/rustguac/issues/118) (reported by @Bails309, who diagnosed the root cause and supplied the fix).
+stale/blank canvas for the resized layer. See [sol1/persea#118](https://github.com/sol1/persea/issues/118) (reported by @Bails309, who diagnosed the root cause and supplied the fix).
 
 **Fix:** In `guac_rdp_gdi_desktop_resize()`, after the layer resize and before
 `guac_display_layer_close_raw()`:
@@ -107,7 +107,7 @@ stale/blank canvas for the resized layer. See [sol1/rustguac#118](https://github
 1. Mark the entire layer dirty (`guac_rect_init(&current_context->dirty, ...)`) so a full repaint is flushed to the client.
 2. Issue a `RefreshRect` for the full new desktop so the server re-sends authoritative pixels (legacy bitmap update path).
 
-**Scope:** Fixes the legacy bitmap update path, which is rustguac's default
+**Scope:** Fixes the legacy bitmap update path, which is persea's default
 (`enable_gfx` defaults to false). The RDPGFX surface cache ignores
 `RefreshRect`, so GFX sessions are not addressed by this patch; in practice
 GFX sessions have not reproduced the artifact.
@@ -145,13 +145,13 @@ Ported from [pletch/guacamole-server@b28bdac](https://github.com/pletch/guacamol
 
 **Feature:** Adds native SPICE protocol support (`libguac-client-spice`), vendored from the upstream PR [apache/guacamole-server#688](https://github.com/apache/guacamole-server/pull/688) ([GUACAMOLE-261](https://issues.apache.org/jira/browse/GUACAMOLE-261)). Enables connecting to SPICE displays (e.g. Proxmox VE / QEMU consoles). Requires `libspice-client-glib-2.0-dev` (>= 0.38) at build time; guacd is configured `--with-spice`.
 
-Vendored as the diff of the PR branch against its merge-base with our pinned guacd. The PR's incidental, non-SPICE change to `src/terminal/terminal.c` (SSH terminal keyboard-modifier handling) is **excluded** here: it is unrelated to SPICE and conflicted with our pinned base. The bundled `guacclip` tool is included in the source but not built (`--disable-guacclip`, matching how we treat guacenc/guaclog); see [sol1/rustguac#181](https://github.com/sol1/rustguac/issues/181) for a possible future clipboard-audit feature.
+Vendored as the diff of the PR branch against its merge-base with our pinned guacd. The PR's incidental, non-SPICE change to `src/terminal/terminal.c` (SSH terminal keyboard-modifier handling) is **excluded** here: it is unrelated to SPICE and conflicted with our pinned base. The bundled `guacclip` tool is included in the source but not built (`--disable-guacclip`, matching how we treat guacenc/guaclog); see [sol1/persea#181](https://github.com/sol1/persea/issues/181) for a possible future clipboard-audit feature.
 
 **Files patched:** new `src/protocols/spice/*` and `src/guacclip/*` trees, plus additive hooks in `configure.ac`, `Makefile.am`, `src/libguac/*` (protocol constants, user handlers, rect), and per-protocol `input.c`.
 
 ## 009-spice-empty-port.patch
 
-**Bug:** For TLS-only SPICE (e.g. Proxmox VE consoles) rustguac sends an empty `port` connect arg so guacd connects via `tls-port`. `guac_spice_session_configure()` set the spice-gtk `port` property whenever `settings->port != NULL`, but the parsed value for an omitted arg is an empty string (non-NULL), so spice-gtk logged `GSpice: Invalid port value` on every channel while parsing `""`.
+**Bug:** For TLS-only SPICE (e.g. Proxmox VE consoles) persea sends an empty `port` connect arg so guacd connects via `tls-port`. `guac_spice_session_configure()` set the spice-gtk `port` property whenever `settings->port != NULL`, but the parsed value for an omitted arg is an empty string (non-NULL), so spice-gtk logged `GSpice: Invalid port value` on every channel while parsing `""`.
 
 **Fix:** Only set the plain `port` when it is non-empty (`settings->port[0] != '\0'`), so TLS-only connections use `tls-port` cleanly with no warning.
 
@@ -169,18 +169,18 @@ Patches are applied automatically by all build scripts (`build-deb.sh`, `build-r
 
 ```bash
 cd ../guacamole-server
-git apply ../rustguac/patches/001-freerdp3-debian13.patch
+git apply ../persea/patches/001-freerdp3-debian13.patch
 ```
 
 To check if patches are already applied:
 
 ```bash
 cd ../guacamole-server
-git apply --check ../rustguac/patches/001-freerdp3-debian13.patch 2>&1 || echo "Already applied or conflict"
+git apply --check ../persea/patches/001-freerdp3-debian13.patch 2>&1 || echo "Already applied or conflict"
 ```
 
 ## Adding new patches
 
 1. Make changes in the `../guacamole-server` working tree
-2. Export: `cd ../guacamole-server && git diff > ../rustguac/patches/NNN-description.patch`
+2. Export: `cd ../guacamole-server && git diff > ../persea/patches/NNN-description.patch`
 3. Patches are applied in numeric order by the build scripts
