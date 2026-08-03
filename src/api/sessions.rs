@@ -216,37 +216,26 @@ pub async fn delete_session(
     identity: Option<Extension<AuthIdentity>>,
     trusted: Option<Extension<TrustedProxies>>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
+) -> Result<StatusCode, AppError> {
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let ip = client_ip(&headers, addr.ip(), &proxies);
 
-    let id_inner = match identity {
-        Some(Extension(ref id_inner)) => id_inner,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({"error": "authentication required"})),
-            )
-                .into_response();
-        }
-    };
+    let id_inner = identity
+        .map(|Extension(id)| id)
+        .ok_or_else(|| AppError::Auth("authentication required".into()))?;
 
     if !id_inner.has_role("operator") {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "insufficient permissions — operator role required"})),
-        )
-            .into_response();
+        return Err(AppError::Forbidden(
+            "insufficient permissions — operator role required".into(),
+        ));
     }
 
     if !id_inner.has_role("admin") {
         if let Some(creator) = manager.get_session_creator(id).await {
             if creator != id_inner.display_name() {
-                return (
-                    StatusCode::FORBIDDEN,
-                    Json(json!({"error": "you can only delete your own sessions"})),
-                )
-                    .into_response();
+                return Err(AppError::Forbidden(
+                    "you can only delete your own sessions".into(),
+                ));
             }
         }
     }
@@ -275,19 +264,18 @@ pub async fn delete_session(
             })
             .await;
         }
-        StatusCode::NO_CONTENT.into_response()
+        Ok(StatusCode::NO_CONTENT)
     } else {
-        (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "session not found" })),
-        )
-            .into_response()
+        Err(AppError::Session("session not found".into()))
     }
 }
 
 pub(crate) fn is_jpeg_magic(body: &[u8]) -> bool {
     body.len() >= 3 && body[0] == 0xFF && body[1] == 0xD8 && body[2] == 0xFF
 }
+
+/// Maximum thumbnail body size in bytes (100 KiB).
+const MAX_THUMBNAIL_BODY_LEN: usize = 100_000;
 
 pub async fn put_session_thumbnail(
     State(manager): State<AppState>,
@@ -309,7 +297,7 @@ pub async fn put_session_thumbnail(
     if !is_admin && !is_owner {
         return StatusCode::NOT_FOUND.into_response();
     }
-    if body.len() > 100_000 {
+    if body.len() > MAX_THUMBNAIL_BODY_LEN {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
     if !is_jpeg_magic(&body) {

@@ -16,6 +16,7 @@ struct Metrics {
     sessions_total: AtomicU64,
     requests_total: AtomicU64,
     request_errors: AtomicU64,
+    start_time: std::time::Instant,
 }
 
 static METRICS: OnceLock<Metrics> = OnceLock::new();
@@ -26,6 +27,7 @@ fn metrics() -> &'static Metrics {
         sessions_total: AtomicU64::new(0),
         requests_total: AtomicU64::new(0),
         request_errors: AtomicU64::new(0),
+        start_time: std::time::Instant::now(),
     })
 }
 
@@ -59,8 +61,13 @@ pub fn error_inc() {
         .fetch_add(1, Ordering::Relaxed);
 }
 
+pub fn uptime_seconds() -> u64 {
+    metrics().start_time.elapsed().as_secs()
+}
+
 pub fn render_prometheus() -> String {
     let m = metrics();
+    let uptime_secs = m.start_time.elapsed().as_secs();
     format!(
         "# HELP rustguac_sessions_active Current active sessions\n\
          # TYPE rustguac_sessions_active gauge\n\
@@ -71,13 +78,17 @@ pub fn render_prometheus() -> String {
          # HELP rustguac_requests_total Total HTTP requests\n\
          # TYPE rustguac_requests_total counter\n\
          rustguac_requests_total {}\n\
-         # HELP rustguac_request_errors Total request errors\n\
-         # TYPE rustguac_request_errors counter\n\
-         rustguac_request_errors {}\n",
+         # HELP rustguac_errors_total Total request errors (5xx responses)\n\
+         # TYPE rustguac_errors_total counter\n\
+         rustguac_errors_total {}\n\
+         # HELP rustguac_uptime_seconds Server uptime in seconds\n\
+         # TYPE rustguac_uptime_seconds gauge\n\
+         rustguac_uptime_seconds {}\n",
         m.sessions_active.load(Ordering::Relaxed),
         m.sessions_total.load(Ordering::Relaxed),
         m.requests_total.load(Ordering::Relaxed),
         m.request_errors.load(Ordering::Relaxed),
+        uptime_secs,
     )
 }
 
