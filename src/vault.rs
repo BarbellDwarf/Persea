@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use zeroize::Zeroizing;
-use zeroize::Zeroizing;
 
 use crate::config::VaultConfig;
 use crate::tunnel;
@@ -685,7 +684,7 @@ impl VaultClient {
         let url = format!("{}/v1/auth/token/renew-self", self.addr);
         let token = self.token.read().await.clone();
 
-        let mut req = self.http.post(&url).header("X-Vault-Token", &token);
+        let mut req = self.http.post(&url).header("X-Vault-Token", token.as_str());
         if let Some(ref ns) = self.namespace {
             req = req.header("X-Vault-Namespace", ns.as_str());
         }
@@ -712,7 +711,7 @@ impl VaultClient {
             let mut req = self
                 .http
                 .request(method.clone(), &url)
-                .header("X-Vault-Token", &token);
+                .header("X-Vault-Token", token.as_str());
             if let Some(ref ns) = self.namespace {
                 req = req.header("X-Vault-Namespace", ns.as_str());
             }
@@ -1127,7 +1126,7 @@ impl VaultClient {
         let url = format!("{}{}?list=true", self.addr, path);
         let token = self.token.read().await.clone();
 
-        let mut req = self.http.get(&url).header("X-Vault-Token", &token);
+        let mut req = self.http.get(&url).header("X-Vault-Token", token.as_str());
         if let Some(ref ns) = self.namespace {
             req = req.header("X-Vault-Namespace", ns.as_str());
         }

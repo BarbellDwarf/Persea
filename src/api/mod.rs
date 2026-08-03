@@ -296,6 +296,9 @@ pub use tokens::*;
 pub use users::*;
 
 #[cfg(test)]
+mod integration_tests;
+
+#[cfg(test)]
 mod tests {
     use super::tokens::partition_credential_writes;
     use super::address_book::html_escape;

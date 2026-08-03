@@ -339,7 +339,7 @@ impl DockerDriver {
                         "printf '%s:%s\\n' \"$1\" \"$2\" | chpasswd",
                         "sh",
                         username,
-                        password,,
+                        password,
                     ]),
                     attach_stdout: Some(false),
                     attach_stderr: Some(false),
