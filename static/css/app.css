@@ -569,7 +569,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .text-xl { font-size: 20px; line-height: 1.5; }
 .text-2xl { font-size: 24px; line-height: 1.5; }
 .text-3xl { font-size: 30px; line-height: 1.5; }
-.p-1 { padding: 4px; } .p-3 { padding: 12px; } .p-5 { padding: 20px; } .p-6 { padding: 24px; }
+.p-1 { padding: 4px; } .p-3 { padding: 12px; } .p-4 { padding: 16px; } .p-5 { padding: 20px; } .p-6 { padding: 24px; }
 .px-2 { padding-left: 8px; padding-right: 8px; }
 .px-3 { padding-left: 12px; padding-right: 12px; }
 .px-4 { padding-left: 16px; padding-right: 16px; }
