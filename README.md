@@ -1,13 +1,28 @@
 # persea
 
-[![CI](https://github.com/sol1/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/sol1/persea/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/sol1/persea)](https://github.com/sol1/persea/releases/latest)
-[![License](https://img.shields.io/github/license/sol1/persea)](LICENSE)
-[![Docker](https://img.shields.io/docker/pulls/sol1/persea)](https://hub.docker.com/r/sol1/persea)
+[![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
+[![License](https://img.shields.io/github/license/BarbellDwarf/persea)](LICENSE)
 
-A lightweight Rust replacement for the Apache Guacamole Java webapp. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
+A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
 
 No Java. No Tomcat. Single binary + guacd.
+
+## Why this exists
+
+I love Apache Guacamole. Both the dish and the program. But it has always looked like it came straight out of 2005. The functionality is solid and I am glad Apache keeps it in development, but the frontend has been the sticking point whenever I tried to offer it as a solution at work or for clients. I mostly used it in my homelab.
+
+Then [Sol1](https://www.sol1.com.au) released RustGuac — a Rust replacement for the Guacamole Java webapp. Exactly what I had been waiting for. Open source does what open source does best.
+
+But RustGuac was not complete in my eyes. It was missing broader SSO and auth provider support, the frontend felt clunky in spots, and some documentation gaps made it hard to adopt confidently.
+
+I am not a developer. I have been in IT for over a decade, I know the technology stack and how the pieces fit together, but I do not write code. With AI coding assistants, I did not need to. I needed a solid plan and enough direction to guide the implementation.
+
+So I forked Sol1's work, spun up [OpenCode](https://opencode.ai) (the Go subscription — great tool, not sponsored, just respect the OSS philosophy), and started mapping out what needed to change.
+
+This is a work in progress. I have a day job, so progress comes in waves. If you find value in this upgrade from Sol1's work, give them a star too. They built the foundation.
+
+If you hit issues, open one with details — logs, screenshots, reproduction steps. That helps me fix things faster.
 
 ## Architecture
 
@@ -18,7 +33,7 @@ Browser (HTML/JS)
     v
 persea (Rust, axum)
     |
-    | TLS (Guacamole protocol)
+    | TCP (Guacamole protocol)
     v
 guacd (C, from guacamole-server)
     |
@@ -37,17 +52,22 @@ guacd (C, from guacamole-server)
 
 | Type | Description |
 |------|-------------|
-| **SSH** | Browser-based terminal with password, private key, or ephemeral keypair auth. SFTP file transfer. |
+| **SSH** | Browser terminal with password, private key, or ephemeral keypair auth. SFTP file transfer. |
 | **RDP** | Windows/Linux RDP with auto-fit resize, Kerberos NLA, RemoteApp/RAIL, H.264 passthrough, GFX pipeline. |
 | **VNC** | Connect to any VNC server (KVM/IPMI consoles, remote desktops, VM displays). |
-| **SPICE** | Direct SPICE displays (libvirt/QEMU consoles) with TLS, CA verification, certificate-subject pinning, and SPICE-proxy support. |
-| **Proxmox VE** | VM consoles brokered through the Proxmox API. One-time SPICE tickets fetched just-in-time at connect (only the API token is stored), node auto-detected from the VM ID, and SSH-tunnel aware. |
+| **SPICE** | Direct SPICE displays (libvirt/QEMU consoles) with TLS, CA verification, certificate-subject pinning, SPICE-proxy support. |
+| **Proxmox VE** | VM consoles through the Proxmox API. One-time SPICE tickets fetched at connect, node auto-detected from VM ID, SSH-tunnel aware. |
 | **Web** | Headless Chromium on Xvnc with native autofill, domain allowlisting, login script automation. |
 | **VDI** | Ephemeral Docker desktop containers per user. Persist after disconnect, auto-cleanup on idle. |
 
-### Security & authentication
+### Security and authentication
 
 - **OIDC single sign-on**: Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
+- **LDAP / Active Directory**: bind + search authentication
+- **SAML 2.0**: service provider with signature verification
+- **RADIUS**: PAP authentication for network equipment integration
+- **Database auth**: local password accounts with Argon2id hashing
+- **TOTP two-factor**: enrollment, QR codes, recovery codes, admin enforcement
 - **4-tier role system**: admin, poweruser, operator, viewer with OIDC group mapping
 - **API key auth**: SHA-256 hashed keys with IP allowlists and expiry
 - **Vault-backed connections**: credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
@@ -56,6 +76,7 @@ guacd (C, from guacamole-server)
 - **Per-entry clipboard control**: disable copy and/or paste for data loss prevention
 - **Rate limiting**: per-IP, per-endpoint via tower_governor
 - **Session recording**: Guacamole format with playback UI, disk rotation, per-entry limits
+- **Audit logging**: SHA-256 hash chain with tamper evidence
 
 ### Connectivity
 
@@ -77,27 +98,30 @@ guacd (C, from guacamole-server)
 
 ### UI
 
+- **Sidebar navigation** across all pages
 - **Connections** with folder-based organisation and OIDC group access control
 - **Active Sessions** section with live thumbnail previews
 - **Session ended overlay** with Reconnect/Close buttons
 - **Clipboard panel controls** (Home + Fullscreen)
 - **8 built-in themes** with CSS gradient backgrounds, or configure your own
 - **Reports page** with session analytics, history, and CSV export
+- **Dark mode** by default with light mode toggle
+- **Responsive layout** from laptop to ultrawide displays
 
 ## Requirements
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| guacd | Bundled | Built from `apache/guacamole-server`, ships in the .deb and Docker image. No separate install. |
-| **Vault or OpenBao** | **Required for the Connections UI** | Stores connection entries and credentials server-side. Without it the Connections page is unavailable and users can only run ad-hoc sessions via the API. Use [`contrib/vault-quickstart.sh`](contrib/vault-quickstart.sh) for one-command setup (auto-detects `vault` or `bao`, supports `--dev` and `--local` modes). |
-| OIDC provider | Optional | For SSO. API-key auth works on its own. Authentik/Google/Okta/Keycloak/JumpCloud all tested. |
+| guacd | Required | Built from `apache/guacamole-server`, ships in the .deb and Docker image. |
+| **Vault or OpenBao** | **Required for Connections UI** | Stores connection entries and credentials server-side. Without it the Connections page is unavailable and users can only run ad-hoc sessions via the API. Use [`contrib/vault-quickstart.sh`](contrib/vault-quickstart.sh) for one-command setup. |
+| OIDC provider | Optional | For SSO. API-key auth works on its own. |
 | Docker | Optional | Only needed for VDI desktop containers. |
 
 ## Quick start
 
 ### Debian 13 (.deb)
 
-Pre-built packages for amd64 and arm64 are available from [Releases](https://github.com/sol1/persea/releases):
+Pre-built packages for amd64 and arm64 are available from [Releases](https://github.com/BarbellDwarf/persea/releases):
 
 ```bash
 sudo apt install ./persea_*.deb
@@ -108,8 +132,8 @@ sudo systemctl enable --now persea
 ### Docker
 
 ```bash
-docker pull sol1/persea:latest
-docker run -d -p 8089:8089 sol1/persea:latest
+docker pull persea/persea:latest
+docker run -d -p 8089:8089 persea/persea:latest
 ```
 
 For VDI support, mount the Docker socket:
@@ -118,18 +142,18 @@ For VDI support, mount the Docker socket:
 docker run -d -p 8089:8089 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --group-add $(getent group docker | cut -d: -f3) \
-  sol1/persea:latest
+  persea/persea:latest
 ```
 
 ### Other distributions
 
-Pre-built packages are provided for Debian 13. For other distributions, build from source:
+Pre-built packages target Debian 13. For other distributions, build from source:
 
 ```bash
 sudo ./install.sh
 ```
 
-See the [Installation guide](docs/installation.md) for full details including Docker Compose, TLS setup, and development builds.
+See the [Installation guide](docs/installation.md) for Docker Compose, TLS setup, and development builds.
 
 ### VDI setup
 
@@ -158,16 +182,12 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 - [Credential Variables](docs/credential-variables.md): shared credentials across entries
 - [Reports](docs/reports.md): session analytics, history, CSV export
 
-### Integration & reference
+### Integration and reference
 - [Integrations](docs/integrations.md): Vault, LUKS drives, SSH tunnels, Kerberos, HAProxy, Knocknoc
 - [NetBox](docs/netbox.md): connections sync via custom fields and webhooks
 - [Security](docs/security.md): TLS, rate limiting, headers, audit logging, hardening
 - [API Reference](docs/api.md): REST API endpoints, the session connection flow, and headless ws-ticket integration
 - [Migration from Apache Guacamole](docs/migration.md): MySQL/MariaDB to Vault
-
-## Commercial support
-
-Commercial support for persea is available from [Sol1](https://www.sol1.com.au).
 
 ## License
 
