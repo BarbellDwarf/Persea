@@ -1,5 +1,12 @@
 <header class="header">
-    <div class="header-title">rustguac</div>
+    <div style="display:flex;align-items:center;gap:8px">
+        <button class="hamburger" id="hamburger-btn" aria-label="Toggle navigation">
+            <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/>
+            </svg>
+        </button>
+        <div class="header-title">rustguac</div>
+    </div>
     <div class="header-actions">
         <button id="theme-toggle" class="btn btn-sm" style="padding:6px 10px" title="Toggle theme">
             <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -17,4 +24,32 @@ document.getElementById('theme-toggle')?.addEventListener('click', function() {
     html.classList.toggle('light');
     localStorage.setItem('theme', html.classList.contains('dark') ? 'dark' : 'light');
 });
+
+// ── Mobile hamburger menu ──
+(function() {
+    var btn = document.getElementById('hamburger-btn');
+    var sidebar = document.querySelector('.sidebar');
+    var overlay = document.createElement('div');
+    overlay.className = 'sidebar-overlay';
+    document.body.appendChild(overlay);
+
+    function closeSidebar() {
+        sidebar.classList.remove('open');
+        overlay.classList.remove('active');
+    }
+
+    btn?.addEventListener('click', function() {
+        sidebar.classList.toggle('open');
+        overlay.classList.toggle('active');
+    });
+
+    overlay.addEventListener('click', closeSidebar);
+
+    // Close on nav item click (mobile)
+    sidebar?.querySelectorAll('.nav-item').forEach(function(item) {
+        item.addEventListener('click', function() {
+            if (window.innerWidth <= 768) closeSidebar();
+        });
+    });
+})();
 </script>

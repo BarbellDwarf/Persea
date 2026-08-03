@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::api::AppState;
 use crate::auth::AuthIdentity;
 use crate::db::Db;
+use crate::error::AppError;
 
 #[derive(Deserialize)]
 pub struct CreateJumpHost {
@@ -34,35 +35,37 @@ pub struct TestResult {
     pub error: Option<String>,
 }
 
-/// Require admin role. Returns 403 if not admin.
-fn require_admin(identity: &Option<axum::Extension<AuthIdentity>>) -> Result<(), StatusCode> {
+fn require_admin(identity: &Option<Extension<AuthIdentity>>) -> Result<(), AppError> {
     match identity {
-        Some(axum::Extension(id)) if id.has_role("admin") => Ok(()),
-        _ => Err(StatusCode::FORBIDDEN),
+        Some(Extension(id)) if id.has_role("admin") => Ok(()),
+        _ => Err(AppError::Forbidden("admin role required".into())),
     }
 }
 
-/// GET /api/admin/jump-hosts
 pub async fn list_jump_hosts(
     State(_state): State<AppState>,
     Extension(db): Extension<Db>,
-    Extension(identity): Extension<AuthIdentity>,
-) -> Result<Json<Vec<crate::db::JumpHostRecord>>, StatusCode> {
-    let _ = identity;
-    let hosts = crate::db::list_jump_hosts(&db).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    identity: Option<Extension<AuthIdentity>>,
+) -> Result<Json<Vec<crate::db::JumpHostRecord>>, AppError> {
+    require_admin(&identity)?;
+    let hosts = crate::db::list_jump_hosts(&db).map_err(|e| {
+        tracing::error!(error = %e, "failed to list jump hosts");
+        AppError::Internal("failed to list jump hosts".into())
+    })?;
     Ok(Json(hosts))
 }
 
-/// POST /api/admin/jump-hosts
 pub async fn create_jump_host(
     State(_state): State<AppState>,
     Extension(db): Extension<Db>,
-    Extension(identity): Extension<AuthIdentity>,
+    identity: Option<Extension<AuthIdentity>>,
     Json(input): Json<CreateJumpHost>,
-) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
-    let _ = identity;
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    require_admin(&identity)?;
     if input.name.is_empty() || input.hostname.is_empty() || input.username.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
+        return Err(AppError::Validation(
+            "name, hostname, and username are required".into(),
+        ));
     }
     let port = if input.port == 0 { 22 } else { input.port };
     let id = crate::db::create_jump_host(
@@ -75,8 +78,8 @@ pub async fn create_jump_host(
         input.key_path.as_deref(),
     )
     .map_err(|e| {
-        tracing::warn!("Failed to create jump host: {}", e);
-        StatusCode::INTERNAL_SERVER_ERROR
+        tracing::error!(error = %e, "failed to create jump host");
+        AppError::Internal("failed to create jump host".into())
     })?;
     Ok((
         StatusCode::CREATED,
@@ -84,15 +87,14 @@ pub async fn create_jump_host(
     ))
 }
 
-/// PUT /api/admin/jump-hosts/{id}
 pub async fn update_jump_host(
     State(_state): State<AppState>,
     Extension(db): Extension<Db>,
-    Extension(identity): Extension<AuthIdentity>,
+    identity: Option<Extension<AuthIdentity>>,
     Path(id): Path<String>,
     Json(input): Json<UpdateJumpHost>,
-) -> Result<StatusCode, StatusCode> {
-    let _ = identity;
+) -> Result<StatusCode, AppError> {
+    require_admin(&identity)?;
     let updated = crate::db::update_jump_host(
         &db,
         &id,
@@ -103,44 +105,49 @@ pub async fn update_jump_host(
         &input.auth_method,
         input.key_path.as_deref(),
     )
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|e| {
+        tracing::error!(error = %e, "failed to update jump host");
+        AppError::Internal("failed to update jump host".into())
+    })?;
     if updated {
         Ok(StatusCode::OK)
     } else {
-        Err(StatusCode::NOT_FOUND)
+        Err(AppError::Internal("jump host not found".into()))
     }
 }
 
-/// DELETE /api/admin/jump-hosts/{id}
 pub async fn delete_jump_host(
     State(_state): State<AppState>,
     Extension(db): Extension<Db>,
-    Extension(identity): Extension<AuthIdentity>,
+    identity: Option<Extension<AuthIdentity>>,
     Path(id): Path<String>,
-) -> Result<StatusCode, StatusCode> {
-    let _ = identity;
-    let deleted =
-        crate::db::delete_jump_host(&db, &id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+) -> Result<StatusCode, AppError> {
+    require_admin(&identity)?;
+    let deleted = crate::db::delete_jump_host(&db, &id).map_err(|e| {
+        tracing::error!(error = %e, "failed to delete jump host");
+        AppError::Internal("failed to delete jump host".into())
+    })?;
     if deleted {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err(StatusCode::NOT_FOUND)
+        Err(AppError::Internal("jump host not found".into()))
     }
 }
 
-/// POST /api/admin/jump-hosts/{id}/test
 pub async fn test_jump_host(
     State(_state): State<AppState>,
     Extension(db): Extension<Db>,
-    Extension(identity): Extension<AuthIdentity>,
+    identity: Option<Extension<AuthIdentity>>,
     Path(id): Path<String>,
-) -> Result<Json<TestResult>, StatusCode> {
-    let _ = identity;
+) -> Result<Json<TestResult>, AppError> {
+    require_admin(&identity)?;
     let host = crate::db::get_jump_host(&db, &id)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+        .map_err(|e| {
+            tracing::error!(error = %e, "failed to get jump host");
+            AppError::Internal("failed to get jump host".into())
+        })?
+        .ok_or_else(|| AppError::Internal("jump host not found".into()))?;
 
-    // Attempt an SSH connection test
     let result = crate::tunnel::probe_host_key(&host.hostname, host.port).await;
     match result {
         Ok(fingerprint) => Ok(Json(TestResult {
@@ -156,12 +163,10 @@ pub async fn test_jump_host(
     }
 }
 
-/// GET /api/admin/tunnels/active
 pub async fn list_active_tunnels(
     State(_state): State<AppState>,
-    Extension(identity): Extension<AuthIdentity>,
-) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
-    let _ = identity;
-    // Placeholder — active tunnel tracking is not yet wired to SessionManager
+    identity: Option<Extension<AuthIdentity>>,
+) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    require_admin(&identity)?;
     Ok(Json(vec![]))
 }

@@ -11,6 +11,7 @@ use crate::auth::{client_ip, extract_cookie, TrustedProxies};
 use crate::auth_chain::AuthChain;
 use crate::auth_provider::{AuthRequest, AuthProvider};
 use crate::db::{self, Db};
+use crate::CspNonce;
 use crate::templates::LoginPageTemplate;
 use crate::totp::TotpEnforcement;
 
@@ -96,6 +97,7 @@ pub async fn login_page(
     headers: HeaderMap,
     Extension(database): Extension<Db>,
     Extension(oidc_enabled): Extension<OidcEnabled>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     // Redirect to setup wizard if no users exist (first run)
     if crate::handlers::setup::needs_setup(&database) {

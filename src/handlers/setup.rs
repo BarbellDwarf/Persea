@@ -4,6 +4,7 @@ use axum::Extension;
 use serde::Deserialize;
 
 use crate::api::SiteTitle;
+use crate::CspNonce;
 use crate::templates::SetupTemplate;
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +81,7 @@ pub fn needs_setup(db: &crate::db::Db) -> bool {
 pub async fn setup_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(database): Extension<crate::db::Db>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     if !needs_setup(&database) {
         return Redirect::to("/").into_response();
@@ -108,6 +110,7 @@ pub async fn setup_page(
 pub async fn setup_submit(
     Extension(site_title): Extension<SiteTitle>,
     Extension(database): Extension<crate::db::Db>,
+    Extension(nonce): Extension<CspNonce>,
     Form(form): Form<SetupForm>,
 ) -> Response {
     if !needs_setup(&database) {
