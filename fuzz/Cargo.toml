@@ -1,5 +1,5 @@
 [package]
-name = "rustguac-fuzz"
+name = "persea-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -12,7 +12,7 @@ libfuzzer-sys = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-[dependencies.rustguac]
+[dependencies.persea]
 path = ".."
 
 [[bin]]

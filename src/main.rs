@@ -1,4 +1,4 @@
-//! rustguac — lightweight Guacamole proxy. CLI entry point and server setup.
+//! persea — lightweight Guacamole proxy. CLI entry point and server setup.
 
 mod api;
 mod audit;
@@ -62,7 +62,7 @@ use base64::Engine as _;
 use base64::Engine as _;
 
 #[derive(Parser)]
-#[command(name = "rustguac", about = "Lightweight Guacamole SSH proxy")]
+#[command(name = "persea", about = "Lightweight Guacamole SSH proxy")]
 struct Cli {
     /// Path to TOML config file
     #[arg(short, long)]
@@ -135,7 +135,7 @@ enum Command {
 
     /// Generate a self-signed TLS certificate for development/testing
     GenerateCert {
-        /// Hostname for the certificate (e.g. "rustguac.example.com")
+        /// Hostname for the certificate (e.g. "persea.example.com")
         #[arg(long)]
         hostname: String,
         /// Output directory for cert.pem and key.pem
@@ -596,6 +596,10 @@ async fn security_headers(
         rand::rng().fill(&mut bytes);
         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
     };
+
+    // Insert nonce into request extensions so handlers can extract it for templates
+    let mut request = request;
+    request.extensions_mut().insert(CspNonce(nonce.clone()));
 
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
@@ -1557,7 +1561,7 @@ async fn run_server(config: Config, database: Db) {
     } else {
         "http"
     };
-    tracing::info!("rustguac starting on {}://{}", scheme, listen_addr);
+    tracing::info!("persea starting on {}://{}", scheme, listen_addr);
     tracing::info!("Static files served from {:?}", static_path);
 
     // TCP keepalive on the listener. Linux inherits SO_KEEPALIVE and the
@@ -1764,19 +1768,19 @@ fn html_escape(s: &str) -> String {
         .replace('\'', "&#x27;")
 }
 
-/// Rewrite branding in HTML: replace default "rustguac" site title and logo.
+/// Rewrite branding in HTML: replace default "persea" site title and logo.
 fn rewrite_branding(html: &str, site_title: &str, logo_url: Option<&str>) -> String {
     let mut out = html.to_string();
-    if site_title != "rustguac" {
+    if site_title != "persea" {
         let safe_title = html_escape(site_title);
-        // <title>rustguac</title> and <title>rustguac - Sessions</title> etc.
+        // <title>persea</title> and <title>persea - Sessions</title> etc.
         out = out.replace(
-            "<title>rustguac</title>",
+            "<title>persea</title>",
             &format!("<title>{}</title>", safe_title),
         );
-        out = out.replace("<title>rustguac - ", &format!("<title>{} - ", safe_title));
-        // <h1>rustguac</h1> (with or without inline style)
-        out = out.replace(">rustguac</h1>", &format!(">{}</h1>", safe_title));
+        out = out.replace("<title>persea - ", &format!("<title>{} - ", safe_title));
+        // <h1>persea</h1> (with or without inline style)
+        out = out.replace(">persea</h1>", &format!(">{}</h1>", safe_title));
     }
     if let Some(url) = logo_url {
         let safe_url = html_escape(url);
@@ -1791,7 +1795,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_branding_title() {
-        let html = "<title>rustguac - Sessions</title>";
+        let html = "<title>persea - Sessions</title>";
         assert_eq!(
             rewrite_branding(html, "MyGateway", None),
             "<title>MyGateway - Sessions</title>"
@@ -1800,7 +1804,7 @@ mod tests {
 
     #[test]
     fn test_rewrite_branding_h1() {
-        let html = r#"<h1 style="display:inline">rustguac</h1>"#;
+        let html = r#"<h1 style="display:inline">persea</h1>"#;
         assert_eq!(
             rewrite_branding(html, "MyGateway", None),
             r#"<h1 style="display:inline">MyGateway</h1>"#
@@ -1811,15 +1815,15 @@ mod tests {
     fn test_rewrite_branding_logo() {
         let html = r#"<img id="site-logo" src="/logo.svg" style="max-height:40px">"#;
         assert_eq!(
-            rewrite_branding(html, "rustguac", Some("https://example.com/logo.png")),
+            rewrite_branding(html, "persea", Some("https://example.com/logo.png")),
             r#"<img id="site-logo" src="https://example.com/logo.png" style="max-height:40px">"#
         );
     }
 
     #[test]
     fn test_rewrite_branding_noop() {
-        let html = "<title>rustguac</title><h1>rustguac</h1>";
-        assert_eq!(rewrite_branding(html, "rustguac", None), html);
+        let html = "<title>persea</title><h1>persea</h1>";
+        assert_eq!(rewrite_branding(html, "persea", None), html);
     }
 
     // ── Rate-limit plumbing ─────────────────────────────────────────────

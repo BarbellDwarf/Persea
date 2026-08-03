@@ -1,5 +1,5 @@
 [package]
-name = "rustguac"
+name = "persea"
 version = "1.10.0"
 edition = "2021"
 description = "Lightweight Rust replacement for Apache Guacamole client"
