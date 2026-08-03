@@ -91,6 +91,16 @@ pub async fn ws_handler(
         }
     }
 
+    // Reject new WebSocket connections during shutdown
+    if manager.is_shutting_down() {
+        tracing::debug!(session_id = %session_id, "Rejecting WebSocket during shutdown");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error": "server is shutting down"})),
+        )
+            .into_response();
+    }
+
     // Check if this is an owner connection (session is Pending)
     let is_owner = manager.is_session_pending(session_id).await;
 

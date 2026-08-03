@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use rand::RngExt;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::{Mutex, RwLock};
 use tokio_rustls::TlsConnector;
 use tokio_util::sync::CancellationToken;
@@ -20,6 +21,11 @@ pub struct SessionManager {
     pub(super) guacd_tls: Option<TlsConnector>,
     pub(super) db: Option<crate::db::Db>,
     pub(super) vdi_driver: Option<Arc<dyn crate::vdi::VdiDriver>>,
+    /// Set to `true` when a shutdown signal is received. Prevents new session
+    /// creation while allowing existing sessions to drain gracefully.
+    pub(super) shutdown: Arc<AtomicBool>,
+    /// Notified when `shutdown` flips to `true` so background tasks can exit.
+    pub(super) shutdown_notify: Arc<tokio::sync::Notify>,
 }
 
 impl SessionManager {
@@ -62,6 +68,8 @@ impl SessionManager {
             guacd_tls,
             db: None,
             vdi_driver,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -654,5 +662,47 @@ impl SessionManager {
                 );
             }
         }
+    }
+
+    /// Mark the server as shutting down. Returns `false` if already shutting down.
+    /// New session creation is blocked after this call.
+    pub fn initiate_shutdown(&self) -> bool {
+        let was = self.shutdown.swap(true, Ordering::SeqCst);
+        if !was {
+            self.shutdown_notify.notify_waiters();
+        }
+        !was
+    }
+
+    /// Returns `true` if a shutdown signal has been received.
+    pub fn is_shutting_down(&self) -> bool {
+        self.shutdown.load(Ordering::SeqCst)
+    }
+
+    /// Wait until the shutdown signal is received.
+    pub async fn wait_for_shutdown(&self) {
+        if self.is_shutting_down() {
+            return;
+        }
+        self.shutdown_notify.notified().await;
+    }
+
+    /// Cancel all active sessions (cancel their CancellationToken) and
+    /// return the count of sessions that were signalled.
+    pub async fn cancel_all_sessions(&self) -> usize {
+        let sessions = self.sessions.read().await;
+        let mut count = 0;
+        for (id, session) in sessions.iter() {
+            let mut session = session.lock().await;
+            if matches!(
+                session.status,
+                SessionStatus::Active | SessionStatus::Pending
+            ) {
+                session.cancel.cancel();
+                tracing::debug!(session_id = %id, "Signalled session for shutdown");
+                count += 1;
+            }
+        }
+        count
     }
 }

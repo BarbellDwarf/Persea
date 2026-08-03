@@ -470,6 +470,12 @@ pub struct Config {
     #[serde(default = "default_session_cleanup_delay_secs")]
     pub session_cleanup_delay_secs: u64,
 
+    /// Graceful shutdown timeout in seconds. Default: 30.
+    /// After receiving SIGTERM/SIGINT, the server stops accepting new connections
+    /// and waits this long for active sessions to drain before forcing exit.
+    #[serde(default = "default_shutdown_timeout_secs")]
+    pub shutdown_timeout_secs: u64,
+
     /// Enable API rate limiting. Default: false.
     /// When behind a reverse proxy (HAProxy, nginx) or access gateway (KnockNoc),
     /// rate limiting is typically handled upstream and not needed here.
@@ -1158,6 +1164,10 @@ fn default_session_cleanup_delay_secs() -> u64 {
     300 // 5 minutes
 }
 
+fn default_shutdown_timeout_secs() -> u64 {
+    30
+}
+
 fn default_auth_session_ttl_secs() -> u64 {
     86400 // 24 hours
 }
@@ -1245,6 +1255,7 @@ impl Default for Config {
             max_sessions: default_max_sessions(),
             max_sessions_per_user: default_max_sessions_per_user(),
             session_cleanup_delay_secs: default_session_cleanup_delay_secs(),
+            shutdown_timeout_secs: default_shutdown_timeout_secs(),
             rate_limit: false,
             trusted_proxies: Vec::new(),
             user_credentials_default_scope: default_user_credentials_scope(),
