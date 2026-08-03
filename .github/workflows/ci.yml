@@ -1,57 +1,51 @@
 name: CI
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-
+on: [push, pull_request]
 jobs:
   check:
-    name: Build & Lint
     runs-on: ubuntu-latest
-    container: debian:trixie-slim
-
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo check
 
-      - name: Install system dependencies
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends \
-            curl ca-certificates gcc g++ pkg-config make \
-            libcairo2-dev libjpeg-dev libpng-dev libwebp-dev \
-            libssh2-1-dev libssl-dev libvncserver-dev \
-            libpango1.0-dev libpulse-dev \
-            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-            libtelnet-dev libwebsockets-dev uuid-dev freerdp3-dev
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo fmt --check
 
-      - name: Install Rust toolchain
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo clippy -- -D warnings
 
-      - name: Cache cargo registry & target
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo test
 
-      - name: Check formatting
-        run: $HOME/.cargo/bin/cargo fmt --check
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo install cargo-audit && cargo audit
 
-      - name: Clippy
-        run: $HOME/.cargo/bin/cargo clippy -- -D warnings
-
-      - name: Build
-        run: $HOME/.cargo/bin/cargo build --release
-
-      - name: Security audit
-        # Ignored advisories + rationale live in .cargo/audit.toml so new
-        # advisories on the same crates still surface.
-        run: |
-          $HOME/.cargo/bin/cargo install cargo-audit
-          $HOME/.cargo/bin/cargo audit
+  # Integration test - starts server and runs health check
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo build
+      - run: |
+          # Start server in background, wait for it, hit health endpoint
+          ./target/debug/rustguac &
+          sleep 5
+          curl -f http://localhost:9090/api/health || exit 1
+          kill %1
