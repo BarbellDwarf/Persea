@@ -159,7 +159,7 @@ path-traversal or homoglyph mischief from crafted filenames.
 ### Overriding a built-in
 
 If you create a file named after a built-in (`aurora.toml`,
-`corporate.toml`, …) it **replaces** the built-in in the picker and in
+`corporate.toml`, ...) it **replaces** the built-in in the picker and in
 `preset` resolution. This is the supported way to re-brand a built-in
 without forking persea: edit your own `aurora.toml` rather than
 patching the Rust source.
