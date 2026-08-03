@@ -55,6 +55,7 @@ guacd (C, from guacamole-server)
 | **VNC** | Connect to any VNC server (KVM/IPMI consoles, remote desktops, VM displays). |
 | **SPICE** | Direct SPICE displays (libvirt/QEMU consoles) with TLS, CA verification, certificate-subject pinning, SPICE-proxy support. |
 | **Proxmox VE** | VM consoles through the Proxmox API. One-time SPICE tickets fetched at connect, node auto-detected from VM ID, SSH-tunnel aware. |
+| **VMware vSphere** | VM inventory and console brokering through the vCenter REST API. In development. |
 | **Web** | Headless Chromium on Xvnc with native autofill, domain allowlisting, login script automation. |
 | **VDI** | Ephemeral Docker desktop containers per user. Persist after disconnect, auto-cleanup on idle. |
 

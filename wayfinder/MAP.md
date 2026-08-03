@@ -130,18 +130,7 @@ A production-hardened, well-tested, accessible, documented codebase ready for co
 
 ## Not yet specified
 
-- Whether to migrate API handlers to return `Result<T, AppError>` (error.rs exists but handlers still use inline error mapping)
-- Whether to add `#[must_use]` to all error types across modules
-- Whether to consolidate duplicated functions (`role_level`, cookie extraction, role validation) into shared helpers
-- Prometheus metrics endpoint design
-- Deep health check implementation (guacd + DB + Vault connectivity)
-- WebSocket auto-reconnect with exponential backoff
-- Frontend JS extraction to external files (bundle strategy)
-- Session drain on graceful shutdown
-- Config validation at startup (address parsing, CIDR validation)
-- Request logging middleware (tower-http TraceLayer)
-- Property-based testing (proptest) for parsers
-- Mock traits for Vault/Docker/guacd in tests
+- VMware vSphere integration: route wiring, connections page entries, OS detection, config, tests, docs (ticket 021)
 
 ## Out of scope
 
