@@ -1,8 +1,8 @@
 # Web Browser Sessions
 
-Web browser sessions give users a full Chromium browser running on the server, streamed to their own browser via the Guacamole protocol. Each session spawns a headless Xvnc display with Chromium in kiosk mode — the user sees and interacts with a real browser without installing anything locally.
+Web browser sessions give users a full Chromium browser running on the server, streamed to their own browser via the Guacamole protocol. Each session spawns a headless Xvnc display with Chromium in kiosk mode. The user sees and interacts with a real browser without installing anything locally.
 
-This is useful for:
+This supports several use cases:
 
 - **Controlled web access** — give operators access to specific internal web applications without exposing credentials or granting direct network access
 - **Credential isolation** — passwords and session cookies stay server-side, never reaching the user's machine
@@ -83,7 +83,7 @@ This is a server-side CIDR check applied at session creation. The URL's hostname
 
 ## Native autofill
 
-For simple login flows (a form with username and password fields), native autofill is the easiest approach. persea pre-populates Chromium's built-in password manager database before launch — no scripts, no external runtimes, no CDP.
+For simple login flows (a form with username and password fields), native autofill is the easiest approach. persea pre-populates Chromium's built-in password manager database before launch. No scripts, no external runtimes, no CDP.
 
 When the user clicks on a login form, Chromium shows its familiar autofill dropdown with the pre-filled credentials.
 
@@ -138,7 +138,7 @@ persea creates a Chromium profile directory before launch and writes to `Default
 2. Encrypt with AES-128-CBC, IV = 16 × `0x20` (space characters)
 3. Store as `v10` prefix + ciphertext blob
 
-This is Chromium's own obfuscation layer for the headless Linux case (no keyring). It is not a security boundary — the security boundary is that the profile directory is ephemeral (deleted on session end) and only accessible server-side.
+This is Chromium's own obfuscation layer for the headless Linux case (no keyring). It is not a security boundary. The security boundary is that the profile directory is ephemeral (deleted on session end) and only accessible server-side.
 
 ### UI
 
@@ -168,12 +168,9 @@ There are two separate mechanisms that control what a web session can access:
 | **`web_allowed_networks`** | `config.toml` (global) | Server-side, at session creation | CIDR ranges — controls which IPs persea will connect to |
 | **`allowed_domains`** | Connections entry | Client-side, inside Chromium at runtime | Domain names — controls which sites the user can navigate to |
 
-They don't conflict — both can be active simultaneously for defense in depth:
+Both can be active simultaneously for defense in depth. `web_allowed_networks` prevents persea from initiating connections to disallowed networks (SSRF protection). `allowed_domains` prevents the user from navigating to sites outside the allowlist within an already-running session.
 
-- `web_allowed_networks` prevents persea from initiating connections to disallowed networks (SSRF protection)
-- `allowed_domains` prevents the user from navigating to sites outside the allowlist within an already-running session
-
-**Example:** Your config allows `10.0.0.0/8` for web sessions (server-side). An connections entry for the internal wiki sets `allowed_domains: ["wiki.internal.example.com"]`. The session can only reach the wiki — even though the server-side allowlist permits the entire `10.0.0.0/8` range.
+**Example:** Your config allows `10.0.0.0/8` for web sessions (server-side). An connections entry for the internal wiki sets `allowed_domains: ["wiki.internal.example.com"]`. The session can only reach the wiki, even though the server-side allowlist permits the entire `10.0.0.0/8` range.
 
 ### API
 
@@ -192,7 +189,7 @@ curl -X POST https://persea.example.com/api/sessions \
 
 For complex login flows that native autofill can't handle (multi-step forms, CAPTCHAs, JavaScript-heavy SPAs, MFA prompts), login scripts provide full browser automation via the Chrome DevTools Protocol (CDP).
 
-A login script is a server-side executable that connects to the already-running Chromium instance, performs login automation, then disconnects — leaving the user on an authenticated page.
+A login script is a server-side executable that connects to the already-running Chromium instance, performs login automation, then disconnects. The user is left on an authenticated page.
 
 ### How it works
 
@@ -404,10 +401,7 @@ echo "[login] Done — user should see authenticated page"
 
 ### Combining autofill and login scripts
 
-Autofill and login scripts can be used together on the same entry:
-
-- **Autofill** pre-populates the password manager — useful if the script fails or for subsequent logins during the session
-- **Login script** automates the initial login flow — handles complex cases like MFA, JavaScript-heavy forms, or multi-step wizards
+Autofill and login scripts can be used together on the same entry. Autofill pre-populates the password manager, useful if the script fails or for subsequent logins during the session. Login scripts automate the initial login flow and handle complex cases like MFA, JavaScript-heavy forms, or multi-step wizards.
 
 The autofill database is written before Chromium launches, and the login script runs after. They don't interfere with each other.
 
@@ -476,7 +470,7 @@ Web sessions support [multi-hop SSH tunnel chains](overview.md#ssh-tunnel--jump-
 
 Every web session runs Chromium with a comprehensive managed policy and an isolated profile. See [Security: Web session hardening](security.md#web-session-hardening) for the full policy table.
 
-**Warning:** The Chromium managed policy is installed globally at `/etc/chromium/policies/managed/persea.json`. This affects **all** Chromium instances on the machine — not just persea sessions. Do not install persea on a desktop machine where you want to use Chromium for normal browsing. persea is designed to run on a dedicated server or VM.
+**Warning:** The Chromium managed policy is installed globally at `/etc/chromium/policies/managed/persea.json`. This affects **all** Chromium instances on the machine, not just persea sessions. Do not install persea on a desktop machine where you want to use Chromium for normal browsing. persea is designed to run on a dedicated server or VM.
 
 Key restrictions:
 
@@ -578,16 +572,10 @@ When creating entries via the Vault connections (UI or API), the same fields are
 
 ## Terminal Emulation Notes
 
-guacd's built-in terminal emulator handles SSH sessions. It supports xterm-256color
-and most common escape sequences, but has limitations compared to full terminal
-emulators:
+guacd's built-in terminal emulator handles SSH sessions. It supports xterm-256color and most common escape sequences, but has limitations compared to full terminal emulators:
 
 - **256 colors** supported; truecolor (24-bit) not supported
-- **Bracketed paste** (`DECSET 2004`) not supported — applications like ble.sh
-  cannot distinguish pasted text from typed input
-- **modifyOtherKeys** keyboard protocol not supported — some Ctrl+key
-  combinations may not work as expected in advanced line editors
+- **Bracketed paste** (`DECSET 2004`) not supported — applications like ble.sh cannot distinguish pasted text from typed input
+- **modifyOtherKeys** keyboard protocol not supported — some Ctrl+key combinations may not work as expected in advanced line editors
 
-For applications requiring full terminal emulation (ble.sh, fzf with advanced
-features, tmux with truecolor), consider using a desktop terminal emulator
-connected via SSH rather than the web interface.
+For applications requiring full terminal emulation (ble.sh, fzf with advanced features, tmux with truecolor), consider using a desktop terminal emulator connected via SSH rather than the web interface.
