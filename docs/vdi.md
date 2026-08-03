@@ -73,7 +73,7 @@ A minimal example image is at `contrib/vdi-test-image/` (Debian + xfce4).
 
 If your image has a hardcoded user account that does not honour `VDI_USERNAME` / `VDI_PASSWORD`, set `container_username` and `container_password` on the entry. persea uses those values for the RDP login into the container.
 
-**`VDI_USERNAME` / `VDI_PASSWORD` are still injected** with the override values, so an image that *also* happens to read them gets consistent state. Images that ignore the env vars simply continue to use their baked-in account; persea just makes sure the RDP login matches.
+`VDI_USERNAME` / `VDI_PASSWORD` are still injected with the override values, so an image that also happens to read them gets consistent state. Images that ignore the env vars simply continue to use their baked-in account, and persea ensures the RDP login matches.
 
 The container name is still deterministic from the resolved username, so multiple operators connecting via an entry that uses a fixed `container_username` will share the same container instance. Confirm this is what you want before using Pattern B at scale.
 
@@ -147,10 +147,7 @@ Dormant VDI containers (running but no active browser session) also appear with 
 
 ## Container hook
 
-Set `container_hook_script` when Persea needs an external command to prepare
-or tear down access to a container's mapped RDP port. This can be used for
-deployment-specific setup that must happen after Docker has assigned the port
-and before Persea starts probing xrdp.
+Set `container_hook_script` when Persea needs an external command to prepare or tear down access to a container's mapped RDP port. This can be used for deployment-specific setup that must happen after Docker has assigned the port and before Persea starts probing xrdp.
 
 Persea calls the script as:
 
@@ -159,11 +156,7 @@ Persea calls the script as:
 /opt/persea/vdi-container-hook.sh down <port> <container_id> <container_name>
 ```
 
-`up` runs after Docker inspect finds the mapped RDP port and before Persea
-checks whether xrdp is ready on `127.0.0.1:<port>`. The script should return
-only after the local listener is available. `down` runs before Persea stops
-and removes the container. Hook execution is limited by
-`container_hook_timeout_secs` (default: 10 seconds).
+`up` runs after Docker inspect finds the mapped RDP port and before Persea checks whether xrdp is ready on `127.0.0.1:<port>`. The script should return only after the local listener is available. `down` runs before Persea stops and removes the container. Hook execution is limited by `container_hook_timeout_secs` (default: 10 seconds).
 
 ## Per-entry settings
 
