@@ -47,9 +47,9 @@ pub enum AppError {
     Internal(String),
 }
 
-impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        let (status, message) = match &self {
+impl AppError {
+    fn status_and_code(&self) -> (StatusCode, &'static str) {
+        match self {
             AppError::Session(msg) if msg.contains("not found") => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::Session(msg) if msg.contains("validation") => (StatusCode::BAD_REQUEST, self.to_string()),
             AppError::Session(msg) if msg.contains("not active") => (StatusCode::CONFLICT, self.to_string()),
@@ -75,10 +75,23 @@ impl IntoResponse for AppError {
             AppError::Drive(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             AppError::Pve(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Vsphere(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-        };
+            AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
+        }
+    }
+}
 
-        let body = json!({ "error": message });
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        let (status, code) = self.status_and_code();
+        let message = self.to_string();
+
+        tracing::error!(error = %message, status = %status.as_u16(), code = %code, "API error");
+
+        let body = json!({
+            "error": message,
+            "code": status.as_u16(),
+            "error_code": code,
+        });
         (status, axum::Json(body)).into_response()
     }
 }

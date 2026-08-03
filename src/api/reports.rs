@@ -223,17 +223,13 @@ pub async fn report_sessions_csv(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
     axum::extract::Query(q): axum::extract::Query<ReportQuery>,
-) -> impl IntoResponse {
+) -> Result<axum::response::Response, AppError> {
     if !identity
         .as_ref()
         .map(|Extension(id)| id.has_role("poweruser"))
         .unwrap_or(false)
     {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "poweruser role required"})),
-        )
-            .into_response();
+        return Err(AppError::Forbidden("poweruser role required".into()));
     }
     match db::query_session_history(
         &database,
@@ -278,7 +274,7 @@ pub async fn report_sessions_csv(
                 csv_escape_into(&mut csv, row["recording_file"].as_str().unwrap_or(""));
                 csv.push('\n');
             }
-            axum::response::Response::builder()
+            Ok(axum::response::Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/csv; charset=utf-8")
                 .header(
@@ -287,13 +283,12 @@ pub async fn report_sessions_csv(
                 )
                 .body(Body::from(csv))
                 .unwrap()
-                .into_response()
+                .into_response())
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to query session history for CSV export");
+            Err(AppError::Internal("failed to query session history".into()))
+        }
     }
 }
 
@@ -368,42 +363,30 @@ pub async fn serve_recording(
     State(manager): State<AppState>,
     Path(name): Path<String>,
     identity: Option<Extension<AuthIdentity>>,
-) -> impl IntoResponse {
+) -> Result<axum::response::Response, AppError> {
     match &identity {
         Some(Extension(id)) if id.has_role("poweruser") => {}
         _ => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "requires poweruser or admin role"})),
-            )
-                .into_response();
+            return Err(AppError::Forbidden(
+                "requires poweruser or admin role".into(),
+            ));
         }
     }
     if !is_safe_recording_name(&name, manager.recording_path()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "invalid recording name"})),
-        )
-            .into_response();
+        return Err(AppError::Internal("invalid recording name".into()));
     }
 
     let path = manager.recording_path().join(&name);
 
-    let file = match tokio::fs::File::open(&path).await {
-        Ok(f) => f,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({"error": "recording not found"})),
-            )
-                .into_response();
-        }
-    };
+    let file = tokio::fs::File::open(&path).await.map_err(|e| {
+        tracing::warn!(name = %name, error = %e, "Recording not found");
+        AppError::Session("recording not found".into())
+    })?;
 
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
 
-    axum::response::Response::builder()
+    Ok(axum::response::Response::builder()
         .header("content-type", "application/octet-stream")
         .header(
             "content-disposition",
@@ -411,40 +394,31 @@ pub async fn serve_recording(
         )
         .body(body)
         .unwrap()
-        .into_response()
+        .into_response())
 }
 
 pub async fn delete_recording(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
     Path(name): Path<String>,
-) -> impl IntoResponse {
+) -> Result<StatusCode, AppError> {
     if let Some(Extension(ref id)) = identity {
         if !id.has_role("admin") {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "insufficient permissions — admin role required"})),
-            )
-                .into_response();
+            return Err(AppError::Forbidden(
+                "insufficient permissions — admin role required".into(),
+            ));
         }
     }
 
     if !is_safe_recording_name(&name, manager.recording_path()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "invalid recording name"})),
-        )
-            .into_response();
+        return Err(AppError::Internal("invalid recording name".into()));
     }
 
     let path = manager.recording_path().join(&name);
 
-    match tokio::fs::remove_file(&path).await {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "recording not found"})),
-        )
-            .into_response(),
-    }
+    tokio::fs::remove_file(&path).await.map_err(|e| {
+        tracing::warn!(name = %name, error = %e, "Recording not found");
+        AppError::Session("recording not found".into())
+    })?;
+    Ok(StatusCode::NO_CONTENT)
 }
