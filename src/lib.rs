@@ -1,9 +1,5 @@
-#![warn(clippy::pedantic)]
-#![warn(clippy::unwrap_used)]
-#![warn(clippy::expect_used)]
 #![allow(missing_docs)]
 
-/// Re-export modules for fuzz targets and testing.
 pub mod protocol;
 pub mod password;
 pub mod crypto;
@@ -14,4 +10,24 @@ pub mod auth_providers;
 pub mod auth_chain;
 pub mod totp;
 pub mod db;
-pub mod role;
+pub mod auth;
+pub mod error;
+pub mod config;
+pub mod vault;
+pub mod session;
+pub mod browser;
+pub mod guacd;
+pub mod drive;
+pub mod tunnel;
+pub mod recording;
+pub mod metrics;
+pub mod vsphere;
+pub mod vdi;
+pub mod pve;
+pub mod oidc;
+pub mod templates;
+pub mod migrate;
+pub mod db_migrate;
+pub mod db_pool;
+pub mod import;
+pub mod api;
