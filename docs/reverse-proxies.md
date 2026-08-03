@@ -3,7 +3,7 @@
 persea is designed to run behind a TLS-terminating reverse proxy. The
 primary supported path is **HAProxy + Knocknoc** (see
 [`haproxy.example.cfg`](../haproxy.example.cfg) and
-[`integrations.md`](integrations.md)), which is what sol1 runs in
+[`integrations.md`](integrations.md)), which is what persea runs in
 production. This document covers other reverse proxies and a specific
 gotcha that affects nested folder paths across several of them.
 
@@ -21,7 +21,7 @@ persea's router captures `Clients%2FAcme%2FProd` as a single `{folder}`
 parameter and percent-decodes it inside the handler. This works correctly
 when the reverse proxy passes the request URI through unchanged.
 
-Several reverse proxies **normalise the URI** before forwarding by
+Some reverse proxies **normalise the URI** before forwarding by
 default: they decode `%2F` to `/` in the path, which turns the single
 segment into three. persea's route definition doesn't match, and you get
 a 404 on every subfolder click. The top-level folders work fine because
