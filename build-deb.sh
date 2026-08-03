@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build-deb.sh — Build a .deb package for rustguac (includes guacd).
+# build-deb.sh — Build a .deb package for persea (includes guacd).
 #
 # Prerequisites:
 #   - Rust toolchain (cargo)
@@ -13,7 +13,7 @@
 #   ./build-deb.sh
 #
 # Output:
-#   ../rustguac_<version>_amd64.deb
+#   ../persea_<version>_amd64.deb
 #
 set -euo pipefail
 
@@ -24,7 +24,7 @@ GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
 # install.sh (GUACD_COMMIT). Do not bump it without re-rebasing the patch set.
 GUACD_COMMIT="6719b20d"
 STAGING="${SCRIPT_DIR}/debian/staging"
-PREFIX="/opt/rustguac"
+PREFIX="/opt/persea"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -42,18 +42,18 @@ CARGO_VERSION=$(grep '^version' "$SCRIPT_DIR/Cargo.toml" | head -1 | sed 's/.*"\
 GIT_HASH=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 VERSION="${CARGO_VERSION}+g${GIT_HASH}"
 
-info "Building rustguac ${VERSION}"
+info "Building persea ${VERSION}"
 
 # ---------------------------------------------------------------------------
 # Step 2: Generate debian/changelog
 # ---------------------------------------------------------------------------
 info "Generating debian/changelog..."
 cat > "$SCRIPT_DIR/debian/changelog" <<EOF
-rustguac (${VERSION}) unstable; urgency=medium
+persea (${VERSION}) unstable; urgency=medium
 
   * Built from git commit ${GIT_HASH}.
 
- -- rustguac build <rustguac@localhost>  $(date -R)
+ -- persea build <persea@localhost>  $(date -R)
 EOF
 
 # ---------------------------------------------------------------------------
@@ -141,12 +141,12 @@ build_guacd() {
 build_guacd
 
 # ---------------------------------------------------------------------------
-# Step 4: Build rustguac
+# Step 4: Build persea
 # ---------------------------------------------------------------------------
-info "Building rustguac (cargo build --release)..."
+info "Building persea (cargo build --release)..."
 cd "$SCRIPT_DIR"
 cargo build --release
-info "rustguac built."
+info "persea built."
 
 # ---------------------------------------------------------------------------
 # Step 5: Build the .deb
@@ -158,7 +158,7 @@ dpkg-buildpackage -us -uc -b
 # ---------------------------------------------------------------------------
 # Step 6: Report results
 # ---------------------------------------------------------------------------
-DEB=$(ls -1t "$SCRIPT_DIR/../rustguac_${VERSION}_"*.deb 2>/dev/null | head -1)
+DEB=$(ls -1t "$SCRIPT_DIR/../persea_${VERSION}_"*.deb 2>/dev/null | head -1)
 if [[ -n "$DEB" ]]; then
     echo ""
     info "============================================"

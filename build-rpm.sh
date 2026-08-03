@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build-rpm.sh — Build an RPM package for rustguac (includes guacd).
+# build-rpm.sh — Build an RPM package for persea (includes guacd).
 #
 # Prerequisites:
 #   - Rust toolchain (cargo)
@@ -14,7 +14,7 @@
 #   ./build-rpm.sh
 #
 # Output:
-#   ../rustguac-<version>-1.el9.x86_64.rpm
+#   ../persea-<version>-1.el9.x86_64.rpm
 #
 set -euo pipefail
 
@@ -24,7 +24,7 @@ GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
 GUACD_COMMIT="6719b20d"
 GUACD_SRC="${SCRIPT_DIR}/../guacamole-server"
 STAGING="${SCRIPT_DIR}/rpm/staging"
-PREFIX="/opt/rustguac"
+PREFIX="/opt/persea"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -42,7 +42,7 @@ CARGO_VERSION=$(grep '^version' "$SCRIPT_DIR/Cargo.toml" | head -1 | sed 's/.*"\
 GIT_HASH=$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 VERSION="${CARGO_VERSION}+g${GIT_HASH}"
 
-info "Building rustguac ${VERSION}"
+info "Building persea ${VERSION}"
 
 # ---------------------------------------------------------------------------
 # Step 2: Build guacd into rpm/staging
@@ -119,12 +119,12 @@ build_guacd() {
 build_guacd
 
 # ---------------------------------------------------------------------------
-# Step 3: Build rustguac
+# Step 3: Build persea
 # ---------------------------------------------------------------------------
-info "Building rustguac (cargo build --release)..."
+info "Building persea (cargo build --release)..."
 cd "$SCRIPT_DIR"
 cargo build --release
-info "rustguac built."
+info "persea built."
 
 # ---------------------------------------------------------------------------
 # Step 4: Build the RPM
@@ -138,12 +138,12 @@ rpmbuild -bb \
     --define "_topdir $RPMBUILD_DIR" \
     --define "_builddir $SCRIPT_DIR" \
     --define "_version ${CARGO_VERSION}" \
-    "$SCRIPT_DIR/rustguac.spec"
+    "$SCRIPT_DIR/persea.spec"
 
 # ---------------------------------------------------------------------------
 # Step 5: Report results
 # ---------------------------------------------------------------------------
-RPM=$(find "$RPMBUILD_DIR/RPMS" -name "rustguac-*.rpm" -type f | head -1)
+RPM=$(find "$RPMBUILD_DIR/RPMS" -name "persea-*.rpm" -type f | head -1)
 if [[ -n "$RPM" ]]; then
     cp "$RPM" "$SCRIPT_DIR/../"
     FINAL="$SCRIPT_DIR/../$(basename "$RPM")"

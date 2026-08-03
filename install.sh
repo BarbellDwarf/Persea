@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 #
-# install.sh — Install rustguac + guacd on Debian 13 (Trixie).
+# install.sh — Install persea + guacd on Debian 13 (Trixie).
 #
-# Installs everything to /opt/rustguac with a systemd service.
+# Installs everything to /opt/persea with a systemd service.
 #
 # Usage:
-#   sudo ./install.sh              Full install (build deps, guacd, rustguac)
+#   sudo ./install.sh              Full install (build deps, guacd, persea)
 #   sudo ./install.sh --deps-only  Only install system packages
 #   sudo ./install.sh --no-deps    Skip apt install (assume deps already present)
 #
 set -euo pipefail
 
-PREFIX="/opt/rustguac"
+PREFIX="/opt/persea"
 GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
 GUACD_BRANCH="main"
 GUACD_COMMIT="6719b20d"  # Pin to known-good commit
-BUILD_DIR="/tmp/rustguac-build-$$"
+BUILD_DIR="/tmp/persea-build-$$"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RED='\033[0;31m'
@@ -216,28 +216,28 @@ build_guacd() {
 build_guacd
 
 # ---------------------------------------------------------------------------
-# Step 4: Build rustguac
+# Step 4: Build persea
 # ---------------------------------------------------------------------------
-build_rustguac() {
-    info "Building rustguac..."
+build_persea() {
+    info "Building persea..."
     cd "$SCRIPT_DIR"
     sudo -u "$REAL_USER" "$CARGO_BIN" build --release
-    info "rustguac built."
+    info "persea built."
 }
 
-build_rustguac
+build_persea
 
 # ---------------------------------------------------------------------------
-# Step 5: Install rustguac files
+# Step 5: Install persea files
 # ---------------------------------------------------------------------------
-install_rustguac() {
-    info "Installing rustguac to $PREFIX..."
+install_persea() {
+    info "Installing persea to $PREFIX..."
 
     mkdir -p "$PREFIX"/{bin,data,recordings,static}
 
     # Binary
-    cp "$SCRIPT_DIR/target/release/rustguac" "$PREFIX/bin/rustguac"
-    chmod 755 "$PREFIX/bin/rustguac"
+    cp "$SCRIPT_DIR/target/release/persea" "$PREFIX/bin/persea"
+    chmod 755 "$PREFIX/bin/persea"
 
     # Static web assets
     cp -r "$SCRIPT_DIR/static/"* "$PREFIX/static/"
@@ -251,9 +251,9 @@ install_rustguac() {
         cat > "$PREFIX/config.toml" <<TOMLEOF
 listen_addr = "0.0.0.0:${LISTEN_PORT}"
 guacd_addr = "127.0.0.1:4822"
-recording_path = "/opt/rustguac/recordings"
-static_path = "/opt/rustguac/static"
-db_path = "/opt/rustguac/data/rustguac.db"
+recording_path = "/opt/persea/recordings"
+static_path = "/opt/persea/static"
+db_path = "/opt/persea/data/persea.db"
 session_pending_timeout_secs = 60
 xvnc_path = "Xvnc"
 chromium_path = "chromium"
@@ -265,9 +265,9 @@ TOMLEOF
             cat >> "$PREFIX/config.toml" <<'TOMLEOF'
 
 [tls]
-cert_path = "/opt/rustguac/tls/cert.pem"
-key_path = "/opt/rustguac/tls/key.pem"
-guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+cert_path = "/opt/persea/tls/cert.pem"
+key_path = "/opt/persea/tls/key.pem"
+guacd_cert_path = "/opt/persea/tls/cert.pem"
 TOMLEOF
         fi
 
@@ -276,26 +276,26 @@ TOMLEOF
         info "Config already exists at $PREFIX/config.toml (not overwritten)"
     fi
 
-    # Create rustguac system user (if not exists)
-    if ! id -u rustguac >/dev/null 2>&1; then
-        useradd --system --create-home --home-dir /home/rustguac --shell /usr/sbin/nologin rustguac
-        info "Created system user 'rustguac'"
+    # Create persea system user (if not exists)
+    if ! id -u persea >/dev/null 2>&1; then
+        useradd --system --create-home --home-dir /home/persea --shell /usr/sbin/nologin persea
+        info "Created system user 'persea'"
     fi
 
-    chown -R rustguac:rustguac "$PREFIX/data" "$PREFIX/recordings"
+    chown -R persea:persea "$PREFIX/data" "$PREFIX/recordings"
 
     # Chromium policy: web session hardening (block file dialogs, printing, extensions, etc.)
     # DeveloperToolsAvailability=0: DevTools/CDP allowed (needed for login scripts).
     # Users can't reach chrome://devtools anyway — chrome://* is in URLBlocklist.
     mkdir -p /etc/chromium/policies/managed
-    cat > /etc/chromium/policies/managed/rustguac.json <<'POLICY'
+    cat > /etc/chromium/policies/managed/persea.json <<'POLICY'
 {"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 0, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}
 POLICY
 
-    info "rustguac installed to $PREFIX"
+    info "persea installed to $PREFIX"
 }
 
-install_rustguac
+install_persea
 
 # ---------------------------------------------------------------------------
 # Step 6: Generate TLS certificate (unless --no-tls)
@@ -316,11 +316,11 @@ setup_tls() {
     local CERT_HOSTNAME="${TLS_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}"
 
     info "Generating self-signed TLS certificate for: $CERT_HOSTNAME"
-    "$PREFIX/bin/rustguac" generate-cert \
+    "$PREFIX/bin/persea" generate-cert \
         --hostname "$CERT_HOSTNAME" \
         --out-dir "$PREFIX/tls"
 
-    chown -R rustguac:rustguac "$PREFIX/tls"
+    chown -R persea:persea "$PREFIX/tls"
     chmod 600 "$PREFIX/tls/key.pem"
     chmod 644 "$PREFIX/tls/cert.pem"
 
@@ -335,17 +335,17 @@ setup_tls
 # Step 6b: Drive / LUKS setup (optional, interactive)
 # ---------------------------------------------------------------------------
 # Env vars for non-interactive / automation:
-#   RUSTGUAC_DRIVE_SETUP=yes|no   — skip the prompt
-#   RUSTGUAC_DRIVE_SIZE=4G        — LUKS container size
-#   RUSTGUAC_DRIVE_MOUNT=/mnt/rustguac-drives
-#   RUSTGUAC_LUKS_DEVICE=/opt/rustguac/drives.luks
-#   RUSTGUAC_LUKS_NAME=rustguac-drives
+#   PERSEA_DRIVE_SETUP=yes|no   — skip the prompt
+#   PERSEA_DRIVE_SIZE=4G        — LUKS container size
+#   PERSEA_DRIVE_MOUNT=/mnt/persea-drives
+#   PERSEA_LUKS_DEVICE=/opt/persea/drives.luks
+#   PERSEA_LUKS_NAME=persea-drives
 setup_drive() {
-    local SETUP="${RUSTGUAC_DRIVE_SETUP:-}"
-    local DRIVE_SIZE="${RUSTGUAC_DRIVE_SIZE:-4G}"
-    local MOUNT_POINT="${RUSTGUAC_DRIVE_MOUNT:-/mnt/rustguac-drives}"
-    local LUKS_DEVICE="${RUSTGUAC_LUKS_DEVICE:-$PREFIX/drives.luks}"
-    local LUKS_NAME="${RUSTGUAC_LUKS_NAME:-rustguac-drives}"
+    local SETUP="${PERSEA_DRIVE_SETUP:-}"
+    local DRIVE_SIZE="${PERSEA_DRIVE_SIZE:-4G}"
+    local MOUNT_POINT="${PERSEA_DRIVE_MOUNT:-/mnt/persea-drives}"
+    local LUKS_DEVICE="${PERSEA_LUKS_DEVICE:-$PREFIX/drives.luks}"
+    local LUKS_NAME="${PERSEA_LUKS_NAME:-persea-drives}"
 
     # If already set up, skip
     if [[ -f "$LUKS_DEVICE" ]]; then
@@ -412,31 +412,31 @@ setup_drive() {
 
     # Create mount point
     mkdir -p "$MOUNT_POINT"
-    chown rustguac:rustguac "$MOUNT_POINT"
+    chown persea:persea "$MOUNT_POINT"
 
     # Set ownership of LUKS file
-    chown rustguac:rustguac "$LUKS_DEVICE"
+    chown persea:persea "$LUKS_DEVICE"
     chmod 600 "$LUKS_DEVICE"
 
     # Install sudoers rules
     info "Installing sudoers rules for LUKS management..."
-    cat > /etc/sudoers.d/rustguac-drive <<SUDOERS
-# rustguac LUKS drive management
-rustguac ALL=(root) NOPASSWD: /usr/sbin/cryptsetup open --type luks --key-file=- $LUKS_DEVICE $LUKS_NAME
-rustguac ALL=(root) NOPASSWD: /usr/sbin/cryptsetup close $LUKS_NAME
-rustguac ALL=(root) NOPASSWD: /bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /usr/bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /bin/umount $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /usr/bin/umount $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /bin/chown rustguac\:rustguac $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /usr/bin/chown rustguac\:rustguac $MOUNT_POINT
+    cat > /etc/sudoers.d/persea-drive <<SUDOERS
+# persea LUKS drive management
+persea ALL=(root) NOPASSWD: /usr/sbin/cryptsetup open --type luks --key-file=- $LUKS_DEVICE $LUKS_NAME
+persea ALL=(root) NOPASSWD: /usr/sbin/cryptsetup close $LUKS_NAME
+persea ALL=(root) NOPASSWD: /bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /usr/bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /bin/umount $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /usr/bin/umount $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /bin/chown persea\:persea $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /usr/bin/chown persea\:persea $MOUNT_POINT
 SUDOERS
-    chmod 0440 /etc/sudoers.d/rustguac-drive
+    chmod 0440 /etc/sudoers.d/persea-drive
 
     info "LUKS container created and formatted."
     echo ""
     info "IMPORTANT: Store this LUKS key in Vault:"
-    info "  vault kv put -mount=<mount> rustguac/luks-key key='$LUKS_KEY'"
+    info "  vault kv put -mount=<mount> persea/luks-key key='$LUKS_KEY'"
     echo ""
     info "Then add to your config.toml:"
     info "  [drive]"
@@ -444,7 +444,7 @@ SUDOERS
     info "  drive_path = \"$MOUNT_POINT\""
     info "  luks_device = \"$LUKS_DEVICE\""
     info "  luks_name = \"$LUKS_NAME\""
-    info "  luks_key_path = \"rustguac/luks-key\""
+    info "  luks_key_path = \"persea/luks-key\""
     echo ""
     warn "The LUKS key above is shown ONCE. Save it to Vault now."
 }
@@ -455,7 +455,7 @@ setup_drive
 # Step 7: ldconfig for guacd libraries
 # ---------------------------------------------------------------------------
 setup_ldconfig() {
-    echo "$PREFIX/lib" > /etc/ld.so.conf.d/rustguac.conf
+    echo "$PREFIX/lib" > /etc/ld.so.conf.d/persea.conf
     ldconfig
     info "Library path configured."
 }
@@ -469,14 +469,14 @@ install_systemd() {
     info "Installing systemd services..."
 
     # guacd service
-    cat > /etc/systemd/system/rustguac-guacd.service <<EOF
+    cat > /etc/systemd/system/persea-guacd.service <<EOF
 [Unit]
-Description=Guacamole proxy daemon (guacd) for rustguac
+Description=Guacamole proxy daemon (guacd) for persea
 After=network.target
 
 [Service]
 Type=simple
-User=rustguac
+User=persea
 ExecStart=$PREFIX/sbin/guacd -b 127.0.0.1 -l 4822 -L info -f -C $PREFIX/tls/cert.pem -K $PREFIX/tls/key.pem
 Restart=on-failure
 RestartSec=5
@@ -486,18 +486,18 @@ Environment=LD_LIBRARY_PATH=$PREFIX/lib
 WantedBy=multi-user.target
 EOF
 
-    # rustguac service
-    cat > /etc/systemd/system/rustguac.service <<EOF
+    # persea service
+    cat > /etc/systemd/system/persea.service <<EOF
 [Unit]
-Description=rustguac web session proxy
-After=network.target rustguac-guacd.service
-Requires=rustguac-guacd.service
+Description=persea web session proxy
+After=network.target persea-guacd.service
+Requires=persea-guacd.service
 
 [Service]
 Type=simple
-User=rustguac
+User=persea
 WorkingDirectory=$PREFIX
-ExecStart=$PREFIX/bin/rustguac --config $PREFIX/config.toml serve
+ExecStart=$PREFIX/bin/persea --config $PREFIX/config.toml serve
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
@@ -517,11 +517,11 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable rustguac-guacd.service
-    systemctl enable rustguac.service
+    systemctl enable persea-guacd.service
+    systemctl enable persea.service
 
     info "Systemd services installed and enabled."
-    info "  sudo systemctl start rustguac    (starts both guacd + rustguac)"
+    info "  sudo systemctl start persea    (starts both guacd + persea)"
 }
 
 install_systemd
@@ -536,15 +536,15 @@ rm -rf "$BUILD_DIR"
 # ---------------------------------------------------------------------------
 echo ""
 info "============================================"
-info "  rustguac installed to $PREFIX"
+info "  persea installed to $PREFIX"
 info "============================================"
 echo ""
 info "Next steps:"
 info "  1. Create an admin:"
-info "     $PREFIX/bin/rustguac --config $PREFIX/config.toml add-admin --name admin"
+info "     $PREFIX/bin/persea --config $PREFIX/config.toml add-admin --name admin"
 info ""
 info "  2. Start the services:"
-info "     sudo systemctl start rustguac"
+info "     sudo systemctl start persea"
 info ""
 if [[ $NO_TLS -eq 0 ]]; then
     info "  3. Open in browser:"

@@ -45,7 +45,7 @@ jobs:
       - run: cargo build
       - run: |
           # Start server in background, wait for it, hit health endpoint
-          ./target/debug/rustguac &
+          ./target/debug/persea &
           sleep 5
           curl -f http://localhost:9090/api/health || exit 1
           kill %1

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# install-release.sh — Install rustguac from a release tarball.
+# install-release.sh — Install persea from a release tarball.
 #
 # This script is shipped inside the release tarball and installs
-# pre-built binaries to /opt/rustguac with systemd services.
+# pre-built binaries to /opt/persea with systemd services.
 #
 # Usage:
 #   sudo ./install.sh
@@ -12,7 +12,7 @@
 #
 set -euo pipefail
 
-PREFIX="/opt/rustguac"
+PREFIX="/opt/persea"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RED='\033[0;31m'
@@ -49,22 +49,22 @@ fi
 # ---------------------------------------------------------------------------
 # Step 1: Create system user
 # ---------------------------------------------------------------------------
-if ! id -u rustguac >/dev/null 2>&1; then
-    useradd --system --create-home --home-dir /home/rustguac --shell /usr/sbin/nologin rustguac
-    info "Created system user 'rustguac'"
+if ! id -u persea >/dev/null 2>&1; then
+    useradd --system --create-home --home-dir /home/persea --shell /usr/sbin/nologin persea
+    info "Created system user 'persea'"
 else
-    info "System user 'rustguac' already exists"
+    info "System user 'persea' already exists"
 fi
 
 # ---------------------------------------------------------------------------
 # Step 2: Install files
 # ---------------------------------------------------------------------------
-info "Installing rustguac to $PREFIX..."
+info "Installing persea to $PREFIX..."
 
 mkdir -p "$PREFIX"/{bin,sbin,lib,static,data,recordings,tls}
 
 # Binaries
-install -m 755 "$SCRIPT_DIR/bin/rustguac" "$PREFIX/bin/rustguac"
+install -m 755 "$SCRIPT_DIR/bin/persea" "$PREFIX/bin/persea"
 install -m 755 "$SCRIPT_DIR/sbin/guacd"   "$PREFIX/sbin/guacd"
 
 # Libraries
@@ -96,12 +96,12 @@ else
     info "Config already exists at $PREFIX/config.toml (not overwritten)"
 fi
 
-chown -R rustguac:rustguac "$PREFIX/data" "$PREFIX/recordings"
+chown -R persea:persea "$PREFIX/data" "$PREFIX/recordings"
 
 # ---------------------------------------------------------------------------
 # Step 3: ldconfig
 # ---------------------------------------------------------------------------
-echo "$PREFIX/lib" > /etc/ld.so.conf.d/rustguac.conf
+echo "$PREFIX/lib" > /etc/ld.so.conf.d/persea.conf
 ldconfig
 info "Library path configured"
 
@@ -109,12 +109,12 @@ info "Library path configured"
 # Step 4: systemd services
 # ---------------------------------------------------------------------------
 info "Installing systemd services..."
-cp "$SCRIPT_DIR/systemd/rustguac.service"       /etc/systemd/system/
-cp "$SCRIPT_DIR/systemd/rustguac-guacd.service"  /etc/systemd/system/
+cp "$SCRIPT_DIR/systemd/persea.service"       /etc/systemd/system/
+cp "$SCRIPT_DIR/systemd/persea-guacd.service"  /etc/systemd/system/
 
 systemctl daemon-reload
-systemctl enable rustguac-guacd.service
-systemctl enable rustguac.service
+systemctl enable persea-guacd.service
+systemctl enable persea.service
 
 info "Systemd services installed and enabled"
 
@@ -127,10 +127,10 @@ if [[ $NO_TLS -eq 0 ]]; then
     else
         CERT_HOSTNAME="${TLS_HOSTNAME:-$(hostname -f 2>/dev/null || hostname)}"
         info "Generating self-signed TLS certificate for: $CERT_HOSTNAME"
-        "$PREFIX/bin/rustguac" generate-cert \
+        "$PREFIX/bin/persea" generate-cert \
             --hostname "$CERT_HOSTNAME" \
             --out-dir "$PREFIX/tls"
-        chown -R rustguac:rustguac "$PREFIX/tls"
+        chown -R persea:persea "$PREFIX/tls"
         chmod 600 "$PREFIX/tls/key.pem"
         chmod 644 "$PREFIX/tls/cert.pem"
         info "TLS certificate generated at $PREFIX/tls/"
@@ -142,18 +142,18 @@ fi
 # ---------------------------------------------------------------------------
 echo ""
 info "============================================"
-info "  rustguac installed to $PREFIX"
+info "  persea installed to $PREFIX"
 info "============================================"
 echo ""
 info "Next steps:"
 info "  1. Create an admin:"
-info "     $PREFIX/bin/rustguac --config $PREFIX/config.toml add-admin --name admin"
+info "     $PREFIX/bin/persea --config $PREFIX/config.toml add-admin --name admin"
 info ""
 info "  2. (Optional) Set up encrypted file transfer:"
 info "     sudo $PREFIX/bin/drive-setup.sh"
 info ""
 info "  3. Start the services:"
-info "     sudo systemctl start rustguac"
+info "     sudo systemctl start persea"
 echo ""
 if [[ $NO_TLS -eq 0 ]]; then
     info "  4. Open in browser:"

@@ -53,14 +53,14 @@ jobs:
           cd /tmp/guacamole-server && autoreconf -fi
           mkdir /tmp/guacd-build && cd /tmp/guacd-build
           /tmp/guacamole-server/configure \
-            --prefix=/opt/rustguac \
+            --prefix=/opt/persea \
             --with-ssh --with-vnc --with-rdp \
             --without-telnet --without-kubernetes \
             --disable-guacenc --disable-guaclog --disable-static
           make -j"$(nproc)"
           make DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
 
-      - name: Build rustguac
+      - name: Build persea
         run: $HOME/.cargo/bin/cargo build --release
 
       - name: Build .deb package
@@ -69,11 +69,11 @@ jobs:
           GIT_HASH=$(echo "$GITHUB_SHA" | cut -c1-7)
           DEB_VERSION="${VERSION}+g${GIT_HASH}"
           cat > debian/changelog <<EOF
-          rustguac (${DEB_VERSION}) unstable; urgency=medium
+          persea (${DEB_VERSION}) unstable; urgency=medium
 
             * Release ${GITHUB_REF_NAME}
 
-           -- rustguac build <rustguac@localhost>  $(date -R)
+           -- persea build <persea@localhost>  $(date -R)
           EOF
           dpkg-buildpackage -us -uc -b
           # dpkg-buildpackage puts .deb in parent dir; copy to workspace for upload
@@ -91,29 +91,29 @@ jobs:
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          TARBALL_DIR="/tmp/rustguac-${TAG_VERSION}-linux-amd64"
+          TARBALL_DIR="/tmp/persea-${TAG_VERSION}-linux-amd64"
           mkdir -p "$TARBALL_DIR/bin" "$TARBALL_DIR/sbin" "$TARBALL_DIR/lib" "$TARBALL_DIR/static" "$TARBALL_DIR/systemd"
 
-          cp target/release/rustguac "$TARBALL_DIR/bin/"
-          cp debian/staging/opt/rustguac/sbin/guacd "$TARBALL_DIR/sbin/"
-          cp -a debian/staging/opt/rustguac/lib/*.so* "$TARBALL_DIR/lib/"
+          cp target/release/persea "$TARBALL_DIR/bin/"
+          cp debian/staging/opt/persea/sbin/guacd "$TARBALL_DIR/sbin/"
+          cp -a debian/staging/opt/persea/lib/*.so* "$TARBALL_DIR/lib/"
           cp -r static/* "$TARBALL_DIR/static/"
           cp debian/config.toml.default "$TARBALL_DIR/config.toml.default"
-          cp debian/rustguac.service "$TARBALL_DIR/systemd/"
-          cp debian/rustguac-guacd.service "$TARBALL_DIR/systemd/"
+          cp debian/persea.service "$TARBALL_DIR/systemd/"
+          cp debian/persea-guacd.service "$TARBALL_DIR/systemd/"
           cp install-release.sh "$TARBALL_DIR/install.sh"
           chmod +x "$TARBALL_DIR/install.sh"
           [ -d scripts ] && cp -r scripts "$TARBALL_DIR/" || true
 
           cd /tmp
-          tar czf "$GITHUB_WORKSPACE/rustguac-${TAG_VERSION}-linux-amd64.tar.gz" \
-            "rustguac-${TAG_VERSION}-linux-amd64"
+          tar czf "$GITHUB_WORKSPACE/persea-${TAG_VERSION}-linux-amd64.tar.gz" \
+            "persea-${TAG_VERSION}-linux-amd64"
 
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v7
         with:
           name: tarball
-          path: rustguac-*-linux-amd64.tar.gz
+          path: persea-*-linux-amd64.tar.gz
           if-no-files-found: error
 
 
@@ -158,14 +158,14 @@ jobs:
           cd /tmp/guacamole-server && autoreconf -fi
           mkdir /tmp/guacd-build && cd /tmp/guacd-build
           /tmp/guacamole-server/configure \
-            --prefix=/opt/rustguac \
+            --prefix=/opt/persea \
             --with-ssh --with-vnc --with-rdp \
             --without-telnet --without-kubernetes \
             --disable-guacenc --disable-guaclog --disable-static
           make -j"$(nproc)"
           make DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
 
-      - name: Build rustguac
+      - name: Build persea
         run: $HOME/.cargo/bin/cargo build --release
 
       - name: Build .deb package
@@ -174,11 +174,11 @@ jobs:
           GIT_HASH=$(echo "$GITHUB_SHA" | cut -c1-7)
           DEB_VERSION="${VERSION}+g${GIT_HASH}"
           cat > debian/changelog <<EOF
-          rustguac (${DEB_VERSION}) unstable; urgency=medium
+          persea (${DEB_VERSION}) unstable; urgency=medium
 
             * Release ${GITHUB_REF_NAME}
 
-           -- rustguac build <rustguac@localhost>  $(date -R)
+           -- persea build <persea@localhost>  $(date -R)
           EOF
           dpkg-buildpackage -us -uc -b
           cp ../*.deb .
@@ -193,29 +193,29 @@ jobs:
       - name: Build release tarball
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          TARBALL_DIR="/tmp/rustguac-${TAG_VERSION}-linux-arm64"
+          TARBALL_DIR="/tmp/persea-${TAG_VERSION}-linux-arm64"
           mkdir -p "$TARBALL_DIR/bin" "$TARBALL_DIR/sbin" "$TARBALL_DIR/lib" "$TARBALL_DIR/static" "$TARBALL_DIR/systemd"
 
-          cp target/release/rustguac "$TARBALL_DIR/bin/"
-          cp debian/staging/opt/rustguac/sbin/guacd "$TARBALL_DIR/sbin/"
-          cp -a debian/staging/opt/rustguac/lib/*.so* "$TARBALL_DIR/lib/"
+          cp target/release/persea "$TARBALL_DIR/bin/"
+          cp debian/staging/opt/persea/sbin/guacd "$TARBALL_DIR/sbin/"
+          cp -a debian/staging/opt/persea/lib/*.so* "$TARBALL_DIR/lib/"
           cp -r static/* "$TARBALL_DIR/static/"
           cp debian/config.toml.default "$TARBALL_DIR/config.toml.default"
-          cp debian/rustguac.service "$TARBALL_DIR/systemd/"
-          cp debian/rustguac-guacd.service "$TARBALL_DIR/systemd/"
+          cp debian/persea.service "$TARBALL_DIR/systemd/"
+          cp debian/persea-guacd.service "$TARBALL_DIR/systemd/"
           cp install-release.sh "$TARBALL_DIR/install.sh"
           chmod +x "$TARBALL_DIR/install.sh"
           [ -d scripts ] && cp -r scripts "$TARBALL_DIR/" || true
 
           cd /tmp
-          tar czf "$GITHUB_WORKSPACE/rustguac-${TAG_VERSION}-linux-arm64.tar.gz" \
-            "rustguac-${TAG_VERSION}-linux-arm64"
+          tar czf "$GITHUB_WORKSPACE/persea-${TAG_VERSION}-linux-arm64.tar.gz" \
+            "persea-${TAG_VERSION}-linux-arm64"
 
       - name: Upload tarball artifact
         uses: actions/upload-artifact@v7
         with:
           name: tarball-arm64
-          path: rustguac-*-linux-arm64.tar.gz
+          path: persea-*-linux-arm64.tar.gz
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
@@ -248,7 +248,7 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: sol1/rustguac:${{ steps.version.outputs.version }}-amd64
+          tags: sol1/persea:${{ steps.version.outputs.version }}-amd64
           cache-from: type=gha,scope=docker-amd64
           cache-to: type=gha,mode=max,scope=docker-amd64
 
@@ -276,7 +276,7 @@ jobs:
           context: .
           platforms: linux/arm64
           push: true
-          tags: sol1/rustguac:${{ steps.version.outputs.version }}-arm64
+          tags: sol1/persea:${{ steps.version.outputs.version }}-arm64
           cache-from: type=gha,scope=docker-arm64
           cache-to: type=gha,mode=max,scope=docker-arm64
 
@@ -299,10 +299,10 @@ jobs:
         run: |
           VER="${{ steps.version.outputs.version }}"
           docker buildx imagetools create \
-            -t "sol1/rustguac:${VER}" \
-            -t "sol1/rustguac:latest" \
-            "sol1/rustguac:${VER}-amd64" \
-            "sol1/rustguac:${VER}-arm64"
+            -t "sol1/persea:${VER}" \
+            -t "sol1/persea:latest" \
+            "sol1/persea:${VER}-amd64" \
+            "sol1/persea:${VER}-arm64"
 
   # ---------------------------------------------------------------------------
   # Create GitHub Release

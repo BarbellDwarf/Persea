@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# dev.sh — Build and run rustguac + guacd for local development/testing.
+# dev.sh — Build and run persea + guacd for local development/testing.
 #
 # Usage:
 #   ./dev.sh build-guacd    Build guacd from ../guacamole-server into .guacd-build/
 #   ./dev.sh start-guacd    Start guacd in foreground on localhost:4822
-#   ./dev.sh build           Build rustguac (cargo build)
-#   ./dev.sh run             Build and run rustguac
-#   ./dev.sh start           Build guacd (if needed), build rustguac, start both
+#   ./dev.sh build           Build persea (cargo build)
+#   ./dev.sh run             Build and run persea
+#   ./dev.sh start           Build guacd (if needed), build persea, start both
 #   ./dev.sh stop            Stop backgrounded guacd
 #   ./dev.sh deps            Install build dependencies for guacd (apt, needs sudo)
-#   ./dev.sh status          Show status of guacd and rustguac processes
+#   ./dev.sh status          Show status of guacd and persea processes
 #   ./dev.sh generate-cert   Generate self-signed TLS cert for dev (cert.pem + key.pem)
 #
 set -euo pipefail
@@ -81,7 +81,7 @@ apply_guacd_patches() {
 cmd_build_guacd() {
     if [[ ! -d "$GUACD_SRC" ]]; then
         error "guacamole-server source not found at $GUACD_SRC"
-        error "Expected it at ../guacamole-server relative to rustguac"
+        error "Expected it at ../guacamole-server relative to persea"
         exit 1
     fi
 
@@ -191,17 +191,17 @@ cmd_stop() {
     info "Stopped."
 }
 
-#--- Build rustguac ---
+#--- Build persea ---
 cmd_build() {
-    info "Building rustguac..."
+    info "Building persea..."
     cd "$SCRIPT_DIR"
     cargo build 2>&1
-    info "rustguac built."
+    info "persea built."
 }
 
 #--- Setup dev database with a dev admin ---
 cmd_setup_db() {
-    local DB_PATH="${SCRIPT_DIR}/rustguac.db"
+    local DB_PATH="${SCRIPT_DIR}/persea.db"
     if [[ -f "$DB_PATH" ]]; then
         info "Database already exists at $DB_PATH"
         info "Current admins:"
@@ -218,13 +218,13 @@ cmd_setup_db() {
     info "  curl -H 'Authorization: Bearer <key>' http://localhost:8089/api/sessions"
 }
 
-#--- Run rustguac ---
+#--- Run persea ---
 cmd_run() {
     cmd_build
     mkdir -p "$RECORDINGS_DIR"
     cmd_setup_db
 
-    info "Starting rustguac..."
+    info "Starting persea..."
     cd "$SCRIPT_DIR"
     if [[ -f "$DEV_CONFIG" ]]; then
         info "Using config: $DEV_CONFIG"
@@ -242,7 +242,7 @@ cmd_start() {
         cmd_build_guacd
     fi
 
-    # Build rustguac
+    # Build persea
     cmd_build
 
     # Start guacd in background
@@ -254,10 +254,10 @@ cmd_start() {
     # Setup dev database if needed
     cmd_setup_db
 
-    # Run rustguac in foreground (Ctrl+C stops it, then we clean up guacd)
-    info "Starting rustguac on localhost:8089..."
+    # Run persea in foreground (Ctrl+C stops it, then we clean up guacd)
+    info "Starting persea on localhost:8089..."
     info "Press Ctrl+C to stop both."
-    trap 'echo; info "Shutting down..."; pkill -f "target/debug/rustguac" 2>/dev/null; stop_guacd_quiet; exit 0' INT TERM
+    trap 'echo; info "Shutting down..."; pkill -f "target/debug/persea" 2>/dev/null; stop_guacd_quiet; exit 0' INT TERM
 
     cd "$SCRIPT_DIR"
     if [[ -f "$DEV_CONFIG" ]]; then
@@ -266,9 +266,9 @@ cmd_start() {
     else
         cargo run &
     fi
-    local rustguac_pid=$!
+    local persea_pid=$!
 
-    wait "$rustguac_pid" 2>/dev/null || true
+    wait "$persea_pid" 2>/dev/null || true
     stop_guacd_quiet
 }
 
@@ -288,14 +288,14 @@ cmd_status() {
     fi
 
     echo ""
-    echo "=== rustguac ==="
-    if pgrep -f "target/debug/rustguac" > /dev/null 2>&1; then
-        echo "  Running (pid=$(pgrep -f 'target/debug/rustguac'))"
+    echo "=== persea ==="
+    if pgrep -f "target/debug/persea" > /dev/null 2>&1; then
+        echo "  Running (pid=$(pgrep -f 'target/debug/persea'))"
     else
         echo "  Not running"
     fi
-    if [[ -f "$SCRIPT_DIR/target/debug/rustguac" ]]; then
-        echo "  Binary: $SCRIPT_DIR/target/debug/rustguac"
+    if [[ -f "$SCRIPT_DIR/target/debug/persea" ]]; then
+        echo "  Binary: $SCRIPT_DIR/target/debug/persea"
     else
         echo "  Not built"
     fi
@@ -342,9 +342,9 @@ case "${1:-help}" in
         echo "  deps           Install system build dependencies for guacd (needs sudo)"
         echo "  build-guacd    Build guacd from ../guacamole-server into .guacd-build/"
         echo "  start-guacd    Start guacd in foreground (for debugging)"
-        echo "  build          Build rustguac (cargo build)"
-        echo "  run            Build and run rustguac only"
-        echo "  start          Build everything, start guacd + rustguac together"
+        echo "  build          Build persea (cargo build)"
+        echo "  run            Build and run persea only"
+        echo "  start          Build everything, start guacd + persea together"
         echo "  stop           Stop backgrounded guacd"
         echo "  setup-db       Create dev database and admin API key"
         echo "  generate-cert  Generate self-signed TLS cert+key for dev (localhost)"

@@ -32,14 +32,14 @@ config.local.toml
 
 # Debian packaging (build artifacts)
 debian/.debhelper/
-debian/rustguac/
+debian/persea/
 debian/staging/
 debian/changelog
 debian/debhelper-build-stamp
 debian/files
-debian/rustguac.debhelper.log
-debian/rustguac.postrm.debhelper
-debian/rustguac.substvars
+debian/persea.debhelper.log
+debian/persea.postrm.debhelper
+debian/persea.substvars
 
 # RPM packaging (build artifacts)
 rpm/staging/

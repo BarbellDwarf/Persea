@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 #
-# drive-setup.sh — Set up encrypted LUKS drive for rustguac file transfer.
+# drive-setup.sh — Set up encrypted LUKS drive for persea file transfer.
 #
 # Creates a LUKS-encrypted container, formats it, and installs sudoers rules
-# so the rustguac service can mount/unmount it at runtime.
+# so the persea service can mount/unmount it at runtime.
 #
 # Must be run as root (sudo).
 #
 # Env vars for non-interactive / automation:
-#   RUSTGUAC_DRIVE_SETUP=yes|no   — skip the prompt
-#   RUSTGUAC_DRIVE_SIZE=4G        — LUKS container size
-#   RUSTGUAC_DRIVE_MOUNT=/mnt/rustguac-drives
-#   RUSTGUAC_LUKS_DEVICE=/opt/rustguac/drives.luks
-#   RUSTGUAC_LUKS_NAME=rustguac-drives
+#   PERSEA_DRIVE_SETUP=yes|no   — skip the prompt
+#   PERSEA_DRIVE_SIZE=4G        — LUKS container size
+#   PERSEA_DRIVE_MOUNT=/mnt/persea-drives
+#   PERSEA_LUKS_DEVICE=/opt/persea/drives.luks
+#   PERSEA_LUKS_NAME=persea-drives
 #
 # Usage:
-#   sudo /opt/rustguac/bin/drive-setup.sh
+#   sudo /opt/persea/bin/drive-setup.sh
 #
 set -euo pipefail
 
-PREFIX="/opt/rustguac"
+PREFIX="/opt/persea"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -35,11 +35,11 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-SETUP="${RUSTGUAC_DRIVE_SETUP:-}"
-DRIVE_SIZE="${RUSTGUAC_DRIVE_SIZE:-4G}"
-MOUNT_POINT="${RUSTGUAC_DRIVE_MOUNT:-/mnt/rustguac-drives}"
-LUKS_DEVICE="${RUSTGUAC_LUKS_DEVICE:-$PREFIX/drives.luks}"
-LUKS_NAME="${RUSTGUAC_LUKS_NAME:-rustguac-drives}"
+SETUP="${PERSEA_DRIVE_SETUP:-}"
+DRIVE_SIZE="${PERSEA_DRIVE_SIZE:-4G}"
+MOUNT_POINT="${PERSEA_DRIVE_MOUNT:-/mnt/persea-drives}"
+LUKS_DEVICE="${PERSEA_LUKS_DEVICE:-$PREFIX/drives.luks}"
+LUKS_NAME="${PERSEA_LUKS_NAME:-persea-drives}"
 
 # If already set up, skip
 if [[ -f "$LUKS_DEVICE" ]]; then
@@ -61,9 +61,9 @@ if ! command -v cryptsetup &>/dev/null; then
     exit 1
 fi
 
-# Check if rustguac user exists
-if ! getent passwd rustguac >/dev/null 2>&1; then
-    error "rustguac user not found. Install the rustguac package first."
+# Check if persea user exists
+if ! getent passwd persea >/dev/null 2>&1; then
+    error "persea user not found. Install the persea package first."
     exit 1
 fi
 
@@ -118,31 +118,31 @@ cryptsetup close "$LUKS_NAME"
 
 # Create mount point
 mkdir -p "$MOUNT_POINT"
-chown rustguac:rustguac "$MOUNT_POINT"
+chown persea:persea "$MOUNT_POINT"
 
 # Set ownership of LUKS file
-chown rustguac:rustguac "$LUKS_DEVICE"
+chown persea:persea "$LUKS_DEVICE"
 chmod 600 "$LUKS_DEVICE"
 
 # Install sudoers rules
 info "Installing sudoers rules for LUKS management..."
-cat > /etc/sudoers.d/rustguac-drive <<SUDOERS
-# rustguac LUKS drive management — created by drive-setup.sh
-rustguac ALL=(root) NOPASSWD: /usr/sbin/cryptsetup open --type luks --key-file=- $LUKS_DEVICE $LUKS_NAME
-rustguac ALL=(root) NOPASSWD: /usr/sbin/cryptsetup close $LUKS_NAME
-rustguac ALL=(root) NOPASSWD: /bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /usr/bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /bin/umount $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /usr/bin/umount $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /bin/chown *\:* $MOUNT_POINT
-rustguac ALL=(root) NOPASSWD: /usr/bin/chown *\:* $MOUNT_POINT
+cat > /etc/sudoers.d/persea-drive <<SUDOERS
+# persea LUKS drive management — created by drive-setup.sh
+persea ALL=(root) NOPASSWD: /usr/sbin/cryptsetup open --type luks --key-file=- $LUKS_DEVICE $LUKS_NAME
+persea ALL=(root) NOPASSWD: /usr/sbin/cryptsetup close $LUKS_NAME
+persea ALL=(root) NOPASSWD: /bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /usr/bin/mount /dev/mapper/$LUKS_NAME $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /bin/umount $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /usr/bin/umount $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /bin/chown *\:* $MOUNT_POINT
+persea ALL=(root) NOPASSWD: /usr/bin/chown *\:* $MOUNT_POINT
 SUDOERS
-chmod 0440 /etc/sudoers.d/rustguac-drive
+chmod 0440 /etc/sudoers.d/persea-drive
 
 info "LUKS container created and formatted."
 echo ""
 info "IMPORTANT: Store this LUKS key in Vault:"
-info "  vault kv put -mount=<mount> rustguac/luks-key key='$LUKS_KEY'"
+info "  vault kv put -mount=<mount> persea/luks-key key='$LUKS_KEY'"
 echo ""
 info "Then add to your config.toml:"
 info "  [drive]"
@@ -150,6 +150,6 @@ info "  enabled = true"
 info "  drive_path = \"$MOUNT_POINT\""
 info "  luks_device = \"$LUKS_DEVICE\""
 info "  luks_name = \"$LUKS_NAME\""
-info "  luks_key_path = \"rustguac/luks-key\""
+info "  luks_key_path = \"persea/luks-key\""
 echo ""
 warn "The LUKS key above is shown ONCE. Save it to Vault now."
