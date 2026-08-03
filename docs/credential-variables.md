@@ -2,7 +2,7 @@
 
 Credential variables let connections entries reference shared credentials by name instead of storing passwords directly. Users maintain their own credential values in Vault via the **My Credentials** dialog (the **Credentials** link in the top navigation, or the gear menu). When a session launches, persea substitutes the variables from the user's saved values.
 
-This gives a similar experience to LDAP credential passthrough in Apache Guacamole — users log in once and sessions just work — without persea needing to bind to LDAP. Credentials stay in Vault, never on disk or in the browser.
+This gives a similar experience to LDAP credential passthrough in Apache Guacamole, where users log in once and sessions just work, but without persea needing to bind to LDAP. Credentials stay in Vault, never on disk or in the browser.
 
 ## How it works
 
@@ -53,8 +53,7 @@ VDI entries that auto-derive credentials (the default for images that honour `VD
 
 ## My Credentials dialog
 
-Open it from the **Credentials** link in the top navigation bar, or from the
-gear menu. The dialog:
+Open it from the **Credentials** link in the top navigation bar, or from the gear menu. The dialog:
 
 - Shows all credential variables used across entries the user has access to
 - Groups variables by domain prefix, with each group collapsible
