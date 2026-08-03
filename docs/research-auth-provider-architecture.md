@@ -1,10 +1,10 @@
-# Auth Provider Architecture for rustguac
+# Auth Provider Architecture for persea
 
 ## Current State
 
-rustguac currently has two auth mechanisms in a single `auth.rs` + `oidc.rs`:
+persea currently has two auth mechanisms in a single `auth.rs` + `oidc.rs`:
 - **API key auth** — `Authorization: Bearer <key>` or `X-API-Key` header, validated against SQLite `admins` and `user_api_tokens` tables
-- **OIDC session cookie** — `rustguac_session` cookie, validated against `auth_sessions` table
+- **OIDC session cookie** — `persea_session` cookie, validated against `auth_sessions` table
 - **WebSocket tickets** — single-use tokens for API-key users connecting via WebSocket
 
 The `AuthIdentity` enum carries the identity through the request:
@@ -141,12 +141,12 @@ pub trait AuthProvider: Send + Sync + fmt::Debug {
 
 ### Why Not Separate Traits Per Capability
 
-Guacamole uses a single `AuthenticationProvider` interface. Keycloak splits `Authenticator` from `CredentialProvider` from `UserStorageProvider`. For rustguac, a **single trait with capability flags** is better because:
+Guacamole uses a single `AuthenticationProvider` interface. Keycloak splits `Authenticator` from `CredentialProvider` from `UserStorageProvider`. For persea, a **single trait with capability flags** is better because:
 
 1. **Simpler registration** — one provider, one struct, one `dyn AuthProvider`
 2. **Capability flags let middleware decide** — check `capabilities().requires_redirect` instead of downcasting
 3. **Providers can be incomplete** — return `Err(AuthError::Internal("not supported"))` or `Ok(None)` for methods they don't implement
-4. **Matches Guacamole's model** — `SimpleAuthenticationProvider` is a single class; rustguac is a single binary, not a plugin system
+4. **Matches Guacamole's model** — `SimpleAuthenticationProvider` is a single class; persea is a single binary, not a plugin system
 
 ---
 
@@ -191,7 +191,7 @@ UserContext (interface)
 3. **Credentials object** — Wraps username, password, and arbitrary HTTP request parameters. Providers extract what they need.
 4. **UserContext** — After auth, the provider returns a context that provides access to directories (users, connections, groups). This is the "session scope" concept.
 
-### What rustguac Should Borrow
+### What persea Should Borrow
 
 - **Poll-all pattern**: Try each configured provider until one succeeds
 - **Separation of auth from storage**: Auth provider just authenticates; user upsert is a separate step
@@ -241,11 +241,11 @@ AuthenticatorFactory (extends ProviderFactory<Authenticator>)
 3. **Flow-based composition** — Multiple authenticators are composed into "authentication flows" (sequences of steps). Each step can be REQUIRED, ALTERNATIVE, OPTIONAL, or CONDITIONAL.
 4. **Configurable via Admin Console** — Factories expose `ConfigProperty` lists that the admin console renders as forms.
 
-### What rustguac Should Borrow
+### What persea Should Borrow
 
 - **Factory pattern for provider registration** — `AuthProviderFactory` creates `AuthProvider` instances. Factories are cheap to create; providers hold state.
 - **Capability/requirement metadata** — Providers advertise what they need (redirect? password form? TOTP?) so the UI can adapt.
-- **NOT the flow system** — Keycloak's flow system is overkill for rustguac. A simple "try providers in order" or "primary + optional second factor" is sufficient.
+- **NOT the flow system** — Keycloak's flow system is overkill for persea. A simple "try providers in order" or "primary + optional second factor" is sufficient.
 
 ---
 
@@ -279,9 +279,9 @@ default_role = "viewer"
 
 [auth.oidc]
 issuer_url = "https://keycloak.example.com/realms/corp"
-client_id = "rustguac"
+client_id = "persea"
 client_secret = "..."  # or OIDC_CLIENT_SECRET env var
-redirect_uri = "https://rustguac.example.com/auth/callback"
+redirect_uri = "https://persea.example.com/auth/callback"
 default_role = "operator"
 groups_claim = "groups"
 extra_scopes = ["groups"]
@@ -311,7 +311,7 @@ hash_algorithm = "bcrypt"
 [auth.totp]
 # Second-factor TOTP (applied after primary auth)
 enabled = true
-issuer = "rustguac"
+issuer = "persea"
 digits = 6
 period_secs = 30
 window = 1  # allow ±1 period drift
@@ -516,7 +516,7 @@ async fn handler(
 
 ### The axum-login Pattern (for reference)
 
-`axum-login` uses `AuthnBackend` trait with a single backend. rustguac's `AuthRegistry` is essentially a multi-backend wrapper around the same concept. The key difference: rustguac needs to support both inline (API key, session cookie, LDAP) and redirect (OIDC, SAML) auth, which `axum-login` doesn't handle natively.
+`axum-login` uses `AuthnBackend` trait with a single backend. persea's `AuthRegistry` is essentially a multi-backend wrapper around the same concept. The key difference: persea needs to support both inline (API key, session cookie, LDAP) and redirect (OIDC, SAML) auth, which `axum-login` doesn't handle natively.
 
 ---
 
@@ -640,7 +640,7 @@ src/
 1. **Use `dyn AuthProvider`** — Auth is cold path, open set of providers, no performance concern
 2. **Single trait with capability flags** — Simpler than splitting into Authenticator/CredentialProvider/UserStorage like Keycloak
 3. **Poll-all pattern from Guacamole** — Try providers in order, first success wins
-4. **Factory pattern from Keycloak** — `AuthProviderFactory` creates per-request providers (not critical for rustguac since providers are stateless, but good for future)
+4. **Factory pattern from Keycloak** — `AuthProviderFactory` creates per-request providers (not critical for persea since providers are stateless, but good for future)
 5. **Keep `AuthIdentity` enum** — It's the equivalent of Guacamole's `AuthenticatedUser` and already works
 6. **Add provider metadata to sessions** — Track which provider authenticated each session for audit and TTL management
 7. **Two-phase auth** — Primary (password/SSO) → Optional TOTP, checked via middleware chain

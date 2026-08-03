@@ -1,11 +1,11 @@
-# Contributing to rustguac
+# Contributing to persea
 
 ## Development Setup
 
 ```bash
 # Clone the repo
-git clone https://github.com/sol1/rustguac.git
-cd rustguac
+git clone https://github.com/sol1/persea.git
+cd persea
 
 # Install dependencies and build guacd
 ./dev.sh

@@ -1,14 +1,14 @@
 # Credential Variables
 
-Credential variables let connections entries reference shared credentials by name instead of storing passwords directly. Users maintain their own credential values in Vault via the **My Credentials** dialog (the **Credentials** link in the top navigation, or the gear menu). When a session launches, rustguac substitutes the variables from the user's saved values.
+Credential variables let connections entries reference shared credentials by name instead of storing passwords directly. Users maintain their own credential values in Vault via the **My Credentials** dialog (the **Credentials** link in the top navigation, or the gear menu). When a session launches, persea substitutes the variables from the user's saved values.
 
-This gives a similar experience to LDAP credential passthrough in Apache Guacamole — users log in once and sessions just work — without rustguac needing to bind to LDAP. Credentials stay in Vault, never on disk or in the browser.
+This gives a similar experience to LDAP credential passthrough in Apache Guacamole — users log in once and sessions just work — without persea needing to bind to LDAP. Credentials stay in Vault, never on disk or in the browser.
 
 ## How it works
 
 1. **Admin** creates connections entries with variable references like `$corp_username` and `$corp_password` in the credential fields
 2. **Users** open **My Credentials** from the gear menu and fill in their values (stored per-user in Vault)
-3. **At connect time**, rustguac substitutes the variables. If all are set, the session launches silently. If any are missing, the user is prompted.
+3. **At connect time**, persea substitutes the variables. If all are set, the session launches silently. If any are missing, the user is prompted.
 
 ## Variable naming
 
@@ -114,10 +114,10 @@ In addition to the existing connections policy, add:
 
 ```hcl
 # User credential variables (read/write own credentials)
-path "secret/data/rustguac/users/*" {
+path "secret/data/persea/users/*" {
   capabilities = ["create", "read", "update", "delete"]
 }
-path "secret/metadata/rustguac/users/*" {
+path "secret/metadata/persea/users/*" {
   capabilities = ["list", "read", "delete"]
 }
 ```

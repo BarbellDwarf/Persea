@@ -1,18 +1,18 @@
 # Overview
 
-## What is rustguac?
+## What is persea?
 
-rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, web browser sessions, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
+persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, web browser sessions, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
 
-rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication (LDAP, OIDC, SAML, RADIUS, TOTP, database, API keys), session recording, VDI container orchestration, connection-level RBAC, and credential storage (Vault or encrypted DB).
+persea sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication (LDAP, OIDC, SAML, RADIUS, TOTP, database, API keys), session recording, VDI container orchestration, connection-level RBAC, and credential storage (Vault or encrypted DB).
 
 The connections feature supports credential storage in HashiCorp Vault / OpenBao, or directly in the database with AES-256-GCM encryption. See [Configuration](configuration.md) for the full reference.
 
 ## Why not Apache Guacamole?
 
-Apache Guacamole is a mature, feature-rich platform. rustguac is a purpose-built alternative for organisations that want:
+Apache Guacamole is a mature, feature-rich platform. persea is a purpose-built alternative for organisations that want:
 
-- **No Java stack** — rustguac is a single Rust binary. No Tomcat, no WAR files, no JVM tuning.
+- **No Java stack** — persea is a single Rust binary. No Tomcat, no WAR files, no JVM tuning.
 - **Auth parity** — LDAP, OIDC, SAML, RADIUS, TOTP MFA, local database, and API keys. Pluggable auth chain with configurable provider ordering and MFA support.
 - **Multi-DB support** — MySQL, PostgreSQL, or SQLite. Same binary, same config, different backends.
 - **Security-first design** — CIDR allowlists, TLS everywhere, LUKS-encrypted file transfer, Vault integration, rate limiting, SHA-256 hash chain audit logging, Argon2id password hashing, account lockout.
@@ -25,17 +25,17 @@ Apache Guacamole is a mature, feature-rich platform. rustguac is a purpose-built
 
 ## Similarities to Apache Guacamole
 
-rustguac and Apache Guacamole share the same foundation:
+persea and Apache Guacamole share the same foundation:
 
 - **guacd** — both use guacd from [guacamole-server](https://github.com/apache/guacamole-server) for protocol translation. This is the same battle-tested C daemon.
-- **Guacamole protocol** — the wire protocol between the webapp and guacd is identical. rustguac uses the same instruction format, the same JavaScript client library (`guac-common-js`), and the same WebSocket framing.
+- **Guacamole protocol** — the wire protocol between the webapp and guacd is identical. persea uses the same instruction format, the same JavaScript client library (`guac-common-js`), and the same WebSocket framing.
 - **Session recording** — recordings are in the standard Guacamole format and can be played back with the bundled player.
-- **SSH/RDP/VNC support** — the same protocol backends provided by guacd. rustguac adds web browser, VDI container, and Proxmox session types on top.
-- **Auth parity** — LDAP, RADIUS, TOTP, SAML, and local database authentication are all supported, matching Apache Guacamole's provider set. rustguac adds OIDC and a pluggable auth chain with MFA support.
+- **SSH/RDP/VNC support** — the same protocol backends provided by guacd. persea adds web browser, VDI container, and Proxmox session types on top.
+- **Auth parity** — LDAP, RADIUS, TOTP, SAML, and local database authentication are all supported, matching Apache Guacamole's provider set. persea adds OIDC and a pluggable auth chain with MFA support.
 
 ## Key differences from Apache Guacamole
 
-| Feature | Apache Guacamole | rustguac |
+| Feature | Apache Guacamole | persea |
 |---------|-----------------|----------|
 | **Runtime** | Java (Tomcat + Guice + Jersey) | Rust (single binary) |
 | **Database** | MySQL/PostgreSQL | MySQL, PostgreSQL, SQLite |
@@ -64,7 +64,7 @@ Browser (HTML/JS)
     |
     | WebSocket over HTTPS
     v
-rustguac (Rust, axum)
+persea (Rust, axum)
     |
     | TLS (Guacamole protocol)
     v
@@ -84,10 +84,10 @@ guacd (C, from guacamole-server)
 For SSH, RDP, VNC, and web browser sessions, an optional multi-hop SSH tunnel chain can route the connection through one or more bastion hosts. VDI sessions connect to local Docker containers and do not use tunnels.
 
 ```
-Browser -> rustguac -> SSH tunnel (hop 1) -> SSH tunnel (hop 2) -> ... -> guacd -> target
+Browser -> persea -> SSH tunnel (hop 1) -> SSH tunnel (hop 2) -> ... -> guacd -> target
 ```
 
-Both links are encrypted by default: HTTPS between browsers and rustguac, TLS between rustguac and guacd.
+Both links are encrypted by default: HTTPS between browsers and persea, TLS between persea and guacd.
 
 ## Session types
 
@@ -95,13 +95,13 @@ Both links are encrypted by default: HTTPS between browsers and rustguac, TLS be
 
 Connects guacd directly to a target SSH server. Supports password, private key, and ephemeral keypair authentication. Terminal rendering is handled by guacd's SSH plugin with `xterm-256color` terminal type.
 
-SFTP file transfer is available directly between the browser and the target SSH server (no files stored on the rustguac server).
+SFTP file transfer is available directly between the browser and the target SSH server (no files stored on the persea server).
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach targets through bastion hosts.
 
 ### RDP
 
-Connects guacd to a target RDP server. Supports username/password, domain, and various RDP settings (security mode, certificate ignore, display resize). Drive redirection provides file transfer via a per-session directory on the rustguac server.
+Connects guacd to a target RDP server. Supports username/password, domain, and various RDP settings (security mode, certificate ignore, display resize). Drive redirection provides file transfer via a per-session directory on the persea server.
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) and [Kerberos NLA authentication](integrations.md#rdp-kerberos-nla-authentication).
 
@@ -121,13 +121,13 @@ Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reac
 
 ### VDI (Docker containers)
 
-Spawns an ephemeral Docker container running xrdp and a Linux desktop, then connects guacd via RDP to the container. Each user gets a dedicated container named `rustguac-vdi-{username}`. Containers persist after disconnect for reconnection and are automatically cleaned up after an idle timeout.
+Spawns an ephemeral Docker container running xrdp and a Linux desktop, then connects guacd via RDP to the container. Each user gets a dedicated container named `persea-vdi-{username}`. Containers persist after disconnect for reconnection and are automatically cleaned up after an idle timeout.
 
 VDI sessions support persistent home directories, per-entry resource limits and idle timeouts, session thumbnails, and active session previews in the connections. See [VDI Desktop Containers](vdi.md) for configuration and image requirements.
 
 ## SSH tunnel / jump hosts
 
-SSH, RDP, VNC, and web browser sessions can be routed through one or more SSH bastion hosts using multi-hop SSH tunnel chains. This is useful when target machines are not directly reachable from the rustguac server. VDI sessions do not support tunnels (containers run locally).
+SSH, RDP, VNC, and web browser sessions can be routed through one or more SSH bastion hosts using multi-hop SSH tunnel chains. This is useful when target machines are not directly reachable from the persea server. VDI sessions do not support tunnels (containers run locally).
 
 Each hop in the chain establishes an SSH connection and creates a local TCP port forward (`direct-tcpip`). The hops are chained sequentially — each hop connects through the previous hop's local listener. The final hop forwards to the actual target (e.g., an RDP server on port 3389).
 
@@ -145,8 +145,8 @@ Each hop supports independent credentials (username + password or private key). 
 
 | Port | Service |
 |------|---------|
-| 443 | rustguac HTTPS (default with TLS) |
-| 8089 | rustguac HTTP (when TLS is disabled) |
+| 443 | persea HTTPS (default with TLS) |
+| 8089 | persea HTTP (when TLS is disabled) |
 | 4822 | guacd (TLS, loopback only) |
 | 6000-6099 | Xvnc displays (`:100`-`:199`, internal) |
 

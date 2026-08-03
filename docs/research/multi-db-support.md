@@ -1,11 +1,11 @@
-# Multi-Database Backend Support for rustguac
+# Multi-Database Backend Support for persea
 
 **Date**: 2026-08-01  
 **Status**: Research — not yet implemented
 
 ## Current State
 
-rustguac uses `rusqlite` with `Arc<Mutex<Connection>>` (synchronous, single-threaded). All SQL is SQLite-specific: `INTEGER PRIMARY KEY AUTOINCREMENT`, `datetime('now')`, `?1` positional params, `ON CONFLICT DO UPDATE`, `TEXT` columns. No async runtime for DB.
+persea uses `rusqlite` with `Arc<Mutex<Connection>>` (synchronous, single-threaded). All SQL is SQLite-specific: `INTEGER PRIMARY KEY AUTOINCREMENT`, `datetime('now')`, `?1` positional params, `ON CONFLICT DO UPDATE`, `TEXT` columns. No async runtime for DB.
 
 **Goal**: Support SQLite (dev/single-node) + MySQL/PostgreSQL (enterprise). SQL must be portable or backend-specific with minimal code duplication.
 
@@ -48,8 +48,8 @@ SQLx provides `sqlx::any::AnyPool` / `AnyConnection` which selects the driver at
 ```rust
 // Same code, different URL = different backend
 let pool = AnyPool::connect("sqlite://file.db").await?;
-let pool = AnyPool::connect("postgres://localhost/rustguac").await?;
-let pool = AnyPool::connect("mysql://localhost/rustguac").await?;
+let pool = AnyPool::connect("postgres://localhost/persea").await?;
+let pool = AnyPool::connect("mysql://localhost/persea").await?;
 ```
 
 **Trade-offs of `Any`**:
@@ -197,7 +197,7 @@ struct User {
 - Requires a running database at compile time (similar to SQLx's `query!`)
 - **Slower compile times** than SQLx due to generic expansion
 
-### Verdict for rustguac
+### Verdict for persea
 
 **Not recommended** for this use case. Diesel is excellent for single-backend projects with stable schemas, but:
 - Requires Diesel's DSL (no raw SQL with compile-time checking)
@@ -286,7 +286,7 @@ Supports `postgres`, `mysql`, `rusqlite`, and `tiberius` (SQL Server). Uses SQL 
 
 ## 6. Connection Management
 
-### Current rustguac Pattern
+### Current persea Pattern
 
 ```rust
 pub type Db = Arc<Mutex<Connection>>;  // rusqlite, synchronous
@@ -338,7 +338,7 @@ let pool = PgPoolOptions::new()
 
 ## 7. Practical Patterns — Real Rust Projects
 
-### Pattern: Enum Dispatch (Recommended for rustguac)
+### Pattern: Enum Dispatch (Recommended for persea)
 
 Rust forum consensus: for a **closed set of backends** (SQLite + MySQL + PostgreSQL), use an **enum** rather than trait objects:
 
@@ -407,7 +407,7 @@ mod mysql_impl;
 mod sqlite_impl;
 ```
 
-**Not recommended** for rustguac — runtime selection via config is better for enterprise flexibility.
+**Not recommended** for persea — runtime selection via config is better for enterprise flexibility.
 
 ### Pattern: Separate Modules Per Backend
 
@@ -475,11 +475,11 @@ This is the cleanest structure for maintaining backend-specific SQL.
 - **MySQL**: `FULLTEXT` index + `MATCH ... AGAINST`
 - **PostgreSQL**: `GIN` index + `tsvector`/`plainto_tsquery`
 
-**Recommendation**: For the audit log query patterns in rustguac (filter by user_email, action, date range), standard `LIKE` / indexed columns are sufficient. Full-text search is overkill for this scale.
+**Recommendation**: For the audit log query patterns in persea (filter by user_email, action, date range), standard `LIKE` / indexed columns are sufficient. Full-text search is overkill for this scale.
 
 ---
 
-## Concrete Recommendations for rustguac
+## Concrete Recommendations for persea
 
 ### 1. Library Choice: SQLx
 
@@ -530,9 +530,9 @@ Add to `config.toml`:
 
 ```toml
 [database]
-url = "sqlite:///opt/rustguac/data/rustguac.db"     # dev default
-# url = "postgres://user:pass@localhost:5432/rustguac"  # enterprise
-# url = "mysql://user:pass@localhost:3306/rustguac"     # enterprise
+url = "sqlite:///opt/persea/data/persea.db"     # dev default
+# url = "postgres://user:pass@localhost:5432/persea"  # enterprise
+# url = "mysql://user:pass@localhost:3306/persea"     # enterprise
 max_connections = 10
 ```
 

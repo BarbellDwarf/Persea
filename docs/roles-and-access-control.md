@@ -2,7 +2,7 @@
 
 ## Role hierarchy
 
-rustguac implements a 4-tier role hierarchy:
+persea implements a 4-tier role hierarchy:
 
 | Role | Level | Description |
 |------|-------|-------------|
@@ -15,7 +15,7 @@ Roles are hierarchical: each role includes all permissions of lower roles. For e
 
 ## Connection-level RBAC
 
-Beyond the 4-tier role hierarchy, rustguac supports fine-grained, connection-level permissions. This allows granting specific users or groups access to individual connections without elevating their system-wide role.
+Beyond the 4-tier role hierarchy, persea supports fine-grained, connection-level permissions. This allows granting specific users or groups access to individual connections without elevating their system-wide role.
 
 ### System permissions
 
@@ -65,7 +65,7 @@ Admins bypass all object permission checks — they always have full access.
 
 ## Authentication paths
 
-rustguac supports three authentication methods, tried in order: admin API key, user API token, OIDC session cookie.
+persea supports three authentication methods, tried in order: admin API key, user API token, OIDC session cookie.
 
 ### API key admins
 
@@ -73,17 +73,17 @@ API key holders always have full **admin** access (level 4). There is no way to 
 
 ```bash
 # Create an API key admin
-rustguac add-admin --name automation
+persea add-admin --name automation
 
 # With IP restrictions and expiry
-rustguac add-admin --name ci-bot \
+persea add-admin --name ci-bot \
   --allowed-ips "10.0.0.0/8,192.168.1.0/24" \
   --expires "2026-12-31T00:00:00Z"
 ```
 
 ### User API tokens
 
-User API tokens authenticate as the OIDC user who owns the token, with an effective role capped by the token's `max_role`. Tokens use the same `Authorization: Bearer <token>` header as admin API keys — rustguac tries admin keys first, then user tokens. See [User API tokens](#user-api-tokens) below for details.
+User API tokens authenticate as the OIDC user who owns the token, with an effective role capped by the token's `max_role`. Tokens use the same `Authorization: Bearer <token>` header as admin API keys — persea tries admin keys first, then user tokens. See [User API tokens](#user-api-tokens) below for details.
 
 ### OIDC / LDAP / SAML / database users
 
@@ -206,7 +206,7 @@ A subfolder created with `inherit_from_parent: true` (the default for new subfol
 
 ### Connection groups (RBAC)
 
-Beyond folder access control, rustguac supports a separate RBAC system for connection-level permissions:
+Beyond folder access control, persea supports a separate RBAC system for connection-level permissions:
 
 - **Connection groups** are hierarchical containers for connections (similar to folders but for RBAC)
 - **User groups** map to OIDC/LDAP/SAML group memberships
@@ -282,19 +282,19 @@ This means:
 
 ```bash
 # List all OIDC users
-rustguac list-users
+persea list-users
 
 # Set a user's role
-rustguac set-role --email user@example.com --role poweruser
+persea set-role --email user@example.com --role poweruser
 
 # Disable a user (blocks login)
-rustguac disable-user --email user@example.com
+persea disable-user --email user@example.com
 
 # Re-enable a user
-rustguac enable-user --email user@example.com
+persea enable-user --email user@example.com
 
 # Delete a user
-rustguac delete-user --email user@example.com
+persea delete-user --email user@example.com
 ```
 
 ## Admin UI for permission management
@@ -312,24 +312,24 @@ Access the admin page at `/admin.html` (requires admin role).
 
 ```bash
 # Create an admin
-rustguac add-admin --name myadmin
+persea add-admin --name myadmin
 
 # With IP restrictions
-rustguac add-admin --name myadmin --allowed-ips "10.0.0.0/8,192.168.1.0/24"
+persea add-admin --name myadmin --allowed-ips "10.0.0.0/8,192.168.1.0/24"
 
 # With expiry
-rustguac add-admin --name myadmin --expires "2026-12-31T00:00:00Z"
+persea add-admin --name myadmin --expires "2026-12-31T00:00:00Z"
 
 # List admins
-rustguac list-admins
+persea list-admins
 
 # Disable/enable
-rustguac disable-admin --name myadmin
-rustguac enable-admin --name myadmin
+persea disable-admin --name myadmin
+persea enable-admin --name myadmin
 
 # Rotate key (generates new key, invalidates old immediately)
-rustguac rotate-key --name myadmin
+persea rotate-key --name myadmin
 
 # Delete
-rustguac delete-admin --name myadmin
+persea delete-admin --name myadmin
 ```

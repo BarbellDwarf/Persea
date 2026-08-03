@@ -1,9 +1,9 @@
 # Configuration Reference
 
-rustguac reads a TOML configuration file. All settings have sensible defaults and are optional.
+persea reads a TOML configuration file. All settings have sensible defaults and are optional.
 
 ```bash
-rustguac --config /opt/rustguac/config.toml serve
+persea --config /opt/persea/config.toml serve
 ```
 
 See `config.example.toml` for a fully commented reference.
@@ -16,9 +16,9 @@ See `config.example.toml` for a fully commented reference.
 | `guacd_addr` | `127.0.0.1:4822` | guacd TCP address |
 | `recording_path` | `./recordings` | Session recording directory |
 | `static_path` | `./static` | Static web files directory |
-| `db_path` | `./rustguac.db` | SQLite database path (used when `db_url` is not set) |
+| `db_path` | `./persea.db` | SQLite database path (used when `db_url` is not set) |
 | `db_url` | — | Multi-backend database URL: `postgres://...`, `mysql://...`, or `sqlite://...` (see [Multi-database backend](#multi-database-backend)) |
-| `site_title` | `rustguac` | Browser tab and page header title |
+| `site_title` | `persea` | Browser tab and page header title |
 | `max_sessions` | `500` | Maximum concurrent sessions (all types). 0 = unlimited |
 | `max_sessions_per_user` | `50` | Maximum concurrent sessions per user. 0 = unlimited |
 
@@ -40,7 +40,7 @@ See `config.example.toml` for a fully commented reference.
 | `display_range_end` | `199` | Last X display number |
 | `cdp_port_range_start` | `9200` | First Chrome DevTools Protocol port (for login scripts) |
 | `cdp_port_range_end` | `9299` | Last CDP port |
-| `login_scripts_dir` | `/opt/rustguac/scripts` | Directory containing login scripts |
+| `login_scripts_dir` | `/opt/persea/scripts` | Directory containing login scripts |
 | `login_script_timeout_secs` | `120` | Maximum runtime for login scripts before they are killed |
 
 ## Connection allowlists
@@ -84,22 +84,22 @@ All fields are optional. The `[tls]` section can contain any combination.
 HTTPS + guacd TLS (self-hosted):
 ```toml
 [tls]
-cert_path = "/opt/rustguac/tls/cert.pem"
-key_path = "/opt/rustguac/tls/key.pem"
-guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+cert_path = "/opt/persea/tls/cert.pem"
+key_path = "/opt/persea/tls/key.pem"
+guacd_cert_path = "/opt/persea/tls/cert.pem"
 ```
 
 HTTP server + guacd TLS (behind a reverse proxy):
 ```toml
 [tls]
-guacd_cert_path = "/opt/rustguac/tls/guacd-cert.pem"
+guacd_cert_path = "/opt/persea/tls/guacd-cert.pem"
 ```
 
 HTTPS only (guacd on localhost, no TLS needed):
 ```toml
 [tls]
-cert_path = "/opt/rustguac/tls/cert.pem"
-key_path = "/opt/rustguac/tls/key.pem"
+cert_path = "/opt/persea/tls/cert.pem"
+key_path = "/opt/persea/tls/key.pem"
 ```
 
 ## `[oidc]` section
@@ -145,7 +145,7 @@ user_search_base = "ou=users,dc=example,dc=com"
 user_search_filter = "(uid={})"
 
 [auth.totp]
-issuer = "rustguac"
+issuer = "persea"
 enforcement = "All"
 ```
 
@@ -179,7 +179,7 @@ RADIUS authentication (RFC 2865). Supports PAP, CHAP, and MSCHAPv2 protocols. Ca
 | `shared_secret` | — | Shared secret for RADIUS communication (required) |
 | `timeout_secs` | `5` | Request timeout in seconds |
 | `retries` | `3` | Number of retries on timeout |
-| `nas_identifier` | `rustguac` | NAS identifier string |
+| `nas_identifier` | `persea` | NAS identifier string |
 | `nas_ip` | — | NAS IP address (reported to RADIUS server) |
 | `auth_protocol` | `pap` | Authentication protocol: `pap`, `chap`, or `mschapv2` |
 | `mode` | `primary` | Provider mode: `primary` (first-factor) or `mfa` (second-factor) |
@@ -205,7 +205,7 @@ TOTP (Time-based One-Time Password) MFA second factor. Users enroll via QR code 
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `issuer` | `rustguac` | Issuer name shown in authenticator apps |
+| `issuer` | `persea` | Issuer name shown in authenticator apps |
 | `digits` | `6` | Number of TOTP digits |
 | `period` | `30` | TOTP period in seconds |
 | `skew` | `1` | Clock skew tolerance (how many periods ahead/behind to accept) |
@@ -218,17 +218,17 @@ TOTP (Time-based One-Time Password) MFA second factor. Users enroll via QR code 
 
 ## Multi-database backend
 
-rustguac supports MySQL, PostgreSQL, and SQLite via SQLx. Set `db_url` in the config to use a multi-backend database:
+persea supports MySQL, PostgreSQL, and SQLite via SQLx. Set `db_url` in the config to use a multi-backend database:
 
 ```toml
 # PostgreSQL
-db_url = "postgres://user:password@localhost:5432/rustguac"
+db_url = "postgres://user:password@localhost:5432/persea"
 
 # MySQL
-db_url = "mysql://user:password@localhost:3306/rustguac"
+db_url = "mysql://user:password@localhost:3306/persea"
 
 # SQLite via SQLx (alternative to the default rusqlite path)
-db_url = "sqlite:///opt/rustguac/data/rustguac.db?mode=rwc"
+db_url = "sqlite:///opt/persea/data/persea.db?mode=rwc"
 ```
 
 When `db_url` is set, the SQLx pool is initialised alongside the existing rusqlite `Db`. The `db_path` setting is still used for the admin database (users, API keys, sessions, tokens).
@@ -241,7 +241,7 @@ Controls credential encryption for DB-only mode (when not using Vault).
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `encryption_key` | — | 64-character hex string (32 bytes) for AES-256-GCM encryption of credentials at rest in the database. Can also be set via the `RGUAC_STORAGE_KEY` environment variable |
+| `encryption_key` | — | 64-character hex string (32 bytes) for AES-256-GCM encryption of credentials at rest in the database. Can also be set via the `PERSEA_STORAGE_KEY` environment variable |
 
 When `encryption_key` is set, connection credentials stored in the database are encrypted with AES-256-GCM. Encrypted values are prefixed with `enc:v1:` for future key rotation support.
 
@@ -252,7 +252,7 @@ encryption_key = "aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd112233
 
 Or via environment variable:
 ```bash
-RGUAC_STORAGE_KEY=aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344
+PERSEA_STORAGE_KEY=aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344
 ```
 
 ## `[vsphere]` section
@@ -286,7 +286,7 @@ Enables the Vault-backed connections. Requires `VAULT_SECRET_ID` environment var
 | `addr` | — | Vault server address (required) |
 | `role_id` | — | AppRole role ID (required) |
 | `mount` | `secret` | KV v2 mount path |
-| `base_path` | `rustguac` | Base path under the mount |
+| `base_path` | `persea` | Base path under the mount |
 | `namespace` | — | Vault Enterprise / OpenBao namespace |
 | `instance_name` | — | Instance name for instance-scoped entries |
 | `tls_skip_verify` | `false` | Skip TLS certificate verification (dev only) |
@@ -351,7 +351,7 @@ Enables file transfer for RDP (drive redirection) and SSH (SFTP).
 | `cleanup_on_close` | `true` | Delete session drive directory on disconnect |
 | `retention_secs` | `0` | Delay before cleanup (0 = immediate) |
 | `luks_device` | — | LUKS container file path |
-| `luks_name` | `rustguac-drives` | Device-mapper name |
+| `luks_name` | `persea-drives` | Device-mapper name |
 | `luks_key_path` | — | Vault KV path for LUKS encryption key |
 
 ## `[theme]` section
@@ -368,9 +368,9 @@ accent_color = "#FF6600"
 
 **See [themes.md](themes.md) for the full reference**: built-in preset list, every overridable field, the per-user picker, and how to author your own themes as `.toml` files under `<static_path>/themes/` (no recompile needed).
 
-Place the logo file in the `static_path` directory (e.g. `/opt/rustguac/static/acme-logo.png`). In Docker, mount it as a volume:
+Place the logo file in the `static_path` directory (e.g. `/opt/persea/static/acme-logo.png`). In Docker, mount it as a volume:
 ```
--v /path/to/acme-logo.png:/opt/rustguac/static/acme-logo.png:ro
+-v /path/to/acme-logo.png:/opt/persea/static/acme-logo.png:ro
 ```
 
 ## `[recording]` section
@@ -414,7 +414,7 @@ SSH, writes no typescript. Ad-hoc SSH sessions from the Sessions page have no
 entry and so never record a typescript.
 
 The typescript is produced by guacd, so `typescript_path` must be writable by
-the guacd process. On a standard install guacd runs as the same `rustguac`
+the guacd process. On a standard install guacd runs as the same `persea`
 user as the main service, so a path it owns just works; `create_typescript_path
 = true` lets guacd create the directory. guacd writes two files per session,
 `NAME` and `NAME.timing`.
@@ -425,18 +425,18 @@ is **list-only by design**: the text content is never downloadable through
 the web UI (a typescript can contain passwords typed at prompts or secrets
 printed to screen), so a poweruser can confirm a session was recorded
 while retrieving the actual log still requires direct access to the
-rustguac host or storage.
+persea host or storage.
 
 ```toml
 [recording]
-typescript_path = "/opt/rustguac/data/typescripts"
+typescript_path = "/opt/persea/data/typescripts"
 typescript_name = "{connection}-{user}-{date}-{time}"
 create_typescript_path = true
 ```
 
 **Filename tokens.** guacd does not template typescript names itself (it
 uses the name verbatim and only appends a numeric suffix to avoid
-overwriting an existing file). rustguac therefore expands its own tokens
+overwriting an existing file). persea therefore expands its own tokens
 in `typescript_name` before handing it over, so each file is identifiable:
 
 | Token | Expands to |
@@ -453,14 +453,14 @@ becomes `-`), so usernames like `alice@example.com` and free-text entry
 names are always reduced to a safe basename with no path separators.
 Unknown `{tokens}` are left untouched.
 
-> **Note:** these are rustguac's own tokens, not guacd's, and they are
+> **Note:** these are persea's own tokens, not guacd's, and they are
 > unrelated to [credential variables](credential-variables.md) (which use
 > `$name` syntax and apply only to connection-entry credential fields).
 > guacd's own `${GUAC_*}` tokens are **not** interpreted for typescripts.
 
 Keystroke logging in the *graphical* recording (guacd's
 `recording-include-keys`, parseable by `guaclog`) is a separate mechanism
-that depends on guacd-driven graphical recording, which rustguac does not
+that depends on guacd-driven graphical recording, which persea does not
 use (it records the proxied stream itself). It is therefore not wired up;
 the typescript is the supported text-audit path.
 
@@ -468,25 +468,25 @@ the typescript is the supported text-audit path.
 
 Typescripts are written in plain text. For encryption at rest with no extra
 infrastructure, point `typescript_path` at a subdirectory of the
-LUKS-encrypted drive volume rustguac already manages (see the
-[`[drive]` section](#drive-section)). rustguac opens and mounts that volume at
+LUKS-encrypted drive volume persea already manages (see the
+[`[drive]` section](#drive-section)). persea opens and mounts that volume at
 startup (key fetched from Vault) and unmounts it at shutdown, so the directory
-is available whenever rustguac is running, and the files are encrypted on the
+is available whenever persea is running, and the files are encrypted on the
 block device at rest (powered off, disk theft, block-device backups).
 
 ```toml
 [drive]
-drive_path = "/mnt/rustguac-drives"
+drive_path = "/mnt/persea-drives"
 luks_device = "/dev/disk/by-uuid/..."   # your LUKS volume
-luks_key_path = "secret/rustguac/luks"  # Vault KV path holding the key
+luks_key_path = "secret/persea/luks"  # Vault KV path holding the key
 
 [recording]
-typescript_path = "/mnt/rustguac-drives/typescripts"
+typescript_path = "/mnt/persea-drives/typescripts"
 create_typescript_path = true
 ```
 
 This is the recommended way to protect typescripts at rest today. Note its
-limits: while rustguac is running the volume is mounted, so the files are
+limits: while persea is running the volume is mounted, so the files are
 plain text to anyone with host access (the same threat model as the drive
 feature), and it is one key for the whole volume rather than per-connection.
 Per-file, per-connection-key encryption is tracked as a separate feature
@@ -496,7 +496,7 @@ request, pending demand.
 
 Enables VDI (Virtual Desktop Infrastructure) sessions using Docker containers. Each user gets an ephemeral Linux desktop in a Docker container, accessed via xrdp through guacd.
 
-**Prerequisites:** Docker must be installed on the host and the `rustguac` user must be in the `docker` group. See [VDI Desktop Containers](vdi.md) for full setup.
+**Prerequisites:** Docker must be installed on the host and the `persea` user must be in the `docker` group. See [VDI Desktop Containers](vdi.md) for full setup.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -519,7 +519,7 @@ enabled = true
 idle_timeout_mins = 60
 # port_range_start = 39000
 # port_range_end = 39999
-# container_hook_script = "/opt/rustguac/vdi-container-hook.sh"
+# container_hook_script = "/opt/persea/vdi-container-hook.sh"
 # container_hook_timeout_secs = 10
 home_base = "/vdi-homes"
 # allowed_images = ["myregistry/desktop:latest"]
@@ -533,45 +533,45 @@ home_base = "/vdi-homes"
 | `VAULT_SECRET_ID` | Vault AppRole secret ID for `[vault]` |
 | `VAULT_SHARED_SECRET_ID` | Vault AppRole secret ID for `[vault_shared]` (only if configured) |
 | `VAULT_LOCAL_SECRET_ID` | Vault AppRole secret ID for `[vault_local]` (only if configured) |
-| `RGUAC_STORAGE_KEY` | 64-char hex encryption key for DB credential storage (alternative to `[storage].encryption_key`) |
+| `PERSEA_STORAGE_KEY` | 64-char hex encryption key for DB credential storage (alternative to `[storage].encryption_key`) |
 | `VSPHERE_PASSWORD` | VMware vSphere password (alternative to `[vsphere].password_env`) |
-| `RUST_LOG` | Log level (e.g., `info`, `debug`, `rustguac=debug`) |
+| `RUST_LOG` | Log level (e.g., `info`, `debug`, `persea=debug`) |
 
 ### Setting environment variables for systemd
 
-The shipped systemd unit (`rustguac.service`) does not include an `EnvironmentFile` directive by default. To provide secrets like `VAULT_SECRET_ID` and `OIDC_CLIENT_SECRET`, create a systemd drop-in override:
+The shipped systemd unit (`persea.service`) does not include an `EnvironmentFile` directive by default. To provide secrets like `VAULT_SECRET_ID` and `OIDC_CLIENT_SECRET`, create a systemd drop-in override:
 
 **1. Create the env file** with your secrets:
 
 ```bash
-cat > /opt/rustguac/env <<'EOF'
+cat > /opt/persea/env <<'EOF'
 VAULT_SECRET_ID=your-vault-secret-id
 OIDC_CLIENT_SECRET=your-oidc-client-secret
 EOF
-chmod 600 /opt/rustguac/env
-chown rustguac:rustguac /opt/rustguac/env
+chmod 600 /opt/persea/env
+chown persea:persea /opt/persea/env
 ```
 
 **2. Create a systemd override** to load the env file:
 
 ```bash
-sudo systemctl edit rustguac
+sudo systemctl edit persea
 ```
 
 This opens an editor. Add the following:
 
 ```ini
 [Service]
-EnvironmentFile=/opt/rustguac/env
+EnvironmentFile=/opt/persea/env
 ```
 
-Save and close. This creates a drop-in file at `/etc/systemd/system/rustguac.service.d/override.conf`.
+Save and close. This creates a drop-in file at `/etc/systemd/system/persea.service.d/override.conf`.
 
 **3. Reload and restart:**
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl restart rustguac
+sudo systemctl restart persea
 ```
 
 The override persists across package upgrades — `dpkg` will not overwrite files in the `.d/` directory.
@@ -581,11 +581,11 @@ The override persists across package upgrades — `dpkg` will not overwrite file
 To confirm the env file is loaded:
 
 ```bash
-sudo systemctl show rustguac | grep EnvironmentFile
+sudo systemctl show persea | grep EnvironmentFile
 ```
 
 You should see:
 
 ```
-EnvironmentFile=/opt/rustguac/env
+EnvironmentFile=/opt/persea/env
 ```

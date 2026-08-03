@@ -1,6 +1,6 @@
 # Deployment Guide
 
-A step-by-step guide for planning and deploying rustguac in production. Covers network architecture, server preparation, RDP target setup, security hardening, and ongoing operations.
+A step-by-step guide for planning and deploying persea in production. Covers network architecture, server preparation, RDP target setup, security hardening, and ongoing operations.
 
 ## Architecture Overview
 
@@ -11,7 +11,7 @@ Internet
    |
 [HAProxy] ── TLS termination, rate limiting, Knocknoc ACL
    |
-[rustguac] ── session management, WebSocket proxy, connections
+[persea] ── session management, WebSocket proxy, connections
    |
 [guacd] ── protocol translation (SSH, RDP, VNC)
    |
@@ -25,32 +25,32 @@ Internet
 | Port | Service | Exposure |
 |------|---------|----------|
 | 443 | HAProxy (HTTPS) | Public / Knocknoc-gated |
-| 8089 | rustguac (HTTPS) | Loopback only (behind HAProxy) |
+| 8089 | persea (HTTPS) | Loopback only (behind HAProxy) |
 | 4822 | guacd (TLS) | Loopback only |
 | 6000-6099 | Xvnc displays | Loopback only (web sessions) |
 
-## Step 1: Install rustguac
+## Step 1: Install persea
 
 ### Debian 13 (recommended)
 
 ```bash
 # Download the latest .deb from GitHub releases
-wget https://github.com/sol1/rustguac/releases/latest/download/rustguac_amd64.deb
-sudo apt install ./rustguac_amd64.deb
+wget https://github.com/sol1/persea/releases/latest/download/persea_amd64.deb
+sudo apt install ./persea_amd64.deb
 ```
 
-This installs rustguac + guacd to `/opt/rustguac` with systemd services.
+This installs persea + guacd to `/opt/persea` with systemd services.
 
 ### Docker (recommended for non-Debian-13 hosts)
 
 ```bash
-docker pull ghcr.io/sol1/rustguac:latest
+docker pull ghcr.io/sol1/persea:latest
 docker run -d \
   -p 443:8089 \
-  -v rustguac-data:/opt/rustguac/data \
-  -v rustguac-recordings:/opt/rustguac/recordings \
-  -v ./config.toml:/opt/rustguac/config.toml \
-  ghcr.io/sol1/rustguac:latest
+  -v persea-data:/opt/persea/data \
+  -v persea-recordings:/opt/persea/recordings \
+  -v ./config.toml:/opt/persea/config.toml \
+  ghcr.io/sol1/persea:latest
 ```
 
 The Docker image bundles guacd + FreeRDP + dependencies, so it runs cleanly on Ubuntu, RHEL, Rocky, Arch, and other distros where the bare-metal `.deb` would hit a FreeRDP ABI mismatch. See [installation.md](installation.md#other-linux-distributions) for the full story on non-Debian-13 targets.
@@ -62,7 +62,7 @@ See [installation.md](installation.md) for all install options.
 ### Create an admin API key
 
 ```bash
-/opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml add-admin --name admin
+/opt/persea/bin/persea --config /opt/persea/config.toml add-admin --name admin
 ```
 
 Save the printed key (`rgu_...`) — it is shown only once. Use it for initial setup, then **delete it once OIDC is configured** (see Step 5).
@@ -70,7 +70,7 @@ Save the printed key (`rgu_...`) — it is shown only once. Use it for initial s
 ### Edit config.toml
 
 ```bash
-sudo nano /opt/rustguac/config.toml
+sudo nano /opt/persea/config.toml
 ```
 
 Key settings for a production deployment:
@@ -80,9 +80,9 @@ listen_addr = "127.0.0.1:8089"      # Loopback only — HAProxy handles public T
 guacd_addr = "localhost:4822"
 
 [tls]
-cert_path = "/opt/rustguac/tls/cert.pem"
-key_path = "/opt/rustguac/tls/key.pem"
-guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+cert_path = "/opt/persea/tls/cert.pem"
+key_path = "/opt/persea/tls/key.pem"
+guacd_cert_path = "/opt/persea/tls/cert.pem"
 
 # Trust HAProxy's X-Forwarded-For header
 trusted_proxies = ["127.0.0.1/32"]
@@ -99,7 +99,7 @@ See [configuration.md](configuration.md) for the full reference.
 ### Start services
 
 ```bash
-sudo systemctl enable --now rustguac
+sudo systemctl enable --now persea
 ```
 
 Verify: `curl -k https://localhost:8089/api/health`
@@ -138,17 +138,17 @@ defaults
     timeout http-request 10s        # Slowloris protection
 
 frontend https
-    bind *:443 ssl crt /etc/ssl/private/rustguac.pem alpn h2,http/1.1
+    bind *:443 ssl crt /etc/ssl/private/persea.pem alpn h2,http/1.1
     bind *:80
     http-request redirect scheme https unless { ssl_fc }
     http-request del-header X-Forwarded-For
     option forwardfor
     http-response set-header Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    default_backend rustguac
+    default_backend persea
 
-backend rustguac
+backend persea
     option httpchk GET /api/health
-    server rustguac 127.0.0.1:8089 ssl verify none check inter 30s
+    server persea 127.0.0.1:8089 ssl verify none check inter 30s
 ```
 
 ### TLS certificate
@@ -159,7 +159,7 @@ Use Let's Encrypt or your organisation's CA:
 # Let's Encrypt example (certbot + HAProxy)
 sudo certbot certonly --standalone -d console.example.com
 sudo cat /etc/letsencrypt/live/console.example.com/{fullchain,privkey}.pem \
-    > /etc/ssl/private/rustguac.pem
+    > /etc/ssl/private/persea.pem
 sudo systemctl restart haproxy
 ```
 
@@ -170,8 +170,8 @@ sudo systemctl restart haproxy
 For the best video experience with Linux desktops, use xrdp with x264 H.264 encoding. A single setup script handles everything — desktop environment, audio, xrdp rebuild with x264, and GFX configuration:
 
 ```bash
-# On the RDP target machine (not the rustguac server):
-wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/sol1/rustguac/main/contrib/setup-xrdp-gfx.sh
+# On the RDP target machine (not the persea server):
+wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/sol1/persea/main/contrib/setup-xrdp-gfx.sh
 sudo bash setup-xrdp-gfx.sh --desktop mate
 ```
 
@@ -184,7 +184,7 @@ The script runs in three phases:
 
 Run `bash setup-xrdp-gfx.sh --help` for all options, or `bash setup-xrdp-gfx.sh --diagnose` to troubleshoot after setup.
 
-In the rustguac connections, enable these settings on the RDP entry:
+In the persea connections, enable these settings on the RDP entry:
 - **Enable Graphics Pipeline (GFX)** -- checked
 - **H.264 Passthrough** -- checked
 - **Enable Desktop Composition** -- not needed for Linux (Windows-only DWM setting)
@@ -216,7 +216,7 @@ Add to `config.toml`:
 ```toml
 [oidc]
 issuer_url = "https://your-idp.example.com"
-client_id = "rustguac"
+client_id = "persea"
 redirect_uri = "https://console.example.com/auth/callback"
 groups_claim = "groups"
 
@@ -227,12 +227,12 @@ auth_session_ttl_secs = 28800
 Group-to-role mappings are configured via the Admin page (http://localhost:8089/admin.html)
 or the API endpoint `POST /api/admin/group-mappings`.
 
-Set the client secret in `/opt/rustguac/env`:
+Set the client secret in `/opt/persea/env`:
 
 ```bash
-echo 'OIDC_CLIENT_SECRET=your-secret-here' | sudo tee -a /opt/rustguac/env
-sudo chmod 600 /opt/rustguac/env
-sudo systemctl restart rustguac
+echo 'OIDC_CLIENT_SECRET=your-secret-here' | sudo tee -a /opt/persea/env
+sudo chmod 600 /opt/persea/env
+sudo systemctl restart persea
 ```
 
 See [integrations.md](integrations.md) for provider-specific guides (Authentik, JumpCloud, Entra ID, etc.).
@@ -243,10 +243,10 @@ Once OIDC is working and you have an admin user, remove the initial API key:
 
 ```bash
 # List admin keys
-/opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml list-admins
+/opt/persea/bin/persea --config /opt/persea/config.toml list-admins
 
 # Delete by name
-/opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml delete-admin --name admin
+/opt/persea/bin/persea --config /opt/persea/config.toml delete-admin --name admin
 ```
 
 API keys are powerful (full admin, no MFA). For day-to-day use, OIDC with group-based roles is more secure. If you need programmatic API access, create scoped [user API tokens](roles-and-access-control.md) instead.
@@ -261,7 +261,7 @@ If you want the Vault-backed Connections UI:
 
 1. **Install and initialize Vault** — see [Vault from Zero](integrations.md#vault-from-zero) in the integrations guide
 2. **Enable KV v2** at the `secret` mount path
-3. **Create the rustguac policy** with read/write access to `secret/data/rustguac/*`
+3. **Create the persea policy** with read/write access to `secret/data/persea/*`
 4. **Enable AppRole** and get role_id + secret_id
 5. **Add to config.toml:**
    ```toml
@@ -269,27 +269,27 @@ If you want the Vault-backed Connections UI:
    addr = "http://127.0.0.1:8200"
    role_id = "<your-role-id>"
    ```
-6. **Set the secret_id** in `/opt/rustguac/env`:
+6. **Set the secret_id** in `/opt/persea/env`:
    ```
    VAULT_SECRET_ID=<your-secret-id>
    ```
-7. **Verify:** restart rustguac and check logs for "Vault: authenticated via AppRole"
+7. **Verify:** restart persea and check logs for "Vault: authenticated via AppRole"
 
 ```bash
-echo 'VAULT_SECRET_ID=your-secret-id' | sudo tee -a /opt/rustguac/env
-sudo systemctl restart rustguac
+echo 'VAULT_SECRET_ID=your-secret-id' | sudo tee -a /opt/persea/env
+sudo systemctl restart persea
 ```
 
 See [integrations.md](integrations.md) for Vault setup, AppRole configuration, and mTLS.
 
 ## Step 7: Lock It Down with Knocknoc
 
-[Knocknoc](https://knocknoc.io) removes the attack surface entirely. Instead of exposing rustguac's login page to the internet, Knocknoc gates access at the network layer:
+[Knocknoc](https://knocknoc.io) removes the attack surface entirely. Instead of exposing persea's login page to the internet, Knocknoc gates access at the network layer:
 
 1. **Before Knocknoc:** the login page is visible to scanners, bots, and attackers
 2. **After Knocknoc:** the login page returns 403 unless the user has authenticated through Knocknoc first (SSO + MFA)
 
-Only the front page (`/`) is gated. API endpoints, OIDC callbacks, and share links pass through to rustguac's own auth.
+Only the front page (`/`) is gated. API endpoints, OIDC callbacks, and share links pass through to persea's own auth.
 
 ### HAProxy + Knocknoc configuration
 
@@ -297,20 +297,20 @@ Add to your HAProxy config:
 
 ```
 # Dynamic ACL managed by knocknoc-agent
-acl knoc_rustguac src -u 600
+acl knoc_persea src -u 600
 acl is_root path /
 
 # Gate only the login page
-use_backend rustguac if is_root knoc_rustguac
+use_backend persea if is_root knoc_persea
 use_backend denied   if is_root
-use_backend rustguac
+use_backend persea
 ```
 
 Install and configure [knocknoc-agent](https://docs.knocknoc.io) to manage ACL #600 via the HAProxy admin socket.
 
 ### Why this matters
 
-rustguac gives users administrative access to servers. Even with OIDC and strong passwords, exposing the login page means:
+persea gives users administrative access to servers. Even with OIDC and strong passwords, exposing the login page means:
 - Brute-force and credential-stuffing attacks
 - Zero-day exploits against the web layer
 - Reconnaissance by scanners
@@ -326,7 +326,7 @@ Drive mapping lets users transfer files to/from remote sessions.
 ```toml
 [drive]
 enabled = true
-drive_path = "/opt/rustguac/drives"
+drive_path = "/opt/persea/drives"
 drive_name = "Shared Drive"
 ```
 
@@ -335,17 +335,17 @@ drive_name = "Shared Drive"
 For environments requiring at-rest encryption:
 
 ```bash
-sudo /opt/rustguac/bin/drive-setup.sh
+sudo /opt/persea/bin/drive-setup.sh
 ```
 
 This creates a LUKS-encrypted volume with the encryption key stored in Vault. See [integrations.md](integrations.md) for details.
 
 ## Step 9: Session Recording (optional)
 
-Session recordings are enabled by default and stored in `/opt/rustguac/recordings`.
+Session recordings are enabled by default and stored in `/opt/persea/recordings`.
 
 ```toml
-recording_path = "/opt/rustguac/recordings"
+recording_path = "/opt/persea/recordings"
 
 [recording]
 enabled = true
@@ -359,7 +359,7 @@ Recordings can be played back in the browser via the Sessions page, or exported 
 
 ### Monitoring
 
-- **Health check:** `GET /api/health` returns 200 when rustguac and guacd are running
+- **Health check:** `GET /api/health` returns 200 when persea and guacd are running
 - **System status:** `GET /api/system/status` (admin only) shows version, uptime, active sessions
 - **Reports:** Session history, top connections, top users available at `/reports.html` (poweruser+ role)
 
@@ -367,8 +367,8 @@ Recordings can be played back in the browser via the Sessions page, or exported 
 
 ```bash
 # Debian package
-sudo apt install ./rustguac_new-version.deb
-sudo systemctl restart rustguac
+sudo apt install ./persea_new-version.deb
+sudo systemctl restart persea
 ```
 
 Config files are preserved across upgrades (`--force-confold`). Database migrations run automatically on startup.
@@ -376,22 +376,22 @@ Config files are preserved across upgrades (`--force-confold`). Database migrati
 ### Backup
 
 Back up these paths:
-- `/opt/rustguac/config.toml` — configuration
-- `/opt/rustguac/data/rustguac.db` — users, tokens, session history
-- `/opt/rustguac/env` — secrets (Vault secret ID, OIDC client secret)
-- `/opt/rustguac/recordings/` — session recordings (if needed for compliance)
+- `/opt/persea/config.toml` — configuration
+- `/opt/persea/data/persea.db` — users, tokens, session history
+- `/opt/persea/env` — secrets (Vault secret ID, OIDC client secret)
+- `/opt/persea/recordings/` — session recordings (if needed for compliance)
 
 The connections is in Vault — back up Vault separately.
 
 ### Security checklist
 
 - [ ] HAProxy terminates TLS with a valid certificate (not self-signed)
-- [ ] rustguac listens on loopback only (`listen_addr = "127.0.0.1:8089"`)
+- [ ] persea listens on loopback only (`listen_addr = "127.0.0.1:8089"`)
 - [ ] Network allowlists configured (prevent SSRF to unintended targets)
 - [ ] OIDC configured with group-based role mappings
 - [ ] Bootstrap API key deleted after OIDC setup
 - [ ] Knocknoc gates the login page (optional but strongly recommended)
 - [ ] Drive encryption enabled if file transfer is used in regulated environments
 - [ ] Session recording enabled for audit compliance
-- [ ] `/opt/rustguac/env` has `chmod 600` permissions
+- [ ] `/opt/persea/env` has `chmod 600` permissions
 - [ ] Trusted proxies configured to match HAProxy IP

@@ -3,21 +3,21 @@
 ## guacd
 
 ### guacd won't start
-- Check `systemctl status rustguac-guacd`
-- Check logs: `journalctl -u rustguac-guacd -n 50`
-- Verify FreeRDP plugins: `ls /opt/rustguac/lib/freerdp3/`
+- Check `systemctl status persea-guacd`
+- Check logs: `journalctl -u persea-guacd -n 50`
+- Verify FreeRDP plugins: `ls /opt/persea/lib/freerdp3/`
 - Common: missing `LD_LIBRARY_PATH` — the systemd service sets this automatically
 
 ### guacd connection refused
 - Verify guacd is listening: `ss -tlnp | grep 4822`
-- Check TLS certs exist: `ls /opt/rustguac/tls/`
+- Check TLS certs exist: `ls /opt/persea/tls/`
 - Verify config has `guacd_addr = "127.0.0.1:4822"`
 
-## rustguac
+## persea
 
 ### Server won't start
-- Check `systemctl status rustguac`
-- Verify config: `rustguac --config /opt/rustguac/config.toml serve`
+- Check `systemctl status persea`
+- Verify config: `persea --config /opt/persea/config.toml serve`
 - Common: port 8089 already in use — check `ss -tlnp | grep 8089`
 
 ### WebSocket connection fails
@@ -34,7 +34,7 @@
 
 ### Chromium won't start
 - Verify `chromium` is installed: `which chromium`
-- Check the `rustguac` user has a home directory: `ls -la /home/rustguac`
+- Check the `persea` user has a home directory: `ls -la /home/persea`
 - Common: missing `--in-process-gpu` flag — check Chromium flags in config
 - Check Xvnc: `ps aux | grep Xvnc`
 
@@ -47,9 +47,9 @@
 
 ### Container won't start
 - Verify Docker is running: `docker ps`
-- Check the `rustguac` user is in the `docker` group
+- Check the `persea` user is in the `docker` group
 - Verify the VDI image exists: `docker images | grep vdi`
-- Check container logs: `docker logs rustguac-vdi-{username}`
+- Check container logs: `docker logs persea-vdi-{username}`
 
 ## Database
 
@@ -69,7 +69,7 @@
 
 ### "403 Forbidden" from Vault
 - Check that the role_id and secret_id are correct
-- Verify the policy is attached: `vault read auth/approle/role/rustguac`
+- Verify the policy is attached: `vault read auth/approle/role/persea`
 - Check token hasn't expired: `vault token lookup`
 - If using namespaces, ensure the policy was created inside the namespace
 
@@ -80,14 +80,14 @@
 - Check firewall rules if Vault is on a different host
 
 ### VAULT_SECRET_ID not set
-- The secret_id must be in the environment where rustguac runs
-- For systemd: add to `/opt/rustguac/env` file
+- The secret_id must be in the environment where persea runs
+- For systemd: add to `/opt/persea/env` file
 - For Docker: pass as `-e VAULT_SECRET_ID=...` or use Docker secrets
-- Check: `systemctl show rustguac | grep Environment`
+- Check: `systemctl show persea | grep Environment`
 
 ### Token renewal failures
-- Check rustguac logs for "Vault: token renewal failed"
-- If 403 on renewal, the token expired — rustguac will re-authenticate automatically
+- Check persea logs for "Vault: token renewal failed"
+- If 403 on renewal, the token expired — persea will re-authenticate automatically
 - If persistent, verify the AppRole secret_id hasn't been revoked
 
 ### Namespace mismatch

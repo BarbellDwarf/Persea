@@ -1,6 +1,6 @@
 # Installation
 
-> **Target platform**: rustguac is built and tested against **Debian 13
+> **Target platform**: persea is built and tested against **Debian 13
 > (Trixie)**. The pre-built `.deb` package and the `install.sh` script
 > both assume FreeRDP 3.15+ (Debian 13's `freerdp3-dev`). On other Linux
 > distributions, the recommended path is the Docker image (Option C),
@@ -9,39 +9,39 @@
 
 ## Option A: Debian package (recommended)
 
-Pre-built `.deb` packages are available from the [releases page](https://github.com/sol1/rustguac/releases) for Debian 13 (Trixie) and compatible distributions.
+Pre-built `.deb` packages are available from the [releases page](https://github.com/sol1/persea/releases) for Debian 13 (Trixie) and compatible distributions.
 
 ```bash
-sudo apt install ./rustguac_*.deb
+sudo apt install ./persea_*.deb
 ```
 
 Using `apt install` (not `dpkg -i`) ensures all runtime dependencies are resolved automatically.
 
-The package installs to `/opt/rustguac` and creates systemd services for both guacd and rustguac.
+The package installs to `/opt/persea` and creates systemd services for both guacd and persea.
 
 ### Post-install
 
 1. **Create an admin API key:**
 
 ```bash
-/opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml add-admin --name admin
+/opt/persea/bin/persea --config /opt/persea/config.toml add-admin --name admin
 ```
 
 Save the printed API key — it is only shown once.
 
-2. **Configure** — edit `/opt/rustguac/config.toml` as needed (see [Configuration](configuration.md)).
+2. **Configure** — edit `/opt/persea/config.toml` as needed (see [Configuration](configuration.md)).
 
 3. **Start the services:**
 
 ```bash
-sudo systemctl enable --now rustguac
+sudo systemctl enable --now persea
 ```
 
-This starts both `rustguac-guacd` (the protocol daemon) and `rustguac` (the web proxy).
+This starts both `persea-guacd` (the protocol daemon) and `persea` (the web proxy).
 
 4. **(Required for connections) Set up Vault or OpenBao:**
 
-The connections page is rustguac's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2 — credentials never reach the browser. **Without one of these, the Connections UI is unavailable** and users can only run ad-hoc sessions via the Sessions page or the API.
+The connections page is persea's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2 — credentials never reach the browser. **Without one of these, the Connections UI is unavailable** and users can only run ad-hoc sessions via the Sessions page or the API.
 
 For a single-host install the fastest path is the bundled quickstart helper, which auto-detects vault or bao and provisions everything:
 
@@ -60,22 +60,22 @@ See [Vault / OpenBao Connections](integrations.md#vault--openbao-connections) fo
 6. **(Optional) Set up encrypted drive storage:**
 
 ```bash
-sudo /opt/rustguac/bin/drive-setup.sh
+sudo /opt/persea/bin/drive-setup.sh
 ```
 
 See [Drive / File Transfer](integrations.md#drive--file-transfer--luks-encryption) for details.
 
 7. **(Optional) Enable VDI desktop containers:**
 
-If you want to use VDI sessions (ephemeral Docker desktop containers), install Docker and grant rustguac access:
+If you want to use VDI sessions (ephemeral Docker desktop containers), install Docker and grant persea access:
 
 ```bash
 # Install Docker (if not already installed)
 curl -fsSL https://get.docker.com | sh
 
-# Allow rustguac to manage containers
-sudo usermod -aG docker rustguac
-sudo systemctl restart rustguac
+# Allow persea to manage containers
+sudo usermod -aG docker persea
+sudo systemctl restart persea
 ```
 
 Then add a `[vdi]` section to your config — see [VDI Desktop Containers](vdi.md) for full setup.
@@ -86,7 +86,7 @@ After installation, verify everything works:
 
 1. **Check services are running:**
    ```bash
-   sudo systemctl status rustguac guacd
+   sudo systemctl status persea guacd
    ```
 
 2. **Test the health endpoint:**
@@ -97,13 +97,13 @@ After installation, verify everything works:
 
 3. **Check for errors in logs:**
    ```bash
-   journalctl -u rustguac -n 20 --no-pager
+   journalctl -u persea -n 20 --no-pager
    journalctl -u guacd -n 20 --no-pager
    ```
 
 4. **Create an admin user** (if not done during install):
    ```bash
-   sudo -u rustguac /opt/rustguac/bin/rustguac add-admin --name admin
+   sudo -u persea /opt/persea/bin/persea add-admin --name admin
    ```
 
 5. **Open the web interface** at `https://your-server:8089` and log in with the admin API key.
@@ -123,10 +123,10 @@ This performs the following steps:
 1. Installs system packages (build tools, Xvnc, Chromium, cryptsetup, etc.)
 2. Installs the Rust toolchain (if not present)
 3. Clones and builds guacd from [guacamole-server](https://github.com/apache/guacamole-server) source, applying patches automatically
-4. Builds rustguac with `cargo build --release`
-5. Creates the `rustguac` system user (home: `/home/rustguac`)
+4. Builds persea with `cargo build --release`
+5. Creates the `persea` system user (home: `/home/persea`)
 6. Generates a self-signed TLS certificate
-7. Installs binaries, static files, and config to `/opt/rustguac`
+7. Installs binaries, static files, and config to `/opt/persea`
 8. Sets up systemd services
 
 ### Install flags
@@ -141,8 +141,8 @@ This performs the following steps:
 ### Installed layout
 
 ```
-/opt/rustguac/
-  bin/rustguac           # Main binary
+/opt/persea/
+  bin/persea           # Main binary
   bin/drive-setup.sh     # LUKS drive setup script
   sbin/guacd             # Guacamole protocol daemon
   lib/                   # guacd shared libraries
@@ -158,34 +158,34 @@ This performs the following steps:
 
 | Service | Description |
 |---------|-------------|
-| `rustguac-guacd` | guacd protocol daemon (TLS, loopback only) |
-| `rustguac` | rustguac web proxy (depends on guacd) |
+| `persea-guacd` | guacd protocol daemon (TLS, loopback only) |
+| `persea` | persea web proxy (depends on guacd) |
 
-Both services run as the `rustguac` user and restart on failure.
+Both services run as the `persea` user and restart on failure.
 
-The `rustguac` service loads environment variables from `/opt/rustguac/env` via systemd's `EnvironmentFile` directive. Use this for secrets like `VAULT_SECRET_ID` and `OIDC_CLIENT_SECRET`.
+The `persea` service loads environment variables from `/opt/persea/env` via systemd's `EnvironmentFile` directive. Use this for secrets like `VAULT_SECRET_ID` and `OIDC_CLIENT_SECRET`.
 
 ## Option C: Docker
 
-Pre-built images are available on [Docker Hub](https://hub.docker.com/r/sol1/rustguac):
+Pre-built images are available on [Docker Hub](https://hub.docker.com/r/sol1/persea):
 
 ```bash
-docker pull sol1/rustguac:latest
-docker run -d -p 8089:8089 sol1/rustguac:latest
+docker pull sol1/persea:latest
+docker run -d -p 8089:8089 sol1/persea:latest
 ```
 
 To build from source instead:
 
 ```bash
-docker build -t rustguac .
-docker run -d -p 8089:8089 rustguac
+docker build -t persea .
+docker run -d -p 8089:8089 persea
 ```
 
 The Docker image:
 - Uses a multi-stage build (Debian 13 trixie-slim runtime)
 - Builds guacd from source with patches applied
 - Generates a self-signed TLS certificate at build time
-- Enables TLS between rustguac and guacd by default
+- Enables TLS between persea and guacd by default
 - Exposes HTTP on port 8089 (put a reverse proxy in front for HTTPS)
 
 ### API key setup
@@ -193,14 +193,14 @@ The Docker image:
 On first run (when no database exists), the container automatically generates an admin API key and prints it to the logs:
 
 ```bash
-docker logs rustguac
+docker logs persea
 ```
 
 Save the printed key — it is only shown once. To generate additional keys later:
 
 ```bash
-docker exec rustguac /opt/rustguac/bin/rustguac \
-    --config /opt/rustguac/config.toml add-admin --name my-admin
+docker exec persea /opt/persea/bin/persea \
+    --config /opt/persea/config.toml add-admin --name my-admin
 ```
 
 ### Customizing the configuration
@@ -210,7 +210,7 @@ To persist config changes across container restarts, bind-mount a local `config.
 1. **Copy the default config** from the image:
 
 ```bash
-docker run --rm --entrypoint cat sol1/rustguac:latest /opt/rustguac/config.toml.default > config.toml
+docker run --rm --entrypoint cat sol1/persea:latest /opt/persea/config.toml.default > config.toml
 ```
 
 2. **Edit** `config.toml` as needed (see [Configuration](configuration.md)):
@@ -228,25 +228,25 @@ If no config file is mounted, the container uses a built-in default on first sta
 
 ```yaml
 services:
-  rustguac:
-    image: sol1/rustguac:latest
+  persea:
+    image: sol1/persea:latest
     ports:
       - "8089:8089"
     volumes:
-      - ./config.toml:/opt/rustguac/config.toml
-      - rustguac-data:/opt/rustguac/data
-      - rustguac-recordings:/opt/rustguac/recordings
+      - ./config.toml:/opt/persea/config.toml
+      - persea-data:/opt/persea/data
+      - persea-recordings:/opt/persea/recordings
     environment:
       - RUST_LOG=info
 
 volumes:
-  rustguac-data:
-  rustguac-recordings:
+  persea-data:
+  persea-recordings:
 ```
 
 ### Sharing guacd with Apache Guacamole
 
-If you already run Apache Guacamole with its own guacd container, rustguac can share it. Override the entrypoint to skip the built-in guacd and point to the existing one:
+If you already run Apache Guacamole with its own guacd container, persea can share it. Override the entrypoint to skip the built-in guacd and point to the existing one:
 
 ```yaml
 services:
@@ -255,16 +255,16 @@ services:
     image: guacamole/guacd:latest
     # ... your existing guacd config ...
 
-  rustguac:
-    image: sol1/rustguac:latest
-    entrypoint: ["/opt/rustguac/bin/rustguac"]
-    command: ["--config", "/opt/rustguac/config.toml", "serve"]
+  persea:
+    image: sol1/persea:latest
+    entrypoint: ["/opt/persea/bin/persea"]
+    command: ["--config", "/opt/persea/config.toml", "serve"]
     ports:
       - "8089:8089"
     volumes:
-      - ./config.toml:/opt/rustguac/config.toml
-      - rustguac-data:/opt/rustguac/data
-      - rustguac-recordings:/opt/rustguac/recordings
+      - ./config.toml:/opt/persea/config.toml
+      - persea-data:/opt/persea/data
+      - persea-recordings:/opt/persea/recordings
     environment:
       - RUST_LOG=info
     # Must be on the same Docker network as guacd
@@ -278,11 +278,11 @@ In your `config.toml`, set `guacd_addr` to the guacd container's hostname:
 guacd_addr = "guacd:4822"
 ```
 
-Both Apache Guacamole and rustguac will use the same guacd daemon. They can share recordings, but each maintains its own session state and user database.
+Both Apache Guacamole and persea will use the same guacd daemon. They can share recordings, but each maintains its own session state and user database.
 
 ## Option D: RPM package (build from source)
 
-Pre-built RPM packages are not currently provided. An RPM spec file (`rustguac.spec`) and build script (`build-rpm.sh`) are included for Red Hat / Fedora / Rocky Linux based systems. You will need FreeRDP 3.x development headers installed.
+Pre-built RPM packages are not currently provided. An RPM spec file (`persea.spec`) and build script (`build-rpm.sh`) are included for Red Hat / Fedora / Rocky Linux based systems. You will need FreeRDP 3.x development headers installed.
 
 ```bash
 # Install build dependencies (example for Rocky/RHEL 9)
@@ -295,7 +295,7 @@ sudo dnf install -y gcc gcc-c++ make git autoconf automake libtool \
 
 # Build the RPM
 bash build-rpm.sh
-sudo rpm -i rustguac-*.rpm
+sudo rpm -i persea-*.rpm
 ```
 
 RPM builds are untested — contributions and feedback are welcome.
@@ -303,10 +303,10 @@ RPM builds are untested — contributions and feedback are welcome.
 ## Option E: Development
 
 ```bash
-# Clone guacamole-server alongside rustguac
+# Clone guacamole-server alongside persea
 git clone https://github.com/apache/guacamole-server.git ../guacamole-server
 
-# Install build deps, build guacd, build + run rustguac
+# Install build deps, build guacd, build + run persea
 ./dev.sh deps
 ./dev.sh build-guacd
 ./dev.sh start
@@ -329,7 +329,7 @@ EOF
 
 ## Other Linux distributions
 
-rustguac is built and tested against Debian 13 (Trixie). On other Linux
+persea is built and tested against Debian 13 (Trixie). On other Linux
 distributions the FreeRDP ABI is typically different, and the prebuilt
 `.deb` will fail at runtime even if it installs cleanly. The most common
 symptom is RDP sessions working visually but drive redirection and audio
@@ -351,7 +351,7 @@ daemon. This is the supported path for Ubuntu, RHEL/Rocky/Alma, Arch,
 and any other non-Debian-13 distribution.
 
 ```bash
-docker pull sol1/rustguac:latest
+docker pull sol1/persea:latest
 ```
 
 See [Option C: Docker](#option-c-docker) above for the full setup.
@@ -383,20 +383,20 @@ sudo apt-get install -y \
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # Build guacd against system FreeRDP 3.5 (skip our 3.15+ patches)
-git clone https://github.com/sol1/rustguac.git
+git clone https://github.com/sol1/persea.git
 git clone https://github.com/apache/guacamole-server.git
 cd guacamole-server
-git checkout 6719b20d   # same pin rustguac uses
+git checkout 6719b20d   # same pin persea uses
 autoreconf -fi
-./configure --prefix=/opt/rustguac --with-rdp
+./configure --prefix=/opt/persea --with-rdp
 make -j"$(nproc)"
 sudo make install
 
-# Build rustguac
-cd ../rustguac
+# Build persea
+cd ../persea
 cargo build --release
 bash build-deb.sh
-sudo dpkg -i ../rustguac_*_amd64.deb
+sudo dpkg -i ../persea_*_amd64.deb
 ```
 
 Drive redirection, audio, and clipboard should work. The 3.15-specific
@@ -410,7 +410,7 @@ scope for this guide.
 Both paths are **untested by us**: we don't run CI against Ubuntu 24.04
 and we don't ship `.deb`s for it. Issues experienced on Ubuntu will be
 triaged as best-effort and will generally close with a pointer back to
-the Docker image. If you do run rustguac on Ubuntu successfully (or
+the Docker image. If you do run persea on Ubuntu successfully (or
 unsuccessfully), reports via GitHub issues are welcome and help inform
 whether we eventually add a CI target.
 
@@ -421,7 +421,7 @@ For everything else, the Docker image is the path of least resistance.
 
 ## System dependencies
 
-For bare-metal installs, rustguac requires:
+For bare-metal installs, persea requires:
 
 - **Rust toolchain** (1.80+)
 - **guacd** (built from guacamole-server source)

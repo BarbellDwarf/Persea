@@ -1,11 +1,11 @@
 # VDI Desktop Containers
 
-rustguac can spawn ephemeral Docker desktop containers on demand. Each user gets their own isolated Linux desktop accessible via the browser, with no client software required.
+persea can spawn ephemeral Docker desktop containers on demand. Each user gets their own isolated Linux desktop accessible via the browser, with no client software required.
 
 ## How it works
 
 1. An admin creates a VDI entry in the connections, specifying a Docker image
-2. When a user clicks Connect, rustguac creates a Docker container from that image
+2. When a user clicks Connect, persea creates a Docker container from that image
 3. The container runs xrdp on port 3389, and guacd connects to it via RDP
 4. The user sees a full Linux desktop in their browser
 5. On disconnect (tab close, network drop), the container keeps running for reconnection
@@ -14,15 +14,15 @@ rustguac can spawn ephemeral Docker desktop containers on demand. Each user gets
 
 ## Prerequisites
 
-VDI requires Docker on the same machine as rustguac. Install Docker and grant access:
+VDI requires Docker on the same machine as persea. Install Docker and grant access:
 
 ```bash
 # Install Docker (if not already installed)
 curl -fsSL https://get.docker.com | sh
 
-# Allow the rustguac user to manage containers
-sudo usermod -aG docker rustguac
-sudo systemctl restart rustguac
+# Allow the persea user to manage containers
+sudo usermod -aG docker persea
+sudo systemctl restart persea
 ```
 
 You also need at least one Docker image with xrdp pre-pulled on the host (see [Docker image requirements](#docker-image-requirements) below).
@@ -40,40 +40,40 @@ enabled = true
 # ready_timeout_secs = 120                  # wait for xrdp to start
 # port_range_start = 39000                  # optional localhost RDP port range
 # port_range_end = 39999
-# container_hook_script = "/opt/rustguac/vdi-container-hook.sh"
+# container_hook_script = "/opt/persea/vdi-container-hook.sh"
 # container_hook_timeout_secs = 10
 # idle_timeout_mins = 60                    # container lifetime after disconnect
 # home_base = "/vdi-homes"                  # persistent home directories
 # allowed_images = ["myregistry/desktop:latest"]  # whitelist, empty = allow all
 ```
 
-The `rustguac` system user must be in the `docker` group:
+The `persea` system user must be in the `docker` group:
 
 ```bash
-sudo usermod -aG docker rustguac
-sudo systemctl restart rustguac
+sudo usermod -aG docker persea
+sudo systemctl restart persea
 ```
 
 ## Docker image requirements
 
-rustguac supports two patterns for image authentication:
+persea supports two patterns for image authentication:
 
 ### Pattern A: env-var driven (recommended for shared deployments)
 
 The image reads `VDI_USERNAME` and `VDI_PASSWORD` from its entrypoint, calls `useradd` / `chpasswd` to provision the account, and starts xrdp. This is the default flow:
 
-- rustguac derives `VDI_USERNAME` from the operator's identity (everything before `@`, lowercased, non-alphanumeric replaced with `_`).
+- persea derives `VDI_USERNAME` from the operator's identity (everything before `@`, lowercased, non-alphanumeric replaced with `_`).
 - `VDI_PASSWORD` is freshly generated per connect (32 random hex chars).
-- Container name is deterministic per operator (`rustguac-vdi-<username>`), so reconnects reuse the same container.
+- Container name is deterministic per operator (`persea-vdi-<username>`), so reconnects reuse the same container.
 - xrdp listens on port 3389 with TLS certificates configured.
 
 A minimal example image is at `contrib/vdi-test-image/` (Debian + xfce4).
 
 ### Pattern B: baked-in account (for images with fixed credentials)
 
-If your image has a hardcoded user account that does not honour `VDI_USERNAME` / `VDI_PASSWORD`, set `container_username` and `container_password` on the entry. rustguac uses those values for the RDP login into the container.
+If your image has a hardcoded user account that does not honour `VDI_USERNAME` / `VDI_PASSWORD`, set `container_username` and `container_password` on the entry. persea uses those values for the RDP login into the container.
 
-**`VDI_USERNAME` / `VDI_PASSWORD` are still injected** with the override values, so an image that *also* happens to read them gets consistent state. Images that ignore the env vars simply continue to use their baked-in account; rustguac just makes sure the RDP login matches.
+**`VDI_USERNAME` / `VDI_PASSWORD` are still injected** with the override values, so an image that *also* happens to read them gets consistent state. Images that ignore the env vars simply continue to use their baked-in account; persea just makes sure the RDP login matches.
 
 The container name is still deterministic from the resolved username, so multiple operators connecting via an entry that uses a fixed `container_username` will share the same container instance. Confirm this is what you want before using Pattern B at scale.
 
@@ -110,7 +110,7 @@ exec xrdp --nodaemon
 
 1. Create a folder in the connections (or use an existing one)
 2. Add a new entry with type **VDI (Docker)**
-3. Set the **Container Image** (e.g. `rustguac-vdi-test:latest`)
+3. Set the **Container Image** (e.g. `persea-vdi-test:latest`)
 4. Optionally set CPU limit, memory limit, environment variables, idle timeout
 5. If the image has a baked-in user account (Pattern B above), set **Container username** and **Container password** to match; otherwise leave them blank and the image's entrypoint will provision the account from `VDI_USERNAME` / `VDI_PASSWORD`
 6. Click Save
@@ -147,21 +147,21 @@ Dormant VDI containers (running but no active browser session) also appear with 
 
 ## Container hook
 
-Set `container_hook_script` when Rustguac needs an external command to prepare
+Set `container_hook_script` when Persea needs an external command to prepare
 or tear down access to a container's mapped RDP port. This can be used for
 deployment-specific setup that must happen after Docker has assigned the port
-and before Rustguac starts probing xrdp.
+and before Persea starts probing xrdp.
 
-Rustguac calls the script as:
+Persea calls the script as:
 
 ```bash
-/opt/rustguac/vdi-container-hook.sh up   <port> <container_id> <container_name>
-/opt/rustguac/vdi-container-hook.sh down <port> <container_id> <container_name>
+/opt/persea/vdi-container-hook.sh up   <port> <container_id> <container_name>
+/opt/persea/vdi-container-hook.sh down <port> <container_id> <container_name>
 ```
 
-`up` runs after Docker inspect finds the mapped RDP port and before Rustguac
+`up` runs after Docker inspect finds the mapped RDP port and before Persea
 checks whether xrdp is ready on `127.0.0.1:<port>`. The script should return
-only after the local listener is available. `down` runs before Rustguac stops
+only after the local listener is available. `down` runs before Persea stops
 and removes the container. Hook execution is limited by
 `container_hook_timeout_secs` (default: 10 seconds).
 
@@ -181,4 +181,4 @@ Each VDI connections entry can override:
 - Use `allowed_images` to restrict which images can be used
 - Containers run with default Docker isolation (no `--privileged`)
 - Credentials are auto-generated per session (users never see the RDP password)
-- The `rustguac` user needs Docker socket access but no other elevated permissions
+- The `persea` user needs Docker socket access but no other elevated permissions

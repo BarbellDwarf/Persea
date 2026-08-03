@@ -1,4 +1,4 @@
-# Enterprise Session Management, RBAC, and Audit Patterns for rustguac
+# Enterprise Session Management, RBAC, and Audit Patterns for persea
 
 Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-53, NIST 800-63B, and SOC 2 documentation.
 
@@ -20,7 +20,7 @@ Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-
 - `api-session-timeout` (default 60 minutes) controls **authentication token** expiry, NOT remote desktop connection idle timeout
 - Guacamole considers an open remote desktop connection as "user activity" regardless of mouse/keyboard input — so `api-session-timeout` does NOT close idle remote sessions
 - Remote desktop idle timeout must be configured on the **target server** (e.g., Windows Group Policy "Idle session limit", SSH `ClientAliveInterval`/`ClientAliveCountMax`)
-- **Key insight for rustguac**: idle timeout must be implemented at the WebSocket/guacd level, not at the HTTP session level
+- **Key insight for persea**: idle timeout must be implemented at the WebSocket/guacd level, not at the HTTP session level
 
 **Max Duration / Concurrent Sessions:**
 - No built-in max session duration or concurrent session limit in open-source Guacamole
@@ -75,7 +75,7 @@ Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-
 - Roles assigned at any scope, permissions cascade down
 - Grant strings: `id=;type=;actions=;output_fields=`
 
-### Best Practices for rustguac
+### Best Practices for persea
 
 **Session Binding:**
 - Tie every session to the authenticated identity (user email + OIDC subject)
@@ -87,7 +87,7 @@ Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-
 - On timeout: close WebSocket → sends disconnect to guacd → guacd closes protocol connection
 - What gets terminated: **both** — the WebSocket proxy connection AND the guacd TCP connection
 - The guacd connection is a child of the WebSocket; closing the parent kills the child
-- Implement at the proxy layer (rustguac websocket.rs), not at HTTP session level
+- Implement at the proxy layer (persea websocket.rs), not at HTTP session level
 
 **Max Duration:**
 - Hard cap per-session (configurable, default 8 hours like Boundary)
@@ -165,7 +165,7 @@ spec:
 - **`authorize-session`**: the critical permission — who can connect to what
 - **Managed groups**: auto-populated from IdP group membership
 
-### rustguac Role Assessment
+### persea Role Assessment
 
 Current roles: `admin` (4) > `poweruser` (3) > `operator` (2) > `viewer` (1)
 
@@ -239,7 +239,7 @@ CREATE TABLE connection_permissions (
 - No syslog/SIEM integration built-in
 - Recordings are proprietary format (`.guac`)
 
-### Recommended rustguac SQLite Audit Log Schema
+### Recommended persea SQLite Audit Log Schema
 
 Based on AU-2/AU-3 requirements:
 
@@ -277,12 +277,12 @@ CREATE INDEX IF NOT EXISTS idx_ae_outcome ON audit_events(outcome);
 
 **CEF (Common Event Format)** — preferred for Splunk, ArcSight, QRadar:
 ```
-CEF:0|rustguac|rustguac|1.0|session.start|Session Started|5|src=10.0.0.1 suser=admin@example.com destinationServiceName=ssh-target1 cs1=uuid-here cs1Label=sessionId cs2=ssh cs2Label=sessionType
+CEF:0|persea|persea|1.0|session.start|Session Started|5|src=10.0.0.1 suser=admin@example.com destinationServiceName=ssh-target1 cs1=uuid-here cs1Label=sessionId cs2=ssh cs2Label=sessionType
 ```
 
 **LEEF (Log Event Extended Format)** — IBM QRadar native:
 ```
-LEEF:1.0|rustguac|rustguac|1.0|session.start|devTime=2024-01-15T10:30:00Z|src=10.0.0.1 usrName=admin@example.com sessionId=uuid-here sessionType=ssh target=ssh-target1
+LEEF:1.0|persea|persea|1.0|session.start|devTime=2024-01-15T10:30:00Z|src=10.0.0.1 usrName=admin@example.com sessionId=uuid-here sessionType=ssh target=ssh-target1
 ```
 
 **Implementation recommendation:**
@@ -341,9 +341,9 @@ LEEF:1.0|rustguac|rustguac|1.0|session.start|devTime=2024-01-15T10:30:00Z|src=10
 11. **Paste support**: enable paste in password fields (for password managers)
 12. **Storage**: salted cryptographic hashing (PBKDF2, Argon2, bcrypt)
 
-### rustguac Implementation
+### persea Implementation
 
-**Current state:** rustguac uses SHA-256 for API key hashing (not password-based auth). No local password policy exists since OIDC handles authentication.
+**Current state:** persea uses SHA-256 for API key hashing (not password-based auth). No local password policy exists since OIDC handles authentication.
 
 **If adding local password auth:**
 
@@ -398,7 +398,7 @@ NIST recommends **progressive delay**, not permanent lockout:
 
 ### IP Allowlisting (Already Implemented)
 
-rustguac already has CIDR allowlists per admin API key. Need to extend:
+persea already has CIDR allowlists per admin API key. Need to extend:
 - Per-connection IP allowlists (stored in Vault or SQLite)
 - Per-user IP restrictions
 - Time-based access windows
@@ -410,7 +410,7 @@ rustguac already has CIDR allowlists per admin API key. Need to extend:
 - Boundary: `session_max_seconds` per target (limits per-connection duration)
 - Time-of-day restrictions: not built into either, but achievable via policy engines
 
-**Implementation for rustguac:**
+**Implementation for persea:**
 
 ```sql
 -- Time-based access rules
@@ -432,7 +432,7 @@ CREATE TABLE access_windows (
 - Boundary: users request access → approval → temporary credential → auto-revoke
 - Teleport: Access Requests with Slack/PagerDuty approval workflows
 
-**rustguac JIT implementation:**
+**persea JIT implementation:**
 1. User requests access to a connection (POST /api/jit-request)
 2. Admin approves (or auto-approve for low-risk connections)
 3. Time-bound permission created (e.g., 4-hour window)
@@ -457,7 +457,7 @@ CREATE TABLE jit_requests (
 
 ---
 
-## Summary: Priority Implementation Order for rustguac
+## Summary: Priority Implementation Order for persea
 
 ### Phase 1 (Immediate)
 1. **Unified audit event log** — replace scattered audit tables with `audit_events` (AU-2/AU-3 compliant)

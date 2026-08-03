@@ -1,6 +1,6 @@
 # Themes
 
-rustguac ships with a small set of built-in colour presets and lets you
+persea ships with a small set of built-in colour presets and lets you
 add your own without recompiling. This page covers everything theme:
 choosing a preset, overriding individual colours, and authoring a brand
 new theme as a `.toml` file.
@@ -41,7 +41,7 @@ users and lets you override individual colours on top of that preset.
 ```toml
 [theme]
 preset = "aurora"            # base preset; defaults to "aurora" if omitted
-logo_url = "/logo.png"       # optional, replaces the rustguac logo
+logo_url = "/logo.png"       # optional, replaces the persea logo
 primary_color = "#003366"    # any of the per-field overrides below
 ```
 
@@ -96,8 +96,8 @@ accent_color = "#FF6600"
 
 Since v1.7.1 you can ship arbitrary themes as standalone files without
 touching Rust or the project repo. Drop a `<name>.toml` file into
-`<static_path>/themes/` (typically `/opt/rustguac/static/themes/`), restart
-rustguac, and the theme appears in the gear-menu picker. Available to all
+`<static_path>/themes/` (typically `/opt/persea/static/themes/`), restart
+persea, and the theme appears in the gear-menu picker. Available to all
 users; selectable as `preset = "<name>"` in `config.toml`.
 
 ### File format
@@ -110,7 +110,7 @@ match the per-field overrides above, but **without** the `_color` suffix
 which defaults to `"none"` if omitted.
 
 ```toml
-# /opt/rustguac/static/themes/acme-night.toml
+# /opt/persea/static/themes/acme-night.toml
 primary          = "#003366"
 primary_hover    = "#002244"
 accent           = "#FF6600"
@@ -144,7 +144,7 @@ hop_fg           = "#34d399"
 bg_pattern       = "none"
 ```
 
-A complete example ships with rustguac at
+A complete example ships with persea at
 `static/themes/catppuccin-macchiato.toml`. Copy it and tweak.
 
 ### Naming rules
@@ -161,12 +161,12 @@ path-traversal or homoglyph mischief from crafted filenames.
 If you create a file named after a built-in (`aurora.toml`,
 `corporate.toml`, …) it **replaces** the built-in in the picker and in
 `preset` resolution. This is the supported way to re-brand a built-in
-without forking rustguac: edit your own `aurora.toml` rather than
+without forking persea: edit your own `aurora.toml` rather than
 patching the Rust source.
 
 ### Loading rules
 
-- Loaded once at rustguac startup. Restart `rustguac` after adding,
+- Loaded once at persea startup. Restart `persea` after adding,
   editing, or removing a theme file.
 - Files must have a `.toml` extension to be loaded.
 - Each file must contain all required colour fields. Files missing
@@ -182,15 +182,15 @@ set in `config.toml`; defaults are:
 
 | Install method | Default static_path |
 |----------------|---------------------|
-| `.deb` (Debian) | `/opt/rustguac/static/` |
-| Docker image | `/opt/rustguac/static/` |
-| `install.sh` (bare metal) | `/opt/rustguac/static/` |
+| `.deb` (Debian) | `/opt/persea/static/` |
+| Docker image | `/opt/persea/static/` |
+| `install.sh` (bare metal) | `/opt/persea/static/` |
 | Cargo run from source | `./static/` |
 
 For Docker, mount your themes directory over the in-image path:
 
 ```bash
-docker run -v /etc/rustguac/themes:/opt/rustguac/static/themes:ro ...
+docker run -v /etc/persea/themes:/opt/persea/static/themes:ro ...
 ```
 
 ## Per-user theme switching

@@ -1,6 +1,6 @@
 # NetBox Integration
 
-rustguac integrates with [NetBox](https://netbox.dev/) to provide one-click remote console access from device pages. No NetBox plugin is required — the integration uses NetBox's built-in Custom Links, Custom Fields, and Event Rules.
+persea integrates with [NetBox](https://netbox.dev/) to provide one-click remote console access from device pages. No NetBox plugin is required — the integration uses NetBox's built-in Custom Links, Custom Fields, and Event Rules.
 
 **Note:** NetBox Custom Links and Webhook body templates use **Jinja2** template syntax. Filter arguments use parentheses — `default('ssh')` — not Django's colon syntax (`default:'ssh'`). Only standard Jinja2 filters are available (e.g. `lower`, `default`, `split`). Ansible filters like `regex_replace` and Django filters like `cut` are **not** available. Custom Links use `object.cf.field_name` for custom fields; Webhook body templates use `data.custom_fields.field_name` (the REST API serialization).
 
@@ -83,7 +83,7 @@ Use NetBox's **bulk edit** to enable across multiple devices at once.
 
 ## Webhook-Driven Connections Sync
 
-Automatically sync NetBox devices to rustguac's Vault-backed connections using Event Rules and Webhooks. This keeps connections entries in sync with NetBox — when a device is created or updated, the corresponding entry is created in Vault.
+Automatically sync NetBox devices to persea's Vault-backed connections using Event Rules and Webhooks. This keeps connections entries in sync with NetBox — when a device is created or updated, the corresponding entry is created in Vault.
 
 ### Filtering: control what syncs
 
@@ -132,14 +132,14 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 ### Create webhook: device created/updated
 
 1. **Create an Event Rule** (**Operations > Event Rules**):
-   - Name: `rustguac-sync-create`
+   - Name: `persea-sync-create`
    - Content Types: dcim > device
    - Events: Object created, Object updated
    - Conditions: your filter (see above)
    - Action type: Webhook
 
 2. **Create the Webhook**:
-   - Name: `rustguac-sync-create`
+   - Name: `persea-sync-create`
    - URL: `https://console.example.com/api/addressbook/folders/shared/netbox-sync/entries`
    - HTTP method: POST
    - HTTP content type: `application/json`
@@ -164,13 +164,13 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 ### Create webhook: device deleted
 
 1. **Create an Event Rule**:
-   - Name: `rustguac-sync-delete`
+   - Name: `persea-sync-delete`
    - Content Types: dcim > device
    - Events: Object deleted
    - Action type: Webhook
 
 2. **Create the Webhook**:
-   - Name: `rustguac-sync-delete`
+   - Name: `persea-sync-delete`
    - URL: `https://console.example.com/api/addressbook/folders/shared/netbox-sync/entries/{{ data.name | lower }}`
    - HTTP method: DELETE
    - Additional headers:
@@ -196,11 +196,11 @@ curl -X POST https://console.example.com/api/addressbook/folders \
 
 ## Shared SSO
 
-Both NetBox and rustguac support OIDC authentication. When configured with the same OIDC provider (Authentik, Keycloak, Okta, etc.), users authenticate once and get sessions in both applications. The Custom Link in NetBox opens rustguac, which recognises the existing SSO session — no second login prompt.
+Both NetBox and persea support OIDC authentication. When configured with the same OIDC provider (Authentik, Keycloak, Okta, etc.), users authenticate once and get sessions in both applications. The Custom Link in NetBox opens persea, which recognises the existing SSO session — no second login prompt.
 
 ## Example: Full Setup
 
-1. Configure rustguac with OIDC (see [Integrations > OIDC](integrations.md))
+1. Configure persea with OIDC (see [Integrations > OIDC](integrations.md))
 2. Configure NetBox with the same OIDC provider
 3. Create the four custom fields (`console_enabled`, `console_mode`, `remote_protocol`, `remote_port`)
 4. Create the two Custom Links (Console green, Quick SSH blue)

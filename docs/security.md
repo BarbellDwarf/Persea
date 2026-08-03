@@ -1,49 +1,49 @@
 # Security
 
-rustguac is designed with a security-first approach. This document covers all security features and their implementation.
+persea is designed with a security-first approach. This document covers all security features and their implementation.
 
 ## TLS encryption
 
 ### Client-facing HTTPS
 
-When `cert_path` and `key_path` are set in the `[tls]` section, rustguac serves HTTPS using rustls (a modern, memory-safe TLS implementation). The install script generates a self-signed certificate by default.
+When `cert_path` and `key_path` are set in the `[tls]` section, persea serves HTTPS using rustls (a modern, memory-safe TLS implementation). The install script generates a self-signed certificate by default.
 
 ```toml
 [tls]
-cert_path = "/opt/rustguac/tls/cert.pem"
-key_path = "/opt/rustguac/tls/key.pem"
+cert_path = "/opt/persea/tls/cert.pem"
+key_path = "/opt/persea/tls/key.pem"
 ```
 
-If you're behind a TLS-terminating reverse proxy (e.g. Traefik, HAProxy, nginx), you can omit `cert_path`/`key_path` and rustguac will serve plain HTTP.
+If you're behind a TLS-terminating reverse proxy (e.g. Traefik, HAProxy, nginx), you can omit `cert_path`/`key_path` and persea will serve plain HTTP.
 
 Generate a certificate:
 
 ```bash
-rustguac generate-cert --hostname your-hostname.example.com --out-dir /opt/rustguac/tls
+persea generate-cert --hostname your-hostname.example.com --out-dir /opt/persea/tls
 ```
 
 ### guacd TLS
 
-The connection between rustguac and guacd can also be encrypted with TLS. When `guacd_cert_path` is set, rustguac connects to guacd over TLS, trusting the specified certificate. This is independent of server HTTPS — you can use guacd TLS without serving HTTPS yourself.
+The connection between persea and guacd can also be encrypted with TLS. When `guacd_cert_path` is set, persea connects to guacd over TLS, trusting the specified certificate. This is independent of server HTTPS — you can use guacd TLS without serving HTTPS yourself.
 
 **Full HTTPS + guacd TLS:**
 ```toml
 [tls]
-cert_path = "/opt/rustguac/tls/cert.pem"
-key_path = "/opt/rustguac/tls/key.pem"
-guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+cert_path = "/opt/persea/tls/cert.pem"
+key_path = "/opt/persea/tls/key.pem"
+guacd_cert_path = "/opt/persea/tls/cert.pem"
 ```
 
 **HTTP server + guacd TLS** (behind a reverse proxy):
 ```toml
 [tls]
-guacd_cert_path = "/opt/rustguac/tls/guacd-cert.pem"
+guacd_cert_path = "/opt/persea/tls/guacd-cert.pem"
 ```
 
 guacd must be started with matching TLS flags:
 
 ```bash
-guacd -b 127.0.0.1 -l 4822 -L info -f -C /opt/rustguac/tls/cert.pem -K /opt/rustguac/tls/key.pem
+guacd -b 127.0.0.1 -l 4822 -L info -f -C /opt/persea/tls/cert.pem -K /opt/persea/tls/key.pem
 ```
 
 The install script configures both sides automatically.
@@ -63,7 +63,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 
 ## Authentication
 
-rustguac supports a pluggable authentication chain. Providers are tried in config order — first success wins. An optional TOTP second factor can be layered on top. See [Roles and Access Control](roles-and-access-control.md) for the full role system.
+persea supports a pluggable authentication chain. Providers are tried in config order — first success wins. An optional TOTP second factor can be layered on top. See [Roles and Access Control](roles-and-access-control.md) for the full role system.
 
 ### API key authentication
 
@@ -77,7 +77,7 @@ rustguac supports a pluggable authentication chain. Providers are tried in confi
 ### OIDC session authentication
 
 - Session tokens are 256-bit random values, stored in SQLite with a TTL
-- Cookie: `rustguac_session` with `HttpOnly`, `Secure` (when TLS enabled), `SameSite=Lax`
+- Cookie: `persea_session` with `HttpOnly`, `Secure` (when TLS enabled), `SameSite=Lax`
 - Configurable TTL (default: 24 hours)
 - PKCE and nonce validation on every login flow
 - Works with any OIDC provider (Authentik, Keycloak, Okta, Azure AD, Google, etc.)
@@ -186,7 +186,7 @@ All responses include the following headers:
 
 ## Audit logging
 
-rustguac logs security-relevant events via the `tracing` framework:
+persea logs security-relevant events via the `tracing` framework:
 
 - Authentication failures (API key, user token, OIDC, LDAP, RADIUS, SAML, database)
 - Session creation, connection, and termination
@@ -198,11 +198,11 @@ Additionally, user API token operations are logged to a persistent `token_audit_
 
 ### Hash chain audit logging
 
-rustguac maintains a SHA-256 hash chain for audit events, providing tamper evidence. Each event includes a hash of the previous event, forming an append-only chain:
+persea maintains a SHA-256 hash chain for audit events, providing tamper evidence. Each event includes a hash of the previous event, forming an append-only chain:
 
 - Events include: event type, timestamp, user ID, source IP, outcome, details, and session ID
 - Each event hash is computed from canonical JSON (sorted keys, no whitespace) of all fields plus the previous hash
-- Chain verification can be run via the CLI (`rustguac verify-audit-chain`) or the Admin UI
+- Chain verification can be run via the CLI (`persea verify-audit-chain`) or the Admin UI
 - A broken chain indicates tampering — the event at the break point and all subsequent events are flagged
 
 **Verification result:**
@@ -254,7 +254,7 @@ Lockout state is per-user and resets on successful authentication. The lockout c
 
 ## RBAC (Role-Based Access Control)
 
-rustguac implements two layers of access control:
+persea implements two layers of access control:
 
 ### System permissions
 
@@ -307,7 +307,7 @@ Web browser sessions (headless Chromium on Xvnc) include several security layers
 
 ### Chromium managed policy
 
-A managed policy is installed at `/etc/chromium/policies/managed/rustguac.json` that restricts Chromium's capabilities. **This policy is global** — it affects all Chromium instances on the machine, not just rustguac sessions. Do not install rustguac on a machine where you want to use Chromium for normal browsing.
+A managed policy is installed at `/etc/chromium/policies/managed/persea.json` that restricts Chromium's capabilities. **This policy is global** — it affects all Chromium instances on the machine, not just persea sessions. Do not install persea on a machine where you want to use Chromium for normal browsing.
 
 Policies applied:
 
@@ -331,9 +331,9 @@ Connections entries can specify an `allowed_domains` list. When set, Chromium ca
 
 Subdomains are automatically included — adding `example.com` allows `*.example.com` as well.
 
-**Important:** The `allowed_domains` field restricts which domains the browser can reach. This is separate from the server-side `web_allowed_networks` CIDR allowlist, which controls which target hosts rustguac will connect to when creating sessions. Both can be active simultaneously:
+**Important:** The `allowed_domains` field restricts which domains the browser can reach. This is separate from the server-side `web_allowed_networks` CIDR allowlist, which controls which target hosts persea will connect to when creating sessions. Both can be active simultaneously:
 
-- `web_allowed_networks` — server-side CIDR filter applied at session creation time (controls what the rustguac server is allowed to connect to)
+- `web_allowed_networks` — server-side CIDR filter applied at session creation time (controls what the persea server is allowed to connect to)
 - `allowed_domains` — client-side DNS restriction applied inside Chromium at runtime (controls what sites the user can navigate to within the browser session)
 
 ### Profile isolation
@@ -346,13 +346,13 @@ Chromium runs with its normal sandbox enabled (via the SUID `chrome-sandbox` hel
 
 ## TLS hot-reload
 
-TLS certificates can be rotated without restarting rustguac:
+TLS certificates can be rotated without restarting persea:
 
 - **File watcher** — inotify/kqueue monitors the certificate and key files for changes
-- **SIGHUP** — send `SIGHUP` to the rustguac process to force immediate reload
+- **SIGHUP** — send `SIGHUP` to the persea process to force immediate reload
 - **Admin UI** — upload new certificates via the admin settings page
 
-When a change is detected, rustguac reloads the certificate and key from disk and begins serving the new TLS configuration on subsequent connections. Existing connections are not interrupted.
+When a change is detected, persea reloads the certificate and key from disk and begins serving the new TLS configuration on subsequent connections. Existing connections are not interrupted.
 
 ## Multi-database encryption at rest
 
@@ -363,7 +363,7 @@ When using MySQL, PostgreSQL, or SQLite via `db_url`, connection credentials can
 encryption_key = "aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344"
 ```
 
-Encrypted values are prefixed with `enc:v1:` for future key rotation support. The encryption key can also be provided via the `RGUAC_STORAGE_KEY` environment variable.
+Encrypted values are prefixed with `enc:v1:` for future key rotation support. The encryption key can also be provided via the `PERSEA_STORAGE_KEY` environment variable.
 
 **What is encrypted:**
 - Connection passwords
@@ -385,11 +385,11 @@ Encrypted values are prefixed with `enc:v1:` for future key rotation support. Th
 
 | Path | Mode | Owner |
 |------|------|-------|
-| Drive directories | 0750 (rwxr-x---) | rustguac:rustguac |
-| LUKS device file | 0600 (rw-------) | rustguac:rustguac |
-| Recording files | 0640 (rw-r-----) | rustguac:rustguac |
-| Recording directory | 0750 (rwxr-x---) | rustguac:rustguac |
-| TLS private key | 0600 (rw-------) | rustguac:rustguac |
+| Drive directories | 0750 (rwxr-x---) | persea:persea |
+| LUKS device file | 0600 (rw-------) | persea:persea |
+| Recording files | 0640 (rw-r-----) | persea:persea |
+| Recording directory | 0750 (rwxr-x---) | persea:persea |
+| TLS private key | 0600 (rw-------) | persea:persea |
 
 ## SQL injection protection
 
@@ -409,7 +409,7 @@ HTTP request bodies are limited to 64KB to prevent memory exhaustion attacks.
 
 ## Trusted proxy support
 
-When `trusted_proxies` is configured, rustguac extracts the real client IP from the `X-Forwarded-For` header for connections originating from trusted proxy CIDRs. This ensures correct IP-based rate limiting and audit logging behind reverse proxies.
+When `trusted_proxies` is configured, persea extracts the real client IP from the `X-Forwarded-For` header for connections originating from trusted proxy CIDRs. This ensures correct IP-based rate limiting and audit logging behind reverse proxies.
 
 ```toml
 trusted_proxies = ["127.0.0.1/32"]

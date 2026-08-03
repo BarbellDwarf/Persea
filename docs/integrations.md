@@ -2,7 +2,7 @@
 
 ## OIDC Single Sign-On
 
-rustguac supports OpenID Connect for user authentication. Any OIDC provider works: Authentik, Keycloak, Okta, Azure AD, Google, etc.
+persea supports OpenID Connect for user authentication. Any OIDC provider works: Authentik, Keycloak, Okta, Azure AD, Google, etc.
 
 ### Setup
 
@@ -13,7 +13,7 @@ rustguac supports OpenID Connect for user authentication. Any OIDC provider work
 
 ```toml
 [oidc]
-issuer_url = "https://authentik.example.com/application/o/rustguac/"
+issuer_url = "https://authentik.example.com/application/o/persea/"
 client_id = "your-client-id"
 client_secret = "your-client-secret"
 redirect_uri = "https://your-host/auth/callback"
@@ -28,13 +28,13 @@ The `client_secret` can be provided via the `OIDC_CLIENT_SECRET` environment var
 
 ```bash
 # For systemd
-echo 'OIDC_CLIENT_SECRET=your-secret' >> /opt/rustguac/env
-chmod 600 /opt/rustguac/env
+echo 'OIDC_CLIENT_SECRET=your-secret' >> /opt/persea/env
+chmod 600 /opt/persea/env
 ```
 
 ### OIDC groups
 
-rustguac extracts group memberships from the OIDC ID token. The claim name is configurable (default: `groups`). Groups are used for:
+persea extracts group memberships from the OIDC ID token. The claim name is configurable (default: `groups`). Groups are used for:
 
 - **Automatic role assignment** via group-to-role mappings (see [Roles and Access Control](roles-and-access-control.md))
 - **Connections folder access** — folders can be restricted to specific OIDC groups
@@ -50,7 +50,7 @@ extra_scopes = ["groups"]
 1. User clicks "Login" on the web UI
 2. Redirected to OIDC provider with PKCE challenge
 3. After authentication, provider redirects to `/auth/callback`
-4. rustguac validates the token (PKCE + nonce), extracts user info and groups
+4. persea validates the token (PKCE + nonce), extracts user info and groups
 5. User is created or updated in the database
 6. Group-to-role mappings are evaluated (highest matching role wins)
 7. A session cookie is set and the user is redirected to the application
@@ -61,7 +61,7 @@ extra_scopes = ["groups"]
 
 ### Authentik setup guide
 
-[Authentik](https://goauthentik.io/) is a recommended open-source identity provider that works well with rustguac.
+[Authentik](https://goauthentik.io/) is a recommended open-source identity provider that works well with persea.
 
 **1. Create a `groups` scope mapping** in Authentik (skip if your instance already has one):
 
@@ -69,9 +69,9 @@ Authentik does not ship a `groups` scope mapping by default, so the `groups` sco
 
 - Go to **Customisation > Property Mappings > Create**
 - Type: **Scope Mapping** (under OAuth2/OpenID)
-- Name: `rustguac groups`
+- Name: `persea groups`
 - Scope name: `groups`
-- Description (optional): `Group memberships for rustguac`
+- Description (optional): `Group memberships for persea`
 - Expression:
 
   ```python
@@ -80,57 +80,57 @@ Authentik does not ship a `groups` scope mapping by default, so the `groups` sco
   }
   ```
 
-This creates a `groups` claim in the ID token containing the user's Authentik group names. Used by rustguac for group-to-role mapping (step 6).
+This creates a `groups` claim in the ID token containing the user's Authentik group names. Used by persea for group-to-role mapping (step 6).
 
 **2. Create a provider** in Authentik:
 
 - Go to **Applications > Providers > Create**
 - Select **OAuth2/OpenID Connect**
-- Name: `rustguac`
+- Name: `persea`
 - Authorization flow: pick your default authorization flow (e.g., `default-provider-authorization-implicit-consent`)
 - Client type: **Confidential**
-- Redirect URIs: `https://your-rustguac-host/auth/callback`
+- Redirect URIs: `https://your-persea-host/auth/callback`
 - Under **Advanced protocol settings**:
-  - Scopes: ensure `openid`, `email`, `profile`, **and the `rustguac groups` mapping you created in step 1** are selected
+  - Scopes: ensure `openid`, `email`, `profile`, **and the `persea groups` mapping you created in step 1** are selected
 
 **3. Create an application:**
 
 - Go to **Applications > Applications > Create**
-- Name: `rustguac`
-- Slug: `rustguac`
+- Name: `persea`
+- Slug: `persea`
 - Provider: select the provider you just created
-- Launch URL: `https://your-rustguac-host/`
+- Launch URL: `https://your-persea-host/`
 
 **4. Note the provider details:**
 
 - Go back to the provider and note the **Client ID** and **Client Secret**
-- The **OpenID Configuration Issuer** will be: `https://authentik.example.com/application/o/rustguac/`
+- The **OpenID Configuration Issuer** will be: `https://authentik.example.com/application/o/persea/`
 
-**5. Configure rustguac:**
+**5. Configure persea:**
 
 ```toml
 [oidc]
-issuer_url = "https://authentik.example.com/application/o/rustguac/"
+issuer_url = "https://authentik.example.com/application/o/persea/"
 client_id = "your-client-id"
-redirect_uri = "https://your-rustguac-host/auth/callback"
+redirect_uri = "https://your-persea-host/auth/callback"
 default_role = "operator"
 groups_claim = "groups"
 extra_scopes = ["groups"]
 ```
 
 ```bash
-echo 'OIDC_CLIENT_SECRET=your-client-secret' >> /opt/rustguac/env
-chmod 600 /opt/rustguac/env
-sudo systemctl restart rustguac
+echo 'OIDC_CLIENT_SECRET=your-client-secret' >> /opt/persea/env
+chmod 600 /opt/persea/env
+sudo systemctl restart persea
 ```
 
 **6. (Optional) Set up group-to-role mappings:**
 
-Create groups in Authentik (e.g., `rustguac-admins`, `rustguac-operators`) and assign users to them. Then configure group-to-role mappings in the rustguac Admin page so that group membership automatically assigns roles on login. See [Roles and Access Control](roles-and-access-control.md) for details.
+Create groups in Authentik (e.g., `persea-admins`, `persea-operators`) and assign users to them. Then configure group-to-role mappings in the persea Admin page so that group membership automatically assigns roles on login. See [Roles and Access Control](roles-and-access-control.md) for details.
 
 ### Microsoft Entra ID (Azure AD) setup guide
 
-Entra ID works with rustguac via OIDC, but the way it exposes group
+Entra ID works with persea via OIDC, but the way it exposes group
 memberships is different from Authentik / Keycloak / JumpCloud and trips
 people up.
 
@@ -146,10 +146,10 @@ AADSTS650053: The application asked for scope 'groups' that doesn't exist on the
 **1. Register the application** in the Entra portal:
 
 - Go to **Microsoft Entra ID > App registrations > New registration**
-- Name: `rustguac` (or whatever you prefer)
+- Name: `persea` (or whatever you prefer)
 - Supported account types: **Single tenant** (or whichever fits your
   deployment)
-- Redirect URI: type **Web**, value `https://your-rustguac-host/auth/callback`
+- Redirect URI: type **Web**, value `https://your-persea-host/auth/callback`
 - Note the **Application (client) ID** and **Directory (tenant) ID**
 
 **2. Create a client secret:**
@@ -172,16 +172,16 @@ This is the step that replaces Authentik's `groups` scope.
   **object IDs** (recommended; stable across rename), or expand the
   optional settings and pick **sAMAccountName** if you'd prefer group
   names. If you pick names, the group-to-role mappings you configure in
-  the rustguac Admin page must reference those names.
+  the persea Admin page must reference those names.
 - Save
 
-**4. Configure rustguac:**
+**4. Configure persea:**
 
 ```toml
 [oidc]
 issuer_url = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 client_id = "{application-client-id}"
-redirect_uri = "https://your-rustguac-host/auth/callback"
+redirect_uri = "https://your-persea-host/auth/callback"
 default_role = "operator"
 groups_claim = "groups"
 # DO NOT set extra_scopes = ["groups"] for Entra. Groups come from the
@@ -190,21 +190,21 @@ groups_claim = "groups"
 ```
 
 ```bash
-echo 'OIDC_CLIENT_SECRET={your-client-secret}' >> /opt/rustguac/env
-chmod 600 /opt/rustguac/env
-sudo systemctl restart rustguac
+echo 'OIDC_CLIENT_SECRET={your-client-secret}' >> /opt/persea/env
+chmod 600 /opt/persea/env
+sudo systemctl restart persea
 ```
 
 Replace `{tenant-id}` with your Directory (tenant) ID from step 1. The
 `{tenant-id}/v2.0` issuer URL is required (the v1 endpoint won't return
-the claims rustguac expects).
+the claims persea expects).
 
 **5. (Optional) Group-to-role mappings:**
 
 After your first successful login, the groups you belong to appear in the
-**seen groups** list on the rustguac Admin page. From there you can map
+**seen groups** list on the persea Admin page. From there you can map
 group object IDs (or names, if you chose sAMAccountName in step 3) to
-rustguac roles. See [Roles and Access Control](roles-and-access-control.md).
+persea roles. See [Roles and Access Control](roles-and-access-control.md).
 
 ### Troubleshooting
 
@@ -224,28 +224,28 @@ rustguac roles. See [Roles and Access Control](roles-and-access-control.md).
 
 ### Outbound HTTP proxy (egress)
 
-If rustguac has to reach your identity provider through an outbound HTTP proxy (for example Squid), no code change or config option is needed. The OIDC client honours the standard proxy environment variables, so set them in the service environment and restart.
+If persea has to reach your identity provider through an outbound HTTP proxy (for example Squid), no code change or config option is needed. The OIDC client honours the standard proxy environment variables, so set them in the service environment and restart.
 
 ```bash
 # For systemd (same env file as the client secret above)
-cat >> /opt/rustguac/env <<'EOF'
+cat >> /opt/persea/env <<'EOF'
 HTTPS_PROXY=http://squid.internal:3128
 HTTP_PROXY=http://squid.internal:3128
 NO_PROXY=127.0.0.1,localhost,.internal
 EOF
-systemctl restart rustguac
+systemctl restart persea
 ```
 
-The proxy URL scheme is `http://` (that is your connection to Squid), even though the OIDC issuer is `https`. rustguac reaches an `https` issuer through the proxy with an HTTP `CONNECT` tunnel, which Squid allows by default. The variables are read once when rustguac builds its HTTP client at startup, so a restart is required after changing them.
+The proxy URL scheme is `http://` (that is your connection to Squid), even though the OIDC issuer is `https`. persea reaches an `https` issuer through the proxy with an HTTP `CONNECT` tunnel, which Squid allows by default. The variables are read once when persea builds its HTTP client at startup, so a restart is required after changing them.
 
 Two things to watch:
 
-- **Vault/OpenBao egress uses the same variables.** rustguac's Vault client shares the proxy configuration, so a service-wide `HTTPS_PROXY` also routes Vault traffic through Squid. If your Vault is internal, add its host to `NO_PROXY` (as with `.internal` above). Connections to guacd are local TCP and are never proxied.
-- **TLS interception (SSL bump).** If Squid re-signs TLS, rustguac must trust Squid's CA. Either add it to the system trust store (`update-ca-certificates`) or point rustguac at it directly:
+- **Vault/OpenBao egress uses the same variables.** persea's Vault client shares the proxy configuration, so a service-wide `HTTPS_PROXY` also routes Vault traffic through Squid. If your Vault is internal, add its host to `NO_PROXY` (as with `.internal` above). Connections to guacd are local TCP and are never proxied.
+- **TLS interception (SSL bump).** If Squid re-signs TLS, persea must trust Squid's CA. Either add it to the system trust store (`update-ca-certificates`) or point persea at it directly:
 
   ```toml
   [oidc]
-  ca_cert = "/etc/rustguac/squid-ca.pem"
+  ca_cert = "/etc/persea/squid-ca.pem"
   ```
 
   Do not use `tls_skip_verify = true` to work around a bump: it disables certificate verification entirely and exposes your `client_secret` and tokens to man-in-the-middle. If Squid is a plain `CONNECT` tunnel with no bump, the provider's certificate passes through end to end and nothing extra is needed.
@@ -254,7 +254,7 @@ Two things to watch:
 
 ## Vault / OpenBao Connections
 
-The connections feature stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser. **Either Vault or OpenBao is required for the connections feature** (entries, folders, the Connections page); without it rustguac falls back to ad-hoc-only sessions via the Sessions page.
+The connections feature stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser. **Either Vault or OpenBao is required for the connections feature** (entries, folders, the Connections page); without it persea falls back to ad-hoc-only sessions via the Sessions page.
 
 ### Quickstart script
 
@@ -264,7 +264,7 @@ For a fresh single-host install, `contrib/vault-quickstart.sh` automates the man
 |------|-------------|------------|
 | (default) | Provision an existing Vault using `$VAULT_ADDR` and `$VAULT_TOKEN` | Already-deployed Vault |
 | `--dev`   | Spawn an in-memory dev-mode server and provision it | Demos, throwaway development |
-| `--local` | Install Vault or OpenBao as a systemd service with file storage and on-disk auto-unseal | Single-host rustguac deployments |
+| `--local` | Install Vault or OpenBao as a systemd service with file storage and on-disk auto-unseal | Single-host persea deployments |
 
 ```bash
 # Bootstrap an existing Vault:
@@ -281,11 +281,11 @@ sudo ./contrib/vault-quickstart.sh --cli bao --local
 
 The script does **not** install the Vault or OpenBao binary itself — install one from your distribution or the upstream packages first. After it runs, the script prints the `[vault]` block to drop into `config.toml` and the `VAULT_SECRET_ID` line for the systemd env file.
 
-> **`--local` security caveat:** the unseal key is stored on disk at `/etc/vault.d/unseal-key` (or `/etc/openbao/unseal-key`) mode 0400 root:root, and a `SECURITY.txt` file is written next to it. Anyone with root or read access to that file owns the secret store. This trade is fine for single-host rustguac boxes (where root compromise already means total compromise) but unacceptable for higher-stakes deployments. For real production use cloud-KMS auto-unseal: [Vault](https://developer.hashicorp.com/vault/docs/configuration/seal) | [OpenBao](https://openbao.org/docs/configuration/seal/).
+> **`--local` security caveat:** the unseal key is stored on disk at `/etc/vault.d/unseal-key` (or `/etc/openbao/unseal-key`) mode 0400 root:root, and a `SECURITY.txt` file is written next to it. Anyone with root or read access to that file owns the secret store. This trade is fine for single-host persea boxes (where root compromise already means total compromise) but unacceptable for higher-stakes deployments. For real production use cloud-KMS auto-unseal: [Vault](https://developer.hashicorp.com/vault/docs/configuration/seal) | [OpenBao](https://openbao.org/docs/configuration/seal/).
 
 ### Vault from Zero — Complete Setup Guide
 
-This section walks through every step from a bare server to a working rustguac + Vault integration. Skip sections that are already done.
+This section walks through every step from a bare server to a working persea + Vault integration. Skip sections that are already done.
 
 #### Installing Vault
 
@@ -334,16 +334,16 @@ Verify: `vault status` should show `Sealed: false`.
 vault secrets enable -path=secret kv-v2
 ```
 
-#### Create rustguac policy
+#### Create persea policy
 
-Create a file `rustguac-policy.hcl`:
+Create a file `persea-policy.hcl`:
 
 ```hcl
-path "secret/data/rustguac/*" {
+path "secret/data/persea/*" {
   capabilities = ["create", "read", "update", "delete", "list"]
 }
 
-path "secret/metadata/rustguac/*" {
+path "secret/metadata/persea/*" {
   capabilities = ["list"]
 }
 ```
@@ -351,7 +351,7 @@ path "secret/metadata/rustguac/*" {
 Apply it:
 
 ```bash
-vault policy write rustguac rustguac-policy.hcl
+vault policy write persea persea-policy.hcl
 ```
 
 #### Enable AppRole authentication
@@ -360,11 +360,11 @@ vault policy write rustguac rustguac-policy.hcl
 vault auth enable approle
 ```
 
-Create a role for rustguac:
+Create a role for persea:
 
 ```bash
-vault write auth/approle/role/rustguac \
-    token_policies="rustguac" \
+vault write auth/approle/role/persea \
+    token_policies="persea" \
     token_ttl=1h \
     token_max_ttl=4h \
     secret_id_ttl=0 \
@@ -374,11 +374,11 @@ vault write auth/approle/role/rustguac \
 Get the role_id and secret_id:
 
 ```bash
-vault read auth/approle/role/rustguac/role-id
-vault write -f auth/approle/role/rustguac/secret-id
+vault read auth/approle/role/persea/role-id
+vault write -f auth/approle/role/persea/secret-id
 ```
 
-#### Configure rustguac
+#### Configure persea
 
 Add to `config.toml`:
 
@@ -386,7 +386,7 @@ Add to `config.toml`:
 [vault]
 addr = "http://127.0.0.1:8200"
 mount = "secret"
-base_path = "rustguac"
+base_path = "persea"
 role_id = "<role-id from above>"
 ```
 
@@ -400,11 +400,11 @@ export VAULT_SECRET_ID="<secret-id from above>"
 
 ```bash
 # Put a test entry
-vault kv put secret/rustguac/shared/test-folder/test-entry \
+vault kv put secret/persea/shared/test-folder/test-entry \
     type=ssh hostname=localhost port=22 username=testuser
 
-# Check rustguac logs for successful Vault auth
-journalctl -u rustguac | grep -i vault
+# Check persea logs for successful Vault auth
+journalctl -u persea | grep -i vault
 # Expected: "Vault: authenticated via AppRole, token TTL=3600s"
 
 # Open the Connections page in the browser
@@ -421,12 +421,12 @@ The manual steps above are equivalent to what `vault-quickstart.sh` automates. U
 vault secrets enable -path=secret kv-v2
 ```
 
-**2. Create a policy** for rustguac:
+**2. Create a policy** for persea:
 
 ```bash
-vault policy write rustguac - <<'EOF'
+vault policy write persea - <<'EOF'
 # Connections entries: create, read, update, soft-delete
-path "secret/data/rustguac/*" {
+path "secret/data/persea/*" {
   capabilities = ["create", "read", "update", "delete"]
 }
 
@@ -434,7 +434,7 @@ path "secret/data/rustguac/*" {
 # - "list" + "read": browse the connections
 # - "delete": permanently remove entries and folders
 #   (KV v2 permanent deletes go through the metadata/ path, not data/)
-path "secret/metadata/rustguac/*" {
+path "secret/metadata/persea/*" {
   capabilities = ["list", "read", "delete"]
 }
 EOF
@@ -447,27 +447,27 @@ EOF
 ```bash
 vault auth enable approle
 
-vault write auth/approle/role/rustguac \
-    token_policies="rustguac" \
+vault write auth/approle/role/persea \
+    token_policies="persea" \
     token_ttl=1h \
     token_max_ttl=4h \
     secret_id_ttl=0
 
 # Get the role_id (put in config.toml)
-vault read auth/approle/role/rustguac/role-id
+vault read auth/approle/role/persea/role-id
 
 # Generate a secret_id (set as VAULT_SECRET_ID env var)
-vault write -f auth/approle/role/rustguac/secret-id
+vault write -f auth/approle/role/persea/secret-id
 ```
 
-**4. Configure rustguac:**
+**4. Configure persea:**
 
 ```toml
 [vault]
 addr = "https://vault.example.com:8200"
 role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # mount = "secret"          # KV v2 mount (default)
-# base_path = "rustguac"    # base path (default)
+# base_path = "persea"    # base path (default)
 # namespace = "my-ns"       # Vault Enterprise / OpenBao
 # instance_name = "prod-1"  # instance-scoped entries
 ```
@@ -475,8 +475,8 @@ role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 Set the secret ID:
 
 ```bash
-echo 'VAULT_SECRET_ID=<secret_id>' > /opt/rustguac/env
-chmod 600 /opt/rustguac/env
+echo 'VAULT_SECRET_ID=<secret_id>' > /opt/persea/env
+chmod 600 /opt/persea/env
 ```
 
 ### mTLS (client certificate authentication)
@@ -487,9 +487,9 @@ If your Vault or OpenBao server requires mutual TLS (client certificates), add t
 [vault]
 addr = "https://openbao.example.com:8200"
 role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-ca_cert = "/opt/rustguac/certs/vault-ca.pem"
-client_cert = "/opt/rustguac/certs/vault-client.pem"
-client_key = "/opt/rustguac/certs/vault-client-key.pem"
+ca_cert = "/opt/persea/certs/vault-ca.pem"
+client_cert = "/opt/persea/certs/vault-client.pem"
+client_key = "/opt/persea/certs/vault-client-key.pem"
 ```
 
 | Field | Description |
@@ -498,14 +498,14 @@ client_key = "/opt/rustguac/certs/vault-client-key.pem"
 | `client_cert` | Client certificate (PEM) presented to Vault for mTLS. |
 | `client_key` | Client private key (PEM). Required when `client_cert` is set. |
 
-Ensure the certificate files are readable by the `rustguac` system user and have restrictive permissions:
+Ensure the certificate files are readable by the `persea` system user and have restrictive permissions:
 
 ```bash
-mkdir -p /opt/rustguac/certs
-cp ca.pem client.pem client-key.pem /opt/rustguac/certs/
-chown rustguac:rustguac /opt/rustguac/certs/*
-chmod 600 /opt/rustguac/certs/client-key.pem
-chmod 644 /opt/rustguac/certs/ca.pem /opt/rustguac/certs/client.pem
+mkdir -p /opt/persea/certs
+cp ca.pem client.pem client-key.pem /opt/persea/certs/
+chown persea:persea /opt/persea/certs/*
+chmod 600 /opt/persea/certs/client-key.pem
+chmod 644 /opt/persea/certs/ca.pem /opt/persea/certs/client.pem
 ```
 
 ### Vault Enterprise / OpenBao Namespaces
@@ -524,22 +524,22 @@ This adds an `X-Vault-Namespace` header to all Vault API requests. All Vault CLI
 vault namespace exec -namespace=admin -- vault auth enable approle
 
 # Create policy inside a namespace
-vault namespace exec -namespace=admin -- vault policy write rustguac rustguac-policy.hcl
+vault namespace exec -namespace=admin -- vault policy write persea persea-policy.hcl
 ```
 
-Without the namespace field, rustguac talks to the root namespace. If your AppRole is in a sub-namespace, authentication will fail with 403.
+Without the namespace field, persea talks to the root namespace. If your AppRole is in a sub-namespace, authentication will fail with 403.
 
 ### KV v2 path structure
 
 | Path | Description |
 |------|-------------|
-| `rustguac/shared/<folder>/.config` | Folder metadata: `{"allowed_groups":[...], "description":"..."}` |
-| `rustguac/shared/<folder>/<entry>` | Connection entry (shared across all instances) |
-| `rustguac/instance/<name>/<folder>/<entry>` | Instance-specific entry (requires `instance_name`) |
+| `persea/shared/<folder>/.config` | Folder metadata: `{"allowed_groups":[...], "description":"..."}` |
+| `persea/shared/<folder>/<entry>` | Connection entry (shared across all instances) |
+| `persea/instance/<name>/<folder>/<entry>` | Instance-specific entry (requires `instance_name`) |
 
 ### AppRole token management
 
-rustguac manages Vault tokens automatically:
+persea manages Vault tokens automatically:
 
 - Authenticates via AppRole (`role_id` + `secret_id`) on startup
 - Renews tokens at 50% of their TTL
@@ -548,12 +548,12 @@ rustguac manages Vault tokens automatically:
 
 ### Multi-instance support
 
-When `instance_name` is set, rustguac sees both shared entries and entries scoped to its instance:
+When `instance_name` is set, persea sees both shared entries and entries scoped to its instance:
 
-- `shared/` entries are visible to all rustguac instances
+- `shared/` entries are visible to all persea instances
 - `instance/<name>/` entries are only visible to the named instance
 
-This allows a fleet of rustguac instances to share common entries while maintaining instance-specific ones.
+This allows a fleet of persea instances to share common entries while maintaining instance-specific ones.
 
 ### Entry types
 
@@ -594,18 +594,18 @@ For web sessions, prompted credentials are used for autofill substitution (`$USE
 
 ## SSH Tunnel / Multi-Hop Jump Hosts
 
-rustguac supports routing all session types (SSH, RDP, VNC, and web browser) through one or more SSH bastion hosts. This is useful when the target machine is not directly reachable from the rustguac server — for example, accessing an RDP server on an isolated network segment via a bastion host chain.
+persea supports routing all session types (SSH, RDP, VNC, and web browser) through one or more SSH bastion hosts. This is useful when the target machine is not directly reachable from the persea server — for example, accessing an RDP server on an isolated network segment via a bastion host chain.
 
 ### How it works
 
 Each jump host in the chain establishes an SSH connection and creates a local TCP port forward using SSH's `direct-tcpip` channel. The hops are chained sequentially:
 
-1. **Hop 1**: rustguac SSH-connects to `bastion-1:22`, opens a `direct-tcpip` channel to `bastion-2:22`, and listens on a local TCP port
-2. **Hop 2**: rustguac SSH-connects to `bastion-2:22` (via hop 1's local port), opens a `direct-tcpip` channel to `target:3389`, and listens on another local TCP port
+1. **Hop 1**: persea SSH-connects to `bastion-1:22`, opens a `direct-tcpip` channel to `bastion-2:22`, and listens on a local TCP port
+2. **Hop 2**: persea SSH-connects to `bastion-2:22` (via hop 1's local port), opens a `direct-tcpip` channel to `target:3389`, and listens on another local TCP port
 3. **guacd**: connects to the final local port, which tunnels through the entire chain to the target
 
 ```
-rustguac -> [SSH] bastion-1:22 -> [SSH] bastion-2:22 -> [TCP] target:3389
+persea -> [SSH] bastion-1:22 -> [SSH] bastion-2:22 -> [TCP] target:3389
 ```
 
 The chain is set up sequentially (each hop must connect before the next starts) and torn down in reverse order when the session ends.
@@ -659,7 +659,7 @@ Tunnel errors include the hop index for easier debugging. For example, if hop 2 
 
 ## RDP Kerberos NLA Authentication
 
-rustguac includes a patched guacd with Kerberos NLA (Network Level Authentication) support. This allows RDP connections to authenticate using Kerberos instead of NTLM, which is important as Microsoft is phasing out NTLM.
+persea includes a patched guacd with Kerberos NLA (Network Level Authentication) support. This allows RDP connections to authenticate using Kerberos instead of NTLM, which is important as Microsoft is phasing out NTLM.
 
 ### Background
 
@@ -717,7 +717,7 @@ If using a **KDC Proxy URL** (`kdc-url`), direct access to port 88 is not needed
 
 #### Time synchronisation
 
-Kerberos has a default clock skew tolerance of **5 minutes**. Ensure NTP is configured on the rustguac server:
+Kerberos has a default clock skew tolerance of **5 minutes**. Ensure NTP is configured on the persea server:
 
 ```bash
 timedatectl status   # verify time is synced
@@ -814,13 +814,13 @@ This patch is based on the upstream [GUACAMOLE-2057](https://issues.apache.org/j
 
 ### Troubleshooting
 
-**Enable Kerberos tracing** by adding to the rustguac environment file:
+**Enable Kerberos tracing** by adding to the persea environment file:
 
 ```bash
-echo 'KRB5_TRACE=/dev/stderr' >> /opt/rustguac/env
-sudo systemctl restart rustguac
+echo 'KRB5_TRACE=/dev/stderr' >> /opt/persea/env
+sudo systemctl restart persea
 # View trace output:
-journalctl -u rustguac -f
+journalctl -u persea -f
 ```
 
 **Test Kerberos manually** from the guacd server:
@@ -853,7 +853,7 @@ xfreerdp3 /v:server.example.com /u:user@EXAMPLE.COM /d:EXAMPLE.COM \
 
 ## Drive / File Transfer / LUKS Encryption
 
-rustguac supports file transfer for RDP and SSH sessions.
+persea supports file transfer for RDP and SSH sessions.
 
 ### RDP drive redirection
 
@@ -866,7 +866,7 @@ When drive is enabled, each RDP session gets a per-session directory under `driv
 ```toml
 [drive]
 enabled = true
-drive_path = "/mnt/rustguac-drives"
+drive_path = "/mnt/persea-drives"
 drive_name = "Shared Drive"
 allow_download = true
 allow_upload = true
@@ -885,19 +885,19 @@ Each session gets its own subdirectory under `drive_path` named with the session
 
 ### SSH SFTP
 
-For SSH sessions, SFTP file transfer happens directly between the browser and the target SSH server via guacd. No files are stored on the rustguac server.
+For SSH sessions, SFTP file transfer happens directly between the browser and the target SSH server via guacd. No files are stored on the persea server.
 
 ### LUKS encryption
 
-For RDP drive storage, the `drive_path` can be backed by a LUKS-encrypted volume. The encryption key is stored in Vault and the volume is only unlocked while rustguac is running.
+For RDP drive storage, the `drive_path` can be backed by a LUKS-encrypted volume. The encryption key is stored in Vault and the volume is only unlocked while persea is running.
 
 ```toml
 [drive]
 enabled = true
-drive_path = "/mnt/rustguac-drives"
-luks_device = "/opt/rustguac/drives.luks"
-luks_name = "rustguac-drives"
-luks_key_path = "rustguac/luks-key"
+drive_path = "/mnt/persea-drives"
+luks_device = "/opt/persea/drives.luks"
+luks_name = "persea-drives"
+luks_key_path = "persea/luks-key"
 ```
 
 #### LUKS lifecycle
@@ -906,7 +906,7 @@ On startup:
 1. Read encryption key from Vault KV
 2. Open LUKS container via `sudo cryptsetup open --type luks --key-file=-`
 3. Mount the mapped device at `drive_path`
-4. Set ownership to the rustguac user
+4. Set ownership to the persea user
 
 On shutdown:
 1. Unmount the volume
@@ -919,21 +919,21 @@ The key is passed to cryptsetup via stdin — never on the command line or writt
 Run the interactive setup script:
 
 ```bash
-sudo /opt/rustguac/bin/drive-setup.sh
+sudo /opt/persea/bin/drive-setup.sh
 ```
 
 This creates the LUKS container file, generates a random encryption key, stores the key in Vault, and configures the necessary sudoers rules.
 
 #### Sudoers rules
 
-The rustguac user needs specific sudo permissions for LUKS operations. These are installed automatically:
+The persea user needs specific sudo permissions for LUKS operations. These are installed automatically:
 
 ```
-rustguac ALL=(root) NOPASSWD: /usr/sbin/cryptsetup open --type luks --key-file=- <device> <name>
-rustguac ALL=(root) NOPASSWD: /usr/sbin/cryptsetup close <name>
-rustguac ALL=(root) NOPASSWD: /bin/mount /dev/mapper/<name> <mount_point>
-rustguac ALL=(root) NOPASSWD: /bin/umount <mount_point>
-rustguac ALL=(root) NOPASSWD: /bin/chown *:* <mount_point>
+persea ALL=(root) NOPASSWD: /usr/sbin/cryptsetup open --type luks --key-file=- <device> <name>
+persea ALL=(root) NOPASSWD: /usr/sbin/cryptsetup close <name>
+persea ALL=(root) NOPASSWD: /bin/mount /dev/mapper/<name> <mount_point>
+persea ALL=(root) NOPASSWD: /bin/umount <mount_point>
+persea ALL=(root) NOPASSWD: /bin/chown *:* <mount_point>
 ```
 
 ---
@@ -958,19 +958,19 @@ For nginx, Caddy, Apache, and Traefik setups, see [reverse-proxies.md](reverse-p
 
 ```
 frontend https
-    bind *:443 ssl crt /etc/ssl/private/rustguac.pem alpn h2,http/1.1
+    bind *:443 ssl crt /etc/ssl/private/persea.pem alpn h2,http/1.1
     bind *:80
     http-request redirect scheme https unless { ssl_fc }
     http-request del-header X-Forwarded-For
     option forwardfor
-    default_backend rustguac
+    default_backend persea
 
-backend rustguac
+backend persea
     option httpchk GET /api/health
-    server rustguac 127.0.0.1:8089 ssl verify none check inter 30s
+    server persea 127.0.0.1:8089 ssl verify none check inter 30s
 ```
 
-rustguac must trust HAProxy's IP:
+persea must trust HAProxy's IP:
 
 ```toml
 trusted_proxies = ["127.0.0.1/32"]
@@ -980,7 +980,7 @@ trusted_proxies = ["127.0.0.1/32"]
 
 In the default configuration, traffic is encrypted twice on the loopback:
 1. HAProxy terminates the client's TLS connection
-2. HAProxy connects to rustguac over TLS (rustguac's own self-signed cert)
+2. HAProxy connects to persea over TLS (persea's own self-signed cert)
 
 This is belt-and-suspenders for environments where even loopback traffic should be encrypted.
 
@@ -995,12 +995,12 @@ This is belt-and-suspenders for environments where even loopback traffic should 
 1. User authenticates through Knocknoc (SSO, MFA, etc.)
 2. knocknoc-agent adds the user's IP to HAProxy ACL #600 via the admin socket
 3. HAProxy allows access to the login page (`/` path only)
-4. User logs in via OIDC (rustguac's own auth layer)
+4. User logs in via OIDC (persea's own auth layer)
 5. When the Knocknoc session expires, the IP is removed from the ACL
 
 ### What is gated
 
-Only the front page (`/`) is gated behind Knocknoc. All other paths pass through to rustguac's own authentication:
+Only the front page (`/`) is gated behind Knocknoc. All other paths pass through to persea's own authentication:
 
 - `/api/*` — API key or OIDC session auth
 - `/auth/*` — OIDC login/callback flow
@@ -1016,13 +1016,13 @@ This ensures OIDC callbacks and share links work even when the user hasn't authe
 stats socket /run/haproxy/admin.sock mode 0660 level admin
 
 # Dynamic ACL (ACL ID 600 must match Knocknoc config)
-acl knoc_rustguac src -u 600
+acl knoc_persea src -u 600
 acl is_root path /
 
 # Gate only the front page
-use_backend rustguac if is_rustguac is_root knoc_rustguac
-use_backend denied   if is_rustguac is_root
-use_backend rustguac if is_rustguac
+use_backend persea if is_persea is_root knoc_persea
+use_backend denied   if is_persea is_root
+use_backend persea if is_persea
 ```
 
 ### Verifying ACL state

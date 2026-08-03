@@ -1,6 +1,6 @@
 # Migrating from Apache Guacamole
 
-rustguac can import connections from an Apache Guacamole MySQL/MariaDB database into its Vault-backed connections.
+persea can import connections from an Apache Guacamole MySQL/MariaDB database into its Vault-backed connections.
 
 ## Prerequisites
 
@@ -27,7 +27,7 @@ Only these three tables are needed. Both the default multi-row dump format and `
 Use `--dry-run` to see what would be imported without writing anything:
 
 ```bash
-rustguac --config /opt/rustguac/config.toml \
+persea --config /opt/persea/config.toml \
   import-guacamole \
   --file guacamole-dump.sql \
   --dry-run
@@ -55,7 +55,7 @@ Connections with unsupported protocols (e.g. telnet, kubernetes) are automatical
 
 ```bash
 VAULT_SECRET_ID=your-secret-id \
-rustguac --config /opt/rustguac/config.toml \
+persea --config /opt/persea/config.toml \
   import-guacamole \
   --file guacamole-dump.sql \
   --folder my-servers \
@@ -73,7 +73,7 @@ rustguac --config /opt/rustguac/config.toml \
 
 ## What gets imported
 
-The importer maps Guacamole connection parameters to rustguac connections fields:
+The importer maps Guacamole connection parameters to persea connections fields:
 
 | Guacamole parameter | Connections field |
 |--------------------|--------------------|
@@ -123,7 +123,7 @@ Once imported, connections appear in the connections UI. You can:
 ## Notes
 
 - The import is additive: existing entries in the target folder are not deleted or overwritten. If you re-run the import, entries with the same name will be updated.
-- Guacamole user/group permissions are not imported. Use rustguac's OIDC group mappings and folder `allowed_groups` instead.
+- Guacamole user/group permissions are not imported. Use persea's OIDC group mappings and folder `allowed_groups` instead.
 - Credentials (passwords, private keys) are imported into Vault where they are stored encrypted at rest and never touch disk.
 
 # Splitting to multiple Vaults (disaster recovery)
@@ -143,7 +143,7 @@ Configure the new backend block (e.g. `[vault_shared]`) and its
 
 ```bash
 VAULT_SECRET_ID=... VAULT_SHARED_SECRET_ID=... \
-rustguac --config /opt/rustguac/config.toml \
+persea --config /opt/persea/config.toml \
   vault-migrate --scope shared --from vault --to vault_shared --dry-run
 ```
 
@@ -151,7 +151,7 @@ rustguac --config /opt/rustguac/config.toml \
 
 ```bash
 VAULT_SECRET_ID=... VAULT_SHARED_SECRET_ID=... \
-rustguac --config /opt/rustguac/config.toml \
+persea --config /opt/persea/config.toml \
   vault-migrate --scope shared --from vault --to vault_shared
 ```
 
@@ -172,7 +172,7 @@ the `shared` scope reads only from it, with no fall-back to `[vault]`. So the
 order matters:
 
 1. Copy the subtree first (Step 2).
-2. Then add the `[vault_shared]` block and restart rustguac.
+2. Then add the `[vault_shared]` block and restart persea.
 
 Doing it the other way round makes shared connections briefly disappear (the
 data is safe in the old Vault, just not being read). Entries and folders are

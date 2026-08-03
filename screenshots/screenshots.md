@@ -1,6 +1,6 @@
 # Screenshots
 
-Screenshots of rustguac with the default **aurora** theme, OIDC authentication, Vault-backed Connections, and session recording. User-identifying data has been sanitised.
+Screenshots of persea with the default **aurora** theme, OIDC authentication, Vault-backed Connections, and session recording. User-identifying data has been sanitised.
 
 ## Connections
 
@@ -30,7 +30,7 @@ Entry editor for a web browser session. Spawns a headless Chromium on an Xvnc di
 
 ![VDI Connection](vdi_connection.png)
 
-Entry editor for a VDI session (new in v1.5.0). rustguac spawns an ephemeral Docker container running xrdp and connects guacd to it via RDP. Editor fields: container image (from the admin allowlist), CPU and memory limits, extra environment variables, idle timeout, pre-connect banner, recording, clipboard copy/paste control, v1.6.0's **Allow session sharing** toggle, and v1.6.0's **Auto-open when this is the user's only entry** (kiosk mode).
+Entry editor for a VDI session (new in v1.5.0). persea spawns an ephemeral Docker container running xrdp and connects guacd to it via RDP. Editor fields: container image (from the admin allowlist), CPU and memory limits, extra environment variables, idle timeout, pre-connect banner, recording, clipboard copy/paste control, v1.6.0's **Allow session sharing** toggle, and v1.6.0's **Auto-open when this is the user's only entry** (kiosk mode).
 
 ## SSH Tunnel / Jump Hosts
 
@@ -66,10 +66,10 @@ Reports dashboard — aggregate counters (total sessions, total hours, unique us
 
 ![Admin Console](admin_console.png)
 
-Admin page. System Status cards show rustguac version, active sessions (pending/total), user count, session-history depth, recording count and disk usage, disk pressure, Vault connection health, and enabled features (OIDC, Drive, TLS, Vault). Below is the Users table with role assignment, group membership (from OIDC claims), status and last-login, and per-user actions (disable, force-logout, delete).
+Admin page. System Status cards show persea version, active sessions (pending/total), user count, session-history depth, recording count and disk usage, disk pressure, Vault connection health, and enabled features (OIDC, Drive, TLS, Vault). Below is the Users table with role assignment, group membership (from OIDC claims), status and last-login, and per-user actions (disable, force-logout, delete).
 
 ## Group Mappings + User API Tokens
 
 ![Tokens](tokens_view.png)
 
-Further down the Admin page: **Group-to-Role Mappings** matches OIDC group names to rustguac roles (admin / poweruser / operator / viewer) — highest matching role wins on every login. **User API Tokens** lists OIDC-user-owned tokens issued for API access, with max-role cap, expiry, last-used timestamp, and revocation. Admins can create tokens on behalf of operators. Tokens are SHA-256 hashed at rest — the plaintext is shown once at creation and never again.
+Further down the Admin page: **Group-to-Role Mappings** matches OIDC group names to persea roles (admin / poweruser / operator / viewer) — highest matching role wins on every login. **User API Tokens** lists OIDC-user-owned tokens issued for API access, with max-role cap, expiry, last-used timestamp, and revocation. Admins can create tokens on behalf of operators. Tokens are SHA-256 hashed at rest — the plaintext is shown once at creation and never again.

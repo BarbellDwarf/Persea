@@ -256,7 +256,7 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `proxmox_token_secret` | string | API token secret (the UUID half) |
 | `proxmox_verify_tls` | boolean | Verify the PVE / SPICE-proxy TLS certificate (default false; PVE ships a self-signed cluster cert) |
 
-The token needs `VM.Console` (and `VM.Audit` for node auto-detect) on the target VM. rustguac calls the PVE `spiceproxy` API at connect to fetch a one-time SPICE ticket, so nothing sensitive is stored beyond the token.
+The token needs `VM.Console` (and `VM.Audit` for node auto-detect) on the target VM. persea calls the PVE `spiceproxy` API at connect to fetch a one-time SPICE ticket, so nothing sensitive is stored beyond the token.
 
 **Jump host object fields:**
 
@@ -309,14 +309,14 @@ Creating a session (`POST /api/sessions`) only opens the connection to the targe
 - The **first** connection to a freshly created session is the **owner** connection. It requires an authenticated identity with the **operator** role or higher.
 - A **share token** (`share_url`) only lets a second viewer **join** a session that is already active. It is not an identity and cannot open the owner connection.
 
-If the owner connection is not authenticated, rustguac rejects the WebSocket with `403`, no browser attaches, and guacd eventually reports `User is not responding` (its timeout for a session whose client never arrived, roughly 15 seconds after creation). If you see `User is not responding`, the browser did not connect as an authenticated owner.
+If the owner connection is not authenticated, persea rejects the WebSocket with `403`, no browser attaches, and guacd eventually reports `User is not responding` (its timeout for a session whose client never arrived, roughly 15 seconds after creation). If you see `User is not responding`, the browser did not connect as an authenticated owner.
 
 ### Authenticating the owner connection
 
 The built-in client (`client_url`) authenticates the owner WebSocket one of three ways:
 
-1. **OIDC session cookie** — the user is logged into rustguac in that browser. Open `client_url` and the cookie authenticates.
-2. **`sessionStorage.rustguac_api_key`** — the client exchanges the key for a single-use ticket before connecting.
+1. **OIDC session cookie** — the user is logged into persea in that browser. Open `client_url` and the cookie authenticates.
+2. **`sessionStorage.persea_api_key`** — the client exchanges the key for a single-use ticket before connecting.
 3. **A ws-ticket in the URL** — `client_url?ticket=<ticket>`. Used for headless integrations (below).
 
 ### `POST /api/ws-ticket`
@@ -336,7 +336,7 @@ The ticket is valid for 30 seconds, may be used once, and inherits the caller's 
 
 ### Headless API integration
 
-When the browser has no rustguac login of its own (no OIDC cookie), a backend that holds an API key can still hand off a ready-to-open session without exposing that key to the browser:
+When the browser has no persea login of its own (no OIDC cookie), a backend that holds an API key can still hand off a ready-to-open session without exposing that key to the browser:
 
 1. `POST /api/sessions` (Bearer API key) to create the session.
 2. `POST /api/ws-ticket` (Bearer API key) to mint a ticket.
@@ -630,7 +630,7 @@ No authentication required. Returns whether OIDC is enabled and the site title.
 ```json
 {
   "oidc_enabled": true,
-  "site_title": "rustguac"
+  "site_title": "persea"
 }
 ```
 

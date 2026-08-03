@@ -1,12 +1,12 @@
-# CLAUDE.md — Project state for rustguac
+# CLAUDE.md — Project state for persea
 
 ## What this project is
 
-rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd (the C daemon from guacamole-server). Supports SSH, RDP, VNC, SPICE, Proxmox, VMware, web browser sessions (headless Chromium on Xvnc), and VDI desktop containers (Docker).
+persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd (the C daemon from guacamole-server). Supports SSH, RDP, VNC, SPICE, Proxmox, VMware, web browser sessions (headless Chromium on Xvnc), and VDI desktop containers (Docker).
 
 ## Architecture
 
-- **Rust binary** (`rustguac`) — axum web server, session manager, WebSocket proxy
+- **Rust binary** (`persea`) — axum web server, session manager, WebSocket proxy
 - **guacd** — built from apache/guacamole-server source, handles SSH/VNC/RDP/SPICE protocol translation
 - **Xvnc + Chromium** — spawned per web-browser session, streamed via VNC through guacd
 - **Docker** — VDI containers spawned per-user, connected via RDP through guacd
@@ -107,7 +107,7 @@ TOML config file. Key settings: `listen_addr`, `guacd_addr`, `db_url` (for MySQL
 Supports MySQL, PostgreSQL, and SQLite via SQLx. Set `db_url` in config:
 
 ```toml
-db_url = "postgres://user:pass@localhost/rustguac"  # or mysql://, sqlite://
+db_url = "postgres://user:pass@localhost/persea"  # or mysql://, sqlite://
 ```
 
 Without `db_url`, uses SQLite with the `db_path` setting (legacy mode).
@@ -132,11 +132,11 @@ auth_port = 1812
 
 [auth.saml]
 idp_metadata_url = "https://idp.example.com/metadata"
-entity_id = "rustguac"
-acs_url = "https://rustguac.example.com/auth/saml/acs"
+entity_id = "persea"
+acs_url = "https://persea.example.com/auth/saml/acs"
 
 [auth.totp]
-issuer = "rustguac"
+issuer = "persea"
 enforcement = "AdminsOnly"  # Off, AdminsOnly, All
 ```
 
@@ -148,7 +148,7 @@ Optional `[vault]` section for credential storage. Without Vault, use DB-only mo
 
 ```toml
 [storage]
-encryption_key = "aabbccdd..."  # 64-char hex, or RGUAC_STORAGE_KEY env var
+encryption_key = "aabbccdd..."  # 64-char hex, or PERSEA_STORAGE_KEY env var
 ```
 
 Vault config (when using Vault):
@@ -157,7 +157,7 @@ Vault config (when using Vault):
 [vault]
 addr = "https://vault.example.com:8200"
 mount = "secret"
-base_path = "rustguac"
+base_path = "persea"
 role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
@@ -166,8 +166,8 @@ role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```toml
 [oidc]
 issuer_url = "https://auth.example.com/realms/corp"
-client_id = "rustguac"
-redirect_uri = "https://rustguac.example.com/auth/callback"
+client_id = "persea"
+redirect_uri = "https://persea.example.com/auth/callback"
 groups_claim = "groups"
 ```
 
@@ -177,7 +177,7 @@ groups_claim = "groups"
 [proxmox]
 addr = "https://pve.example.com:8006"
 username = "root@pam"
-token_id = "rustguac"
+token_id = "persea"
 token_secret = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
@@ -230,7 +230,7 @@ username = "administrator@vsphere.local"
 ## Deployment
 
 - **Bare metal**: `sudo ./install.sh` on Debian 13
-- **Docker**: `docker build -t rustguac .`
+- **Docker**: `docker build -t persea .`
 - **First run**: Setup wizard at `/setup` auto-detects environment
 
 ## Build notes

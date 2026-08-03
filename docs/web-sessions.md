@@ -16,7 +16,7 @@ User's browser
     │
     │ WebSocket (Guacamole protocol)
     ▼
-rustguac
+persea
     │
     │ Guacamole protocol (TCP/TLS)
     ▼
@@ -31,8 +31,8 @@ Xvnc (virtual display :100–:199)
             └── https://target-app.example.com
 ```
 
-1. rustguac allocates an X display number and spawns Xvnc
-2. A unique Chromium profile directory is created (`/tmp/rustguac-chromium-{uuid}`)
+1. persea allocates an X display number and spawns Xvnc
+2. A unique Chromium profile directory is created (`/tmp/persea-chromium-{uuid}`)
 3. Optionally, the autofill database is pre-populated with credentials
 4. Chromium launches on the Xvnc display, navigating to the configured URL
 5. guacd connects to the Xvnc display via VNC and streams it to the user
@@ -60,7 +60,7 @@ Optionally add credentials for autofill or login scripts:
 ### API
 
 ```bash
-curl -X POST https://rustguac.example.com/api/sessions \
+curl -X POST https://persea.example.com/api/sessions \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -83,7 +83,7 @@ This is a server-side CIDR check applied at session creation. The URL's hostname
 
 ## Native autofill
 
-For simple login flows (a form with username and password fields), native autofill is the easiest approach. rustguac pre-populates Chromium's built-in password manager database before launch — no scripts, no external runtimes, no CDP.
+For simple login flows (a form with username and password fields), native autofill is the easiest approach. persea pre-populates Chromium's built-in password manager database before launch — no scripts, no external runtimes, no CDP.
 
 When the user clicks on a login form, Chromium shows its familiar autofill dropdown with the pre-filled credentials.
 
@@ -132,7 +132,7 @@ Chromium will offer autofill on both domains.
 
 ### How it works internally
 
-rustguac creates a Chromium profile directory before launch and writes to `Default/Login Data` (a SQLite database that Chromium uses for its password manager). Passwords are encrypted using Chromium's Linux `os_crypt` backend:
+persea creates a Chromium profile directory before launch and writes to `Default/Login Data` (a SQLite database that Chromium uses for its password manager). Passwords are encrypted using Chromium's Linux `os_crypt` backend:
 
 1. Derive a 16-byte AES key via PBKDF2 (password `"peanuts"`, salt `"saltysalt"`, 1 iteration, SHA-1)
 2. Encrypt with AES-128-CBC, IV = 16 × `0x20` (space characters)
@@ -165,12 +165,12 @@ There are two separate mechanisms that control what a web session can access:
 
 | Layer | Config | Applied | Scope |
 |-------|--------|---------|-------|
-| **`web_allowed_networks`** | `config.toml` (global) | Server-side, at session creation | CIDR ranges — controls which IPs rustguac will connect to |
+| **`web_allowed_networks`** | `config.toml` (global) | Server-side, at session creation | CIDR ranges — controls which IPs persea will connect to |
 | **`allowed_domains`** | Connections entry | Client-side, inside Chromium at runtime | Domain names — controls which sites the user can navigate to |
 
 They don't conflict — both can be active simultaneously for defense in depth:
 
-- `web_allowed_networks` prevents rustguac from initiating connections to disallowed networks (SSRF protection)
+- `web_allowed_networks` prevents persea from initiating connections to disallowed networks (SSRF protection)
 - `allowed_domains` prevents the user from navigating to sites outside the allowlist within an already-running session
 
 **Example:** Your config allows `10.0.0.0/8` for web sessions (server-side). An connections entry for the internal wiki sets `allowed_domains: ["wiki.internal.example.com"]`. The session can only reach the wiki — even though the server-side allowlist permits the entire `10.0.0.0/8` range.
@@ -178,7 +178,7 @@ They don't conflict — both can be active simultaneously for defense in depth:
 ### API
 
 ```bash
-curl -X POST https://rustguac.example.com/api/sessions \
+curl -X POST https://persea.example.com/api/sessions \
   -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -198,7 +198,7 @@ A login script is a server-side executable that connects to the already-running 
 
 1. The connections entry specifies a `login_script` filename (e.g., `portal-login.js`)
 2. When the session starts, Chromium is launched with `--remote-debugging-port={cdp_port}`
-3. After Chromium is ready, rustguac spawns the script as a child process
+3. After Chromium is ready, persea spawns the script as a child process
 4. The script connects to Chromium via CDP, performs automation, then exits
 5. The user watches the automation live (it's all happening on the VNC display) and takes over the authenticated session
 
@@ -209,11 +209,11 @@ A login script is a server-side executable that connects to the already-running 
 | Variable | Description |
 |----------|-------------|
 | `DISPLAY` | X display number (e.g., `:100`) |
-| `RUSTGUAC_CDP_PORT` | Chrome DevTools Protocol port (e.g., `9200`) |
-| `RUSTGUAC_URL` | Target URL |
-| `RUSTGUAC_USERNAME` | Username (empty string if not set) |
-| `RUSTGUAC_PASSWORD` | Password (empty string if not set) |
-| `RUSTGUAC_SESSION_ID` | Session UUID |
+| `PERSEA_CDP_PORT` | Chrome DevTools Protocol port (e.g., `9200`) |
+| `PERSEA_URL` | Target URL |
+| `PERSEA_USERNAME` | Username (empty string if not set) |
+| `PERSEA_PASSWORD` | Password (empty string if not set) |
+| `PERSEA_SESSION_ID` | Session UUID |
 
 **Stdin (preferred for credentials):**
 
@@ -231,7 +231,7 @@ Credentials are also sent as JSON on stdin, which is more secure than environmen
 
 **Requirements:**
 
-- The script must be in the `login_scripts_dir` directory (default: `/opt/rustguac/scripts`)
+- The script must be in the `login_scripts_dir` directory (default: `/opt/persea/scripts`)
 - The script must be executable (`chmod +x`)
 - Path traversal is blocked — the filename is validated against the scripts directory
 - Scripts have a timeout (default: 120 seconds, configurable via `login_script_timeout_secs`)
@@ -243,9 +243,9 @@ This example uses [Playwright](https://playwright.dev/) to automate a login flow
 
 ```javascript
 #!/usr/bin/env node
-// login-example.js — Playwright login script for rustguac
+// login-example.js — Playwright login script for persea
 //
-// Install: npm install playwright-core  (in /opt/rustguac/scripts or globally)
+// Install: npm install playwright-core  (in /opt/persea/scripts or globally)
 // The script uses playwright-core (no bundled browsers) since Chromium is
 // already running — it connects via CDP rather than launching a new browser.
 
@@ -271,10 +271,10 @@ async function getCredentials() {
         }
     }
     return {
-        cdpPort:  parseInt(process.env.RUSTGUAC_CDP_PORT, 10),
-        url:      process.env.RUSTGUAC_URL || '',
-        username: process.env.RUSTGUAC_USERNAME || '',
-        password: process.env.RUSTGUAC_PASSWORD || '',
+        cdpPort:  parseInt(process.env.PERSEA_CDP_PORT, 10),
+        url:      process.env.PERSEA_URL || '',
+        username: process.env.PERSEA_USERNAME || '',
+        password: process.env.PERSEA_PASSWORD || '',
     };
 }
 
@@ -363,9 +363,9 @@ main().catch((err) => {
 
 **To use this script:**
 
-1. Save it to `/opt/rustguac/scripts/login-example.js`
-2. Make it executable: `chmod +x /opt/rustguac/scripts/login-example.js`
-3. Install Playwright: `cd /opt/rustguac/scripts && npm install playwright-core`
+1. Save it to `/opt/persea/scripts/login-example.js`
+2. Make it executable: `chmod +x /opt/persea/scripts/login-example.js`
+3. Install Playwright: `cd /opt/persea/scripts && npm install playwright-core`
 4. Set the `login_script` field on an connections entry to `login-example.js`
 
 ### Example: Shell script with curl
@@ -415,7 +415,7 @@ The autofill database is written before Chromium launches, and the login script 
 
 | Config key | Default | Description |
 |------------|---------|-------------|
-| `login_scripts_dir` | `/opt/rustguac/scripts` | Directory containing login scripts |
+| `login_scripts_dir` | `/opt/persea/scripts` | Directory containing login scripts |
 | `login_script_timeout_secs` | `120` | Maximum script runtime before it's killed |
 | `cdp_port_range_start` | `9200` | First CDP port in the allocation pool |
 | `cdp_port_range_end` | `9299` | Last CDP port |
@@ -438,8 +438,8 @@ The session page supports a small set of browser-side shortcuts:
 | Shortcut | Action | Notes |
 |----------|--------|-------|
 | `Ctrl+Alt+Shift` | Toggle the clipboard side panel | Works globally on the session page (capture phase), including when the remote display is focused. |
-| `Ctrl+V` (Windows/Linux) or `Cmd+V` (macOS) | Sync browser clipboard text to the remote session, then send paste | If clipboard API access is available, rustguac reads local clipboard text and sends it to the remote before forwarding the paste key event. |
-| `Esc` (browser fullscreen) | Exit fullscreen | Browser-native fullscreen key. rustguac may request keyboard lock while in fullscreen; if lock is unavailable, an on-screen notice reminds users to press Esc. |
+| `Ctrl+V` (Windows/Linux) or `Cmd+V` (macOS) | Sync browser clipboard text to the remote session, then send paste | If clipboard API access is available, persea reads local clipboard text and sends it to the remote before forwarding the paste key event. |
+| `Esc` (browser fullscreen) | Exit fullscreen | Browser-native fullscreen key. persea may request keyboard lock while in fullscreen; if lock is unavailable, an on-screen notice reminds users to press Esc. |
 
 Additional behavior:
 
@@ -452,13 +452,13 @@ Additional behavior:
 The entry URL supports credential placeholders that are URL-encoded and substituted before Chromium navigates:
 
 ```
-https://app.example.com/login?user=$RUSTGUAC_USERNAME&pass=$RUSTGUAC_PASSWORD
+https://app.example.com/login?user=$PERSEA_USERNAME&pass=$PERSEA_PASSWORD
 ```
 
 | Placeholder | Substituted with |
 |-------------|-----------------|
-| `$RUSTGUAC_USERNAME` | Entry username (URL-encoded) |
-| `$RUSTGUAC_PASSWORD` | Entry password (URL-encoded) |
+| `$PERSEA_USERNAME` | Entry username (URL-encoded) |
+| `$PERSEA_PASSWORD` | Entry password (URL-encoded) |
 
 This is useful for applications that accept credentials as URL parameters (e.g., some IPMI/KVM web consoles).
 
@@ -476,7 +476,7 @@ Web sessions support [multi-hop SSH tunnel chains](overview.md#ssh-tunnel--jump-
 
 Every web session runs Chromium with a comprehensive managed policy and an isolated profile. See [Security: Web session hardening](security.md#web-session-hardening) for the full policy table.
 
-**Warning:** The Chromium managed policy is installed globally at `/etc/chromium/policies/managed/rustguac.json`. This affects **all** Chromium instances on the machine — not just rustguac sessions. Do not install rustguac on a desktop machine where you want to use Chromium for normal browsing. rustguac is designed to run on a dedicated server or VM.
+**Warning:** The Chromium managed policy is installed globally at `/etc/chromium/policies/managed/persea.json`. This affects **all** Chromium instances on the machine — not just persea sessions. Do not install persea on a desktop machine where you want to use Chromium for normal browsing. persea is designed to run on a dedicated server or VM.
 
 Key restrictions:
 
@@ -560,15 +560,15 @@ When creating entries via the Vault connections (UI or API), the same fields are
 - Check the browser's address bar — if it shows "This site can't be reached", the domain is being blocked.
 
 **Login script doesn't run:**
-- The script must be executable: `chmod +x /opt/rustguac/scripts/my-script.js`
+- The script must be executable: `chmod +x /opt/persea/scripts/my-script.js`
 - Check the `login_scripts_dir` config points to the right directory.
-- Check rustguac logs for `[login-script]` messages — script stdout/stderr is captured.
+- Check persea logs for `[login-script]` messages — script stdout/stderr is captured.
 - The script has a timeout (default 120s). Increase `login_script_timeout_secs` if needed.
 
 **Browser shows a blank white screen:**
 - The Xvnc display may not be ready. Check logs for Xvnc startup errors.
 - Verify `chromium_path` and `xvnc_path` in the config point to valid binaries.
-- Ensure the `rustguac` system user has a real home directory (`/home/rustguac`) — Chromium's crashpad handler crashes without one.
+- Ensure the `persea` system user has a real home directory (`/home/persea`) — Chromium's crashpad handler crashes without one.
 
 **"Controlled by automated test software" banner:**
 - This appears when `allowed_domains` is set, because `--enable-automation` is used to suppress a different infobar about `--host-rules`. The banner is cosmetic and does not affect functionality.
