@@ -94,12 +94,12 @@ pub struct AddressbookAuditEntry {
 }
 
 /// If we're running as root and the db's parent directory is owned by a non-root
-/// user (the typical `/opt/rustguac/data` owned by `rustguac:rustguac` case),
+/// user (the typical `/opt/persea/data` owned by `persea:persea` case),
 /// chown the db file and any `-wal` / `-shm` sidecars to match the parent dir.
 ///
 /// Why: CLI commands like `add-admin` are often run under `sudo`, which would
 /// otherwise create a root-owned db that the systemd service (running as the
-/// unprivileged `rustguac` user) can't write to — surfacing later as
+/// unprivileged `persea` user) can't write to — surfacing later as
 /// "attempt to write a readonly database" on the first OIDC login.
 fn repair_db_ownership(path: &Path) {
     use std::os::unix::fs::MetadataExt;

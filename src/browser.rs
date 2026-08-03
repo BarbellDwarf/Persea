@@ -133,7 +133,7 @@ impl BrowserManager {
 
         // Create a unique profile directory for this session (UUID avoids stale crash state)
         let profile_dir =
-            std::env::temp_dir().join(format!("rustguac-chromium-{}", uuid::Uuid::new_v4()));
+            std::env::temp_dir().join(format!("persea-chromium-{}", uuid::Uuid::new_v4()));
         let _ = std::fs::remove_dir_all(&profile_dir); // clean slate
         if let Err(e) = std::fs::create_dir_all(&profile_dir) {
             self.display_allocator.release(display_num);
@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn test_populate_login_data_creates_db() {
-        let dir = std::env::temp_dir().join("rustguac-test-login-data");
+        let dir = std::env::temp_dir().join("persea-test-login-data");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn test_populate_login_data_multiple_creds() {
-        let dir = std::env::temp_dir().join("rustguac-test-login-data-multi");
+        let dir = std::env::temp_dir().join("persea-test-login-data-multi");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

@@ -51,7 +51,7 @@ pub struct CredentialDefaultScope(pub String);
 /// One Vault backend connection cell — `None` until connected / while down.
 pub type VaultCell = Arc<tokio::sync::RwLock<Option<Arc<VaultClient>>>>;
 
-/// The set of Vault backends rustguac talks to.
+/// The set of Vault backends persea talks to.
 ///
 /// In the single-Vault default, `shared` and `local` both alias `default`, so
 /// behaviour is identical to a single `VaultClient`. A multi-Vault split (see
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn test_safe_recording_name_valid() {
-        let dir = std::env::temp_dir().join("rustguac-test-recordings");
+        let dir = std::env::temp_dir().join("persea-test-recordings");
         let _ = std::fs::create_dir_all(&dir);
         let f1 = dir.join("session-abc123.guac");
         let f2 = dir.join("2024-01-01_recording.guac");

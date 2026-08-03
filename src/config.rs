@@ -9,7 +9,7 @@ pub struct TlsConfig {
     pub cert_path: Option<PathBuf>,
     /// Path to server TLS private key (PEM). Required for HTTPS serving.
     pub key_path: Option<PathBuf>,
-    /// Path to guacd's TLS certificate (PEM). When set, rustguac connects to guacd over TLS.
+    /// Path to guacd's TLS certificate (PEM). When set, persea connects to guacd over TLS.
     /// This is independent of server HTTPS — you can use guacd TLS without serving HTTPS.
     pub guacd_cert_path: Option<PathBuf>,
 }
@@ -142,13 +142,13 @@ pub struct DriveConfig {
     #[serde(default)]
     #[allow(dead_code)]
     pub retention_secs: u64,
-    /// LUKS container device/file path (e.g. "/opt/rustguac/drives.luks").
-    /// When set (along with luks_key_path), rustguac manages LUKS open/close lifecycle.
+    /// LUKS container device/file path (e.g. "/opt/persea/drives.luks").
+    /// When set (along with luks_key_path), persea manages LUKS open/close lifecycle.
     pub luks_device: Option<PathBuf>,
-    /// Device-mapper name for the LUKS volume. Default: "rustguac-drives".
+    /// Device-mapper name for the LUKS volume. Default: "persea-drives".
     #[serde(default = "default_luks_name")]
     pub luks_name: String,
-    /// Vault KV path for the LUKS encryption key (e.g. "rustguac/luks-key").
+    /// Vault KV path for the LUKS encryption key (e.g. "persea/luks-key").
     /// The secret must have a "key" field containing the passphrase.
     pub luks_key_path: Option<String>,
 }
@@ -166,7 +166,7 @@ fn default_true() -> bool {
 }
 
 fn default_luks_name() -> String {
-    "rustguac-drives".into()
+    "persea-drives".into()
 }
 
 impl Default for DriveConfig {
@@ -211,7 +211,7 @@ pub struct RecordingConfig {
     pub typescript_path: Option<PathBuf>,
     /// Base filename template for the typescript. guacd itself does NOT
     /// substitute tokens in this name (it uses it verbatim and appends a
-    /// numeric suffix to avoid collisions), so rustguac expands its own
+    /// numeric suffix to avoid collisions), so persea expands its own
     /// brace tokens before passing it on: `{user}`, `{connection}`
     /// (address-book entry name, falls back to hostname), `{host}`,
     /// `{date}` (UTC YYYYMMDD), `{time}` (UTC HHMMSS), `{session}` (short
@@ -319,7 +319,7 @@ fn default_user_credentials_scope() -> String {
 }
 
 fn default_vault_base_path() -> String {
-    "rustguac".into()
+    "persea".into()
 }
 
 /// Authentication chain configuration (`[auth]`).
@@ -355,7 +355,7 @@ pub struct AuthTotpConfig {
     pub enforcement: crate::totp::TotpEnforcement,
 }
 
-fn default_totp_issuer() -> String { "rustguac".into() }
+fn default_totp_issuer() -> String { "persea".into() }
 fn default_totp_digits() -> u8 { 6 }
 fn default_totp_period() -> u16 { 30 }
 fn default_totp_skew() -> u8 { 1 }
@@ -1035,7 +1035,7 @@ impl ThemeConfig {
 ///
 /// Built-ins (the eight `aurora`/`dark`/`light`/... presets in [`builtin_presets`])
 /// are always returned even if `<static_path>/themes/` is absent, so a fresh
-/// install or a misconfigured static_path can never leave rustguac without
+/// install or a misconfigured static_path can never leave persea without
 /// any themes. Operators add a new theme by dropping a `<name>.toml` file
 /// into `<static_path>/themes/`; the filename (minus extension) is the theme
 /// id. A disk theme with the same id as a built-in **overrides** the built-in,
@@ -1141,7 +1141,7 @@ fn default_static_path() -> PathBuf {
 }
 
 fn default_db_path() -> PathBuf {
-    PathBuf::from("./rustguac.db")
+    PathBuf::from("./persea.db")
 }
 
 fn default_session_timeout_secs() -> u64 {
@@ -1205,11 +1205,11 @@ fn default_login_script_timeout_secs() -> u64 {
 }
 
 fn default_login_scripts_dir() -> String {
-    "/opt/rustguac/scripts".into()
+    "/opt/persea/scripts".into()
 }
 
 fn default_site_title() -> String {
-    "rustguac".into()
+    "persea".into()
 }
 
 fn default_localhost_networks() -> Vec<String> {
@@ -1308,8 +1308,8 @@ impl Config {
         // everything they configured.
         let (path, required) = if let Some(p) = path {
             (Some(p.to_string()), true)
-        } else if std::path::Path::new("/opt/rustguac/config.toml").exists() {
-            (Some("/opt/rustguac/config.toml".to_string()), true)
+        } else if std::path::Path::new("/opt/persea/config.toml").exists() {
+            (Some("/opt/persea/config.toml".to_string()), true)
         } else {
             (None, false)
         };
@@ -1356,8 +1356,8 @@ impl Config {
                 eprintln!(
                     "[config] ERROR: [oidc] is configured but no client_secret was provided.\n\
                      [config]        Set `client_secret = \"...\"` in config.toml, or export\n\
-                     [config]        OIDC_CLIENT_SECRET in the rustguac environment\n\
-                     [config]        (e.g. /opt/rustguac/env)."
+                     [config]        OIDC_CLIENT_SECRET in the persea environment\n\
+                     [config]        (e.g. /opt/persea/env)."
                 );
                 std::process::exit(1);
             }
@@ -1603,7 +1603,7 @@ mod tests {
         let config: VaultConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.addr, "https://vault:8200");
         assert_eq!(config.mount, "secret");
-        assert_eq!(config.base_path, "rustguac");
+        assert_eq!(config.base_path, "persea");
         assert!(!config.tls_skip_verify);
         assert!(config.ca_cert.is_none());
     }
@@ -1726,7 +1726,7 @@ mod tests {
         // Backward-compat: a static_path with no themes/ subdir loads
         // exactly the Rust-baked built-ins (8 of them, in their defined
         // order). Existing deployments upgrading to 1.7.1 see no change.
-        let tmp = std::env::temp_dir().join(format!("rustguac-test-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("persea-test-{}", std::process::id()));
         std::fs::create_dir_all(&tmp).unwrap();
         let themes = load_themes(&tmp);
         assert_eq!(themes.len(), builtin_presets().len());
@@ -1739,7 +1739,7 @@ mod tests {
     #[test]
     fn load_themes_adds_new_disk_theme() {
         // A new .toml in the themes dir is appended after the built-ins.
-        let tmp = std::env::temp_dir().join(format!("rustguac-test-{}-add", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("persea-test-{}-add", std::process::id()));
         let themes_dir = tmp.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         std::fs::write(themes_dir.join("custom-brand.toml"), theme_toml("#ff00ff")).unwrap();
@@ -1755,7 +1755,7 @@ mod tests {
     fn load_themes_disk_overrides_builtin_with_same_name() {
         // A .toml named after a built-in (e.g. aurora.toml) replaces the
         // built-in. Operators re-brand by editing the file, not the Rust code.
-        let tmp = std::env::temp_dir().join(format!("rustguac-test-{}-ovr", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("persea-test-{}-ovr", std::process::id()));
         let themes_dir = tmp.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         std::fs::write(themes_dir.join("aurora.toml"), theme_toml("#abcdef")).unwrap();
@@ -1773,7 +1773,7 @@ mod tests {
         // is skipped with a log warning, not loaded. Protects the frontend
         // picker, log lines, and config-file matching from injection or
         // homoglyph confusion via crafted filenames.
-        let tmp = std::env::temp_dir().join(format!("rustguac-test-{}-bad", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("persea-test-{}-bad", std::process::id()));
         let themes_dir = tmp.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         // Whitespace, HTML, traversal-ish, and overlong all rejected.
@@ -1803,7 +1803,7 @@ mod tests {
         // A garbage .toml in the themes dir is skipped with a warning, not
         // fatal. The rest of the directory continues to load.
         let tmp =
-            std::env::temp_dir().join(format!("rustguac-test-{}-bad-toml", std::process::id()));
+            std::env::temp_dir().join(format!("persea-test-{}-bad-toml", std::process::id()));
         let themes_dir = tmp.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         std::fs::write(themes_dir.join("bad.toml"), "this is = not\nvalid toml [[[").unwrap();

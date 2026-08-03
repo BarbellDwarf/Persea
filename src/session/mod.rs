@@ -396,7 +396,7 @@ mod tests {
         // real dir isn't touched and parallel tests don't collide.
         let mut config = crate::config::Config::default();
         let tmp = std::env::temp_dir().join(format!(
-            "rustguac-sessmgr-test-{}",
+            "persea-sessmgr-test-{}",
             uuid::Uuid::new_v4()
         ));
         config.recording_path = tmp.clone();

@@ -335,7 +335,7 @@ mod tests {
     }
 
     // ── Adversarial parser cases ───────────────────────────────────────────
-    // guacd is a trust boundary: even under compromise, the rustguac parser
+    // guacd is a trust boundary: even under compromise, the persea parser
     // must refuse to panic, must reject malformed frames cleanly, and must
     // bound memory. Every negative case here should produce a ParseError or
     // be dropped by the 1 MiB buffer cap — never a panic or OOM.

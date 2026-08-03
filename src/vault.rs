@@ -30,7 +30,7 @@ pub enum VaultError {
     BadName(String),
     /// The backend serving this scope is configured but not currently
     /// connected (initial connect pending or the Vault is down). Distinct from
-    /// a Vault that returns an error: the request never left rustguac.
+    /// a Vault that returns an error: the request never left persea.
     Unavailable,
 }
 
@@ -195,14 +195,14 @@ pub struct AddressBookEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_idle_timeout_mins: Option<u64>,
     /// Optional fixed username for the VDI container's RDP login. When set,
-    /// rustguac uses this username for the RDP connect into the container
+    /// persea uses this username for the RDP connect into the container
     /// instead of deriving one from the operator's identity. Useful when the
     /// container image has a baked-in user that doesn't honour the
     /// VDI_USERNAME env var.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_username: Option<String>,
     /// Optional fixed password matching `container_username`. When set,
-    /// rustguac uses this password for the RDP connect instead of
+    /// persea uses this password for the RDP connect instead of
     /// generating an ephemeral one. Stored in Vault alongside the entry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_password: Option<String>,
@@ -1589,7 +1589,7 @@ mod tests {
         VaultConfig {
             addr: "https://vault.example.com:8200".into(),
             mount: "secret".into(),
-            base_path: "rustguac".into(),
+            base_path: "persea".into(),
             role_id: "test-role-id".into(),
             namespace: None,
             instance_name: None,
@@ -1629,7 +1629,7 @@ mod tests {
     fn test_build_client_ca_cert_invalid_pem() {
         // reqwest::Certificate::from_pem rejects PEM with valid headers but
         // garbage DER content.
-        let dir = std::env::temp_dir().join("rustguac-test-vault-tls");
+        let dir = std::env::temp_dir().join("persea-test-vault-tls");
         let _ = std::fs::create_dir_all(&dir);
         let ca_path = dir.join("bad-ca.pem");
         let bad_pem =
@@ -1646,7 +1646,7 @@ mod tests {
 
     #[test]
     fn test_build_client_client_cert_without_key() {
-        let dir = std::env::temp_dir().join("rustguac-test-vault-tls-nokey");
+        let dir = std::env::temp_dir().join("persea-test-vault-tls-nokey");
         let _ = std::fs::create_dir_all(&dir);
         let cert_path = dir.join("client.pem");
         std::fs::write(&cert_path, b"placeholder").unwrap();
@@ -1673,7 +1673,7 @@ mod tests {
 
     #[test]
     fn test_build_client_client_key_missing_file() {
-        let dir = std::env::temp_dir().join("rustguac-test-vault-tls-keyfile");
+        let dir = std::env::temp_dir().join("persea-test-vault-tls-keyfile");
         let _ = std::fs::create_dir_all(&dir);
         let cert_path = dir.join("client.pem");
         std::fs::write(&cert_path, b"placeholder cert").unwrap();
@@ -1690,7 +1690,7 @@ mod tests {
 
     #[test]
     fn test_build_client_valid_ca_cert() {
-        let dir = std::env::temp_dir().join("rustguac-test-vault-tls-valid");
+        let dir = std::env::temp_dir().join("persea-test-vault-tls-valid");
         let _ = std::fs::create_dir_all(&dir);
         let ca_path = dir.join("ca.pem");
 
@@ -1730,23 +1730,23 @@ mod tests {
         let toml_str = r#"
             addr = "https://vault.example.com:8200"
             role_id = "test-role"
-            ca_cert = "/opt/rustguac/certs/ca.pem"
-            client_cert = "/opt/rustguac/certs/client.pem"
-            client_key = "/opt/rustguac/certs/client-key.pem"
+            ca_cert = "/opt/persea/certs/ca.pem"
+            client_cert = "/opt/persea/certs/client.pem"
+            client_key = "/opt/persea/certs/client-key.pem"
             tls_skip_verify = true
         "#;
         let config: VaultConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(
             config.ca_cert.as_deref(),
-            Some("/opt/rustguac/certs/ca.pem")
+            Some("/opt/persea/certs/ca.pem")
         );
         assert_eq!(
-            config.client_cert.as_deref(),
-            Some("/opt/rustguac/certs/client.pem")
+            config.client_cert,
+            Some("/opt/persea/certs/client.pem")
         );
         assert_eq!(
-            config.client_key.as_deref(),
-            Some("/opt/rustguac/certs/client-key.pem")
+            config.client_key,
+            Some("/opt/persea/certs/client-key.pem")
         );
         assert!(config.tls_skip_verify);
     }
@@ -1805,7 +1805,7 @@ mod tests {
     #[test]
     fn test_build_client_mtls_pkcs8_key() {
         // This test reproduces issue #51: PKCS#8 keys from OpenBao should work.
-        let dir = std::env::temp_dir().join("rustguac-test-vault-mtls");
+        let dir = std::env::temp_dir().join("persea-test-vault-mtls");
         let _ = std::fs::create_dir_all(&dir);
         let cert_path = dir.join("client.pem");
         let key_path = dir.join("client-key.pem");
@@ -1902,7 +1902,7 @@ mod tests {
     #[test]
     fn test_build_client_mtls_fullchain_cert() {
         // Test with fullchain cert (leaf + CA) — as OpenBao typically delivers.
-        let dir = std::env::temp_dir().join("rustguac-test-vault-mtls-chain");
+        let dir = std::env::temp_dir().join("persea-test-vault-mtls-chain");
         let _ = std::fs::create_dir_all(&dir);
         let key_path = dir.join("client-key.pem");
         let fullchain_path = dir.join("client-fullchain.pem");

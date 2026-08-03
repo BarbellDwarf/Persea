@@ -502,8 +502,8 @@ pub async fn get_vdi_container_thumbnail(
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
         .collect::<String>();
     let owns = !current_user.is_empty()
-        && (name == format!("rustguac-vdi-{}", current_user)
-            || name.starts_with(&format!("rustguac-vdi-{}-", current_user)));
+        && (name == format!("persea-vdi-{}", current_user)
+            || name.starts_with(&format!("persea-vdi-{}-", current_user)));
     if !id.has_role("admin") && !owns {
         return StatusCode::NOT_FOUND.into_response();
     }

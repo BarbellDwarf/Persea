@@ -110,7 +110,7 @@ pub struct PveBroker {
     pub api_token: String,
     /// Verify the PVE API server's TLS certificate. Proxmox ships a
     /// self-signed cluster cert by default, so this is often disabled unless
-    /// the cluster CA is trusted on the rustguac host.
+    /// the cluster CA is trusted on the persea host.
     pub verify_tls: bool,
 }
 

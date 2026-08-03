@@ -143,7 +143,7 @@ impl SessionManager {
                     })?;
 
                     let public_key = format!(
-                        "{} rustguac-ephemeral",
+                        "{} persea-ephemeral",
                         keypair.public_key().to_openssh().map_err(|e| {
                             SessionError::ValidationError(format!(
                                 "public key export failed: {}",
@@ -177,7 +177,7 @@ impl SessionManager {
 
                 // SSH typescript recording (#159): per-connection opt-in
                 // (default off), and only when a global typescript_path is
-                // configured. rustguac expands the name template (guacd
+                // configured. persea expands the name template (guacd
                 // uses it verbatim) so audit files are identifiable per
                 // user + connection.
                 let typescript = self
@@ -1122,10 +1122,10 @@ impl SessionManager {
 /// is unset. Produces audit-friendly per-session names (#159).
 const DEFAULT_TYPESCRIPT_NAME: &str = "{connection}-{user}-{date}-{time}";
 
-/// Expand rustguac's brace tokens in a typescript filename template (#159).
+/// Expand persea's brace tokens in a typescript filename template (#159).
 ///
 /// guacd uses the typescript name verbatim (it appends a numeric suffix
-/// only to avoid clobbering an existing file), so rustguac does this
+/// only to avoid clobbering an existing file), so persea does this
 /// substitution itself to produce audit-friendly, per-session filenames
 /// like `coreswitch01-alice-20260610-143022`. Every substituted value is
 /// sanitised to `[A-Za-z0-9_-]`, so the result is always a safe basename:

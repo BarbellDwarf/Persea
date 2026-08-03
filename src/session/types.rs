@@ -147,7 +147,7 @@ pub struct CreateSessionRequest {
     /// SPICE: proxy URL, e.g. a Proxmox SPICE proxy "http://host:3128".
     pub spice_proxy: Option<String>,
     /// Proxmox VE console (SessionType::Proxmox): PVE API base URL, a full URL
-    /// including scheme and port (e.g. "https://pve.example.com:8006"). rustguac
+    /// including scheme and port (e.g. "https://pve.example.com:8006"). persea
     /// fetches a just-in-time SPICE ticket + config from the PVE spiceproxy API
     /// at connect.
     pub proxmox_url: Option<String>,

@@ -69,21 +69,21 @@ pub fn render_prometheus() -> String {
     let m = metrics();
     let uptime_secs = m.start_time.elapsed().as_secs();
     format!(
-        "# HELP rustguac_sessions_active Current active sessions\n\
-         # TYPE rustguac_sessions_active gauge\n\
-         rustguac_sessions_active {}\n\
-         # HELP rustguac_sessions_total Total sessions created\n\
-         # TYPE rustguac_sessions_total counter\n\
-         rustguac_sessions_total {}\n\
-         # HELP rustguac_requests_total Total HTTP requests\n\
-         # TYPE rustguac_requests_total counter\n\
-         rustguac_requests_total {}\n\
-         # HELP rustguac_errors_total Total request errors (5xx responses)\n\
-         # TYPE rustguac_errors_total counter\n\
-         rustguac_errors_total {}\n\
-         # HELP rustguac_uptime_seconds Server uptime in seconds\n\
-         # TYPE rustguac_uptime_seconds gauge\n\
-         rustguac_uptime_seconds {}\n",
+        "# HELP persea_sessions_active Current active sessions\n\
+         # TYPE persea_sessions_active gauge\n\
+         persea_sessions_active {}\n\
+         # HELP persea_sessions_total Total sessions created\n\
+         # TYPE persea_sessions_total counter\n\
+         persea_sessions_total {}\n\
+         # HELP persea_requests_total Total HTTP requests\n\
+         # TYPE persea_requests_total counter\n\
+         persea_requests_total {}\n\
+         # HELP persea_errors_total Total request errors (5xx responses)\n\
+         # TYPE persea_errors_total counter\n\
+         persea_errors_total {}\n\
+         # HELP persea_uptime_seconds Server uptime in seconds\n\
+         # TYPE persea_uptime_seconds gauge\n\
+         persea_uptime_seconds {}\n",
         m.sessions_active.load(Ordering::Relaxed),
         m.sessions_total.load(Ordering::Relaxed),
         m.requests_total.load(Ordering::Relaxed),
