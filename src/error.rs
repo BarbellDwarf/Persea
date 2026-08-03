@@ -3,6 +3,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 #[derive(Debug, thiserror::Error)]
+#[must_use]
 pub enum AppError {
     #[error("session error: {0}")]
     Session(String),

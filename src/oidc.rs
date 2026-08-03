@@ -116,7 +116,11 @@ pub struct LoginParams {
 }
 
 /// GET /auth/login — redirect user to OIDC provider.
-pub async fn login(State(oidc): State<OidcState>, Query(params): Query<LoginParams>) -> Response {
+pub async fn login(
+    State(oidc): State<OidcState>,
+    Query(params): Query<LoginParams>,
+    headers: axum::http::HeaderMap,
+) -> Response {
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let mut auth_request = oidc
@@ -147,9 +151,26 @@ pub async fn login(State(oidc): State<OidcState>, Query(params): Query<LoginPara
     drop(pending);
 
     // Set state in a cookie so we can verify on callback, then redirect
+    // Bind state to client fingerprint (IP + User-Agent) to prevent CSRF
+    let fingerprint = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        headers.get("x-forwarded-for").or_else(|| headers.get("x-real-ip"))
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown")
+            .hash(&mut h);
+        headers.get(header::USER_AGENT)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown")
+            .hash(&mut h);
+        format!("{:x}", h.finish())
+    };
+    let cookie_value = format!("{}:{}", state_key, fingerprint);
+
     let state_cookie = format!(
         "rustguac_oidc_state={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
-        state_key
+        cookie_value
     );
 
     let mut cookies = vec![(header::SET_COOKIE, state_cookie)];
@@ -215,9 +236,39 @@ pub async fn callback(
     };
 
     // Verify the state cookie matches the state query parameter (binds flow to browser)
+    // Cookie format is "state_key:fingerprint" — verify both
     let state_cookie = extract_cookie(&headers, "rustguac_oidc_state");
-    if state_cookie.as_deref() != Some(&state) {
-        tracing::warn!("OIDC callback state cookie mismatch");
+    let cookie_valid = match state_cookie.as_deref() {
+        Some(cookie_val) => {
+            if let Some((cookie_state, cookie_fingerprint)) = cookie_val.split_once(':') {
+                // Verify state matches
+                if cookie_state != state {
+                    false
+                } else {
+                    // Verify fingerprint matches current request
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    let mut h = DefaultHasher::new();
+                    headers.get("x-forwarded-for").or_else(|| headers.get("x-real-ip"))
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown")
+                        .hash(&mut h);
+                    headers.get(header::USER_AGENT)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown")
+                        .hash(&mut h);
+                    let current_fp = format!("{:x}", h.finish());
+                    cookie_fingerprint == current_fp
+                }
+            } else {
+                // Old format without fingerprint — reject
+                false
+            }
+        }
+        None => false,
+    };
+    if !cookie_valid {
+        tracing::warn!("OIDC callback state cookie mismatch or fingerprint mismatch");
         return (
             StatusCode::BAD_REQUEST,
             axum::Json(json!({"error": "OIDC state cookie mismatch"})),

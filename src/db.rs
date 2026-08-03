@@ -565,7 +565,7 @@ pub fn delete_admin(db: &Db, name: &str) -> rusqlite::Result<bool> {
 /// Rotate an admin's API key. Returns the new plaintext key.
 pub fn rotate_key(db: &Db, name: &str) -> rusqlite::Result<Option<String>> {
     let key = generate_key();
-    let key_hash = hash_key(&key);
+    let key_hash = hash_key_salt(&key);
     let conn = db.lock().unwrap();
     let changed = conn.execute(
         "UPDATE admins SET api_key_hash = ?1 WHERE name = ?2",

@@ -1,4 +1,6 @@
 #![allow(missing_docs)]
+#![warn(clippy::unwrap_used)]
+#![warn(clippy::expect_used)]
 
 pub mod protocol;
 pub mod password;

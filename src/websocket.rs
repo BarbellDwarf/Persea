@@ -70,22 +70,37 @@ pub async fn ws_handler(
     // Compare Origin's hostname against the request's Host header hostname.
     // Only the hostname is compared (ports stripped) to avoid false rejections
     // behind reverse proxies that may add/remove default ports.
-    if let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) {
-        let host = headers
-            .get("host")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !origin_host_matches(origin, host) {
+    // Reject WebSocket upgrades when Origin is missing to prevent CSWSH.
+    match headers.get("origin").and_then(|v| v.to_str().ok()) {
+        Some(origin) => {
+            let host = headers
+                .get("host")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if !origin_host_matches(origin, host) {
+                tracing::warn!(
+                    session_id = %session_id,
+                    client_ip = %ip,
+                    origin = %origin,
+                    host = %host,
+                    "WebSocket upgrade rejected: Origin does not match Host (possible CSWSH)"
+                );
+                return (
+                    StatusCode::FORBIDDEN,
+                    axum::Json(json!({"error": "cross-origin WebSocket request rejected"})),
+                )
+                    .into_response();
+            }
+        }
+        None => {
             tracing::warn!(
                 session_id = %session_id,
                 client_ip = %ip,
-                origin = %origin,
-                host = %host,
-                "WebSocket upgrade rejected: Origin does not match Host (possible CSWSH)"
+                "WebSocket upgrade rejected: missing Origin header (possible CSWSH)"
             );
             return (
                 StatusCode::FORBIDDEN,
-                axum::Json(json!({"error": "cross-origin WebSocket request rejected"})),
+                axum::Json(json!({"error": "WebSocket upgrade requires Origin header"})),
             )
                 .into_response();
         }
