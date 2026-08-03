@@ -14,3 +14,4 @@ pub mod auth_providers;
 pub mod auth_chain;
 pub mod totp;
 pub mod db;
+pub mod role;

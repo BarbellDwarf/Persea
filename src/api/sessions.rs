@@ -295,6 +295,9 @@ pub(crate) fn is_jpeg_magic(body: &[u8]) -> bool {
     body.len() >= 3 && body[0] == 0xFF && body[1] == 0xD8 && body[2] == 0xFF
 }
 
+/// Maximum thumbnail body size in bytes (100 KiB).
+const MAX_THUMBNAIL_BODY_LEN: usize = 100_000;
+
 pub async fn put_session_thumbnail(
     State(manager): State<AppState>,
     Path(id): Path<Uuid>,
@@ -315,7 +318,7 @@ pub async fn put_session_thumbnail(
     if !is_admin && !is_owner {
         return StatusCode::NOT_FOUND.into_response();
     }
-    if body.len() > 100_000 {
+    if body.len() > MAX_THUMBNAIL_BODY_LEN {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
     if !is_jpeg_magic(&body) {

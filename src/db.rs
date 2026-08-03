@@ -1,16 +1,6 @@
 //! SQLite database layer for admin/API key management.
 
-/// Map role names to numeric levels for comparison (duplicated from auth
-/// module to avoid circular dependency in lib crate).
-fn role_level(role: &str) -> u8 {
-    match role {
-        "admin" => 4,
-        "poweruser" => 3,
-        "operator" => 2,
-        "viewer" => 1,
-        _ => 0,
-    }
-}
+use crate::role::role_level;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rand::RngExt;
 use rusqlite::{params, Connection};

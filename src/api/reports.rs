@@ -13,6 +13,9 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::io::ReaderStream;
 
+/// Maximum number of rows returned by CSV export queries.
+const MAX_CSV_EXPORT_ROWS: u32 = 100_000;
+
 #[derive(Deserialize)]
 pub struct ReportQuery {
     pub user: Option<String>,
@@ -225,6 +228,7 @@ pub async fn report_sessions_csv(
         q.session_type.as_deref(),
         q.from.as_deref(),
         q.to.as_deref(),
+<<<<<<< HEAD
     )
     .map_err(|e| {
         tracing::error!(error = %e, "Failed to query session history for CSV export");
@@ -239,6 +243,58 @@ pub async fn report_sessions_csv(
         .header(
             "Content-Disposition",
             "attachment; filename=\"session-history.csv\"",
+=======
+        MAX_CSV_EXPORT_ROWS,
+        0,
+    ) {
+        Ok((rows, _total)) => {
+            let mut csv = String::from("Session ID,Type,Hostname,Username,User,Entry,Folder,Started,Ended,Duration (secs),Status,Recording\n");
+            for row in &rows {
+                let fields = [
+                    row["session_id"].as_str().unwrap_or(""),
+                    row["session_type"].as_str().unwrap_or(""),
+                    row["hostname"].as_str().unwrap_or(""),
+                    row["username"].as_str().unwrap_or(""),
+                    row["created_by"].as_str().unwrap_or(""),
+                    row["entry_display_name"]
+                        .as_str()
+                        .or_else(|| row["address_book_entry"].as_str())
+                        .unwrap_or(""),
+                    row["address_book_folder"].as_str().unwrap_or(""),
+                    row["started_at"].as_str().unwrap_or(""),
+                    row["ended_at"].as_str().unwrap_or(""),
+                ];
+                for (i, f) in fields.iter().enumerate() {
+                    if i > 0 {
+                        csv.push(',');
+                    }
+                    csv_escape_into(&mut csv, f);
+                }
+                csv.push(',');
+                if let Some(d) = row["duration_secs"].as_i64() {
+                    csv.push_str(&d.to_string());
+                }
+                csv.push(',');
+                csv_escape_into(&mut csv, row["status"].as_str().unwrap_or(""));
+                csv.push(',');
+                csv_escape_into(&mut csv, row["recording_file"].as_str().unwrap_or(""));
+                csv.push('\n');
+            }
+            axum::response::Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "text/csv; charset=utf-8")
+                .header(
+                    "Content-Disposition",
+                    "attachment; filename=\"session-history.csv\"",
+                )
+                .body(Body::from(csv))
+                .unwrap()
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": e.to_string()})),
+>>>>>>> ticket-015-code-quality
         )
         .body(Body::from(csv))
         .unwrap()

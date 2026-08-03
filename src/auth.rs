@@ -113,24 +113,8 @@ impl AuthIdentity {
     }
 }
 
-/// Map role names to numeric levels for comparison.
-pub fn role_level(role: &str) -> u8 {
-    match role {
-        "admin" => 4,
-        "poweruser" => 3,
-        "operator" => 2,
-        "viewer" => 1,
-        _ => 0,
-    }
-}
-
-/// All valid role names.
-pub const VALID_ROLES: &[&str] = &["admin", "poweruser", "operator", "viewer"];
-
-/// Check if a role string is a valid role name.
-pub fn is_valid_role(role: &str) -> bool {
-    VALID_ROLES.contains(&role)
-}
+// Re-export role utilities from the shared module.
+pub use crate::role::{is_valid_role, role_level, Role, VALID_ROLES};
 
 /// Compute the effective role for a user API token.
 /// Returns the lower of the user's current role and the token's max_role cap.
