@@ -66,7 +66,7 @@ pub async fn create_ws_ticket(
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let Extension(identity) = identity.ok_or_else(|| AppError::Auth("unauthorized".into()))?;
-    let ticket = ticket_store.create(identity);
+    let ticket = ticket_store.create(identity).await;
     Ok(Json(json!({"ticket": ticket})))
 }
 

@@ -12,7 +12,8 @@ use ipnetwork::IpNetwork;
 use serde_json::json;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use std::time::Instant;
 
 /// Single-use WebSocket ticket. Created via POST /api/ws-ticket, consumed on
@@ -34,9 +35,9 @@ impl WsTicketStore {
     }
 
     /// Create a ticket for the given identity. Returns the ticket string.
-    pub fn create(&self, identity: AuthIdentity) -> String {
+    pub async fn create(&self, identity: AuthIdentity) -> String {
         let ticket = format!("wst_{}", uuid::Uuid::new_v4().as_simple());
-        let mut store = self.0.lock().unwrap();
+        let mut store = self.0.lock().await;
 
         // Prune expired tickets while we have the lock
         let cutoff = Instant::now() - std::time::Duration::from_secs(WS_TICKET_TTL_SECS);
@@ -54,8 +55,8 @@ impl WsTicketStore {
 
     /// Consume a ticket, returning the identity if valid and not expired.
     /// Single-use: the ticket is removed on consumption.
-    pub fn consume(&self, ticket: &str) -> Option<AuthIdentity> {
-        let mut store = self.0.lock().unwrap();
+    pub async fn consume(&self, ticket: &str) -> Option<AuthIdentity> {
+        let mut store = self.0.lock().await;
         let entry = store.remove(ticket)?;
         if entry.created.elapsed().as_secs() <= WS_TICKET_TTL_SECS {
             Some(entry.identity)
@@ -368,7 +369,7 @@ pub async fn optional_auth(
             })
         });
         if let Some(ticket) = ticket_val {
-            if let Some(identity) = ticket_store.consume(&ticket) {
+            if let Some(identity) = ticket_store.consume(&ticket).await {
                 tracing::debug!("Optional auth: WebSocket ticket consumed");
                 let mut request = request;
                 request.extensions_mut().insert(identity);

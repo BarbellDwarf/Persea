@@ -206,9 +206,19 @@ pub fn last_instruction_boundary(buf: &[u8]) -> Option<usize> {
 }
 
 /// Streaming parser that accumulates data and yields complete instructions.
-#[derive(Default)]
+///
+/// Uses `bytes::BytesMut` internally to avoid repeated String allocations
+/// when slicing the buffer after extracting instructions.
 pub struct InstructionParser {
-    buffer: String,
+    buffer: bytes::BytesMut,
+}
+
+impl Default for InstructionParser {
+    fn default() -> Self {
+        Self {
+            buffer: bytes::BytesMut::with_capacity(8192),
+        }
+    }
 }
 
 impl InstructionParser {
@@ -218,7 +228,7 @@ impl InstructionParser {
 
     /// Feed data into the parser and return any complete instructions.
     pub fn receive(&mut self, data: &str) -> Vec<Result<Instruction, ParseError>> {
-        self.buffer.push_str(data);
+        self.buffer.extend_from_slice(data.as_bytes());
 
         if self.buffer.len() > 1_048_576 {
             self.buffer.clear();
@@ -227,10 +237,18 @@ impl InstructionParser {
 
         let mut results = Vec::new();
 
-        while let Some(semi_pos) = self.buffer.find(';') {
-            let instruction_str = self.buffer[..semi_pos].to_string();
-            self.buffer = self.buffer[semi_pos + 1..].to_string();
-            results.push(Instruction::parse(&instruction_str));
+        while let Some(semi_pos) = self.buffer.iter().position(|&b| b == b';') {
+            let instruction_bytes = self.buffer.split_to(semi_pos + 1);
+            // Strip trailing ';' before parsing
+            let instr_slice = &instruction_bytes[..instruction_bytes.len() - 1];
+            let instruction_str = match std::str::from_utf8(instr_slice) {
+                Ok(s) => s,
+                Err(_) => {
+                    results.push(Err(ParseError::MalformedElement));
+                    continue;
+                }
+            };
+            results.push(Instruction::parse(instruction_str));
         }
 
         results

@@ -26,6 +26,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Streaming
 futures-util = "0.3"
+bytes = "1"
 
 # Config
 toml = "1"
