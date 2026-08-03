@@ -100,7 +100,7 @@ export class AdminPage {
   async goto(): Promise<void> {
     await this.page.goto('/');
     await this.page.evaluate((key) => {
-      sessionStorage.setItem('rustguac_api_key', key);
+      sessionStorage.setItem('persea_api_key', key);
     }, process.env.ADMIN_API_KEY || '');
     await this.page.goto('/admin.html');
   }
