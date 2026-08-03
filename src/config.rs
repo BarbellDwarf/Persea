@@ -470,6 +470,12 @@ pub struct Config {
     #[serde(default = "default_session_cleanup_delay_secs")]
     pub session_cleanup_delay_secs: u64,
 
+    /// Graceful shutdown timeout in seconds. Default: 30.
+    /// After receiving SIGTERM/SIGINT, the server stops accepting new connections
+    /// and waits this long for active sessions to drain before forcing exit.
+    #[serde(default = "default_shutdown_timeout_secs")]
+    pub shutdown_timeout_secs: u64,
+
     /// Enable API rate limiting. Default: false.
     /// When behind a reverse proxy (HAProxy, nginx) or access gateway (KnockNoc),
     /// rate limiting is typically handled upstream and not needed here.
@@ -1158,6 +1164,10 @@ fn default_session_cleanup_delay_secs() -> u64 {
     300 // 5 minutes
 }
 
+fn default_shutdown_timeout_secs() -> u64 {
+    30
+}
+
 fn default_auth_session_ttl_secs() -> u64 {
     86400 // 24 hours
 }
@@ -1245,6 +1255,7 @@ impl Default for Config {
             max_sessions: default_max_sessions(),
             max_sessions_per_user: default_max_sessions_per_user(),
             session_cleanup_delay_secs: default_session_cleanup_delay_secs(),
+            shutdown_timeout_secs: default_shutdown_timeout_secs(),
             rate_limit: false,
             trusted_proxies: Vec::new(),
             user_credentials_default_scope: default_user_credentials_scope(),
@@ -1352,49 +1363,95 @@ impl Config {
             }
         }
 
-        // Validate config values
-        config.validate();
+        // Sanitize mutable config (remove invalid CIDRs, cap out-of-range values)
+        config.sanitize();
 
         config
     }
 
-    fn validate(&mut self) {
-        // Fatal: can't start
-        if self.listen_addr.parse::<std::net::SocketAddr>().is_err() {
-            eprintln!("FATAL: invalid listen_addr: {}", self.listen_addr);
-            std::process::exit(1);
-        }
+    /// Validate configuration values. Returns `Err` with a fatal message
+    /// if the server cannot start; returns `Ok(warnings)` with non-fatal
+    /// advisory messages the caller should print.
+    pub fn validate(&self) -> Result<Vec<String>, String> {
+        let mut warnings = Vec::new();
+
+        // ── Fatal errors ──────────────────────────────────────────────
+        self.listen_addr
+            .parse::<std::net::SocketAddr>()
+            .map_err(|e| format!("invalid listen_addr '{}': {}", self.listen_addr, e))?;
+
         // guacd_addr accepts IP:port or hostname:port — validate port is numeric
-        if let Some(port_str) = self.guacd_addr.rsplit(':').next() {
-            if port_str.parse::<u16>().is_err() {
-                eprintln!("FATAL: invalid guacd_addr (bad port): {}", self.guacd_addr);
-                std::process::exit(1);
-            }
-        } else {
-            eprintln!("FATAL: invalid guacd_addr: {}", self.guacd_addr);
-            std::process::exit(1);
+        match self.guacd_addr.rsplit(':').next() {
+            Some(port_str) if port_str.parse::<u16>().is_ok() => {}
+            _ => return Err(format!("invalid guacd_addr: {}", self.guacd_addr)),
         }
 
-        // Warnings: bad values
+        // CIDR entries must parse
+        for cidr in &self.ssh_allowed_networks {
+            cidr.parse::<ipnetwork::IpNetwork>()
+                .map_err(|e| format!("invalid ssh_allowed_networks CIDR '{}': {}", cidr, e))?;
+        }
+        for cidr in &self.rdp_allowed_networks {
+            cidr.parse::<ipnetwork::IpNetwork>()
+                .map_err(|e| format!("invalid rdp_allowed_networks CIDR '{}': {}", cidr, e))?;
+        }
+        for cidr in &self.vnc_allowed_networks {
+            cidr.parse::<ipnetwork::IpNetwork>()
+                .map_err(|e| format!("invalid vnc_allowed_networks CIDR '{}': {}", cidr, e))?;
+        }
+        for cidr in &self.web_allowed_networks {
+            cidr.parse::<ipnetwork::IpNetwork>()
+                .map_err(|e| format!("invalid web_allowed_networks CIDR '{}': {}", cidr, e))?;
+        }
+        for cidr in &self.trusted_proxies {
+            cidr.parse::<ipnetwork::IpNetwork>()
+                .map_err(|e| format!("invalid trusted_proxies CIDR '{}': {}", cidr, e))?;
+        }
+
         if self.display_range_start >= self.display_range_end {
-            eprintln!("WARNING: display_range_start ({}) >= display_range_end ({}), displays may not work",
-                self.display_range_start, self.display_range_end);
-        }
-        if self.session_pending_timeout_secs == 0 {
-            eprintln!("WARNING: session_pending_timeout_secs is 0, pending sessions will expire immediately");
-        }
-        if self.recording.as_ref().is_some_and(|r| r.max_disk_percent > 100) {
-            eprintln!("WARNING: recording.max_disk_percent ({}) > 100, capping at 100",
-                self.recording.as_ref().unwrap().max_disk_percent);
+            return Err(format!(
+                "display_range_start ({}) must be less than display_range_end ({})",
+                self.display_range_start, self.display_range_end
+            ));
         }
 
-        // Validate and sanitize CIDR entries in allowed_network lists
+        if self.session_pending_timeout_secs == 0 {
+            return Err("session_pending_timeout_secs must be greater than 0".into());
+        }
+
+        if let Some(ref rec) = self.recording {
+            if rec.max_disk_percent > 100 {
+                return Err(format!(
+                    "recording.max_disk_percent ({}) must be <= 100",
+                    rec.max_disk_percent
+                ));
+            }
+        }
+
+        // ── Non-fatal warnings ────────────────────────────────────────
+        if !self.recording_path.to_string_lossy().is_empty() && self.recording.is_some() {
+            warnings.push(
+                "top-level 'recording_path' is deprecated in favour of [recording].path — \
+                 the [recording] section takes precedence"
+                    .into(),
+            );
+        } else if !self.recording_path.to_string_lossy().is_empty() {
+            warnings.push(
+                "top-level 'recording_path' is deprecated; migrate to [recording] section".into(),
+            );
+        }
+
+        Ok(warnings)
+    }
+
+    /// Sanitize mutable config in place: remove invalid CIDRs, cap out-of-range
+    /// values. Called during `Config::load()` before `validate()`.
+    pub fn sanitize(&mut self) {
         sanitize_cidr_list("ssh", &mut self.ssh_allowed_networks);
         sanitize_cidr_list("rdp", &mut self.rdp_allowed_networks);
         sanitize_cidr_list("vnc", &mut self.vnc_allowed_networks);
         sanitize_cidr_list("web", &mut self.web_allowed_networks);
 
-        // Validate trusted_proxies
         self.trusted_proxies.retain(|cidr| {
             if cidr.parse::<ipnetwork::IpNetwork>().is_err() {
                 eprintln!("WARNING: invalid trusted_proxies CIDR '{}', removing", cidr);
@@ -1403,6 +1460,14 @@ impl Config {
                 true
             }
         });
+
+        if self.recording.as_ref().is_some_and(|r| r.max_disk_percent > 100) {
+            eprintln!(
+                "WARNING: recording.max_disk_percent ({}) > 100, capping at 100",
+                self.recording.as_ref().unwrap().max_disk_percent
+            );
+            self.recording.as_mut().unwrap().max_disk_percent = 100;
+        }
     }
 
     /// Effective recording path: `[recording].path` overrides top-level `recording_path`.
@@ -1864,7 +1929,7 @@ mod tests {
     // ── Config validation tests ──
 
     #[test]
-    fn test_validate_removes_invalid_cidrs() {
+    fn test_sanitize_removes_invalid_cidrs() {
         let mut config = Config::default();
         config.ssh_allowed_networks = vec![
             "10.0.0.0/8".into(),
@@ -1872,19 +1937,19 @@ mod tests {
             "192.168.0.0/16".into(),
             "".into(),
         ];
-        config.validate();
+        config.sanitize();
         assert_eq!(config.ssh_allowed_networks, vec!["10.0.0.0/8", "192.168.0.0/16"]);
     }
 
     #[test]
-    fn test_validate_keeps_valid_cidrs() {
+    fn test_sanitize_keeps_valid_cidrs() {
         let mut config = Config::default();
         config.ssh_allowed_networks = vec![
             "10.0.0.0/8".into(),
             "172.16.0.0/12".into(),
             "::1/128".into(),
         ];
-        config.validate();
+        config.sanitize();
         assert_eq!(config.ssh_allowed_networks.len(), 3);
     }
 
@@ -1924,17 +1989,90 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_trusted_proxies() {
+    fn test_sanitize_trusted_proxies() {
         let mut config = Config::default();
         config.trusted_proxies = vec![
             "10.0.0.0/8".into(),
             "not-valid".into(),
             "192.168.0.0/16".into(),
         ];
-        config.validate();
+        config.sanitize();
         assert_eq!(
             config.trusted_proxies,
             vec!["10.0.0.0/8", "192.168.0.0/16"]
+        );
+    }
+
+    // ── validate() method tests ──
+
+    #[test]
+    fn test_validate_ok_default_config() {
+        let config = Config::default();
+        let result = config.validate();
+        assert!(result.is_ok(), "default config should pass validation");
+    }
+
+    #[test]
+    fn test_validate_bad_listen_addr() {
+        let mut config = Config::default();
+        config.listen_addr = "not-an-address".into();
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("listen_addr"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_validate_bad_guacd_addr() {
+        let mut config = Config::default();
+        config.guacd_addr = "host:99999".into();
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("guacd_addr"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_validate_bad_cidr_fatal() {
+        let mut config = Config::default();
+        config.ssh_allowed_networks = vec!["not-a-cidr".into()];
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("ssh_allowed_networks"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_validate_display_range_start_ge_end() {
+        let mut config = Config::default();
+        config.display_range_start = 200;
+        config.display_range_end = 100;
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("display_range_start"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_validate_session_pending_timeout_zero() {
+        let mut config = Config::default();
+        config.session_pending_timeout_secs = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("session_pending_timeout_secs"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_validate_max_disk_percent_over_100() {
+        let mut config = Config::default();
+        config.recording = Some(RecordingConfig {
+            max_disk_percent: 120,
+            ..RecordingConfig::default()
+        });
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("max_disk_percent"), "error: {}", err);
+    }
+
+    #[test]
+    fn test_validate_recording_path_deprecation_warning() {
+        let mut config = Config::default();
+        config.recording = Some(RecordingConfig::default());
+        let warnings = config.validate().unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("recording_path")),
+            "expected deprecation warning, got: {:?}",
+            warnings
         );
     }
 }

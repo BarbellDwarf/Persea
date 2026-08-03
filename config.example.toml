@@ -63,6 +63,15 @@ session_max_duration_secs = 28800
 # Session history in SQLite is not affected. Default: 300 (5 minutes).
 # session_cleanup_delay_secs = 300
 
+# How many days to retain session history in the database. Default: 90.
+# Set to 0 to keep history forever.
+# session_history_retention_days = 90
+
+# Enable API rate limiting. Default: false.
+# When behind a reverse proxy (HAProxy, nginx) or access gateway (KnockNoc),
+# rate limiting is typically handled upstream and not needed here.
+# rate_limit = false
+
 # ─── Browser Sessions (Xvnc + Chromium) ──────────────────────────────────────
 
 # Path to the Xvnc binary (from tigervnc-standalone-server).
@@ -79,6 +88,19 @@ chromium_path = "chromium"
 display_range_start = 100
 display_range_end = 199
 
+# Chrome DevTools Protocol port range for headless Chromium instances.
+# Default: 9200–9299.
+# cdp_port_range_start = 9200
+# cdp_port_range_end = 9299
+
+# Timeout (seconds) for login scripts executed on SSH sessions.
+# Default: 120
+# login_script_timeout_secs = 120
+
+# Directory containing login scripts for SSH sessions.
+# Default: "/opt/rustguac/scripts"
+# login_scripts_dir = "/opt/rustguac/scripts"
+
 # ─── Connection Allowlists (CIDR) ────────────────────────────────────────────
 #
 # Control which hosts sessions can connect to. Each is a list of CIDR ranges.
@@ -90,6 +112,9 @@ ssh_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "192.168.0.0/16"
 
 # RDP session targets
 rdp_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "192.168.0.0/16"]
+
+# VNC session targets
+# vnc_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "192.168.0.0/16"]
 
 # Web browser session URL hosts
 # Use ["0.0.0.0/0", "::/0"] to allow any host.
@@ -103,6 +128,11 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # Default: [] (empty — always use socket address)
 
 # trusted_proxies = ["127.0.0.0/8", "::1/128"]
+
+# Default scope for new per-user credential variables when multiple Vault
+# backends are configured: "local" (default — stays on this instance) or
+# "shared" (propagates fleet-wide). Ignored with a single Vault.
+# user_credentials_default_scope = "local"
 
 # ─── TLS ──────────────────────────────────────────────────────────────────────
 #

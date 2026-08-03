@@ -251,7 +251,20 @@ async fn main() {
     let cli = Cli::parse();
 
     // Load config
-    let config = Config::load(cli.config.as_deref());
+    let mut config = Config::load(cli.config.as_deref());
+
+    // Validate config values (fatal errors exit, warnings are printed)
+    match config.validate() {
+        Ok(warnings) => {
+            for w in &warnings {
+                eprintln!("WARNING: {}", w);
+            }
+        }
+        Err(msg) => {
+            eprintln!("FATAL: config validation failed: {}", msg);
+            std::process::exit(1);
+        }
+    }
 
     // Open database
     let database = db::init_db(&config.db_path).expect("Failed to open database");
