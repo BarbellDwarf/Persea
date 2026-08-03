@@ -1,12 +1,10 @@
 # Security
 
-persea is designed with a security-first approach. This document covers all security features and their implementation.
-
 ## TLS encryption
 
 ### Client-facing HTTPS
 
-When `cert_path` and `key_path` are set in the `[tls]` section, persea serves HTTPS using rustls (a modern, memory-safe TLS implementation). The install script generates a self-signed certificate by default.
+When `cert_path` and `key_path` are set in the `[tls]` section, persea serves HTTPS using rustls, a modern, memory-safe TLS implementation. The install script generates a self-signed certificate by default.
 
 ```toml
 [tls]
@@ -24,7 +22,7 @@ persea generate-cert --hostname your-hostname.example.com --out-dir /opt/persea/
 
 ### guacd TLS
 
-The connection between persea and guacd can also be encrypted with TLS. When `guacd_cert_path` is set, persea connects to guacd over TLS, trusting the specified certificate. This is independent of server HTTPS — you can use guacd TLS without serving HTTPS yourself.
+The connection between persea and guacd can also be encrypted with TLS. When `guacd_cert_path` is set, persea connects to guacd over TLS, trusting the specified certificate. This is independent of server HTTPS. You can use guacd TLS without serving HTTPS yourself.
 
 **Full HTTPS + guacd TLS:**
 ```toml
@@ -59,16 +57,16 @@ vnc_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8"]
 web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 ```
 
-**Default: localhost only** — all four default to `["127.0.0.0/8", "::1/128"]`, preventing SSRF attacks out of the box.
+**Default: localhost only**. All four default to `["127.0.0.0/8", "::1/128"]`, preventing SSRF attacks out of the box.
 
 ## Authentication
 
-persea supports a pluggable authentication chain. Providers are tried in config order — first success wins. An optional TOTP second factor can be layered on top. See [Roles and Access Control](roles-and-access-control.md) for the full role system.
+persea supports a pluggable authentication chain. Providers are tried in config order, and the first success wins. An optional TOTP second factor can be layered on top. See [Roles and Access Control](roles-and-access-control.md) for the full role system.
 
 ### API key authentication
 
 - Keys are 256-bit random values (64 hex characters)
-- Stored as SHA-256 hashes in SQLite — the plaintext key is only shown once at creation
+- Stored as SHA-256 hashes in SQLite. The plaintext key is only shown once at creation
 - Supported in `Authorization: Bearer <key>`, `X-API-Key: <key>` headers, and `?key=<key>` query parameter (WebSocket fallback)
 - Optional IP allowlist (comma-separated CIDR ranges)
 - Optional expiry timestamp (ISO 8601)
@@ -117,7 +115,7 @@ User API tokens provide OIDC users with long-lived API credentials for automatio
 **Token format and storage:**
 
 - Tokens are 60 hex characters with a `rgu_` prefix (e.g., `rgu_a1b2c3...`)
-- Stored as SHA-256 hashes in SQLite — the plaintext token is shown once at creation and cannot be retrieved
+- Stored as SHA-256 hashes in SQLite. The plaintext token is shown once at creation and cannot be retrieved
 - The `rgu_` prefix allows secret scanners and log monitoring tools to identify leaked tokens
 - Token validation uses constant-time hash comparison (SHA-256 matching via SQLite query) to prevent timing attacks
 
@@ -194,7 +192,7 @@ persea logs security-relevant events via the `tracing` framework:
 - Admin operations (user management, key rotation)
 - Client IP addresses (resolved via trusted proxies)
 
-Additionally, user API token operations are logged to a persistent `token_audit_log` database table (see [User API token authentication](#user-api-token-authentication) above). This provides a queryable audit trail for token creation, revocation, and usage — retained for 90 days.
+Additionally, user API token operations are logged to a persistent `token_audit_log` database table (see [User API token authentication](#user-api-token-authentication) above). This provides a queryable audit trail for token creation, revocation, and usage. Logs are retained for 90 days.
 
 ### Hash chain audit logging
 
@@ -203,7 +201,7 @@ persea maintains a SHA-256 hash chain for audit events, providing tamper evidenc
 - Events include: event type, timestamp, user ID, source IP, outcome, details, and session ID
 - Each event hash is computed from canonical JSON (sorted keys, no whitespace) of all fields plus the previous hash
 - Chain verification can be run via the CLI (`persea verify-audit-chain`) or the Admin UI
-- A broken chain indicates tampering — the event at the break point and all subsequent events are flagged
+- A broken chain indicates tampering. The event at the break point and all subsequent events are flagged
 
 **Verification result:**
 ```
@@ -232,7 +230,7 @@ Local database authentication uses Argon2id with OWASP-recommended parameters:
 | Parallelism | 1 | Thread count |
 | Output | 32 bytes | PHC-encoded hash string |
 
-Passwords are stored as PHC-encoded Argon2id hashes containing all parameters. Verification uses the stored parameters — no need to supply the same params at verify time.
+Passwords are stored as PHC-encoded Argon2id hashes containing all parameters. Verification uses the stored parameters, so there's no need to supply the same params at verify time.
 
 **Additional password security:**
 - Constant-time comparison prevents timing attacks
@@ -287,19 +285,19 @@ See [Roles and Access Control](roles-and-access-control.md) for the full RBAC mo
 
 ## Session security
 
-- **Pending timeout** — sessions that don't receive a WebSocket connection within 60 seconds (configurable) are automatically cleaned up
-- **Maximum duration** — active sessions are terminated after 8 hours (configurable) to prevent abandoned sessions
-- **Session ownership** — non-admin users can only terminate their own sessions
-- **Share tokens** — read-only or collaborative access via time-limited share URLs
+- **Pending timeout**: sessions that don't receive a WebSocket connection within 60 seconds (configurable) are automatically cleaned up
+- **Maximum duration**: active sessions are terminated after 8 hours (configurable) to prevent abandoned sessions
+- **Session ownership**: non-admin users can only terminate their own sessions
+- **Share tokens**: read-only or collaborative access via time-limited share URLs
 
 ## Clipboard control
 
 Clipboard copy (server → client) and paste (client → server) can be independently disabled per connections entry. This uses guacd's native `disable-copy` and `disable-paste` parameters, which work for all session types (SSH, RDP, VNC, and web browser sessions).
 
 Use cases:
-- **Disable copy** — prevents users from copying data out of sensitive sessions (data loss prevention)
-- **Disable paste** — prevents users from pasting potentially malicious content into remote sessions
-- **Disable both** — fully isolates the clipboard between the local browser and the remote session
+- **Disable copy**: prevents users from copying data out of sensitive sessions (data loss prevention)
+- **Disable paste**: prevents users from pasting potentially malicious content into remote sessions
+- **Disable both**: fully isolates the clipboard between the local browser and the remote session
 
 ## Web session hardening
 
@@ -307,7 +305,7 @@ Web browser sessions (headless Chromium on Xvnc) include several security layers
 
 ### Chromium managed policy
 
-A managed policy is installed at `/etc/chromium/policies/managed/persea.json` that restricts Chromium's capabilities. **This policy is global** — it affects all Chromium instances on the machine, not just persea sessions. Do not install persea on a machine where you want to use Chromium for normal browsing.
+A managed policy is installed at `/etc/chromium/policies/managed/persea.json` that restricts Chromium's capabilities. **This policy is global**. It affects all Chromium instances on the machine, not just persea sessions. Do not install persea on a machine where you want to use Chromium for normal browsing.
 
 Policies applied:
 
@@ -329,7 +327,7 @@ Policies applied:
 
 Connections entries can specify an `allowed_domains` list. When set, Chromium can only reach those domains (plus localhost). All other domains are blocked via Chromium's `--host-rules` flag, which prevents DNS resolution for non-allowed hosts.
 
-Subdomains are automatically included — adding `example.com` allows `*.example.com` as well.
+Subdomains are automatically included, so adding `example.com` allows `*.example.com` as well.
 
 **Important:** The `allowed_domains` field restricts which domains the browser can reach. This is separate from the server-side `web_allowed_networks` CIDR allowlist, which controls which target hosts persea will connect to when creating sessions. Both can be active simultaneously:
 
@@ -348,9 +346,9 @@ Chromium runs with its normal sandbox enabled (via the SUID `chrome-sandbox` hel
 
 TLS certificates can be rotated without restarting persea:
 
-- **File watcher** — inotify/kqueue monitors the certificate and key files for changes
-- **SIGHUP** — send `SIGHUP` to the persea process to force immediate reload
-- **Admin UI** — upload new certificates via the admin settings page
+- **File watcher**: inotify/kqueue monitors the certificate and key files for changes
+- **SIGHUP**: send `SIGHUP` to the persea process to force immediate reload
+- **Admin UI**: upload new certificates via the admin settings page
 
 When a change is detected, persea reloads the certificate and key from disk and begins serving the new TLS configuration on subsequent connections. Existing connections are not interrupted.
 
@@ -417,10 +415,10 @@ trusted_proxies = ["127.0.0.1/32"]
 
 ## Credential handling
 
-- **Vault credentials** — connections entries are read server-side from Vault. Connection passwords and private keys are never sent to the browser.
-- **SSH tunnel credentials** — jump host passwords and private keys are stored in Vault alongside the connections entry. They are read server-side when establishing the tunnel chain and are never sent to the browser. For ad-hoc sessions, jump host credentials are provided in the session creation request and exist only in memory during tunnel setup.
-- **API keys** — only the SHA-256 hash is stored. The plaintext key is shown once at creation and cannot be retrieved.
-- **User API tokens** — same SHA-256 hash storage as admin API keys. The `rgu_` prefix enables secret scanning. Plaintext shown once at creation only.
-- **OIDC client secret** — can be provided via `OIDC_CLIENT_SECRET` environment variable instead of the config file.
-- **LUKS encryption key** — stored in Vault, passed to cryptsetup via stdin (never on the command line or on disk).
-- **Ephemeral SSH keys** — the private key exists only in memory during the guacd handshake. It is never stored on disk or returned by the API.
+- **Vault credentials**: connections entries are read server-side from Vault. Connection passwords and private keys are never sent to the browser.
+- **SSH tunnel credentials**: jump host passwords and private keys are stored in Vault alongside the connections entry. They are read server-side when establishing the tunnel chain and are never sent to the browser. For ad-hoc sessions, jump host credentials are provided in the session creation request and exist only in memory during tunnel setup.
+- **API keys**: only the SHA-256 hash is stored. The plaintext key is shown once at creation and cannot be retrieved.
+- **User API tokens**: same SHA-256 hash storage as admin API keys. The `rgu_` prefix enables secret scanning. Plaintext shown once at creation only.
+- **OIDC client secret**: can be provided via `OIDC_CLIENT_SECRET` environment variable instead of the config file.
+- **LUKS encryption key**: stored in Vault, passed to cryptsetup via stdin (never on the command line or on disk).
+- **Ephemeral SSH keys**: the private key exists only in memory during the guacd handshake. It is never stored on disk or returned by the API.
