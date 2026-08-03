@@ -19,7 +19,7 @@ Apache Guacamole is a mature, feature-rich platform. persea is a purpose-built a
 - **Simpler deployment** — one binary + guacd. Install with a single script or Docker image.
 - **VDI desktops** — ephemeral Docker containers give each user an isolated Linux desktop on demand. No VM infrastructure required.
 - **Connections in Vault or DB** — credentials stored in HashiCorp Vault / OpenBao KV v2, or encrypted at rest in the database with AES-256-GCM. Credentials never reach the browser.
-- **VMware vSphere integration** — VM inventory, OS-aware protocol routing (RDP/SSH/VNC), and direct connection to guest IPs via vCenter REST API.
+- **VMware vSphere integration** — VM inventory, OS-aware protocol routing (RDP/SSH/VNC), and direct connection to guest IPs via vCenter REST API. In development.
 - **Connection-level RBAC** — fine-grained permissions on individual connections and connection groups, with group-based inheritance.
 - **Zero-trust integration** — works with [Knocknoc](https://knocknoc.io) for identity-aware network access control at the HAProxy layer.
 
@@ -47,7 +47,7 @@ persea and Apache Guacamole share the same foundation:
 | **Ephemeral SSH keys** | Not supported | Ed25519 keypair per session |
 | **File transfer encryption** | Not supported | LUKS + Vault key management |
 | **Multi-hop SSH tunnels** | Not supported | Chain multiple SSH bastion hops to reach isolated targets |
-| **VMware vSphere** | Not supported | VM inventory, OS-aware protocol routing (RDP/SSH/VNC) |
+| **VMware vSphere** | Not supported | VM inventory, OS-aware protocol routing (RDP/SSH/VNC). In development. |
 | **Network allowlists** | Not supported | CIDR allowlists per protocol |
 | **Rate limiting** | Not built-in | Per-IP, per-endpoint (tower_governor) |
 | **Reverse proxy integration** | Generic | HAProxy + Knocknoc examples |
@@ -87,7 +87,7 @@ For SSH, RDP, VNC, and web browser sessions, an optional multi-hop SSH tunnel ch
 Browser -> persea -> SSH tunnel (hop 1) -> SSH tunnel (hop 2) -> ... -> guacd -> target
 ```
 
-Both links are encrypted by default: HTTPS between browsers and persea, TLS between persea and guacd.
+Both links are encrypted by default, with HTTPS between browsers and persea, TLS between persea and guacd.
 
 ## Session types
 
@@ -95,7 +95,7 @@ Both links are encrypted by default: HTTPS between browsers and persea, TLS betw
 
 Connects guacd directly to a target SSH server. Supports password, private key, and ephemeral keypair authentication. Terminal rendering is handled by guacd's SSH plugin with `xterm-256color` terminal type.
 
-SFTP file transfer is available directly between the browser and the target SSH server (no files stored on the persea server).
+SFTP file transfer is available directly between the browser and the target SSH server, with no files stored on the persea server.
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach targets through bastion hosts.
 
@@ -127,9 +127,9 @@ VDI sessions support persistent home directories, per-entry resource limits and 
 
 ## SSH tunnel / jump hosts
 
-SSH, RDP, VNC, and web browser sessions can be routed through one or more SSH bastion hosts using multi-hop SSH tunnel chains. This is useful when target machines are not directly reachable from the persea server. VDI sessions do not support tunnels (containers run locally).
+SSH, RDP, VNC, and web browser sessions can be routed through one or more SSH bastion hosts using multi-hop SSH tunnel chains. This is useful when target machines are not directly reachable from the persea server. VDI sessions do not support tunnels, as containers run locally.
 
-Each hop in the chain establishes an SSH connection and creates a local TCP port forward (`direct-tcpip`). The hops are chained sequentially — each hop connects through the previous hop's local listener. The final hop forwards to the actual target (e.g., an RDP server on port 3389).
+Each hop in the chain establishes an SSH connection and creates a local TCP port forward (`direct-tcpip`). The hops are chained sequentially, with each hop connecting through the previous hop's local listener. The final hop forwards to the actual target (e.g., an RDP server on port 3389).
 
 ```
 You -> bastion-1:22 -> bastion-2:22 -> target:3389 RDP
@@ -182,7 +182,7 @@ src/
   totp.rs              TOTP enrollment, QR codes, verification
   tunnel.rs            Multi-hop SSH tunnel chain
   vault.rs             Vault/OpenBao KV v2 client (AppRole auth)
-  vsphere.rs           VMware vSphere REST API (VM inventory, OS detection)
+  vsphere.rs           VMware vSphere REST API (VM inventory, OS detection). In development.
   vdi/mod.rs           VDI driver trait and container types
   vdi/docker.rs        Docker-based VDI driver (bollard)
   websocket.rs         WebSocket <-> guacd proxy
