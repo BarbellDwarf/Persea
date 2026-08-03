@@ -22,17 +22,17 @@
         <!-- Getting Started -->
         <section id="getting-started" class="mb-12">
             <h1 class="text-2xl font-bold text-gray-100 mb-4">Getting Started</h1>
-            <p class="text-gray-400 mb-4">rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd.</p>
+            <p class="text-gray-400 mb-4">persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd.</p>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Quick Start</h2>
             <div class="card mb-4">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code># Clone and build
-git clone https://github.com/your-org/rustguac.git
-cd rustguac
+git clone https://github.com/your-org/persea.git
+cd persea
 cargo build --release
 
 # Run with config
-./target/release/rustguac --config config.toml serve</code></pre>
+./target/release/persea --config config.toml serve</code></pre>
             </div>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Requirements</h2>
@@ -46,15 +46,15 @@ cargo build --release
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Docker</h2>
             <div class="card">
-                <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>docker build -t rustguac .
-docker run -p 8089:8089 rustguac</code></pre>
+                <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>docker build -t persea .
+docker run -p 8089:8089 persea</code></pre>
             </div>
         </section>
 
         <!-- Configuration -->
         <section id="configuration" class="mb-12">
             <h1 class="text-2xl font-bold text-gray-100 mb-4">Configuration</h1>
-            <p class="text-gray-400 mb-4">rustguac uses a TOML configuration file. Key settings:</p>
+            <p class="text-gray-400 mb-4">persea uses a TOML configuration file. Key settings:</p>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Core Settings</h2>
             <div class="card mb-4">
@@ -63,14 +63,14 @@ listen_addr = "0.0.0.0:8089"
 guacd_addr = "127.0.0.1:4822"
 
 [database]
-db_path = "/opt/rustguac/data/rustguac.db"
+db_path = "/opt/persea/data/persea.db"
 
 [session]
 max_duration_secs = 14400   # 4 hours
 cleanup_delay_secs = 60
 
 [recording]
-path = "/opt/rustguac/recordings"
+path = "/opt/persea/recordings"
 max_disk_percent = 80
 max_recordings = 1000</code></pre>
             </div>
@@ -78,8 +78,8 @@ max_recordings = 1000</code></pre>
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">TLS</h2>
             <div class="card mb-4">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[tls]
-cert_path = "/etc/rustguac/cert.pem"
-key_path = "/etc/rustguac/key.pem"
+cert_path = "/etc/persea/cert.pem"
+key_path = "/etc/persea/key.pem"
 guacd_cert_path = "/etc/guacd/ca.pem"  # Optional</code></pre>
             </div>
 
@@ -88,7 +88,7 @@ guacd_cert_path = "/etc/guacd/ca.pem"  # Optional</code></pre>
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[vault]
 addr = "https://vault.example.com:8200"
 mount = "secret"
-base_path = "rustguac"
+base_path = "persea"
 role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # VAULT_SECRET_ID env var provides the secret ID</code></pre>
             </div>
@@ -99,15 +99,15 @@ role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
         <!-- Auth Methods -->
         <section id="auth-methods" class="mb-12">
             <h1 class="text-2xl font-bold text-gray-100 mb-4">Authentication Methods</h1>
-            <p class="text-gray-400 mb-4">rustguac supports multiple authentication backends.</p>
+            <p class="text-gray-400 mb-4">persea supports multiple authentication backends.</p>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">OIDC (OpenID Connect)</h2>
             <div class="card mb-4">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[oidc]
 issuer_url = "https://auth.example.com"
-client_id = "rustguac"
+client_id = "persea"
 client_secret = "..."
-redirect_uri = "https://rustguac.example.com/auth/callback"
+redirect_uri = "https://persea.example.com/auth/callback"
 groups_claim = "groups"</code></pre>
             </div>
             <p class="text-gray-400 text-sm mb-4">OIDC provides SSO with group-based role mapping via <code>[admin.group_mappings]</code>.</p>
@@ -119,14 +119,14 @@ groups_claim = "groups"</code></pre>
             <p class="text-gray-400 text-sm mb-4">External directory authentication. Configured via auth provider chain in <code>[auth]</code> section.</p>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">API Keys</h2>
-            <p class="text-gray-400 text-sm mb-4">API key authentication for programmatic access. Create via CLI: <code>rustguac add-admin --name mykey</code>.</p>
+            <p class="text-gray-400 text-sm mb-4">API key authentication for programmatic access. Create via CLI: <code>persea add-admin --name mykey</code>.</p>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">TOTP (Two-Factor)</h2>
             <p class="text-gray-400 text-sm">Optional TOTP 2FA. Users can enroll from the account settings page. Configure enforcement in <code>[totp]</code>:</p>
             <div class="card mt-3">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[totp]
 enabled = true
-issuer = "rustguac"
+issuer = "persea"
 enforcement = "All"   # Off | AdminsOnly | All</code></pre>
             </div>
         </section>

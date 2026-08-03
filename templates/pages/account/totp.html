@@ -168,7 +168,7 @@
                     pendingEnrollment = data;
                     document.getElementById('qr-code-img').src = 'data:image/png;base64,' + data.qr_png;
                     document.getElementById('totp-secret').textContent = data.secret_b32;
-                    document.getElementById('totp-issuer').textContent = data.issuer || 'rustguac';
+                    document.getElementById('totp-issuer').textContent = data.issuer || 'persea';
                     document.getElementById('totp-account').textContent = data.email || '';
                     document.getElementById('enrollment-section').classList.remove('hidden');
                     document.getElementById('verify-code').focus();

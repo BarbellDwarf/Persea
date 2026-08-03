@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Setup — rustguac{% endblock %}
+{% block title %}Setup — persea{% endblock %}
 
 {% block body %}
 <div class="login-wrapper">
@@ -9,7 +9,7 @@
             <div class="login-logo-icon">rg</div>
         </div>
 
-        <h1 class="login-title">rustguac Setup</h1>
+        <h1 class="login-title">persea Setup</h1>
         <p class="login-subtitle">Configure your installation</p>
 
         {% if error %}
@@ -30,7 +30,7 @@
             <div class="form-group">
                 <label class="form-label" for="db_path">Database Path</label>
                 <input type="text" id="db_path" name="db_path" class="form-input"
-                       value="{{ db_path }}" placeholder="/opt/rustguac/data/rustguac.db">
+                       value="{{ db_path }}" placeholder="/opt/persea/data/persea.db">
             </div>
 
             <!-- guacd -->

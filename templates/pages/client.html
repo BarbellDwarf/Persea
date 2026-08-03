@@ -173,7 +173,7 @@
             .tb-btn { padding: 4px 4px; }
         }
     </style>
-    <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);}catch(e){}}})();</script>
+    <script>(function(){var c=localStorage.getItem('persea_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);}catch(e){}}})();</script>
 
     <!-- Guacamole JS modules -->
     <script src="/guac/Namespace.js"></script>
@@ -301,7 +301,7 @@
         var statusEl = document.getElementById('status');
         var urlParams = new URLSearchParams(window.location.search);
         var shareToken = urlParams.get('token');
-        var apiKey = sessionStorage.getItem('rustguac_api_key');
+        var apiKey = sessionStorage.getItem('persea_api_key');
         var urlTicket = urlParams.get('ticket');
         var entryName = urlParams.get('name');
         var relaunchInfo = null;
@@ -401,11 +401,11 @@
                 if (!canvas || canvas.width === 0) return;
                 var a = document.createElement('a');
                 a.href = canvas.toDataURL('image/png');
-                a.download = 'rustguac-' + sessionId.substring(0, 8) + '-' + Date.now() + '.png';
+                a.download = 'persea-' + sessionId.substring(0, 8) + '-' + Date.now() + '.png';
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
-            } catch (e) { console.warn('[rustguac] screenshot failed:', e); }
+            } catch (e) { console.warn('[persea] screenshot failed:', e); }
         });
 
         // ── Fullscreen ──
@@ -481,7 +481,7 @@
 
         // ── Theme / site title ──
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
-            var siteTitle = d.site_title || 'rustguac';
+            var siteTitle = d.site_title || 'persea';
             document.title = entryName ? (entryName + ' \u2014 ' + siteTitle) : (siteTitle + ' - Session');
             if (typeof initTheme === 'function') initTheme(d.theme);
         });
