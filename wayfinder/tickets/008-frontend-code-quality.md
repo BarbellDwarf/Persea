@@ -15,7 +15,7 @@ Should the inline JS/CSS in HTML files be extracted to external files?
 - CSP requires `'unsafe-inline'` for scripts because of this
 - `applyThemeColors()`, `initTheme()`, `escapeHtml()`, `escapeAttr()`, `apiHeaders()` copy-pasted across all pages
 - Theme description map duplicated in every page
-- `client.html` duplicates CSS variables from `rustguac.css`
+- `client.html` duplicates CSS variables from `persea.css`
 
 ### Problems:
 - Caching impossible (every page load re-downloads same code)

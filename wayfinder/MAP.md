@@ -1,4 +1,4 @@
-# Wayfinder Map: rustguac Codebase Improvement
+# Wayfinder Map: persea Codebase Improvement
 
 ## Destination
 
@@ -59,7 +59,7 @@ A production-hardened, well-tested, accessible, documented codebase ready for co
 - **Touch targets**: `--ctl-sm` increased 38px → 44px (WCAG minimum)
 - **Disabled button contrast**: color improved to #bbb, opacity 0.6
 - **Focus indicators**: `:focus-visible` outline on buttons/links
-- **Responsive breakpoints**: `@media` for 768px/480px in rustguac.css
+- **Responsive breakpoints**: `@media` for 768px/480px in persea.css
 - **Table overflow**: `.table-wrap` class, applied to 5 pages
 - **Modal mobile**: `min-width: min(440px, 95vw)`
 - **Connections sidebar**: stacks on mobile

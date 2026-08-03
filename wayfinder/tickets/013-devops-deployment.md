@@ -18,7 +18,7 @@ What DevOps and deployment improvements should be made?
 **Systemd service:**
 - Missing `LimitNOFILE=65535` (bench docs warn about this explicitly)
 - No hardening directives (`ProtectSystem`, `NoNewPrivileges`, etc.)
-- `install.sh` creates different service file than `debian/rustguac.service` — can drift
+- `install.sh` creates different service file than `debian/persea.service` — can drift
 
 **Health check:**
 - `GET /api/health` returns `{"status": "ok"}` without checking guacd, DB, or Vault

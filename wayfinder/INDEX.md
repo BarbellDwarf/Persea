@@ -1,4 +1,4 @@
-# Wayfinder Ticket Index — rustguac Improvement Map
+# Wayfinder Ticket Index — persea Improvement Map
 
 ## Ticket Dependency Graph
 
