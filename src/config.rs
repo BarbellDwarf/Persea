@@ -530,7 +530,7 @@ pub struct Config {
 /// connect request) leaves a field unset.
 ///
 /// `default_auth_pkg` picks the NLA/CredSSP authentication package
-/// FreeRDP uses. Rustguac defaults to `"ntlm"` because Kerberos
+/// FreeRDP uses. Persea defaults to `"ntlm"` because Kerberos
 /// requires a working KDC reachable via DNS, which most deployments
 /// don't have, and the failure mode is a silent hang. Override here
 /// with `"kerberos"` or `"negotiate"` if your environment actually
@@ -1637,11 +1637,11 @@ mod tests {
         // Now it's optional at parse time and validated at startup.
         let toml_str = r#"
             issuer_url = "https://idp.example.com/"
-            client_id = "rustguac"
+            client_id = "persea"
             redirect_uri = "https://console.example.com/oidc/callback"
         "#;
         let config: OidcConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.client_id, "rustguac");
+        assert_eq!(config.client_id, "persea");
         assert!(config.client_secret.is_none());
     }
 
@@ -1649,7 +1649,7 @@ mod tests {
     fn oidc_config_parses_with_client_secret() {
         let toml_str = r#"
             issuer_url = "https://idp.example.com/"
-            client_id = "rustguac"
+            client_id = "persea"
             client_secret = "from-config"
             redirect_uri = "https://console.example.com/oidc/callback"
         "#;
@@ -1661,7 +1661,7 @@ mod tests {
     fn oidc_config_debug_redacts_client_secret() {
         let config = OidcConfig {
             issuer_url: "https://idp.example.com/".into(),
-            client_id: "rustguac".into(),
+            client_id: "persea".into(),
             client_secret: Some("sensitive-value".into()),
             redirect_uri: "https://console.example.com/oidc/callback".into(),
             default_role: default_oidc_default_role(),

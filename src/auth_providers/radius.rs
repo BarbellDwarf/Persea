@@ -91,7 +91,7 @@ fn default_retries() -> u32 {
     3
 }
 fn default_nas_identifier() -> String {
-    "rustguac".into()
+    "persea".into()
 }
 
 impl Default for RadiusConfig {
@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(cfg.port, 1812);
         assert_eq!(cfg.timeout_secs, 5);
         assert_eq!(cfg.retries, 3);
-        assert_eq!(cfg.nas_identifier, "rustguac");
+        assert_eq!(cfg.nas_identifier, "persea");
         assert_eq!(cfg.auth_protocol, AuthProtocol::Pap);
         assert_eq!(cfg.mode, RadiusMode::Primary);
     }
@@ -808,7 +808,7 @@ mod tests {
     #[test]
     fn nas_identifier_bytes() {
         let provider = RadiusProvider::new(RadiusConfig::default());
-        assert_eq!(provider.nas_identifier_bytes(), b"rustguac");
+        assert_eq!(provider.nas_identifier_bytes(), b"persea");
     }
 
     #[test]

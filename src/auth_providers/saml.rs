@@ -1210,21 +1210,21 @@ mod tests {
     #[test]
     fn generate_sp_metadata_basic() {
         let config = SamlConfig {
-            entity_id: "https://rustguac.example.com/saml/metadata".into(),
-            acs_url: "https://rustguac.example.com/saml/acs".into(),
+            entity_id: "https://persea.example.com/saml/metadata".into(),
+            acs_url: "https://persea.example.com/saml/acs".into(),
             ..Default::default()
         };
         let xml = generate_sp_metadata(&config);
         assert!(xml.contains("EntityDescriptor"));
-        assert!(xml.contains("rustguac.example.com"));
+        assert!(xml.contains("persea.example.com"));
         assert!(xml.contains("HTTP-POST"));
     }
 
     #[test]
     fn generate_sp_metadata_with_cert() {
         let config = SamlConfig {
-            entity_id: "https://rustguac.example.com/saml/metadata".into(),
-            acs_url: "https://rustguac.example.com/saml/acs".into(),
+            entity_id: "https://persea.example.com/saml/metadata".into(),
+            acs_url: "https://persea.example.com/saml/acs".into(),
             certificate: Some("MIICpDCCAYwCCQDU...".into()),
             ..Default::default()
         };

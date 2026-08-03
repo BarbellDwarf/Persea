@@ -24,7 +24,7 @@ pub struct TotpProviderConfig {
 impl Default for TotpProviderConfig {
     fn default() -> Self {
         Self {
-            issuer: "rustguac".into(),
+            issuer: "persea".into(),
             digits: 6,
             period: 30,
             algorithm: totp_rs::Algorithm::SHA1,
