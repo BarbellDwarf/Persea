@@ -1,16 +1,14 @@
 {% extends "layouts/app.html" %}
-
 {% block title %}{{ site_title }} — Sessions{% endblock %}
-
 {% block content %}
 <div class="max-w-7xl mx-auto">
     <div class="flex items-center justify-between mb-6">
         <div>
             <h1 class="text-2xl font-bold text-gray-100">Sessions</h1>
-            <p class="text-sm text-gray-500 mt-1"><span id="session-counts"></span></p>
+            <p class="text-sm text-muted mt-1"><span id="session-counts"></span></p>
         </div>
         <div class="flex items-center gap-3">
-            <select id="filter-protocol" class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 text-sm focus:ring-2 focus:ring-emerald-500">
+            <select id="filter-protocol" class="form-input">
                 <option value="">All Protocols</option>
                 <option value="ssh">SSH</option>
                 <option value="rdp">RDP</option>
@@ -19,92 +17,49 @@
                 <option value="spice">SPICE</option>
                 <option value="vdi">VDI</option>
             </select>
-            <select id="filter-status" class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-300 text-sm focus:ring-2 focus:ring-emerald-500">
+            <select id="filter-status" class="form-input">
                 <option value="">All Status</option>
                 <option value="active">Active</option>
                 <option value="pending">Pending</option>
                 <option value="expired">Expired</option>
             </select>
-            <button id="btn-new-session" class="poweruser-only hidden px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
-                + New Session
-            </button>
+            <button id="btn-new-session" class="poweruser-only hidden btn btn-primary btn-sm">+ New Session</button>
         </div>
     </div>
-
-    <div id="session-form" class="hidden mb-6 bg-gray-900 border border-gray-800 rounded-xl p-6">
+    <div id="session-form" class="hidden mb-6 card">
         <div id="new-session-toggle" class="flex items-center gap-2 cursor-pointer mb-4">
             <svg id="new-session-arrow" class="w-4 h-4 text-emerald-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
             <span class="text-emerald-400 font-semibold">New Ad-Hoc Session</span>
         </div>
         <div id="new-session-fields" class="hidden space-y-4">
-            <div>
-                <label class="block text-sm text-gray-300 mb-1">Type</label>
-                <select id="session-type" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm focus:ring-2 focus:ring-emerald-500">
-                    <option value="ssh" selected>SSH</option>
-                    <option value="rdp">RDP</option>
-                    <option value="vnc">VNC</option>
-                    <option value="web">Web</option>
-                    <option value="vdi">VDI (Docker)</option>
-                </select>
-            </div>
+            <div class="form-group"><label class="form-label">Type</label>
+                <select id="session-type" class="form-input"><option value="ssh" selected>SSH</option><option value="rdp">RDP</option><option value="vnc">VNC</option><option value="web">Web</option><option value="vdi">VDI (Docker)</option></select></div>
             <div id="ssh-fields" class="grid grid-cols-2 gap-4">
-                <div><label class="block text-sm text-gray-300 mb-1">Host</label><input type="text" id="hostname" placeholder="192.168.1.1" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                <div><label class="block text-sm text-gray-300 mb-1">Port</label><input type="number" id="port" value="22" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                <div><label class="block text-sm text-gray-300 mb-1">Username</label><input type="text" id="username" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                <div><label class="block text-sm text-gray-300 mb-1">Password</label><input type="password" id="password" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                <div class="form-group"><label class="form-label">Host</label><input type="text" id="hostname" placeholder="192.168.1.1" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Port</label><input type="number" id="port" value="22" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Username</label><input type="text" id="username" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Password</label><input type="password" id="password" class="form-input"></div>
             </div>
             <div id="rdp-fields" class="hidden grid grid-cols-2 gap-4">
-                <div><label class="block text-sm text-gray-300 mb-1">Host</label><input type="text" id="rdp-hostname" placeholder="192.168.1.1" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                <div><label class="block text-sm text-gray-300 mb-1">Port</label><input type="number" id="rdp-port" value="3389" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                <div><label class="block text-sm text-gray-300 mb-1">Username</label><input type="text" id="rdp-username" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                <div><label class="block text-sm text-gray-300 mb-1">Password</label><input type="password" id="rdp-password" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                <div class="form-group"><label class="form-label">Host</label><input type="text" id="rdp-hostname" placeholder="192.168.1.1" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Port</label><input type="number" id="rdp-port" value="3389" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Username</label><input type="text" id="rdp-username" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Password</label><input type="password" id="rdp-password" class="form-input"></div>
             </div>
             <div id="vnc-fields" class="hidden grid grid-cols-2 gap-4">
-                <div><label class="block text-sm text-gray-300 mb-1">Host</label><input type="text" id="vnc-hostname" placeholder="192.168.1.1" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                <div><label class="block text-sm text-gray-300 mb-1">Port</label><input type="number" id="vnc-port" value="5900" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                <div class="form-group"><label class="form-label">Host</label><input type="text" id="vnc-hostname" placeholder="192.168.1.1" class="form-input"></div>
+                <div class="form-group"><label class="form-label">Port</label><input type="number" id="vnc-port" value="5900" class="form-input"></div>
             </div>
-            <div id="web-fields" class="hidden">
-                <label class="block text-sm text-gray-300 mb-1">URL</label>
-                <input type="text" id="url" placeholder="https://example.com" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
-            </div>
-            <div id="vdi-fields" class="hidden">
-                <label class="block text-sm text-gray-300 mb-1">Container Image</label>
-                <input type="text" id="vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
-            </div>
-            <div id="error" class="text-red-400 text-sm"></div>
-            <button type="button" id="connect-btn" class="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">Connect</button>
+            <div id="web-fields" class="hidden"><div class="form-group"><label class="form-label">URL</label><input type="text" id="url" placeholder="https://example.com" class="form-input"></div></div>
+            <div id="vdi-fields" class="hidden"><div class="form-group"><label class="form-label">Container Image</label><input type="text" id="vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest" class="form-input"></div></div>
+            <div id="error" class="alert alert-error" aria-live="polite"></div>
+            <button type="button" id="connect-btn" class="btn btn-primary">Connect</button>
         </div>
     </div>
-
-    <div id="sessions" class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden"
-         hx-get="/api/sessions"
-         hx-trigger="load, every 5s"
-         hx-swap="innerHTML"
-         hx-target="#session-list">
-        <table class="w-full">
-            <thead>
-                <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
-                    <th class="px-4 py-3 w-8"></th>
-                    <th class="px-4 py-3">User</th>
-                    <th class="px-4 py-3">Protocol</th>
-                    <th class="px-4 py-3">Target</th>
-                    <th class="px-4 py-3">Duration</th>
-                    <th class="px-4 py-3">Actions</th>
-                </tr>
-            </thead>
-            <tbody id="session-list" class="divide-y divide-gray-800"></tbody>
-        </table>
-        <p id="session-empty" class="hidden text-center py-12 text-gray-500 text-sm">No active sessions</p>
+    <div id="sessions" class="card table-wrapper" hx-get="/api/sessions" hx-trigger="load, every 5s" hx-swap="innerHTML" hx-target="#session-list">
+        <table class="w-full"><thead><tr><th class="w-8"></th><th>User</th><th>Protocol</th><th>Target</th><th>Duration</th><th>Actions</th></tr></thead><tbody id="session-list"></tbody></table>
+        <p id="session-empty" class="hidden text-center py-12 text-muted text-sm">No active sessions</p>
     </div>
 </div>
-
-<style>
-    .proto-ssh { background: rgba(34,197,94,0.15); color: #4ade80; border-color: rgba(34,197,94,0.3); }
-    .proto-rdp { background: rgba(59,130,246,0.15); color: #60a5fa; border-color: rgba(59,130,246,0.3); }
-    .proto-vnc { background: rgba(249,115,22,0.15); color: #fb923c; border-color: rgba(249,115,22,0.3); }
-    .proto-spice { background: rgba(168,85,247,0.15); color: #c084fc; border-color: rgba(168,85,247,0.3); }
-    .proto-web, .proto-vmware { background: rgba(20,184,166,0.15); color: #2dd4bf; border-color: rgba(20,184,166,0.3); }
-    .proto-proxmox { background: rgba(99,102,241,0.15); color: #818cf8; border-color: rgba(99,102,241,0.3); }
-    .proto-vdi { background: rgba(168,85,247,0.15); color: #c084fc; border-color: rgba(168,85,247,0.3); }
-</style>
+<style>.proto-ssh{background:rgba(34,197,94,.15);color:#4ade80;border-color:rgba(34,197,94,.3)}.proto-rdp{background:rgba(59,130,246,.15);color:#60a5fa;border-color:rgba(59,130,246,.3)}.proto-vnc{background:rgba(249,115,22,.15);color:#fb923c;border-color:rgba(249,115,22,.3)}.proto-spice{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}.proto-web,.proto-vmware{background:rgba(20,184,166,.15);color:#2dd4bf;border-color:rgba(20,184,166,.3)}.proto-proxmox{background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.3)}.proto-vdi{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}</style>
 {% endblock %}
