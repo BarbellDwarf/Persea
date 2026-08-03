@@ -626,16 +626,10 @@ pub async fn ab_create_folder(
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Json(req): Json<CreateFolderRequest>,
-) -> impl IntoResponse {
+) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
-        _ => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "admin role required"})),
-            )
-                .into_response()
-        }
+        _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
     let allowed_count = req.allowed_groups.len();
@@ -668,13 +662,12 @@ pub async fn ab_create_folder(
                 Some(&details),
             )
             .await;
-            (StatusCode::CREATED, Json(json!({"ok": true}))).into_response()
+            Ok(StatusCode::CREATED)
         }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, scope = %req.scope, folder = %req.name, "Failed to create folder");
+            Err(AppError::Vault(e.to_string()))
+        }
     }
 }
 
@@ -800,16 +793,10 @@ pub async fn ab_create_entry(
     Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<CreateEntryRequest>,
-) -> impl IntoResponse {
+) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
-        _ => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "admin role required"})),
-            )
-                .into_response()
-        }
+        _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
     let session_type = req.entry.session_type.clone();
@@ -831,13 +818,12 @@ pub async fn ab_create_entry(
                 Some(&details),
             )
             .await;
-            (StatusCode::CREATED, Json(json!({"ok": true}))).into_response()
+            Ok(StatusCode::CREATED)
         }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, scope = %scope, folder = %folder, entry = %req.name, "Failed to create entry");
+            Err(AppError::Vault(e.to_string()))
+        }
     }
 }
 
@@ -930,16 +916,10 @@ pub async fn ab_delete_entry(
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
-) -> impl IntoResponse {
+) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
-        _ => {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "admin role required"})),
-            )
-                .into_response()
-        }
+        _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
     match vault.delete_entry(&scope, &folder, &entry).await {
@@ -956,18 +936,13 @@ pub async fn ab_delete_entry(
                 None,
             )
             .await;
-            StatusCode::NO_CONTENT.into_response()
+            Ok(StatusCode::NO_CONTENT)
         }
-        Err(VaultError::NotFound) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "entry not found"})),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": e.to_string()})),
-        )
-            .into_response(),
+        Err(VaultError::NotFound) => Err(AppError::Session("entry not found".into())),
+        Err(e) => {
+            tracing::error!(error = %e, scope = %scope, folder = %folder, entry = %entry, "Failed to delete entry");
+            Err(AppError::Vault(e.to_string()))
+        }
     }
 }
 

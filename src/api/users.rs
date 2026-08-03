@@ -6,7 +6,6 @@ use crate::error::AppError;
 use axum::{
     extract::Path,
     http::StatusCode,
-    response::IntoResponse,
     Extension, Json,
 };
 use serde::Deserialize;
@@ -121,14 +120,10 @@ pub async fn delete_user(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
-) -> impl IntoResponse {
+) -> Result<StatusCode, AppError> {
     if let Some(Extension(ref id)) = identity {
         if !id.has_role("admin") {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "admin role required"})),
-            )
-                .into_response();
+            return Err(AppError::Forbidden("admin role required".into()));
         }
     }
 
@@ -158,18 +153,17 @@ pub async fn delete_user(
                     tracing::error!(error = %e, "audit task failed");
                 }
             }
-            StatusCode::NO_CONTENT.into_response()
+            Ok(StatusCode::NO_CONTENT)
         }
-        Ok(Ok(false)) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "user not found"})),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "failed to delete user"})),
-        )
-            .into_response(),
+        Ok(Ok(false)) => Err(AppError::Session("user not found".into())),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "Failed to delete user");
+            Err(AppError::Internal("failed to delete user".into()))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Task panicked while deleting user");
+            Err(AppError::Internal("Task panicked".into()))
+        }
     }
 }
 
@@ -465,17 +459,13 @@ pub async fn delete_group_mapping(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
     Path(id): Path<i64>,
-) -> impl IntoResponse {
+) -> Result<StatusCode, AppError> {
     if !identity
         .as_ref()
         .map(|Extension(id)| id.has_role("admin"))
         .unwrap_or(false)
     {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(json!({"error": "admin role required"})),
-        )
-            .into_response();
+        return Err(AppError::Forbidden("admin role required".into()));
     }
 
     let db_clone = database.clone();
@@ -505,17 +495,16 @@ pub async fn delete_group_mapping(
                     tracing::error!(error = %e, "audit task failed");
                 }
             }
-            StatusCode::NO_CONTENT.into_response()
+            Ok(StatusCode::NO_CONTENT)
         }
-        Ok(Ok(false)) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "mapping not found"})),
-        )
-            .into_response(),
-        _ => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({"error": "failed to delete mapping"})),
-        )
-            .into_response(),
+        Ok(Ok(false)) => Err(AppError::Session("mapping not found".into())),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "Failed to delete group mapping");
+            Err(AppError::Internal("failed to delete mapping".into()))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Task panicked while deleting group mapping");
+            Err(AppError::Internal("Task panicked".into()))
+        }
     }
 }
