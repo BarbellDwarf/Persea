@@ -21,43 +21,126 @@ pub async fn health(
         return Ok(Json(json!({"status": "ok"})));
     }
 
-    let mut components = std::collections::HashMap::new();
+    let mut checks = std::collections::HashMap::new();
 
     // Check guacd
-    components.insert(
+    let guacd_start = std::time::Instant::now();
+    let guacd_status = match tokio::net::TcpStream::connect(&state.config().guacd_addr).await {
+        Ok(stream) => {
+            drop(stream);
+            "up"
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "health: guacd unreachable");
+            "down"
+        }
+    };
+    checks.insert(
         "guacd".to_string(),
-        match tokio::net::TcpStream::connect(&state.config().guacd_addr).await {
-            Ok(_) => "ok".to_string(),
-            Err(e) => {
-                tracing::warn!(error = %e, "health: guacd unreachable");
-                "unreachable".to_string()
-            }
-        },
+        json!({
+            "status": guacd_status,
+            "latency_ms": guacd_start.elapsed().as_millis(),
+        }),
     );
 
     // Check database
-    if let Some(db) = state.db() {
-        components.insert(
-            "database".to_string(),
-            match db.lock().unwrap().execute("SELECT 1", []) {
-                Ok(_) => "ok".to_string(),
+    let db_start = std::time::Instant::now();
+    let db_status = if let Some(db) = state.db() {
+        match db.lock().unwrap().execute("SELECT 1", []) {
+            Ok(_) => "up",
+            Err(e) => {
+                tracing::warn!(error = %e, "health: database error");
+                "down"
+            }
+        }
+    } else {
+        "unavailable"
+    };
+    checks.insert(
+        "database".to_string(),
+        json!({
+            "status": db_status,
+            "latency_ms": db_start.elapsed().as_millis(),
+        }),
+    );
+
+    // Check vault (if configured)
+    if let Some(vault_config) = &state.config().vault {
+        let vault_start = std::time::Instant::now();
+        let vault_url = format!("{}/v1/sys/health", vault_config.addr);
+        let skip_verify = vault_config.tls_skip_verify;
+        let vault_status = match reqwest::Client::builder()
+            .danger_accept_invalid_certs(skip_verify)
+            .build()
+        {
+            Ok(client) => match client.get(&vault_url).send().await {
+                Ok(resp) => {
+                    let status_code = resp.status().as_u16();
+                    if status_code == 200 || status_code == 429 {
+                        "up"
+                    } else {
+                        tracing::warn!(status = status_code, "health: vault unhealthy");
+                        "down"
+                    }
+                }
                 Err(e) => {
-                    tracing::warn!(error = %e, "health: database error");
-                    "error".to_string()
+                    tracing::warn!(error = %e, "health: vault unreachable");
+                    "down"
                 }
             },
+            Err(e) => {
+                tracing::warn!(error = %e, "health: vault client build failed");
+                "down"
+            }
+        };
+        checks.insert(
+            "vault".to_string(),
+            json!({
+                "status": vault_status,
+                "latency_ms": vault_start.elapsed().as_millis(),
+            }),
         );
     }
 
-    let status = if components.values().all(|v| v == "ok") {
+    // Check disk usage
+    let rec_path = state.recording_path().to_path_buf();
+    let max_disk = state.config().recording.as_ref().map(|r| r.max_disk_percent).unwrap_or(80);
+    let disk_usage = tokio::task::spawn_blocking(move || {
+        crate::recording::disk_usage_percent(&rec_path).unwrap_or(0.0)
+    })
+    .await
+    .unwrap_or(0.0);
+    let disk_status = if max_disk > 0 && disk_usage >= max_disk as f64 {
+        "warning"
+    } else {
         "ok"
+    };
+    checks.insert(
+        "disk".to_string(),
+        json!({
+            "status": disk_status,
+            "usage_percent": (disk_usage * 10.0).round() / 10.0,
+        }),
+    );
+
+    // Count active sessions
+    let sessions = state.list_sessions().await;
+    let active_sessions = sessions
+        .iter()
+        .filter(|s| s.status == crate::session::SessionStatus::Active)
+        .count();
+
+    let status = if checks.values().all(|c| c["status"] == "up" || c["status"] == "ok") {
+        "healthy"
     } else {
         "degraded"
     };
 
     Ok(Json(json!({
         "status": status,
-        "components": components,
+        "checks": checks,
+        "uptime_seconds": crate::metrics::uptime_seconds(),
+        "active_sessions": active_sessions,
     })))
 }
 
