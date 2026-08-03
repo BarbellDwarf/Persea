@@ -267,6 +267,8 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );
         CREATE INDEX IF NOT EXISTS idx_ab_audit_created ON addressbook_audit_log(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_ab_audit_user ON addressbook_audit_log(user_email);
+        CREATE INDEX IF NOT EXISTS idx_admin_api_key_hash ON admins(api_key_hash);
+        CREATE INDEX IF NOT EXISTS idx_admin_token_hash ON user_api_tokens(token_hash);
 
         CREATE TABLE IF NOT EXISTS audit_events (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1430,6 +1432,123 @@ pub fn query_session_history(
         .collect();
 
     Ok((rows, total))
+}
+
+
+/// Stream session history rows directly into a CSV writer, avoiding the
+/// intermediate Vec allocation of query_session_history.
+pub fn stream_session_history_csv(
+    db: &Db,
+    writer: &mut dyn std::io::Write,
+    user: Option<&str>,
+    entry: Option<&str>,
+    session_type: Option<&str>,
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    let conn = db.lock().unwrap();
+    let mut conditions = vec!["1=1".to_string()];
+    let mut params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut idx = 1;
+
+    if let Some(u) = user {
+        conditions.push(format!("created_by LIKE ?{}", idx));
+        params_vec.push(Box::new(format!("%{}%", u)));
+        idx += 1;
+    }
+    if let Some(e) = entry {
+        conditions.push(format!(
+            "(address_book_entry LIKE ?{} OR entry_display_name LIKE ?{})",
+            idx, idx
+        ));
+        params_vec.push(Box::new(format!("%{}%", e)));
+        idx += 1;
+    }
+    if let Some(t) = session_type {
+        conditions.push(format!("session_type = ?{}", idx));
+        params_vec.push(Box::new(t.to_string()));
+        idx += 1;
+    }
+    if let Some(f) = from {
+        conditions.push(format!("started_at >= ?{}", idx));
+        params_vec.push(Box::new(f.to_string()));
+        idx += 1;
+    }
+    if let Some(t) = to {
+        conditions.push(format!("started_at <= ?{}", idx));
+        params_vec.push(Box::new(t.to_string()));
+        idx += 1;
+    }
+
+    let where_clause = conditions.join(" AND ");
+    let sql = format!(
+        "SELECT session_id, session_type, hostname, port, username, created_by,
+                COALESCE(entry_display_name, address_book_entry, \'\'),
+                COALESCE(address_book_folder, \'\'),
+                started_at, ended_at, duration_secs, status, recording_file
+         FROM session_history WHERE {} ORDER BY started_at DESC",
+        where_clause
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut count = 0usize;
+    let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<i64>>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, String>(6)?,
+            row.get::<_, String>(7)?,
+            row.get::<_, String>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<i64>>(10)?,
+            row.get::<_, String>(11)?,
+            row.get::<_, Option<String>>(12)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (
+            session_id, session_type, hostname, _port, username, created_by,
+            entry, folder, started_at, ended_at, duration_secs, status, recording,
+        ) = row?;
+        let fields = [
+            &session_id, &session_type, &hostname, &username, &created_by,
+            &entry, &folder, &started_at,
+        ];
+        for (i, f) in fields.iter().enumerate() {
+            if i > 0 { write!(writer, ",")?; }
+            csv_escape_field(writer, f)?;
+        }
+        write!(writer, ",")?;
+        csv_escape_field(writer, ended_at.as_deref().unwrap_or(""))?;
+        write!(writer, ",")?;
+        if let Some(d) = duration_secs { write!(writer, "{}", d)?; }
+        write!(writer, ",")?;
+        csv_escape_field(writer, &status)?;
+        write!(writer, ",")?;
+        csv_escape_field(writer, recording.as_deref().unwrap_or(""))?;
+        writeln!(writer)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
+fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<()> {
+    if field.contains(',') || field.contains('"') || field.contains('\n') {
+        write!(w, "\"")?;
+        for ch in field.chars() {
+            if ch == '"' { write!(w, "\"\"")?; }
+            else { write!(w, "{}", ch)?; }
+        }
+        write!(w, "\"")?;
+    } else {
+        write!(w, "{}", field)?;
+    }
+    Ok(())
 }
 
 /// Top connections by session count and total hours.

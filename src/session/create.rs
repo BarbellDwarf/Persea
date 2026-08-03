@@ -53,6 +53,13 @@ impl SessionManager {
             }
         }
 
+        // Reject new sessions during graceful shutdown
+        if self.is_shutting_down() {
+            return Err(SessionError::ValidationError(
+                "server is shutting down — new sessions are not accepted".into(),
+            ));
+        }
+
         let session_id = Uuid::new_v4();
         let raw_width = req.width.unwrap_or(1920);
         let raw_height = req.height.unwrap_or(1080);
@@ -113,7 +120,7 @@ impl SessionManager {
                 let port = req.port.unwrap_or(22);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.ssh_allowed_networks)?;
+                check_allowed_network(&hostname, port, &self.config.ssh_allowed_networks).await?;
 
                 tracing::info!(
                     session_id = %session_id,
@@ -227,7 +234,7 @@ impl SessionManager {
                 let port = req.port.unwrap_or(3389);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.rdp_allowed_networks)?;
+                check_allowed_network(&hostname, port, &self.config.rdp_allowed_networks).await?;
 
                 tracing::info!(
                     session_id = %session_id,
@@ -328,7 +335,7 @@ impl SessionManager {
                 let port = req.port.unwrap_or(5900);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.vnc_allowed_networks)?;
+                check_allowed_network(&hostname, port, &self.config.vnc_allowed_networks).await?;
 
                 tracing::info!(
                     session_id = %session_id,
@@ -360,7 +367,7 @@ impl SessionManager {
                     SessionError::ValidationError("hostname is required for SPICE sessions".into())
                 })?;
                 let port = req.port.unwrap_or(5900);
-                check_allowed_network(&hostname, port, &self.config.vnc_allowed_networks)?;
+                check_allowed_network(&hostname, port, &self.config.vnc_allowed_networks).await?;
 
                 let spice = guacd::SpiceParams {
                     hostname: hostname.clone(),
@@ -592,7 +599,7 @@ impl SessionManager {
                         .port()
                         .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
 
-                check_allowed_network(url_host, url_port, &self.config.web_allowed_networks)?;
+                check_allowed_network(url_host, url_port, &self.config.web_allowed_networks).await?;
 
                 tracing::info!(
                     session_id = %session_id,
@@ -1235,7 +1242,7 @@ fn parse_host_port(input: &str, default_port: u16) -> Result<(String, u16), Sess
 }
 
 /// Check that a host resolves to an IP within the allowed CIDR networks.
-fn check_allowed_network(host: &str, port: u16, allowed: &[String]) -> Result<(), SessionError> {
+async fn check_allowed_network(host: &str, port: u16, allowed: &[String]) -> Result<(), SessionError> {
     let networks: Vec<IpNetwork> = allowed
         .iter()
         .filter_map(|s| s.parse::<IpNetwork>().ok())
@@ -1258,13 +1265,18 @@ fn check_allowed_network(host: &str, port: u16, allowed: &[String]) -> Result<()
         )));
     }
 
-    // Resolve hostname to IP addresses
-    let addrs: Vec<std::net::SocketAddr> = format!("{}:{}", host, port)
-        .to_socket_addrs()
-        .map_err(|e| {
-            SessionError::ValidationError(format!("failed to resolve host '{}': {}", host, e))
-        })?
-        .collect();
+    // Resolve hostname to IP addresses (spawn_blocking to avoid blocking tokio)
+    let host_owned = host.to_owned();
+    let addrs: Vec<std::net::SocketAddr> =
+        tokio::task::spawn_blocking(move || format!("{}:{}", host_owned, port).to_socket_addrs())
+            .await
+            .map_err(|e| {
+                SessionError::ValidationError(format!("DNS task join error: {}", e))
+            })?
+            .map_err(|e| {
+                SessionError::ValidationError(format!("failed to resolve host '{}': {}", host, e))
+            })?
+            .collect();
 
     if addrs.is_empty() {
         return Err(SessionError::ValidationError(format!(
@@ -1410,39 +1422,39 @@ mod tests {
         assert_eq!(got, "pre-{bogus}-x");
     }
 
-    #[test]
-    fn test_check_allowed_network_ipv4_match() {
-        assert!(check_allowed_network("127.0.0.1", 22, &["127.0.0.0/8".into()]).is_ok());
-        assert!(check_allowed_network("10.1.2.3", 80, &["10.0.0.0/8".into()]).is_ok());
+    #[tokio::test]
+    async fn test_check_allowed_network_ipv4_match() {
+        assert!(check_allowed_network("127.0.0.1", 22, &["127.0.0.0/8".into()]).await.is_ok());
+        assert!(check_allowed_network("10.1.2.3", 80, &["10.0.0.0/8".into()]).await.is_ok());
     }
 
-    #[test]
-    fn test_check_allowed_network_ipv4_denied() {
-        let err = check_allowed_network("8.8.8.8", 22, &["127.0.0.0/8".into()]);
+    #[tokio::test]
+    async fn test_check_allowed_network_ipv4_denied() {
+        let err = check_allowed_network("8.8.8.8", 22, &["127.0.0.0/8".into()]).await;
         assert!(err.is_err());
     }
 
-    #[test]
-    fn test_check_allowed_network_empty_allowlist() {
-        let err = check_allowed_network("127.0.0.1", 22, &[]);
+    #[tokio::test]
+    async fn test_check_allowed_network_empty_allowlist() {
+        let err = check_allowed_network("127.0.0.1", 22, &[]).await;
         assert!(err.is_err());
         let msg = format!("{}", err.unwrap_err());
         assert!(msg.contains("no valid CIDR"), "got: {}", msg);
     }
 
-    #[test]
-    fn test_check_allowed_network_multiple_cidrs() {
+    #[tokio::test]
+    async fn test_check_allowed_network_multiple_cidrs() {
         let cidrs = vec!["10.0.0.0/8".into(), "192.168.0.0/16".into()];
-        assert!(check_allowed_network("10.1.1.1", 22, &cidrs).is_ok());
-        assert!(check_allowed_network("192.168.1.1", 22, &cidrs).is_ok());
-        assert!(check_allowed_network("172.16.0.1", 22, &cidrs).is_err());
+        assert!(check_allowed_network("10.1.1.1", 22, &cidrs).await.is_ok());
+        assert!(check_allowed_network("192.168.1.1", 22, &cidrs).await.is_ok());
+        assert!(check_allowed_network("172.16.0.1", 22, &cidrs).await.is_err());
     }
 
-    #[test]
-    fn test_check_allowed_network_localhost_resolves() {
+    #[tokio::test]
+    async fn test_check_allowed_network_localhost_resolves() {
         // "localhost" should resolve to 127.0.0.1 or ::1
         let cidrs = vec!["127.0.0.0/8".into(), "::1/128".into()];
-        assert!(check_allowed_network("localhost", 80, &cidrs).is_ok());
+        assert!(check_allowed_network("localhost", 80, &cidrs).await.is_ok());
     }
 
     #[test]

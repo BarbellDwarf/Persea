@@ -204,21 +204,6 @@ pub async fn report_sessions(
     Ok(Json(json!({"sessions": rows, "total": total, "limit": limit, "offset": offset})))
 }
 
-fn csv_escape_into(buf: &mut String, field: &str) {
-    if field.contains(',') || field.contains('"') || field.contains('\n') {
-        buf.push('"');
-        for ch in field.chars() {
-            if ch == '"' {
-                buf.push('"');
-            }
-            buf.push(ch);
-        }
-        buf.push('"');
-    } else {
-        buf.push_str(field);
-    }
-}
-
 pub async fn report_sessions_csv(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -235,49 +220,19 @@ pub async fn report_sessions_csv(
         )
             .into_response();
     }
-    match db::query_session_history(
+    let mut csv_buf = Vec::new();
+    match db::stream_session_history_csv(
         &database,
+        &mut csv_buf,
         q.user.as_deref(),
         q.entry.as_deref(),
         q.session_type.as_deref(),
         q.from.as_deref(),
         q.to.as_deref(),
-        100_000,
-        0,
     ) {
-        Ok((rows, _total)) => {
+        Ok(_count) => {
             let mut csv = String::from("Session ID,Type,Hostname,Username,User,Entry,Folder,Started,Ended,Duration (secs),Status,Recording\n");
-            for row in &rows {
-                let fields = [
-                    row["session_id"].as_str().unwrap_or(""),
-                    row["session_type"].as_str().unwrap_or(""),
-                    row["hostname"].as_str().unwrap_or(""),
-                    row["username"].as_str().unwrap_or(""),
-                    row["created_by"].as_str().unwrap_or(""),
-                    row["entry_display_name"]
-                        .as_str()
-                        .or_else(|| row["address_book_entry"].as_str())
-                        .unwrap_or(""),
-                    row["address_book_folder"].as_str().unwrap_or(""),
-                    row["started_at"].as_str().unwrap_or(""),
-                    row["ended_at"].as_str().unwrap_or(""),
-                ];
-                for (i, f) in fields.iter().enumerate() {
-                    if i > 0 {
-                        csv.push(',');
-                    }
-                    csv_escape_into(&mut csv, f);
-                }
-                csv.push(',');
-                if let Some(d) = row["duration_secs"].as_i64() {
-                    csv.push_str(&d.to_string());
-                }
-                csv.push(',');
-                csv_escape_into(&mut csv, row["status"].as_str().unwrap_or(""));
-                csv.push(',');
-                csv_escape_into(&mut csv, row["recording_file"].as_str().unwrap_or(""));
-                csv.push('\n');
-            }
+            csv.push_str(&String::from_utf8_lossy(&csv_buf));
             axum::response::Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/csv; charset=utf-8")
@@ -418,33 +373,24 @@ pub async fn delete_recording(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
     Path(name): Path<String>,
-) -> impl IntoResponse {
+) -> Result<StatusCode, AppError> {
     if let Some(Extension(ref id)) = identity {
         if !id.has_role("admin") {
-            return (
-                StatusCode::FORBIDDEN,
-                Json(json!({"error": "insufficient permissions — admin role required"})),
-            )
-                .into_response();
+            return Err(AppError::Forbidden(
+                "insufficient permissions — admin role required".into(),
+            ));
         }
     }
 
     if !is_safe_recording_name(&name, manager.recording_path()) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"error": "invalid recording name"})),
-        )
-            .into_response();
+        return Err(AppError::Internal("invalid recording name".into()));
     }
 
     let path = manager.recording_path().join(&name);
 
-    match tokio::fs::remove_file(&path).await {
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            Json(json!({"error": "recording not found"})),
-        )
-            .into_response(),
-    }
+    tokio::fs::remove_file(&path).await.map_err(|e| {
+        tracing::warn!(name = %name, error = %e, "Recording not found");
+        AppError::Session("recording not found".into())
+    })?;
+    Ok(StatusCode::NO_CONTENT)
 }
