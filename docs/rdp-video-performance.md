@@ -78,7 +78,7 @@ Debian 13 (trixie) ships xrdp 0.10.x, but the stock package does **not** include
 A single setup script handles everything — desktop, audio, xrdp rebuild, and configuration. Run **on the xrdp target machine** (not the persea server):
 
 ```bash
-wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/sol1/persea/main/contrib/setup-xrdp-gfx.sh
+wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/persea-persea/persea/main/contrib/setup-xrdp-gfx.sh
 sudo bash setup-xrdp-gfx.sh --desktop mate
 ```
 
