@@ -79,7 +79,7 @@ async fn redirect_to_mfa(
     };
 
     let mfa_cookie = format!(
-        "rustguac_mfa_pending={}; Path=/auth/mfa; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
+        "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
         pending_token, ttl_secs
     );
 
@@ -110,7 +110,7 @@ pub async fn login_page(
         .and_then(|cookie_str| {
             cookie_str.split(';').find_map(|c| {
                 let c = c.trim();
-                c.strip_prefix("rustguac_session=")
+                c.strip_prefix("persea_session=")
                     .map(|v| v.to_string())
             })
         });
@@ -248,7 +248,7 @@ pub async fn login_submit(
             }
 
             let session_cookie = format!(
-                "rustguac_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
+                "persea_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
                 session_token, ttl_secs
             );
 
@@ -366,7 +366,7 @@ pub async fn mfa_submit(
     let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
 
     // Read the pending MFA cookie
-    let pending_token = match extract_cookie(&headers, "rustguac_mfa_pending") {
+    let pending_token = match extract_cookie(&headers, "persea_mfa_pending") {
         Some(t) => t,
         None => {
             return Redirect::to("/auth/mfa?error=no_session").into_response();
@@ -459,11 +459,11 @@ pub async fn mfa_submit(
     }
 
     let session_cookie = format!(
-        "rustguac_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
+        "persea_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
         session_token, ttl_secs
     );
     let clear_mfa_cookie =
-        "rustguac_mfa_pending=; Path=/auth/mfa; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
+        "persea_mfa_pending=; Path=/auth/mfa; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
             .to_string();
 
     (

@@ -169,7 +169,7 @@ pub async fn login(
     let cookie_value = format!("{}:{}", state_key, fingerprint);
 
     let state_cookie = format!(
-        "rustguac_oidc_state={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
+        "persea_oidc_state={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
         cookie_value
     );
 
@@ -179,7 +179,7 @@ pub async fn login(
     if let Some(ref next) = params.next {
         if next.starts_with('/') && !next.starts_with("//") && !next.contains("://") {
             let next_cookie = format!(
-                "rustguac_next={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
+                "persea_next={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
                 next
             );
             cookies.push((header::SET_COOKIE, next_cookie));
@@ -237,7 +237,7 @@ pub async fn callback(
 
     // Verify the state cookie matches the state query parameter (binds flow to browser)
     // Cookie format is "state_key:fingerprint" — verify both
-    let state_cookie = extract_cookie(&headers, "rustguac_oidc_state");
+    let state_cookie = extract_cookie(&headers, "persea_oidc_state");
     let cookie_valid = match state_cookie.as_deref() {
         Some(cookie_val) => {
             if let Some((cookie_state, cookie_fingerprint)) = cookie_val.split_once(':') {
@@ -497,13 +497,13 @@ pub async fn callback(
         tracing::info!(email = %email, "OIDC login requires TOTP — redirecting to MFA");
 
         let mfa_cookie = format!(
-            "rustguac_mfa_pending={}; Path=/auth/mfa; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
+            "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
             pending_token, ttl_secs
         );
         let clear_state_cookie =
-            "rustguac_oidc_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+            "persea_oidc_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
         let clear_next_cookie =
-            "rustguac_next=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+            "persea_next=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
 
         return (
             AppendHeaders([
@@ -553,19 +553,19 @@ pub async fn callback(
     }
 
     // Check for post-login redirect cookie
-    let redirect_to = extract_cookie(&headers, "rustguac_next")
+    let redirect_to = extract_cookie(&headers, "persea_next")
         .filter(|n| n.starts_with('/') && !n.starts_with("//") && !n.contains("://"))
         .unwrap_or_else(|| "/addressbook.html".to_string());
 
     // Set session cookie and redirect; clear OIDC state and next cookies
     let session_cookie = format!(
-        "rustguac_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
+        "persea_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
         session_token, ttl_secs
     );
     let clear_state_cookie =
-        "rustguac_oidc_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+        "persea_oidc_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
     let clear_next_cookie =
-        "rustguac_next=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+        "persea_next=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
 
     (
         AppendHeaders([
@@ -584,14 +584,14 @@ pub async fn logout(
     request: axum::extract::Request,
 ) -> Response {
     // Try to delete the session from DB
-    if let Some(token) = extract_cookie(request.headers(), "rustguac_session") {
+    if let Some(token) = extract_cookie(request.headers(), "persea_session") {
         let db_clone = database.clone();
         let _ =
             tokio::task::spawn_blocking(move || db::delete_auth_session(&db_clone, &token)).await;
     }
 
     let clear_cookie =
-        "rustguac_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+        "persea_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
 
     (
         [(header::SET_COOKIE, clear_cookie)],

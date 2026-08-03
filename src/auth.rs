@@ -262,7 +262,7 @@ pub async fn require_auth(
     }
 
     // Path 2: Session cookie
-    let session_token = extract_cookie(request.headers(), "rustguac_session");
+    let session_token = extract_cookie(request.headers(), "persea_session");
     if let Some(token) = session_token {
         let db_clone = db.clone();
         let result =
@@ -364,7 +364,7 @@ pub async fn optional_auth(
     }
 
     // Path 2: Session cookie
-    let session_token = extract_cookie(request.headers(), "rustguac_session");
+    let session_token = extract_cookie(request.headers(), "persea_session");
     if let Some(token) = session_token {
         let db_clone = db.clone();
         let result =
