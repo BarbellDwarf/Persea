@@ -9,7 +9,7 @@ test.describe('Connections Page', () => {
     await loginWithApiKey(page, ADMIN_KEY);
     await page.goto(`${BASE_URL}/connections.html`);
     await page.waitForTimeout(2000);
-    await expect(page).toHaveTitle(/rustguac/i);
+    await expect(page).toHaveTitle(/persea/i);
   });
 
   test('page has sidebar or vault notice', async ({ page }) => {

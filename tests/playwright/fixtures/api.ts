@@ -6,7 +6,7 @@ const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
  * Direct API helpers for test setup/teardown.
  * Bypasses the browser UI to create/delete resources.
  */
-export class RustguacApi {
+export class PerseaApi {
   constructor(
     private request: APIRequestContext,
     private apiKey?: string,
@@ -88,7 +88,7 @@ export class RustguacApi {
 /** Inject the API key into sessionStorage so the page is authenticated. */
 export async function setApiKey(page: Page, apiKey: string): Promise<void> {
   await page.evaluate((key) => {
-    sessionStorage.setItem('rustguac_api_key', key);
+    sessionStorage.setItem('persea_api_key', key);
   }, apiKey);
 }
 

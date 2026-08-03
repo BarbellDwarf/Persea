@@ -85,7 +85,7 @@ rm -f /tmp/test_baseline.xwd /tmp/test_baseline.png
 # --- Step 4: Start Chromium with isolated profile ---
 echo ""
 echo "--- Step 4: Starting Chromium ---"
-PROFILE_DIR=$(mktemp -d /tmp/rustguac-test-profile-XXXXXX)
+PROFILE_DIR=$(mktemp -d /tmp/persea-test-profile-XXXXXX)
 echo "Profile dir: $PROFILE_DIR"
 
 chromium \

@@ -10,7 +10,7 @@ test.describe('Connections page', () => {
 
   test('page renders with title and nav', async ({ page }) => {
     await conn.goto();
-    await expect(page).toHaveTitle(/rustguac.*Connections/);
+    await expect(page).toHaveTitle(/persea.*Connections/);
     await expect(page.locator('h1')).toBeVisible();
     await expect(conn.navConnections).toHaveClass(/active/);
   });

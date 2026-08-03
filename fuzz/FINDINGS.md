@@ -1,6 +1,6 @@
 # Rust Protocol Parser Fuzzing Findings
 
-Fuzz targets for `src/protocol.rs` — rustguac's Guacamole wire-format
+Fuzz targets for `src/protocol.rs` — persea's Guacamole wire-format
 parser and streaming instruction parser.
 
 ## Setup

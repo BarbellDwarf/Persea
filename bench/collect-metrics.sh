@@ -1,7 +1,7 @@
 #!/bin/bash
-# Collect system metrics for rustguac + guacd every N seconds.
+# Collect system metrics for persea + guacd every N seconds.
 # Usage: ./collect-metrics.sh [interval_secs] [output_file]
-# Run on the rustguac server during benchmarks.
+# Run on the persea server during benchmarks.
 set -e
 
 INTERVAL=${1:-5}
@@ -10,7 +10,7 @@ OUTPUT=${2:-"metrics-$(date +%Y%m%d-%H%M%S).csv"}
 echo "Collecting metrics every ${INTERVAL}s → $OUTPUT"
 echo "Press Ctrl+C to stop."
 
-echo "timestamp,rg_rss_kb,rg_threads,rg_fds,rg_cpu_pct,gd_rss_kb,gd_threads,gd_fds,gd_cpu_pct,sys_mem_avail_mb,tcp_established,tcp_time_wait" > "$OUTPUT"
+echo "timestamp,pg_rss_kb,pg_threads,pg_fds,pg_cpu_pct,gd_rss_kb,gd_threads,gd_fds,gd_cpu_pct,sys_mem_avail_mb,tcp_established,tcp_time_wait" > "$OUTPUT"
 
 # Track CPU usage between samples
 PREV_RG_UTIME=0; PREV_RG_STIME=0; PREV_GD_UTIME=0; PREV_GD_STIME=0
@@ -21,10 +21,10 @@ while true; do
     TS=$(date -Iseconds)
     NOW=$(date +%s%N)
 
-    RG_PID=$(pgrep -x rustguac 2>/dev/null | head -1)
+    RG_PID=$(pgrep -x persea 2>/dev/null | head -1)
     GD_PID=$(pgrep -x guacd 2>/dev/null | head -1)
 
-    # rustguac metrics
+    # persea metrics
     if [ -n "$RG_PID" ] && [ -d "/proc/$RG_PID" ]; then
         RG_RSS=$(awk '/VmRSS/{print $2}' /proc/$RG_PID/status 2>/dev/null || echo 0)
         RG_THR=$(awk '/Threads/{print $2}' /proc/$RG_PID/status 2>/dev/null || echo 0)

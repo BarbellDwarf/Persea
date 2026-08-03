@@ -8,7 +8,7 @@ test.describe('Sessions form validation', () => {
     sessions = new SessionsPage(page);
     await page.goto('/');
     await page.evaluate((key) => {
-      sessionStorage.setItem('rustguac_api_key', key);
+      sessionStorage.setItem('persea_api_key', key);
     }, process.env.ADMIN_API_KEY || '');
     await page.goto('/sessions.html');
     await expect(sessions.sessionForm).toBeVisible();

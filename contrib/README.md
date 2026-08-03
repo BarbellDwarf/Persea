@@ -1,6 +1,6 @@
 # contrib/
 
-Utility scripts and Docker images for rustguac.
+Utility scripts and Docker images for persea.
 
 ## Scripts
 

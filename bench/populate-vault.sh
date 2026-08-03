@@ -1,34 +1,34 @@
 #!/bin/bash
 # Populate Vault with address book entries for benchmarking.
-# Usage: ./populate-vault.sh [total_entries] [folders] [vault_addr] [api_key] [rustguac_url]
+# Usage: ./populate-vault.sh [total_entries] [folders] [vault_addr] [api_key] [persea_url]
 #
 # Defaults: 1000 entries across 20 folders.
-# Uses the rustguac API (not Vault directly) so entries are properly formatted.
+# Uses the persea API (not Vault directly) so entries are properly formatted.
 set -e
 
 TOTAL=${1:-1000}
 FOLDERS=${2:-20}
 VAULT_ADDR=${3:-"http://127.0.0.1:8200"}
 API_KEY=${4:-""}
-RUSTGUAC_URL=${5:-"https://localhost:8089"}
+PERSEA_URL=${5:-"https://localhost:8089"}
 ENTRIES_PER_FOLDER=$((TOTAL / FOLDERS))
 
 if [ -z "$API_KEY" ]; then
-    echo "Usage: $0 [entries] [folders] [vault_addr] [api_key] [rustguac_url]"
-    echo "  api_key is required (admin API key for rustguac)"
+    echo "Usage: $0 [entries] [folders] [vault_addr] [api_key] [persea_url]"
+    echo "  api_key is required (admin API key for persea)"
     exit 1
 fi
 
 CURL="curl -sk -H X-API-Key:${API_KEY} -H Content-Type:application/json"
 
 echo "Creating $TOTAL entries across $FOLDERS folders ($ENTRIES_PER_FOLDER per folder)"
-echo "rustguac: $RUSTGUAC_URL"
+echo "persea: $PERSEA_URL"
 
 for f in $(seq 1 $FOLDERS); do
     FOLDER="bench-folder-$(printf '%02d' $f)"
 
     # Create folder
-    $CURL -X POST "$RUSTGUAC_URL/api/addressbook/folders" \
+    $CURL -X POST "$PERSEA_URL/api/addressbook/folders" \
         -d "{\"name\":\"$FOLDER\",\"scope\":\"shared\",\"description\":\"Benchmark folder $f\",\"allowed_groups\":[]}" \
         -o /dev/null 2>/dev/null
 
@@ -37,7 +37,7 @@ for f in $(seq 1 $FOLDERS); do
         OCTET3=$((f % 256))
         OCTET4=$((e % 256))
 
-        $CURL -X PUT "$RUSTGUAC_URL/api/addressbook/folders/shared/$FOLDER/entries/$ENTRY" \
+        $CURL -X PUT "$PERSEA_URL/api/addressbook/folders/shared/$FOLDER/entries/$ENTRY" \
             -d "{
                 \"type\":\"rdp\",
                 \"hostname\":\"10.99.${OCTET3}.${OCTET4}\",

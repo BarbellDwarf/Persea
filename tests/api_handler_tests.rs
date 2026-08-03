@@ -3,8 +3,8 @@ use axum::extract::ConnectInfo;
 use axum::http::{header, Request, StatusCode};
 use axum::routing::{delete, get, post, put};
 use axum::{middleware, Extension, Router};
-use rustguac::auth::TrustedProxies;
-use rustguac::db::{self, Db};
+use persea::auth::TrustedProxies;
+use persea::db::{self, Db};
 use std::net::SocketAddr;
 use tower::ServiceExt;
 
@@ -12,18 +12,18 @@ fn test_db() -> Db { db::init_db(std::path::Path::new(":memory:")).unwrap() }
 
 fn test_router(db: Db) -> Router {
     Router::new()
-        .route("/api/users", get(rustguac::api::users::list_users))
-        .route("/api/users/{email}/role", put(rustguac::api::users::set_user_role))
-        .route("/api/users/{email}", delete(rustguac::api::users::delete_user))
-        .route("/api/users/{email}/disable", post(rustguac::api::users::disable_user))
-        .route("/api/users/{email}/enable", post(rustguac::api::users::enable_user))
-        .route("/api/me/tokens", get(rustguac::api::tokens::list_my_tokens))
-        .route("/api/me/tokens", post(rustguac::api::tokens::create_my_token))
-        .route("/api/me/tokens/{id}", delete(rustguac::api::tokens::revoke_my_token))
-        .route("/api/admin/user-tokens", get(rustguac::api::tokens::admin_list_user_tokens))
-        .route("/api/admin/user-tokens", post(rustguac::api::tokens::admin_create_user_token))
-        .route("/api/admin/user-tokens/{id}", delete(rustguac::api::tokens::admin_revoke_user_token))
-        .layer(middleware::from_fn(rustguac::auth::require_auth))
+        .route("/api/users", get(persea::api::users::list_users))
+        .route("/api/users/{email}/role", put(persea::api::users::set_user_role))
+        .route("/api/users/{email}", delete(persea::api::users::delete_user))
+        .route("/api/users/{email}/disable", post(persea::api::users::disable_user))
+        .route("/api/users/{email}/enable", post(persea::api::users::enable_user))
+        .route("/api/me/tokens", get(persea::api::tokens::list_my_tokens))
+        .route("/api/me/tokens", post(persea::api::tokens::create_my_token))
+        .route("/api/me/tokens/{id}", delete(persea::api::tokens::revoke_my_token))
+        .route("/api/admin/user-tokens", get(persea::api::tokens::admin_list_user_tokens))
+        .route("/api/admin/user-tokens", post(persea::api::tokens::admin_create_user_token))
+        .route("/api/admin/user-tokens/{id}", delete(persea::api::tokens::admin_revoke_user_token))
+        .layer(middleware::from_fn(persea::auth::require_auth))
         .layer(Extension(TrustedProxies(Vec::new())))
         .layer(Extension(db))
 }
@@ -91,14 +91,14 @@ fn setup_session(db: &Db, email: &str, role: &str) -> String {
 
 fn sess_req(method: &str, path: &str, tok: &str) -> Request<axum::body::Body> {
     Request::builder().method(method).uri(path)
-        .header(header::COOKIE, format!("rustguac_session={}", tok))
+        .header(header::COOKIE, format!("persea_session={}", tok))
         .extension(fake_addr())
         .body(axum::body::Body::empty()).unwrap()
 }
 
 fn sess_post(path: &str, tok: &str, body: serde_json::Value) -> Request<axum::body::Body> {
     Request::builder().method("POST").uri(path)
-        .header(header::COOKIE, format!("rustguac_session={}", tok))
+        .header(header::COOKIE, format!("persea_session={}", tok))
         .header(header::CONTENT_TYPE, "application/json")
         .extension(fake_addr())
         .body(axum::body::Body::from(serde_json::to_string(&body).unwrap())).unwrap()

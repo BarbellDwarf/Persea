@@ -37,12 +37,12 @@ test.describe('Authentication Flow', () => {
     await page.goto(`${BASE_URL}/connections.html`);
     await page.waitForTimeout(500);
 
-    const storedKey = await page.evaluate(() => sessionStorage.getItem('rustguac_api_key'));
+    const storedKey = await page.evaluate(() => sessionStorage.getItem('persea_api_key'));
     expect(storedKey).toBe(ADMIN_KEY);
 
     await page.goto(`${BASE_URL}/sessions.html`);
     await page.waitForTimeout(500);
-    const keyAfterNav = await page.evaluate(() => sessionStorage.getItem('rustguac_api_key'));
+    const keyAfterNav = await page.evaluate(() => sessionStorage.getItem('persea_api_key'));
     expect(keyAfterNav).toBe(ADMIN_KEY);
   });
 });

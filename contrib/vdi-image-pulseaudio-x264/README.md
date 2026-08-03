@@ -1,6 +1,6 @@
 # VDI Example Image with PulseAudio and H.264 RDP Support
 
-Debian Trixie Docker image for Rustguac VDI sessions. Provides a MATE desktop, common desktop applications, PulseAudio redirection, and xrdp H.264/GFX support on port 3389.
+Debian Trixie Docker image for Persea VDI sessions. Provides a MATE desktop, common desktop applications, PulseAudio redirection, and xrdp H.264/GFX support on port 3389.
 
 ## Build
 
@@ -10,9 +10,9 @@ docker build -t trixie-vdi-pulseaudio-x264:latest .
 
 ## Usage
 
-This image is designed to be launched by rustguac's VDI driver. Create an address book entry of type **VDI (Docker)** with the image name `trixie-vdi-pulseaudio-x264:latest`.
+This image is designed to be launched by persea's VDI driver. Create an address book entry of type **VDI (Docker)** with the image name `trixie-vdi-pulseaudio-x264:latest`.
 
-The entrypoint accepts these environment variables (set automatically by rustguac):
+The entrypoint accepts these environment variables (set automatically by persea):
 
 | Variable | Description |
 |----------|-------------|

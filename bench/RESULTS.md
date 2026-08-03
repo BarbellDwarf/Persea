@@ -1,4 +1,4 @@
-# rustguac Scale Test Results
+# persea Scale Test Results
 
 **Date:** 2026-03-21
 **Version:** 0.8.1
@@ -9,7 +9,7 @@
 
 ## Summary
 
-rustguac comfortably handles **100 concurrent RDP sessions** with zero errors and flat latencies. The Rust proxy itself is negligible overhead — **guacd (FreeRDP) is the sole bottleneck**, consuming ~158 MB RAM per session.
+persea comfortably handles **100 concurrent RDP sessions** with zero errors and flat latencies. The Rust proxy itself is negligible overhead — **guacd (FreeRDP) is the sole bottleneck**, consuming ~158 MB RAM per session.
 
 ## Test 1: Session Ramp (0 → 100 concurrent)
 
@@ -30,17 +30,17 @@ k6 ramping-vus: 0→10→25→50→75→100, hold 2 min, ramp down.
 
 | Component | Baseline | Peak (100 sessions) | Per-session |
 |-----------|----------|---------------------|-------------|
-| rustguac RSS | 18 MB | 45 MB | ~0.3 MB |
+| persea RSS | 18 MB | 45 MB | ~0.3 MB |
 | guacd RSS | 19 MB | 15,854 MB | ~158 MB |
-| rustguac threads | 5 | 9 | negligible |
+| persea threads | 5 | 9 | negligible |
 | guacd threads | 1 | 4,962 | ~50 |
-| rustguac FDs | 11 | 351 | ~3.4 |
+| persea FDs | 11 | 351 | ~3.4 |
 | TCP connections | 3 | 665 | ~6.6 |
 | Available RAM | 15,471 MB | 6,060 MB | — |
 
 ### Key Observations
 
-- **rustguac is not the bottleneck.** 27 MB additional RSS for 100 sessions. The tokio runtime added only 4 threads.
+- **persea is not the bottleneck.** 27 MB additional RSS for 100 sessions. The tokio runtime added only 4 threads.
 - **guacd/FreeRDP is the bottleneck.** ~158 MB per RDP session, ~50 threads per session. This is FreeRDP's in-process RDP client + screen encoding.
 - **Latencies stayed flat.** Session creation p95 remained under 100ms from 1 to 100 sessions — no degradation.
 - **Zero errors.** Every session created and connected successfully at every concurrency level.
@@ -68,7 +68,7 @@ An earlier test on 8 GB RAM reached 75 concurrent sessions before available memo
 Each RDP session runs FreeRDP in-process within guacd, consuming ~158 MB. This is the hard ceiling on concurrent sessions. For SSH sessions (no FreeRDP), guacd uses ~2-5 MB per session — roughly 30x more efficient.
 
 **Scaling formula:**
-`max_rdp_sessions ≈ (total_ram - 2 GB for OS - 50 MB for rustguac) / 158 MB`
+`max_rdp_sessions ≈ (total_ram - 2 GB for OS - 50 MB for persea) / 158 MB`
 
 | Server RAM | Max RDP sessions (est.) |
 |------------|------------------------|
@@ -88,8 +88,8 @@ Each RDP session runs FreeRDP in-process within guacd, consuming ~158 MB. This i
 
 ### 3. Non-bottlenecks
 
-- **rustguac CPU/memory:** Negligible. The WebSocket proxy is two tokio tasks per session forwarding bytes through an 8 KB buffer.
-- **rustguac file descriptors:** 351 at peak, well under default limits.
+- **persea CPU/memory:** Negligible. The WebSocket proxy is two tokio tasks per session forwarding bytes through an 8 KB buffer.
+- **persea file descriptors:** 351 at peak, well under default limits.
 - **Session creation latency:** Flat at all concurrency levels. guacd handshake is fast.
 - **Network:** ~10 KB/s per idle session. Active sessions with screen changes: ~100-500 KB/s typical for RDP.
 - **SQLite:** Not in the hot path. Only used for auth/token validation.
@@ -100,7 +100,7 @@ Each RDP session runs FreeRDP in-process within guacd, consuming ~158 MB. This i
 See [README.md](README.md) for setup instructions. Key steps:
 
 1. Set up an xrdp target VM: `bash bench/xrdp-target/setup.sh`
-2. Create a rustguac API token
+2. Create a persea API token
 3. Populate address book: `bash bench/populate-vault.sh 1000 20 ...`
 4. Run metrics collection: `bash bench/collect-metrics.sh 5 metrics.csv`
 5. Run ramp test: `k6 run --env API_KEY=... --env XRDP_HOST=... bench/k6-session-ramp.js`

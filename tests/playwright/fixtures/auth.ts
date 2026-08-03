@@ -2,12 +2,12 @@ import { test as base, type Page } from '@playwright/test';
 
 /**
  * Authenticate via API key and store the session for reuse.
- * The rustguac API key is stored in sessionStorage as 'rustguac_api_key'.
+ * The persea API key is stored in sessionStorage as 'persea_api_key'.
  */
 export async function loginWithApiKey(page: Page, apiKey: string): Promise<void> {
   await page.goto('/');
   await page.evaluate((key) => {
-    sessionStorage.setItem('rustguac_api_key', key);
+    sessionStorage.setItem('persea_api_key', key);
   }, apiKey);
 }
 

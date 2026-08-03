@@ -11,7 +11,7 @@
     - Desktop composition (DWM) in remote sessions
     - Optimized audio settings
 
-    Run on the Windows RDP target server (not the rustguac server).
+    Run on the Windows RDP target server (not the persea server).
     Requires administrator privileges. A reboot is recommended after.
 
 .PARAMETER EnableGPU
@@ -30,7 +30,7 @@
     .\setup-rdp-performance.ps1 -EnableGPU
 
 .NOTES
-    For rustguac - see docs/rdp-video-performance.md
+    For persea - see docs/rdp-video-performance.md
     Tested on: Windows Server 2022, Windows Server 2025, Windows 11
 #>
 

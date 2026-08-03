@@ -170,7 +170,7 @@ async def run_session(
 
 async def main():
     parser = argparse.ArgumentParser(description="Guacamole WebSocket benchmark client")
-    parser.add_argument("--url", required=True, help="rustguac base URL")
+    parser.add_argument("--url", required=True, help="persea base URL")
     parser.add_argument("--api-key", required=True, help="Admin API key")
     parser.add_argument("--rdp-host", required=True, help="xrdp target IP")
     parser.add_argument("--rdp-port", type=int, default=3389, help="xrdp port")
@@ -180,7 +180,7 @@ async def main():
     args = parser.parse_args()
 
     print(f"Starting {args.sessions} sessions to {args.rdp_host}:{args.rdp_port} for {args.duration}s")
-    print(f"rustguac: {args.url}")
+    print(f"persea: {args.url}")
     print()
 
     all_stats = [SessionStats() for _ in range(args.sessions)]

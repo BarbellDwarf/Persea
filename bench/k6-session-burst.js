@@ -1,5 +1,5 @@
 // k6 session creation throughput test.
-// Measures how many sessions/sec rustguac can create.
+// Measures how many sessions/sec persea can create.
 //
 // Usage:
 //   k6 run --env API_KEY=rgu_xxx \

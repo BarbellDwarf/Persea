@@ -10,7 +10,7 @@ test.describe('Recordings page', () => {
 
   test('page renders with title and nav', async ({ page }) => {
     await rec.goto();
-    await expect(page).toHaveTitle(/rustguac.*Recordings/);
+    await expect(page).toHaveTitle(/persea.*Recordings/);
     await expect(page.locator('h1')).toBeVisible();
     await expect(rec.navRecordings).toHaveClass(/active/);
   });

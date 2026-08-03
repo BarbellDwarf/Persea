@@ -1,15 +1,15 @@
 import { test, expect } from '@playwright/test';
-import { RustguacApi, setApiKey } from '../../fixtures/api';
+import { PerseaApi, setApiKey } from '../../fixtures/api';
 import { loginWithApiKey, logout } from '../../fixtures/auth';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
 const ADMIN_KEY = process.env.ADMIN_API_KEY || '';
 
 test.describe('User CRUD', () => {
-  let api: RustguacApi;
+  let api: PerseaApi;
 
   test.beforeEach(async ({ request }) => {
-    api = new RustguacApi(request, ADMIN_KEY);
+    api = new PerseaApi(request, ADMIN_KEY);
   });
 
   test('list users returns array with admin', async ({ page }) => {
@@ -88,7 +88,7 @@ test.describe('User CRUD', () => {
   });
 
   test('viewer role cannot create users (403)', async ({ request }) => {
-    const viewerApi = new RustguacApi(request, process.env.VIEWER_API_KEY || '');
+    const viewerApi = new PerseaApi(request, process.env.VIEWER_API_KEY || '');
     const res = await viewerApi.request.post(`${BASE_URL}/api/users`, {
       headers: { Authorization: `Bearer ${process.env.VIEWER_API_KEY}`, 'Content-Type': 'application/json' },
       data: { email: 'nope@example.com', name: 'No', password: 'TestPass123!', role: 'viewer' },

@@ -32,7 +32,7 @@ test.describe('Role-based navigation visibility', () => {
       const apiKey = process.env.ADMIN_API_KEY || '';
       await page.goto('/');
       await page.evaluate((key) => {
-        sessionStorage.setItem('rustguac_api_key', key);
+        sessionStorage.setItem('persea_api_key', key);
       }, apiKey);
 
       // Go to sessions to check nav
@@ -52,7 +52,7 @@ test.describe('Role-based navigation visibility', () => {
     test('settings menu opens on click', async ({ page }) => {
       await page.goto('/');
       await page.evaluate((key) => {
-        sessionStorage.setItem('rustguac_api_key', key);
+        sessionStorage.setItem('persea_api_key', key);
       }, process.env.ADMIN_API_KEY || '');
       await page.goto('/sessions.html');
       const settingsBtn = page.locator('#user-menu-btn');
@@ -65,7 +65,7 @@ test.describe('Role-based navigation visibility', () => {
     test('theme list is populated', async ({ page }) => {
       await page.goto('/');
       await page.evaluate((key) => {
-        sessionStorage.setItem('rustguac_api_key', key);
+        sessionStorage.setItem('persea_api_key', key);
       }, process.env.ADMIN_API_KEY || '');
       await page.goto('/sessions.html');
       await page.locator('#user-menu-btn').click();

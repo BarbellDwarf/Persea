@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 async function authenticate(page: import('@playwright/test').Page) {
   await page.goto('/');
   await page.evaluate((key) => {
-    sessionStorage.setItem('rustguac_api_key', key);
+    sessionStorage.setItem('persea_api_key', key);
   }, process.env.ADMIN_API_KEY || '');
 }
 

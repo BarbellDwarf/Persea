@@ -3,7 +3,7 @@
  *
  * Fuzzes guac_parser_append() — the core state machine that parses
  * Guacamole wire format data. This is the function that processes
- * all input from rustguac before any protocol handling occurs.
+ * all input from persea before any protocol handling occurs.
  *
  * Build with build.sh or manually:
  *   libFuzzer:  clang -fsanitize=fuzzer,address,undefined \

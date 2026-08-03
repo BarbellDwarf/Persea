@@ -4,7 +4,7 @@
 # Builds and installs the PulseAudio module-xrdp, which creates a virtual
 # audio sink that redirects sound through the RDP channel.
 #
-# Run as root on the xrdp target machine (not the rustguac server).
+# Run as root on the xrdp target machine (not the persea server).
 # Requires: xrdp, pulseaudio, build tools.
 #
 # After install, new RDP sessions will automatically load the audio module

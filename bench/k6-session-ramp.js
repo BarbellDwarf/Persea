@@ -1,4 +1,4 @@
-// k6 session ramp-up test for rustguac.
+// k6 session ramp-up test for persea.
 // Gradually increases concurrent RDP sessions from 0 to 100.
 //
 // Usage:
@@ -8,8 +8,8 @@
 //          bench/k6-session-ramp.js
 //
 // Env vars:
-//   API_KEY    - rustguac admin API key
-//   BASE_URL   - rustguac base URL
+//   API_KEY    - persea admin API key
+//   BASE_URL   - persea base URL
 //   XRDP_HOST  - xrdp target IP (single VM with multiple users)
 //   MAX_VUS    - max concurrent sessions (default 100)
 //   HOLD_SECS  - seconds to hold at max (default 300)

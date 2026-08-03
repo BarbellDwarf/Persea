@@ -2,7 +2,7 @@ FROM debian:trixie-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Debian Trixie desktop image example with PulseAudio Support for rustguac VDI
+# Debian Trixie desktop image example with PulseAudio Support for persea VDI
 #
 # This follows the same broad shape as contrib/setup-xrdp-gfx.sh:
 # install a desktop, install real PulseAudio, build the xrdp PulseAudio

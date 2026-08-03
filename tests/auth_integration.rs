@@ -1,14 +1,14 @@
 //! Integration tests for auth flows: password hashing, TOTP, audit chain,
 //! RBAC permissions, crypto, and auth chain.
 
-use rustguac::audit;
-use rustguac::auth_chain::AuthChain;
-use rustguac::auth_provider::{AuthRequest, AuthResult, AuthProvider, Capabilities};
-use rustguac::crypto;
-use rustguac::db;
-use rustguac::password;
-use rustguac::rbac;
-use rustguac::totp;
+use persea::audit;
+use persea::auth_chain::AuthChain;
+use persea::auth_provider::{AuthRequest, AuthResult, AuthProvider, Capabilities};
+use persea::crypto;
+use persea::db;
+use persea::password;
+use persea::rbac;
+use persea::totp;
 use totp_rs::{Algorithm, TOTP};
 
 use std::sync::Arc;
@@ -46,7 +46,7 @@ fn password_hash_different_each_time() {
 
 #[test]
 fn totp_enrollment_and_verify() {
-    let enrollment = totp::generate_enrollment("user@example.com", "rustguac").unwrap();
+    let enrollment = totp::generate_enrollment("user@example.com", "persea").unwrap();
     assert!(!enrollment.secret_b32.is_empty());
     assert!(enrollment.otpauth_url.starts_with("otpauth://"));
     assert!(!enrollment.qr_png.is_empty());
@@ -63,7 +63,7 @@ fn totp_enrollment_and_verify() {
         1,
         30,
         secret_bytes,
-        Some("rustguac".into()),
+        Some("persea".into()),
         "user@example.com".into(),
     )
     .unwrap();
@@ -341,7 +341,7 @@ async fn auth_chain_empty_always_fails() {
 
 #[tokio::test]
 async fn db_auth_provider_success() {
-    use rustguac::auth_providers::database::DatabaseProvider;
+    use persea::auth_providers::database::DatabaseProvider;
 
     let db = test_db();
     let provider = DatabaseProvider::new(db.clone());
@@ -367,7 +367,7 @@ async fn db_auth_provider_success() {
 
 #[tokio::test]
 async fn db_auth_provider_wrong_password() {
-    use rustguac::auth_providers::database::DatabaseProvider;
+    use persea::auth_providers::database::DatabaseProvider;
 
     let db = test_db();
     let provider = DatabaseProvider::new(db.clone());
@@ -395,7 +395,7 @@ async fn db_auth_provider_wrong_password() {
 
 #[tokio::test]
 async fn totp_provider_verify_second_factor() {
-    use rustguac::auth_providers::totp::{TotpProvider, TotpProviderConfig};
+    use persea::auth_providers::totp::{TotpProvider, TotpProviderConfig};
 
     let db = test_db();
     let provider = TotpProvider::new(TotpProviderConfig::default(), db.clone());

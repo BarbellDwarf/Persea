@@ -1,15 +1,15 @@
 import { test, expect } from '@playwright/test';
-import { RustguacApi, setApiKey } from '../../fixtures/api';
+import { PerseaApi, setApiKey } from '../../fixtures/api';
 import { loginWithApiKey } from '../../fixtures/auth';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
 const ADMIN_KEY = process.env.ADMIN_API_KEY || '';
 
 test.describe('Token CRUD', () => {
-  let api: RustguacApi;
+  let api: PerseaApi;
 
   test.beforeEach(async ({ request }) => {
-    api = new RustguacApi(request, ADMIN_KEY);
+    api = new PerseaApi(request, ADMIN_KEY);
   });
 
   test('create token via API', async () => {

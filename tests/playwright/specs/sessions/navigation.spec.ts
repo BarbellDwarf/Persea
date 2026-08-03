@@ -10,7 +10,7 @@ test.describe('Sessions page', () => {
 
   test('page renders with title and nav', async ({ page }) => {
     await sessions.goto();
-    await expect(page).toHaveTitle(/rustguac.*Sessions/);
+    await expect(page).toHaveTitle(/persea.*Sessions/);
     await expect(page.locator('h1')).toBeVisible();
     await expect(sessions.navConnections).toBeVisible();
     await expect(sessions.navSessions).toHaveClass(/active/);
@@ -56,7 +56,7 @@ test.describe('Sessions page', () => {
   test('session type toggle shows correct fields', async ({ page }) => {
     await page.goto('/');
     await page.evaluate((key) => {
-      sessionStorage.setItem('rustguac_api_key', key);
+      sessionStorage.setItem('persea_api_key', key);
     }, process.env.ADMIN_API_KEY || '');
     await page.goto('/sessions.html');
 

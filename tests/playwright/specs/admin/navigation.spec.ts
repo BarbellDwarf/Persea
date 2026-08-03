@@ -10,7 +10,7 @@ test.describe('Admin page', () => {
 
   test('page renders with title and nav', async ({ page }) => {
     await admin.goto();
-    await expect(page).toHaveTitle(/rustguac.*Admin/);
+    await expect(page).toHaveTitle(/persea.*Admin/);
     await expect(page.locator('h1')).toBeVisible();
     await expect(admin.navAdmin).toHaveClass(/active/);
   });

@@ -10,7 +10,7 @@ test.describe('Sessions Page', () => {
     await page.goto(`${BASE_URL}/sessions.html`);
     await page.waitForTimeout(1000);
 
-    await expect(page).toHaveTitle(/rustguac/i);
+    await expect(page).toHaveTitle(/persea/i);
     const table = page.locator('table, .table-wrapper');
     await expect(table.first()).toBeVisible();
   });
