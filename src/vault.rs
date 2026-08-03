@@ -722,7 +722,7 @@ impl VaultClient {
         };
 
         let token = self.token.read().await.clone();
-        let resp = do_request(token).await?;
+        let resp = do_request(token.to_string()).await?;
 
         if resp.status() == reqwest::StatusCode::FORBIDDEN {
             // Re-login and retry once
