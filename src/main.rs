@@ -992,6 +992,9 @@ async fn run_server(config: Config, database: Db) {
     // Store drive config for shutdown cleanup (before config is moved)
     let shutdown_drive_config = config.drive.clone();
 
+    // Extract shutdown timeout before config is moved into SessionManager
+    let shutdown_timeout_secs = config.shutdown_timeout_secs;
+
     // Build TLS connector for guacd if configured
     let guacd_tls = build_guacd_tls(&config);
     let rate_limit_enabled = config.rate_limit;
@@ -1589,8 +1592,44 @@ async fn run_server(config: Config, database: Db) {
             tracing::warn!(error = %e, "failed to set TCP_NODELAY on TLS listener");
         }
 
+        let handle = axum_server::Handle::new();
+        let handle_clone = handle.clone();
+        let timeout = shutdown_timeout_secs;
+        let shutdown_mgr = manager.clone();
+        tokio::spawn(async move {
+            // Wait for SIGTERM/SIGINT then trigger axum-server graceful shutdown
+            let ctrl_c = tokio::signal::ctrl_c();
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigterm = signal(SignalKind::terminate())
+                    .expect("Failed to register SIGTERM handler");
+                tokio::select! {
+                    _ = ctrl_c => tracing::info!("SIGINT received, starting graceful shutdown"),
+                    _ = sigterm.recv() => tracing::info!("SIGTERM received, starting graceful shutdown"),
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                ctrl_c.await.expect("Failed to listen for ctrl-c");
+                tracing::info!("Shutdown signal received");
+            }
+
+            // Block new sessions and cancel active ones
+            shutdown_mgr.initiate_shutdown();
+            let active_count = shutdown_mgr.cancel_all_sessions().await;
+            tracing::info!(
+                active_sessions = active_count,
+                timeout_secs = timeout,
+                "Graceful shutdown initiated — waiting for sessions to drain"
+            );
+
+            handle_clone.graceful_shutdown(Some(std::time::Duration::from_secs(timeout)));
+        });
+
         axum_server::from_tcp_rustls(std_listener, rustls_config)
             .expect("Failed to wrap listener")
+            .handle(handle)
             .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await
             .expect("Server error");
@@ -1607,13 +1646,42 @@ async fn run_server(config: Config, database: Db) {
             tracing::warn!(error = %e, "failed to set TCP_NODELAY on listener");
         }
 
+        let shutdown_mgr = manager.clone();
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("Shutdown signal received");
+        .with_graceful_shutdown(async move {
+            // Wait for either SIGTERM or SIGINT
+            let ctrl_c = tokio::signal::ctrl_c();
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                let mut sigterm = signal(SignalKind::terminate())
+                    .expect("Failed to register SIGTERM handler");
+                tokio::select! {
+                    _ = ctrl_c => tracing::info!("SIGINT received, starting graceful shutdown"),
+                    _ = sigterm.recv() => tracing::info!("SIGTERM received, starting graceful shutdown"),
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                ctrl_c.await.expect("Failed to listen for ctrl-c");
+                tracing::info!("Shutdown signal received");
+            }
+
+            // 1. Block new session creation
+            shutdown_mgr.initiate_shutdown();
+            let active_count = shutdown_mgr.cancel_all_sessions().await;
+            tracing::info!(
+                active_sessions = active_count,
+                timeout_secs = shutdown_timeout_secs,
+                "Graceful shutdown initiated — waiting for sessions to drain"
+            );
+
+            // 2. Give active sessions time to drain
+            tokio::time::sleep(std::time::Duration::from_secs(shutdown_timeout_secs)).await;
+            tracing::info!("Graceful shutdown timeout reached — exiting");
         })
         .await
         .expect("Server error");
