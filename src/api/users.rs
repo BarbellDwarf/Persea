@@ -1,4 +1,5 @@
 use super::{VaultConfigured, VaultState};
+use crate::audit;
 use crate::auth::AuthIdentity;
 use crate::db::{self, Db};
 use crate::error::AppError;
@@ -65,10 +66,48 @@ pub async fn set_user_role(
 
     let db_clone = database.clone();
     let role = req.role.clone();
-    let found = tokio::task::spawn_blocking(move || db::set_user_role(&db_clone, &email, &role))
+    // Fetch old role for audit before updating
+    let old_role = {
+        let db_for_read = database.clone();
+        let email_clone = email.clone();
+        tokio::task::spawn_blocking(move || {
+            db::get_user_by_email(&db_for_read, &email_clone)
+                .ok()
+                .map(|u| u.role)
+        })
+        .await
+        .unwrap_or(None)
+    };
+    let email_for_update = email.clone();
+    let role_for_update = role.clone();
+    let found = tokio::task::spawn_blocking(move || db::set_user_role(&db_clone, &email_for_update, &role_for_update))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
     if found {
+        // Audit: role change
+        {
+            let db_audit = database.clone();
+            let email_audit = email.clone();
+            let new_role = role.clone();
+            let admin_name = identity
+                .as_ref()
+                .map(|id| id.display_name().to_string())
+                .unwrap_or_default();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = audit::log_event(
+                    &db_audit,
+                    &mut audit::EventBuilder::new("admin.role.change", "success")
+                        .user_id(&admin_name)
+                        .details(serde_json::json!({
+                            "target_email": email_audit,
+                            "old_role": old_role,
+                            "new_role": new_role,
+                        }))
+                        .build(),
+                );
+            })
+            .await;
+        }
         Ok(Json(json!({"ok": true})))
     } else {
         Err(AppError::Session("user not found".into()))
@@ -91,8 +130,30 @@ pub async fn delete_user(
     }
 
     let db_clone = database.clone();
-    match tokio::task::spawn_blocking(move || db::delete_user(&db_clone, &email)).await {
-        Ok(Ok(true)) => StatusCode::NO_CONTENT.into_response(),
+    let email_for_delete = email.clone();
+    match tokio::task::spawn_blocking(move || db::delete_user(&db_clone, &email_for_delete)).await {
+        Ok(Ok(true)) => {
+            // Audit: user delete
+            {
+                let db_audit = database.clone();
+                let email_audit = email.clone();
+                let admin_name = identity
+                    .as_ref()
+                    .map(|id| id.display_name().to_string())
+                    .unwrap_or_default();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = audit::log_event(
+                        &db_audit,
+                        &mut audit::EventBuilder::new("admin.user.delete", "success")
+                            .user_id(&admin_name)
+                            .details(serde_json::json!({"target_email": email_audit}))
+                            .build(),
+                    );
+                })
+                .await;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(Ok(false)) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "user not found"})),
@@ -170,10 +231,30 @@ pub async fn disable_user(
     }
 
     let db_clone = database.clone();
-    let found = tokio::task::spawn_blocking(move || db::disable_user(&db_clone, &email))
+    let email_for_disable = email.clone();
+    let found = tokio::task::spawn_blocking(move || db::disable_user(&db_clone, &email_for_disable))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
     if found {
+        // Audit: user disable
+        {
+            let db_audit = database.clone();
+            let email_audit = email.clone();
+            let admin_name = identity
+                .as_ref()
+                .map(|id| id.display_name().to_string())
+                .unwrap_or_default();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = audit::log_event(
+                    &db_audit,
+                    &mut audit::EventBuilder::new("admin.user.disable", "success")
+                        .user_id(&admin_name)
+                        .details(serde_json::json!({"target_email": email_audit}))
+                        .build(),
+                );
+            })
+            .await;
+        }
         Ok(Json(json!({"ok": true})))
     } else {
         Err(AppError::Session("user not found".into()))
@@ -194,10 +275,30 @@ pub async fn enable_user(
     }
 
     let db_clone = database.clone();
-    let found = tokio::task::spawn_blocking(move || db::enable_user(&db_clone, &email))
+    let email_for_enable = email.clone();
+    let found = tokio::task::spawn_blocking(move || db::enable_user(&db_clone, &email_for_enable))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
     if found {
+        // Audit: user enable
+        {
+            let db_audit = database.clone();
+            let email_audit = email.clone();
+            let admin_name = identity
+                .as_ref()
+                .map(|id| id.display_name().to_string())
+                .unwrap_or_default();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = audit::log_event(
+                    &db_audit,
+                    &mut audit::EventBuilder::new("admin.user.enable", "success")
+                        .user_id(&admin_name)
+                        .details(serde_json::json!({"target_email": email_audit}))
+                        .build(),
+                );
+            })
+            .await;
+        }
         Ok(Json(json!({"ok": true})))
     } else {
         Err(AppError::Session("user not found".into()))
@@ -262,8 +363,10 @@ pub async fn create_group_mapping(
     }
 
     let db_clone = database.clone();
+    let group_for_mapping = req.group.clone();
+    let role_for_mapping = req.role.clone();
     let mapping = tokio::task::spawn_blocking(move || {
-        db::create_group_mapping(&db_clone, &req.group, &req.role)
+        db::create_group_mapping(&db_clone, &group_for_mapping, &role_for_mapping)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -275,6 +378,30 @@ pub async fn create_group_mapping(
             AppError::Internal(msg)
         }
     })?;
+    // Audit: config change
+    {
+        let db_audit = database.clone();
+        let group = req.group.clone();
+        let role = req.role.clone();
+        let admin_name = identity
+            .as_ref()
+            .map(|id| id.display_name().to_string())
+            .unwrap_or_default();
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = audit::log_event(
+                &db_audit,
+                &mut audit::EventBuilder::new("admin.config.change", "success")
+                    .user_id(&admin_name)
+                    .details(serde_json::json!({
+                        "action": "create_group_mapping",
+                        "group": group,
+                        "role": role,
+                    }))
+                    .build(),
+            );
+        })
+        .await;
+    }
     Ok(Json(json!(mapping)))
 }
 
@@ -338,7 +465,30 @@ pub async fn delete_group_mapping(
 
     let db_clone = database.clone();
     match tokio::task::spawn_blocking(move || db::delete_group_mapping(&db_clone, id)).await {
-        Ok(Ok(true)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(Ok(true)) => {
+            // Audit: config change
+            {
+                let db_audit = database.clone();
+                let admin_name = identity
+                    .as_ref()
+                    .map(|id| id.display_name().to_string())
+                    .unwrap_or_default();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = audit::log_event(
+                        &db_audit,
+                        &mut audit::EventBuilder::new("admin.config.change", "success")
+                            .user_id(&admin_name)
+                            .details(serde_json::json!({
+                                "action": "delete_group_mapping",
+                                "mapping_id": id,
+                            }))
+                            .build(),
+                    );
+                })
+                .await;
+            }
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(Ok(false)) => (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "mapping not found"})),

@@ -50,3 +50,6 @@ rpm/staging/
 
 # Claude Code project memory
 .claude/
+
+# Wayfinding - planning artifacts
+wayfinding/

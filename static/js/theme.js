@@ -51,3 +51,19 @@ function initTheme(t) {
 var _ub = document.getElementById('user-menu-btn');
 if (_ub) _ub.addEventListener('click', function(e) { e.stopPropagation(); var m = document.getElementById('user-menu'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; });
 document.addEventListener('click', function() { var m = document.getElementById('user-menu'); if (m) m.style.display = 'none'; });
+
+// ── Dark / Light / System toggle ──────────────────────────────
+(function() {
+    var stored = localStorage.getItem('theme');
+    var preferred = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    var theme = stored || preferred;
+    document.documentElement.classList.add(theme);
+
+    window.toggleTheme = function() {
+        var current = document.documentElement.classList.contains('dark') ? 'dark' : 'light';
+        var next = current === 'dark' ? 'light' : 'dark';
+        document.documentElement.classList.remove(current);
+        document.documentElement.classList.add(next);
+        localStorage.setItem('theme', next);
+    };
+})();

@@ -40,6 +40,9 @@ pub enum AppError {
     #[error("pve error: {0}")]
     Pve(String),
 
+    #[error("vsphere error: {0}")]
+    Vsphere(String),
+
     #[error("{0}")]
     Internal(String),
 }
@@ -71,6 +74,7 @@ impl IntoResponse for AppError {
             AppError::Protocol(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Drive(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             AppError::Pve(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::Vsphere(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
         };
 
@@ -138,6 +142,12 @@ impl From<crate::drive::DriveError> for AppError {
 impl From<crate::pve::PveError> for AppError {
     fn from(e: crate::pve::PveError) -> Self {
         AppError::Pve(e.to_string())
+    }
+}
+
+impl From<crate::vsphere::VsphereError> for AppError {
+    fn from(e: crate::vsphere::VsphereError) -> Self {
+        AppError::Vsphere(e.to_string())
     }
 }
 

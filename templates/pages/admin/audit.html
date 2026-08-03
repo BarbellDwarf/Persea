@@ -1,0 +1,178 @@
+{% extends "layouts/app.html" %}
+
+{% block title %}{{ site_title }} — Audit Log{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-100">Audit Log</h1>
+            <p class="text-sm text-gray-500 mt-1">Tamper-evident event chain with SHA-256 verification</p>
+        </div>
+        <div class="flex items-center gap-3">
+            <div id="chain-status" class="px-3 py-1.5 rounded-lg text-sm font-medium border"></div>
+            <button onclick="verifyChain()"
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors">
+                Verify Chain
+            </button>
+            <div class="relative">
+                <button onclick="document.getElementById('export-menu').classList.toggle('hidden')"
+                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors">
+                    Export ▾
+                </button>
+                <div id="export-menu" class="hidden absolute right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-lg py-1 z-10">
+                    <button onclick="exportAudit('csv')" class="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700">Export CSV</button>
+                    <button onclick="exportAudit('json')" class="block w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-gray-700">Export JSON</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="flex items-center gap-4 mb-4">
+        <div class="flex items-center gap-2">
+            <label class="text-sm text-gray-500">From</label>
+            <input type="date" id="audit-from" name="from"
+                   hx-get="/api/audit/events"
+                   hx-trigger="change"
+                   hx-target="#audit-table-body"
+                   hx-include="[name='to'],[name='user'],[name='event_type'],[name='outcome']"
+                   class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+        </div>
+        <div class="flex items-center gap-2">
+            <label class="text-sm text-gray-500">To</label>
+            <input type="date" id="audit-to" name="to"
+                   hx-get="/api/audit/events"
+                   hx-trigger="change"
+                   hx-target="#audit-table-body"
+                   hx-include="[name='from'],[name='user'],[name='event_type'],[name='outcome']"
+                   class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+        </div>
+        <input type="text" name="user" placeholder="User..."
+               hx-get="/api/audit/events"
+               hx-trigger="keyup changed delay:300ms"
+               hx-target="#audit-table-body"
+               hx-include="[name='from'],[name='to'],[name='event_type'],[name='outcome']"
+               class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+        <select name="event_type"
+                hx-get="/api/audit/events"
+                hx-trigger="change"
+                hx-target="#audit-table-body"
+                hx-include="[name='from'],[name='to'],[name='user'],[name='outcome']"
+                class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+            <option value="">All Events</option>
+            <option value="login">Login</option>
+            <option value="logout">Logout</option>
+            <option value="session_create">Session Create</option>
+            <option value="session_delete">Session Delete</option>
+            <option value="user_update">User Update</option>
+            <option value="auth_config">Auth Config</option>
+            <option value="settings_change">Settings Change</option>
+        </select>
+        <select name="outcome"
+                hx-get="/api/audit/events"
+                hx-trigger="change"
+                hx-target="#audit-table-body"
+                hx-include="[name='from'],[name='to'],[name='user'],[name='event_type']"
+                class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+            <option value="">All Outcomes</option>
+            <option value="success">Success</option>
+            <option value="failure">Failure</option>
+        </select>
+    </div>
+
+    <!-- Audit Events Table -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
+                    <th class="px-4 py-3">Timestamp</th>
+                    <th class="px-4 py-3">Event Type</th>
+                    <th class="px-4 py-3">User</th>
+                    <th class="px-4 py-3">IP</th>
+                    <th class="px-4 py-3">Outcome</th>
+                    <th class="px-4 py-3">Details</th>
+                    <th class="px-4 py-3 text-right">Hash</th>
+                </tr>
+            </thead>
+            <tbody id="audit-table-body" class="divide-y divide-gray-800"
+                  hx-get="/api/audit/events"
+                  hx-trigger="load"
+                  hx-swap="innerHTML">
+                <tr><td colspan="7" class="px-4 py-8 text-center text-gray-500 text-sm">Loading audit events...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    <div id="audit-pagination" class="flex items-center justify-between mt-4 text-sm text-gray-500">
+        <span id="audit-count"></span>
+        <div id="audit-pages" class="flex gap-1"></div>
+    </div>
+</div>
+
+<script>
+function outcomeBadge(outcome) {
+    var colors = {
+        success: 'bg-emerald-900/50 text-emerald-300 border-emerald-800',
+        failure: 'bg-red-900/50 text-red-300 border-red-800',
+        error: 'bg-red-900/50 text-red-300 border-red-800'
+    };
+    return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[outcome] || colors.success) + '">' + outcome + '</span>';
+}
+
+function renderAuditRow(event) {
+    var shortHash = event.event_hash ? event.event_hash.substring(0, 8) + '…' : '-';
+    var details = event.details && typeof event.details === 'object'
+        ? Object.entries(event.details).map(function(e) { return e[0] + ': ' + e[1]; }).join(', ')
+        : (event.details || '-');
+    return '<tr class="hover:bg-gray-800/50">' +
+        '<td class="px-4 py-3 text-sm text-gray-400 whitespace-nowrap">' + event.timestamp + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-200">' + event.event_type + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-400">' + (event.user_id || '-') + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-500">' + (event.source_ip || '-') + '</td>' +
+        '<td class="px-4 py-3">' + outcomeBadge(event.outcome) + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-500 max-w-xs truncate" title="' + details + '">' + details + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-600 font-mono text-right" title="' + event.event_hash + '">' + shortHash + '</td>' +
+        '</tr>';
+}
+
+function verifyChain() {
+    var el = document.getElementById('chain-status');
+    el.className = 'px-3 py-1.5 rounded-lg text-sm font-medium border bg-blue-900/50 text-blue-300 border-blue-800';
+    el.textContent = 'Verifying...';
+    fetch('/api/audit/verify')
+        .then(function(r) { return r.json(); })
+        .then(function(r) {
+            if (r.status === 'verified') {
+                el.className = 'px-3 py-1.5 rounded-lg text-sm font-medium border bg-emerald-900/50 text-emerald-300 border-emerald-800';
+                el.textContent = 'Verified (' + r.events_scanned + ' events)';
+            } else {
+                el.className = 'px-3 py-1.5 rounded-lg text-sm font-medium border bg-red-900/50 text-red-300 border-red-800';
+                el.textContent = 'Broken (' + r.errors.length + ' errors, ' + r.events_scanned + ' scanned)';
+            }
+        })
+        .catch(function() {
+            el.className = 'px-3 py-1.5 rounded-lg text-sm font-medium border bg-gray-800 text-gray-400 border-gray-700';
+            el.textContent = 'Unverified';
+        });
+}
+
+function exportAudit(format) {
+    document.getElementById('export-menu').classList.add('hidden');
+    var params = new URLSearchParams();
+    var from = document.querySelector('[name="from"]').value;
+    var to = document.querySelector('[name="to"]').value;
+    var user = document.querySelector('[name="user"]').value;
+    var eventType = document.querySelector('[name="event_type"]').value;
+    var outcome = document.querySelector('[name="outcome"]').value;
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    if (user) params.set('user', user);
+    if (eventType) params.set('event_type', eventType);
+    if (outcome) params.set('outcome', outcome);
+    params.set('format', format);
+    window.location.href = '/api/audit/export?' + params.toString();
+}
+</script>
+{% endblock %}

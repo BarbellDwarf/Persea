@@ -548,4 +548,111 @@ impl SessionManager {
     pub fn recording_config(&self) -> crate::config::RecordingConfig {
         self.config.recording_config()
     }
+
+    /// Update the last_activity timestamp on a session (called on WebSocket
+    /// input events from the browser). The atomic store avoids a full mutex
+    /// lock for this hot path.
+    pub async fn update_activity(&self, session_id: &Uuid) {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(session_id) {
+            let session = session.lock().await;
+            session.touch_activity();
+        }
+    }
+
+    /// Return session IDs whose last_activity is older than `idle_timeout_secs`
+    /// seconds ago. Only considers Active or Pending sessions.
+    pub async fn get_idle_sessions(&self, idle_timeout_secs: i64) -> Vec<Uuid> {
+        let now = Utc::now().timestamp();
+        let sessions = self.sessions.read().await;
+        let mut idle = Vec::new();
+        for (id, session) in sessions.iter() {
+            let session = session.lock().await;
+            if matches!(
+                session.status,
+                SessionStatus::Active | SessionStatus::Pending
+            ) {
+                let last = session.last_activity_secs();
+                if last > 0 && (now - last) > idle_timeout_secs {
+                    idle.push(*id);
+                }
+            }
+        }
+        idle
+    }
+
+    /// Return session IDs that have been alive longer than `max_duration_secs`.
+    /// Only considers Active or Pending sessions.
+    pub async fn get_expired_sessions(&self, max_duration_secs: i64) -> Vec<Uuid> {
+        let now = Utc::now();
+        let sessions = self.sessions.read().await;
+        let mut expired = Vec::new();
+        for (id, session) in sessions.iter() {
+            let session = session.lock().await;
+            if matches!(
+                session.status,
+                SessionStatus::Active | SessionStatus::Pending
+            ) {
+                let age = now.signed_duration_since(session.created_at);
+                if age.num_seconds() > max_duration_secs {
+                    expired.push(*id);
+                }
+            }
+        }
+        expired
+    }
+
+    /// Count active/pending sessions belonging to `user_id` (matched against
+    /// `created_by`).
+    pub async fn get_user_session_count(&self, user_id: &str) -> usize {
+        let sessions = self.sessions.read().await;
+        let mut count = 0usize;
+        for session in sessions.values() {
+            let session = session.lock().await;
+            if session.created_by == user_id
+                && matches!(
+                    session.status,
+                    SessionStatus::Pending | SessionStatus::Active
+                )
+            {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Returns true if `user_id` has fewer than `limit` active/pending sessions.
+    /// A limit of 0 means unlimited.
+    pub async fn check_concurrent_limit(&self, user_id: &str, limit: usize) -> bool {
+        if limit == 0 {
+            return true;
+        }
+        self.get_user_session_count(user_id).await < limit
+    }
+
+    /// Persist session metadata to the session_history table. This is an
+    /// audit-trail write — credentials are never stored.
+    pub fn save_session_metadata(&self, session: &Session) {
+        if let Some(ref db) = self.db {
+            let st = format!("{:?}", session.session_type).to_lowercase();
+            if let Err(e) = crate::db::insert_session_history(
+                db,
+                &session.id.to_string(),
+                &st,
+                &session.hostname,
+                None,
+                &session.username,
+                &session.created_by,
+                session.address_book_entry.as_deref(),
+                session.address_book_folder.as_deref(),
+                session.entry_display_name.as_deref(),
+            ) {
+                tracing::warn!(
+                    session_id = %session.id,
+                    error = %e,
+                    "Failed to save session metadata"
+                );
+            }
+        }
+    }
 }

@@ -2,145 +2,246 @@
 
 ## What this project is
 
-rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd (the C daemon from guacamole-server). Supports SSH, RDP, VNC, web browser sessions (headless Chromium on Xvnc), and VDI desktop containers (Docker).
+rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd (the C daemon from guacamole-server). Supports SSH, RDP, VNC, SPICE, Proxmox, VMware, web browser sessions (headless Chromium on Xvnc), and VDI desktop containers (Docker).
 
 ## Architecture
 
 - **Rust binary** (`rustguac`) — axum web server, session manager, WebSocket proxy
-- **guacd** — built from apache/guacamole-server source, handles SSH/VNC/RDP protocol translation
+- **guacd** — built from apache/guacamole-server source, handles SSH/VNC/RDP/SPICE protocol translation
 - **Xvnc + Chromium** — spawned per web-browser session, streamed via VNC through guacd
 - **Docker** — VDI containers spawned per-user, connected via RDP through guacd
 
 ## Key files
 
-- `src/main.rs` — entry point, CLI (clap), server setup
-- `src/api.rs` — REST API endpoints (session CRUD, recordings, admin)
-- `src/session.rs` — session state machine, SessionManager
-- `src/browser.rs` — Xvnc + Chromium process lifecycle (display allocator, per-session profile dirs)
-- `src/vdi/mod.rs` — VdiDriver trait, container types (ContainerSpec, ContainerInfo, ManagedContainer)
-- `src/vdi/docker.rs` — Docker-based VDI driver (bollard, unix socket, start/reuse/stop)
+### Core
+- `src/main.rs` — entry point, CLI (clap), server setup, route wiring
+- `src/config.rs` — TOML config loading with defaults, AuthConfig struct
+- `src/error.rs` — unified AppError enum with HTTP status mapping
+
+### Auth system
+- `src/auth.rs` — API key auth middleware (SHA-256, IP allowlists, expiry), role system, session cookie validation
+- `src/auth_provider.rs` — AuthProvider trait, Capabilities bitflags, AuthResult, AuthRequest, UserInfo
+- `src/auth_chain.rs` — AuthChain: priority-ordered provider chain with MFA support
+- `src/auth_providers/` — Individual auth provider implementations:
+  - `database.rs` — Local password auth (Argon2id)
+  - `ldap.rs` — LDAP/AD bind+search auth
+  - `saml.rs` — SAML 2.0 SP (quick-xml + ring signatures)
+  - `radius.rs` — RADIUS PAP (UDP client, challenge/response)
+  - `totp.rs` — TOTP MFA second factor
+- `src/oidc.rs` — OIDC authentication (login, callback, logout, group extraction)
+- `src/password.rs` — Argon2id hashing/verification (OWASP params)
+- `src/totp.rs` — TOTP management (enrollment, QR codes, verification, recovery codes)
+- `src/crypto.rs` — AES-256-GCM credential encryption
+
+### Database
+- `src/db.rs` — SQLite admin database (rusqlite), user/session/token/audit tables
+- `src/db_pool.rs` — SQLx multi-backend pool (PostgreSQL/MySQL/SQLite), DbPool enum, dispatch macros
+- `migrations/` — Per-backend schema DDL (15 tables)
+
+### API
+- `src/api/` — REST API endpoints:
+  - `sessions.rs` — session CRUD, thumbnails, shadow tokens
+  - `address_book.rs` — folder/entry management, connect
+  - `users.rs` — user listing, role management, session management
+  - `admin.rs` — system status, group mappings, token audit
+  - `reports.rs` — session analytics, CSV export
+- `src/handlers/` — Page handlers and new API endpoints:
+  - `auth.rs` — login, MFA, SAML ACS/metadata handlers
+  - `pages.rs` — connections, sessions, recordings page handlers
+  - `account.rs` — profile, tokens, TOTP page handlers
+  - `tunnels.rs` — jump host CRUD API
+  - `rbac.rs` — RBAC group/permission management API
+
+### Session management
+- `src/session/` — session state machine:
+  - `types.rs` — Session, SessionType, SessionStatus, activity tracking
+  - `manager.rs` — SessionManager: storage, idle/max reaper, concurrent limits
+  - `create.rs` — session creation, guacd handshake, protocol branching
+
+### Enterprise features
+- `src/audit.rs` — SHA-256 hash chain audit logging, tamper evidence
+- `src/rbac.rs` — RBAC: system permissions + connection-level object permissions, recursive group CTE
+- `src/db_migrate.rs` — Vault→DB migration tool (661 lines, BFS walk, encrypted credentials)
+
+### Protocol
 - `src/guacd.rs` — TCP connection to guacd, Guacamole protocol handshake
 - `src/protocol.rs` — Guacamole wire format parser/encoder
 - `src/websocket.rs` — WebSocket <-> guacd TCP bridge, recording tee
-- `src/config.rs` — TOML config loading with defaults
-- `src/auth.rs` — API key auth middleware (SHA-256, IP allowlists, expiry), role system
-- `src/oidc.rs` — OIDC authentication (login, callback, logout, group extraction)
-- `src/vault.rs` — Vault/OpenBao KV v2 client for connections (AppRole auth, token renewal)
-- `src/db.rs` — SQLite admin database (rusqlite, bundled)
-- `static/client.html` — Guacamole JS client with auto-scaling display
-- `static/connections.html` — Vault-backed connections UI (folder/entry management, connect)
-- `static/recordings.html` — recording playback with auto-scaling
-- `static/sessions.html` — session management dashboard
-- `dev.sh` — development script (build guacd, run, deps)
-- `install.sh` — bare-metal Debian 13 installer (systemd services)
-- `Dockerfile` — multi-stage build (guacd + rustguac + runtime)
+
+### Hypervisors
+- `src/pve.rs` — Proxmox VE API (SPICE, VNC, LXC, serial, xterm.js, VM lifecycle)
+- `src/vsphere.rs` — VMware vSphere REST API (VM inventory, OS detection, RDP/SSH routing)
+
+### UI
+- `templates/` — 19 HTML templates (minijinja + htmx + Tailwind CSS):
+  - `base.html`, `layouts/app.html` — base layout with sidebar
+  - `partials/sidebar.html`, `partials/header.html` — navigation components
+  - `pages/login.html` — auth form + SSO buttons
+  - `pages/connections.html` — 70/30 split folder tree + details
+  - `pages/sessions.html` — active sessions table with auto-refresh
+  - `pages/recordings.html` — recording playback
+  - `pages/client.html` — Guacamole client with auto-hide toolbar
+  - `pages/admin/` — users, auth providers, audit, settings, reports, tunnels
+  - `pages/account/` — profile, tokens, TOTP enrollment
+  - `pages/docs.html` — documentation viewer
+
+### Other
+- `src/browser.rs` — Xvnc + Chromium process lifecycle
+- `src/vdi/mod.rs` + `src/vdi/docker.rs` — Docker VDI driver
+- `src/vault.rs` — Vault/OpenBao KV v2 client
+- `src/drive.rs` — LUKS file transfer
+- `src/tunnel.rs` — SSH tunnel (russh)
+- `src/recording.rs` — recording rotation
+- `src/metrics.rs` — Prometheus metrics
+- `src/templates.rs` — minijinja template rendering
+- `dev.sh` — development script
+- `install.sh` — bare-metal Debian 13 installer
+- `Dockerfile` — multi-stage build
 
 ## Configuration
 
-TOML config file (`config.local.toml` for dev, `--config` flag for production). Key settings: `listen_addr`, `guacd_addr`, `recording_path`, `static_path`, `db_path`, `xvnc_path`, `chromium_path`, `display_range_start/end`.
+TOML config file. Key settings: `listen_addr`, `guacd_addr`, `db_url` (for MySQL/PostgreSQL), `recording_path`, `static_path`.
 
-### Vault / Connections
+### Database backends
 
-Optional `[vault]` section enables the Vault-backed connections. Connection entries (SSH/RDP/Web) are stored in Vault KV v2 — credentials never touch disk or the browser.
+Supports MySQL, PostgreSQL, and SQLite via SQLx. Set `db_url` in config:
+
+```toml
+db_url = "postgres://user:pass@localhost/rustguac"  # or mysql://, sqlite://
+```
+
+Without `db_url`, uses SQLite with the `db_path` setting (legacy mode).
+
+### Authentication
+
+Configurable auth provider chain via `[auth]` section:
+
+```toml
+[auth]
+methods = ["oidc", "ldap", "database"]  # priority order
+
+[auth.ldap]
+url = "ldaps://ldap.example.com:636"
+bind_dn = "cn=binduser,dc=example,dc=com"
+user_search_base = "ou=users,dc=example,dc=com"
+user_search_filter = "(uid={username})"
+
+[auth.radius]
+hostname = "10.0.0.1"
+auth_port = 1812
+
+[auth.saml]
+idp_metadata_url = "https://idp.example.com/metadata"
+entity_id = "rustguac"
+acs_url = "https://rustguac.example.com/auth/saml/acs"
+
+[auth.totp]
+issuer = "rustguac"
+enforcement = "AdminsOnly"  # Off, AdminsOnly, All
+```
+
+Available methods: `oidc`, `ldap`, `database`, `api_key`, `radius`, `saml`, `totp`
+
+### Vault / Connections (optional)
+
+Optional `[vault]` section for credential storage. Without Vault, use DB-only mode:
+
+```toml
+[storage]
+encryption_key = "aabbccdd..."  # 64-char hex, or RGUAC_STORAGE_KEY env var
+```
+
+Vault config (when using Vault):
 
 ```toml
 [vault]
 addr = "https://vault.example.com:8200"
-mount = "secret"           # KV v2 mount (default)
-base_path = "rustguac"     # base path under mount (default)
+mount = "secret"
+base_path = "rustguac"
 role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-# namespace = "my-ns"      # optional, for Vault Enterprise / OpenBao namespaces
-# instance_name = "prod-1" # optional, enables instance-scoped entries
 ```
-
-`VAULT_SECRET_ID` env var provides the AppRole secret ID.
-
-Vault KV v2 path structure:
-- `<base_path>/shared/<folder>/<entry>` — shared across all instances
-- `<base_path>/instance/<name>/<folder>/<entry>` — instance-specific
-- `<folder>/.config` — folder metadata: `{"allowed_groups":["group1"], "description":"..."}`
-- `<base_path>/users/<sanitized_email>` — per-user credential variables
-
-#### Multiple Vault backends (DR)
-
-Optional `[vault_shared]` / `[vault_local]` blocks (same keys as `[vault]`) give
-the `shared` / `instance` scopes their own Vault so one being down can't take the
-other with it. A bare `[vault]` is unchanged (shared+local both alias it). Secret
-IDs: `VAULT_SECRET_ID`, `VAULT_SHARED_SECRET_ID`, `VAULT_LOCAL_SECRET_ID`. Each
-backend connects/retries/renews independently; a down backend greys that scope in
-the UI. Per-credential scope: a credential variable can be stored shared or local
-(location = truth), toggled per-row in My Credentials (hidden with a single
-Vault); `user_credentials_default_scope` (default `local`) seeds new ones. Split
-an existing single-Vault deployment with `rustguac vault-migrate` (copy subtree +
-.config, then add the block + restart — routing is single-source, no read
-fallback). Implemented on branch `feature/multi-vault-dr` (see project memory).
 
 ### OIDC
 
-Optional `[oidc]` section enables OpenID Connect authentication. Key settings: `issuer_url`, `client_id`, `client_secret`, `redirect_uri`. `OIDC_CLIENT_SECRET` env var can override the config value. `groups_claim` (default: "groups") specifies the JWT claim for group memberships. `extra_scopes` requests additional scopes.
+```toml
+[oidc]
+issuer_url = "https://auth.example.com/realms/corp"
+client_id = "rustguac"
+redirect_uri = "https://rustguac.example.com/auth/callback"
+groups_claim = "groups"
+```
 
-### Roles
+### Proxmox VE
 
-4-tier role hierarchy: `admin` (4) > `poweruser` (3) > `operator` (2) > `viewer` (1).
-- **admin**: full access, connections folder/entry management
+```toml
+[proxmox]
+addr = "https://pve.example.com:8006"
+username = "root@pam"
+token_id = "rustguac"
+token_secret = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+```
+
+### VMware vSphere
+
+```toml
+[vsphere]
+enabled = true
+vcenter_addr = "vcenter.example.com"
+username = "administrator@vsphere.local"
+# password from env: VSPHERE_PASSWORD
+```
+
+## Roles
+
+4-tier hierarchy: `admin` (4) > `poweruser` (3) > `operator` (2) > `viewer` (1)
+
+- **admin**: full access, user/connection/permission management
 - **poweruser**: ad-hoc session creation + connections connect
 - **operator**: connections connect only (no ad-hoc sessions)
 - **viewer**: read-only
 
+### RBAC (Connection-level permissions)
+
+- System permissions: Administer, CreateSession, CreateConnection, Audit
+- Object permissions: Read, Connect, Update, Delete, Administer (per connection/group)
+- Recursive group inheritance via CTE
+
+## Session types
+
+- **SSH** — password, private key, ephemeral Ed25519 keypair
+- **RDP** — Kerberos/NTLM NLA, RemoteApp, GFX pipeline, H.264
+- **VNC** — password auth, multi-monitor
+- **SPICE** — TLS, CA verification, SPICE proxy
+- **Proxmox VE** — SPICE, VNC, LXC, serial, xterm.js, VM lifecycle
+- **VMware** — vSphere inventory, OS detection, RDP/SSH routing
+- **Web** — Xvnc + Chromium (optional, disabled by default)
+- **VDI** — Docker containers with xrdp (optional, disabled by default)
+
+## Enterprise features
+
+- **Password policies**: Argon2id (NIST 800-63B), 15-char minimum, breach screening (HIBP), history tracking
+- **Account lockout**: Progressive delay (30s → 5min → 30min) after 5 failed attempts
+- **Audit logging**: SHA-256 hash chain with tamper evidence, CLI verification, admin UI verification
+- **Session management**: Idle timeout, max duration, concurrent limits, activity tracking
+- **RBAC**: System + object permissions, recursive group inheritance
+- **TLS hot-reload**: File watcher (inotify/kqueue) + SIGHUP + admin UI upload
+- **Multi-DB**: MySQL, PostgreSQL, SQLite via SQLx enum dispatch
+
 ## Deployment
 
-- **Bare metal**: `sudo ./install.sh` on Debian 13. Installs to `/opt/rustguac`, creates `rustguac` system user with home dir, sets up systemd services.
-- **Docker**: `docker build -t rustguac .` — multi-stage, debian:trixie-slim runtime.
-- **Remote test machine**: See project memory for connection details. Binary at `/opt/rustguac/bin/rustguac`, config at `/opt/rustguac/config.toml`.
+- **Bare metal**: `sudo ./install.sh` on Debian 13
+- **Docker**: `docker build -t rustguac .`
+- **First run**: Setup wizard at `/setup` auto-detects environment
 
 ## Build notes
 
 - guacd is built from `../guacamole-server` (apache/guacamole-server)
-- Debian 13 ships freerdp3-dev, not freerdp2-dev. guacamole-server 1.6.1+ has FreeRDP 3 auto-detection. Building with `--with-rdp`.
-- **Patches required:** guacamole-server needs patches for FreeRDP 3.15+ (Debian 13). See `patches/README.md`. All build scripts apply these automatically.
-- Chromium on headless VMs needs: `--in-process-gpu`, `--use-gl=angle`, `--use-angle=swiftshader`, `--disable-gpu-*`, `--disable-dev-shm-usage`
-- The `rustguac` system user MUST have a real home directory (`/home/rustguac`) or Chromium's crashpad crashes with `trap int3`.
-- Each Chromium session gets an isolated `--user-data-dir` to avoid profile lock conflicts.
-
-## guacamole-server patches
-
-The `patches/` directory contains patches applied to guacamole-server before building. These fix:
-
-1. **Autoconf `-Werror` vs deprecated FreeRDP headers** — FreeRDP 3.15 deprecates `codecs_free()`, breaking `-Werror` compile tests and cascading into missing feature macros.
-2. **Deprecated function pointer API** — Replaces `->input->KeyboardEvent()` etc. with `freerdp_input_send_keyboard_event()` safe API.
-3. **NULL deref in display channel** — FreeRDP 3.x fires PubSub events before `guac_rdp_disp` is allocated.
-
-To add a new patch: edit `../guacamole-server`, export with `git diff > patches/NNN-description.patch`.
-
-## Session types
-
-- **SSH** — connects guacd directly to target SSH server
-- **RDP** — connects guacd directly to target RDP server (same pattern as SSH, no browser spawning)
-- **VNC** — connects guacd directly to target VNC server
-- **SPICE** — connects guacd directly to target SPICE server (for KVM/QEMU virtual machines)
-- **Proxmox** — connects guacd via Proxmox VE API to manage and interact with virtual machines
-- **Web** — spawns Xvnc + Chromium, guacd connects via VNC to local Xvnc display
-- **VDI** — spawns Docker container with xrdp, guacd connects via RDP to container port 3389
-
-### VDI (Docker containers)
-
-Ephemeral per-user Docker desktop containers. `VdiDriver` trait in `src/vdi/mod.rs` enables downstream forks (JumpboxVDI) to add alternative backends (Nomad, Proxmox).
-
-- Container naming: `rustguac-vdi-{username}` (deterministic, one per user)
-- Lifecycle: created on first connect, persists after disconnect for `idle_timeout_mins`, reused on reconnect, destroyed on desktop logout or idle timeout
-- Credentials: auto-generated per session (username from OIDC, random hex password), `chpasswd` updates on reuse
-- BYO image: any Docker image with xrdp on port 3389 accepting `VDI_USERNAME`/`VDI_PASSWORD` env vars
-- Test image: `contrib/vdi-test-image/` (Debian trixie + xrdp + xorgxrdp + xfce4)
-- Thumbnails: client captures display screenshot every 10s, shown in connections "Active Sessions"
-- Config: `[vdi]` section — `enabled`, `docker_socket`, `default_cpu_limit`, `default_memory_limit`, `ready_timeout_secs`, `idle_timeout_mins`, `allowed_images`, `home_base`
-- Requires: `rustguac` user in `docker` group for socket access
-
-## Ports
-
-- 8089: rustguac HTTP/WebSocket
-- 4822: guacd
-- 6000-6099: Xvnc displays (:100-:199, internal)
+- Debian 13 ships freerdp3-dev. guacamole-server 1.6.1+ has FreeRDP 3 auto-detection.
+- **Patches required:** See `patches/README.md` for FreeRDP 3.15+ fixes.
+- SQLx: `cargo sqlx prepare` for offline compile-time checking (per-backend)
 
 ## Testing
 
-- `tests/test_browser_session.sh` — spawns Xvnc + Chromium, screenshots with xwd/ImageMagick, asserts non-black pixels
+- `cargo test` — unit tests + integration tests (144+ tests)
+- `tests/auth_integration.rs` — auth flow integration tests
+- `tests/test_browser_session.sh` — browser session smoke test

@@ -1,0 +1,105 @@
+{% extends "layouts/app.html" %}
+
+{% block title %}{{ site_title }} — Reports{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-gray-100">Reports</h1>
+        <p class="text-sm text-gray-500 mt-1">Session statistics and usage analytics</p>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="grid grid-cols-4 gap-4 mb-6">
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <div class="text-sm text-gray-500 mb-1">Total Sessions</div>
+            <div id="stat-total-sessions" class="text-3xl font-bold text-gray-100">—</div>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <div class="text-sm text-gray-500 mb-1">Active Sessions</div>
+            <div id="stat-active-sessions" class="text-3xl font-bold text-emerald-400">—</div>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <div class="text-sm text-gray-500 mb-1">Total Users</div>
+            <div id="stat-total-users" class="text-3xl font-bold text-gray-100">—</div>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+            <div class="text-sm text-gray-500 mb-1">Uptime</div>
+            <div id="stat-uptime" class="text-3xl font-bold text-gray-100">—</div>
+        </div>
+    </div>
+
+    <!-- Charts Placeholder -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
+        <h2 class="text-lg font-semibold text-gray-100 mb-4">Session Activity</h2>
+        <div id="chart-area" class="h-64 flex items-center justify-center border border-gray-800 rounded-lg bg-gray-800/30">
+            <p class="text-gray-600 text-sm">Charts coming soon</p>
+        </div>
+    </div>
+
+    <!-- Top Connections & Top Users -->
+    <div class="grid grid-cols-2 gap-6">
+        <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+            <div class="px-4 py-3 border-b border-gray-800">
+                <h2 class="text-sm font-semibold text-gray-300">Top Connections</h2>
+            </div>
+            <table class="w-full">
+                <thead>
+                    <tr class="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
+                        <th class="px-4 py-2">Connection</th>
+                        <th class="px-4 py-2 text-right">Sessions</th>
+                    </tr>
+                </thead>
+                <tbody id="top-connections" class="divide-y divide-gray-800"
+                      hx-get="/api/reports/top-connections"
+                      hx-trigger="load"
+                      hx-swap="innerHTML">
+                    <tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+            <div class="px-4 py-3 border-b border-gray-800">
+                <h2 class="text-sm font-semibold text-gray-300">Top Users</h2>
+            </div>
+            <table class="w-full">
+                <thead>
+                    <tr class="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
+                        <th class="px-4 py-2">User</th>
+                        <th class="px-4 py-2 text-right">Sessions</th>
+                    </tr>
+                </thead>
+                <tbody id="top-users" class="divide-y divide-gray-800"
+                      hx-get="/api/reports/top-users"
+                      hx-trigger="load"
+                      hx-swap="innerHTML">
+                    <tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function renderTopConnectionRow(conn) {
+    return '<tr class="hover:bg-gray-800/50">' +
+        '<td class="px-4 py-2 text-sm text-gray-200">' + conn.connection_name + '</td>' +
+        '<td class="px-4 py-2 text-sm text-gray-400 text-right">' + conn.count + '</td></tr>';
+}
+
+function renderTopUserRow(user) {
+    return '<tr class="hover:bg-gray-800/50">' +
+        '<td class="px-4 py-2 text-sm text-gray-200">' + user.email + '</td>' +
+        '<td class="px-4 py-2 text-sm text-gray-400 text-right">' + user.count + '</td></tr>';
+}
+
+// Load summary stats
+fetch('/api/reports/summary').then(function(r) { return r.json(); }).then(function(data) {
+    document.getElementById('stat-total-sessions').textContent = data.total_sessions || '0';
+    document.getElementById('stat-active-sessions').textContent = data.active_sessions || '0';
+    document.getElementById('stat-total-users').textContent = data.total_users || '0';
+    document.getElementById('stat-uptime').textContent = data.uptime || '—';
+});
+</script>
+{% endblock %}

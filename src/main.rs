@@ -1,34 +1,50 @@
 //! rustguac — lightweight Guacamole proxy. CLI entry point and server setup.
 
 mod api;
+mod audit;
 mod auth;
+mod auth_chain;
+mod auth_provider;
+mod auth_providers;
 mod browser;
 mod config;
+mod crypto;
 mod db;
+mod db_migrate;
+mod db_pool;
 mod drive;
 mod error;
 mod guacd;
+mod handlers;
 mod metrics;
 mod import;
 mod migrate;
 mod oidc;
+mod password;
 mod protocol;
 mod pve;
+mod rbac;
 mod recording;
 mod session;
+mod templates;
 #[cfg(test)]
 mod testing;
+mod totp;
 mod tunnel;
 mod vault;
 mod vdi;
+mod vsphere;
 mod websocket;
 
 use crate::api::{
     AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, ThemeData,
     VaultBackends, VaultCell, VaultConfigured, VaultState,
 };
+use crate::auth_chain::AuthChain;
+use crate::auth_provider::AuthProvider;
 use crate::config::Config;
 use crate::db::Db;
+use crate::db_pool::DbPool;
 use crate::session::SessionManager;
 use axum::extract::{DefaultBodyLimit, Request};
 use axum::response::Html;
@@ -59,6 +75,22 @@ struct Cli {
 enum Command {
     /// Run the server (default)
     Serve,
+
+    /// Create a new user with password authentication
+    CreateUser {
+        /// Email address (used as username)
+        #[arg(long)]
+        email: String,
+        /// Display name
+        #[arg(long)]
+        name: String,
+        /// Password
+        #[arg(long)]
+        password: String,
+        /// Role (admin, poweruser, operator, viewer)
+        #[arg(long, default_value = "viewer")]
+        role: String,
+    },
 
     /// Create a new admin with an API key
     AddAdmin {
@@ -159,6 +191,25 @@ enum Command {
         dry_run: bool,
     },
 
+    /// Migrate address-book entries from Vault into the SQLite DB
+    /// (connection_groups + connections tables). Credential fields are
+    /// encrypted with AES-256-GCM. Run with --dry-run first.
+    DbMigrateFromVault {
+        /// Scope to migrate: "shared" or "instance"
+        #[arg(long)]
+        scope: String,
+        /// Overwrite entries that already exist in the DB
+        /// (default: skip existing).
+        #[arg(long)]
+        overwrite: bool,
+        /// Preview without writing to the DB
+        #[arg(long)]
+        dry_run: bool,
+        /// Delete entries from Vault after successful migration
+        #[arg(long)]
+        vault_delete: bool,
+    },
+
     /// Copy an address-book scope subtree between configured Vault backends
     /// (for the multi-Vault DR split). Copies entries and every folder's
     /// `.config`; run with --dry-run first.
@@ -205,6 +256,9 @@ async fn main() {
 
     match cli.command {
         None | Some(Command::Serve) => run_server(config, database).await,
+        Some(Command::CreateUser { email, name, password, role }) => {
+            cmd_create_user(&database, &email, &name, &password, &role);
+        }
         Some(Command::AddAdmin {
             name,
             allowed_ips,
@@ -238,6 +292,21 @@ async fn main() {
             import::cmd_import_guacamole(&config, &file, &folder, &scope, &allowed_groups, dry_run)
                 .await;
         }
+        Some(Command::DbMigrateFromVault {
+            scope,
+            overwrite,
+            dry_run,
+            vault_delete,
+        }) => {
+            db_migrate::cmd_db_migrate_from_vault(
+                &config,
+                &scope,
+                overwrite,
+                dry_run,
+                vault_delete,
+            )
+            .await;
+        }
         Some(Command::VaultMigrate {
             scope,
             from,
@@ -248,6 +317,38 @@ async fn main() {
         }) => {
             migrate::cmd_vault_migrate(&config, &scope, &from, &to, users, overwrite, dry_run)
                 .await;
+        }
+    }
+}
+
+fn cmd_create_user(database: &Db, email: &str, name: &str, password: &str, role: &str) {
+    let hash = match crate::password::hash_password(password) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("Error hashing password: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let conn = database.lock().unwrap();
+
+    // Ensure password_hash and auth_source columns exist (migrate old schema)
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN auth_source TEXT DEFAULT 'database'", []);
+    let _ = conn.execute("ALTER TABLE users ADD COLUMN oidc_groups TEXT DEFAULT ''", []);
+
+    match conn.execute(
+        "INSERT INTO users (email, name, auth_source, password_hash, role, disabled, created_at)
+         VALUES (?1, ?2, 'database', ?3, ?4, 0, ?5)",
+        rusqlite::params![email, name, hash, role, now],
+    ) {
+        Ok(_) => {
+            println!("User '{}' created (email: {}, role: {})", name, email, role);
+            println!("Password: {}", password);
+        }
+        Err(e) => {
+            eprintln!("Error creating user: {}", e);
+            std::process::exit(1);
         }
     }
 }
@@ -698,6 +799,70 @@ async fn run_server(config: Config, database: Db) {
         local: local_cell,
     });
 
+    // Build auth chain from [auth] config.
+    let auth_chain = match config.auth.as_ref() {
+        Some(ref auth_cfg) => {
+            let mut providers: std::collections::HashMap<String, Box<dyn AuthProvider>> =
+                std::collections::HashMap::new();
+
+            // Database provider is always available as a fallback
+            providers.insert(
+                "database".into(),
+                Box::new(crate::auth_providers::database::DatabaseProvider::new(
+                    database.clone(),
+                )),
+            );
+
+            if let Some(ref ldap_cfg) = auth_cfg.ldap {
+                providers.insert(
+                    "ldap".into(),
+                    Box::new(crate::auth_providers::ldap::LdapProvider::new(
+                        ldap_cfg.clone(),
+                    )),
+                );
+            }
+            if let Some(ref radius_cfg) = auth_cfg.radius {
+                providers.insert(
+                    "radius".into(),
+                    Box::new(crate::auth_providers::radius::RadiusProvider::new(
+                        radius_cfg.clone(),
+                    )),
+                );
+            }
+            if let Some(ref saml_cfg) = auth_cfg.saml {
+                providers.insert(
+                    "saml".into(),
+                    Box::new(crate::auth_providers::saml::SamlProvider::new(
+                        saml_cfg.clone(),
+                    )),
+                );
+            }
+
+            match AuthChain::from_config(&auth_cfg.methods, providers) {
+                Ok(chain) => {
+                    tracing::info!(
+                        methods = ?auth_cfg.methods,
+                        "Auth chain initialized"
+                    );
+                    chain
+                }
+                Err(e) => {
+                    tracing::error!("Failed to build auth chain: {} — falling back to database-only", e);
+                    AuthChain::new(vec![Box::new(
+                        crate::auth_providers::database::DatabaseProvider::new(database.clone()),
+                    )])
+                }
+            }
+        }
+        None => {
+            // No [auth] config — default chain is database-only
+            AuthChain::new(vec![Box::new(
+                crate::auth_providers::database::DatabaseProvider::new(database.clone()),
+            )])
+        }
+    };
+    let auth_chain = Arc::new(auth_chain);
+
     let oidc_enabled = OidcEnabled(oidc_state.is_some());
     let vault_configured = VaultConfigured(config.vault.is_some());
     let credential_default_scope =
@@ -732,11 +897,6 @@ async fn run_server(config: Config, database: Db) {
         let logo = config.theme.as_ref().and_then(|t| t.logo_url.as_deref());
         let title = &config.site_title;
         let mut pages = std::collections::HashMap::new();
-        // Embedded client.html
-        pages.insert(
-            "client.html".to_string(),
-            rewrite_branding(include_str!("../static/client.html"), title, logo),
-        );
         // Disk-served HTML pages
         for name in &[
             "index.html",
@@ -801,6 +961,39 @@ async fn run_server(config: Config, database: Db) {
     // Build TLS connector for guacd if configured
     let guacd_tls = build_guacd_tls(&config);
     let rate_limit_enabled = config.rate_limit;
+
+    // Initialise SQLx pool if db_url is configured
+    let db_pool = if let Some(ref url) = config.db_url {
+        match DbPool::connect(url).await {
+            Ok(pool) => {
+                tracing::info!("SQLx pool connected: {}", pool.kind().map(|k| k.to_string()).unwrap_or_else(|| "unknown".into()));
+                if let Err(e) = pool.run_migrations().await {
+                    tracing::error!("SQLx migrations failed: {}", e);
+                }
+                pool
+            }
+            Err(e) => {
+                tracing::error!("Failed to connect SQLx pool: {}", e);
+                DbPool::None
+            }
+        }
+    } else {
+        DbPool::None
+    };
+
+    // Extract SAML provider and TOTP enforcement before config is moved into SessionManager
+    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> =
+        config.auth.as_ref().and_then(|a| {
+            a.saml.as_ref().map(|cfg| {
+                Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone()))
+            })
+        });
+    let totp_enforcement = config
+        .auth
+        .as_ref()
+        .and_then(|a| a.totp.as_ref())
+        .map(|t| t.enforcement)
+        .unwrap_or(crate::totp::TotpEnforcement::Off);
 
     // Create session manager
     let manager: AppState = Arc::new(SessionManager::new_with_db(
@@ -1078,6 +1271,52 @@ async fn run_server(config: Config, database: Db) {
             post(api::ab_connect_entry),
         )
         .route("/api/ssh/probe-host-key", post(api::ssh_probe_host_key))
+        // Jump host / tunnel management
+        .route("/api/admin/jump-hosts", get(handlers::tunnels::list_jump_hosts))
+        .route("/api/admin/jump-hosts", post(handlers::tunnels::create_jump_host))
+        .route(
+            "/api/admin/jump-hosts/{id}",
+            put(handlers::tunnels::update_jump_host),
+        )
+        .route(
+            "/api/admin/jump-hosts/{id}",
+            delete(handlers::tunnels::delete_jump_host),
+        )
+        .route(
+            "/api/admin/jump-hosts/{id}/test",
+            post(handlers::tunnels::test_jump_host),
+        )
+        .route(
+            "/api/admin/tunnels/active",
+            get(handlers::tunnels::list_active_tunnels),
+        )
+        // RBAC management endpoints
+        .route("/api/admin/rbac/groups", get(handlers::rbac::list_rbac_groups))
+        .route("/api/admin/rbac/groups", post(handlers::rbac::create_rbac_group))
+        .route(
+            "/api/admin/rbac/groups/{id}",
+            delete(handlers::rbac::delete_rbac_group),
+        )
+        .route(
+            "/api/admin/rbac/groups/{id}/members",
+            post(handlers::rbac::add_group_member),
+        )
+        .route(
+            "/api/admin/rbac/groups/{id}/members/{user_id}",
+            delete(handlers::rbac::remove_group_member),
+        )
+        .route(
+            "/api/admin/rbac/connections/{id}/permissions",
+            get(handlers::rbac::list_connection_permissions),
+        )
+        .route(
+            "/api/admin/rbac/connections/{id}/permissions",
+            post(handlers::rbac::grant_connection_permission),
+        )
+        .route(
+            "/api/admin/rbac/connections/{id}/permissions",
+            delete(handlers::rbac::revoke_connection_permission),
+        )
         .merge(session_create_route)
         .with_state(manager.clone());
     if rate_limit_enabled {
@@ -1139,25 +1378,79 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/docs", get(api::get_docs))
         .route("/api/sessions/{id}/banner", get(api::get_session_banner))
         .route("/client/{session_id}", get(serve_client_page))
-        .with_state(manager);
+        .with_state(manager.clone());
+
+    // Setup wizard routes (first-run only)
+    let setup_routes = Router::new()
+        .route("/setup", get(handlers::setup::setup_page))
+        .route("/setup", post(handlers::setup::setup_submit))
+        .layer(Extension(database.clone()))
+        .layer(Extension(site_title.clone()));
+
+    // Auth page routes (login, MFA)
+    let auth_pages = Router::new()
+        .route("/", get(handlers::auth::login_page))
+        .route("/auth/login", post(handlers::auth::login_submit))
+        .route("/auth/mfa", get(handlers::auth::mfa_page))
+        .route("/auth/mfa", post(handlers::auth::mfa_submit))
+        .with_state(manager.clone())
+        .layer(Extension(database.clone()))
+        .layer(Extension(oidc_enabled.clone()))
+        .layer(Extension(auth_chain.clone()))
+        .layer(Extension(trusted_proxies.clone()));
+
+    // SAML routes (if configured)
+    let mut saml_routes = Router::new();
+    if let Some(ref sp) = saml_provider {
+        let sp_acs = sp.clone();
+        let sp_meta = sp.clone();
+        saml_routes = Router::new()
+            .route(
+                "/auth/saml/acs",
+                post(handlers::auth::saml_acs),
+            )
+            .route(
+                "/auth/saml/metadata",
+                get(handlers::auth::saml_metadata),
+            )
+            .layer(Extension(sp_acs))
+            .layer(Extension(sp_meta))
+            .layer(Extension(database.clone()))
+            .layer(Extension(trusted_proxies.clone()));
+    }
 
     // Branded HTML page routes (served from memory with site_title/logo baked in)
+    // Connections, sessions, and admin pages use templates for dynamic rendering
     let html_routes = Router::new()
-        .route("/", get(serve_branded_page))
         .route("/index.html", get(serve_branded_page))
-        .route("/connections.html", get(serve_branded_page))
+        .route("/connections.html", get(handlers::pages::connections_page))
         // Legacy path — the page was renamed from Address Book → Connections.
         // Permanent redirect so bookmarks keep working.
         .route(
             "/addressbook.html",
             get(|| async { axum::response::Redirect::permanent("/connections.html") }),
         )
-        .route("/sessions.html", get(serve_branded_page))
-        .route("/recordings.html", get(serve_branded_page))
+        .route("/sessions.html", get(handlers::pages::sessions_page))
+        .route("/recordings.html", get(handlers::pages::recordings_page))
         .route("/reports.html", get(serve_branded_page))
         .route("/admin.html", get(serve_branded_page))
         .route("/tokens.html", get(serve_branded_page))
-        .route("/docs.html", get(serve_branded_page));
+        .route("/docs.html", get(serve_branded_page))
+        // Account pages (templates)
+        .route("/account/profile.html", get(handlers::account::profile_page))
+        .route("/account/tokens.html", get(handlers::account::tokens_page))
+        .route("/account/totp.html", get(handlers::account::totp_page))
+        .route("/docs", get(handlers::account::docs_page))
+        // Admin sub-pages (templates)
+        .route("/admin/users.html", get(handlers::pages::admin_users_page))
+        .route("/admin/auth.html", get(handlers::pages::admin_auth_page))
+        .route("/admin/audit.html", get(handlers::pages::admin_audit_page))
+        .route("/admin/settings.html", get(handlers::pages::admin_settings_page))
+        .route("/admin/reports.html", get(handlers::pages::admin_reports_page))
+        .route("/admin/tunnels.html", get(handlers::pages::admin_tunnels_page))
+        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(ws_ticket_store.clone()))
+        .layer(Extension(database.clone()));
 
     // Build full router (all Router<()> at this point)
     let mut app: Router<()> = Router::new()
@@ -1167,6 +1460,9 @@ async fn run_server(config: Config, database: Db) {
         .merge(metrics_route)
         .merge(ws_route)
         .merge(connect_route)
+        .merge(setup_routes)
+        .merge(auth_pages)
+        .merge(saml_routes)
         .merge(unauth_routes)
         .merge(html_routes);
 
@@ -1178,11 +1474,13 @@ async fn run_server(config: Config, database: Db) {
             .key_extractor(SmartIpKeyExtractor)
             .finish()
             .expect("Failed to build auth rate limit config");
+
         let oidc_routes = Router::new()
             .route("/auth/login", get(oidc::login))
             .route("/auth/callback", get(oidc::callback))
             .with_state(oidc_st.clone())
             .layer(Extension(database.clone()))
+            .layer(Extension(totp_enforcement))
             .layer(GovernorLayer::new(auth_rate_conf));
 
         let logout_route = Router::new()
@@ -1217,6 +1515,7 @@ async fn run_server(config: Config, database: Db) {
         .layer(Extension(theme_data))
         .layer(Extension(trusted_proxies))
         .layer(Extension(branded_pages))
+        .layer(Extension(db_pool))
         .fallback_service(ServeDir::new(&static_path));
 
     let scheme = if server_tls.is_some() {
@@ -1345,17 +1644,16 @@ async fn serve_branded_page(
     }
 }
 
-/// Serve the client HTML page for SSH sessions.
-/// The session_id is extracted by the JS on the page, not by this handler.
+/// Serve the client HTML page for remote desktop sessions.
+/// Renders the new toolbar-based client template.
 async fn serve_client_page(
-    Extension(pages): Extension<Arc<std::collections::HashMap<String, String>>>,
+    Extension(site_title): Extension<SiteTitle>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    if let Some(html) = pages.get("client.html") {
-        Html(html.clone()).into_response()
-    } else {
-        Html(include_str!("../static/client.html")).into_response()
-    }
+    let tmpl = templates::ClientTemplate {
+        site_title: site_title.0.clone(),
+    };
+    tmpl.into_response()
 }
 
 /// HTML-escape a string to prevent XSS when injecting config values into HTML.

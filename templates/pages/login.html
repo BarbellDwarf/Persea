@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Sign In — rustguac{% endblock %}
+
+{% block body %}
+<div class="login-wrapper">
+    <div class="login-card">
+
+        <!-- Logo -->
+        <div class="login-logo">
+            {% if logo_url %}
+            <img src="{{ logo_url }}" alt="rustguac" style="height:40px">
+            {% else %}
+            <div class="login-logo-icon">rg</div>
+            {% endif %}
+        </div>
+
+        <h1 class="login-title">rustguac</h1>
+        <p class="login-subtitle">Sign in to your account</p>
+
+        <!-- Error -->
+        {% if error %}
+        <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+
+        <!-- SSO Buttons -->
+        {% if oidc_enabled %}
+        <a href="/auth/login" class="btn btn-secondary mb-4" style="gap:8px">
+            <svg class="sso-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+            </svg>
+            {{ oidc_button_text }}
+        </a>
+        {% endif %}
+
+        {% if saml_enabled %}
+        <a href="/auth/saml/acs" class="btn btn-secondary mb-4" style="gap:8px">
+            <svg class="sso-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+            </svg>
+            {{ saml_button_text }}
+        </a>
+        {% endif %}
+
+        <!-- Divider -->
+        {% if oidc_enabled or saml_enabled %}
+        <div class="divider">
+            <span class="divider-text">or sign in with email</span>
+        </div>
+        {% endif %}
+
+        <!-- Form -->
+        <form method="POST" action="/auth/login">
+            <div class="form-group">
+                <label class="form-label" for="username">Email</label>
+                <input type="text" id="username" name="username" autocomplete="username" required
+                       class="form-input" placeholder="you@example.com">
+            </div>
+            <div class="form-group">
+                <label class="form-label" for="password">Password</label>
+                <input type="password" id="password" name="password" autocomplete="current-password" required
+                       class="form-input" placeholder="Password">
+            </div>
+            <button type="submit" class="btn btn-primary mt-4">Sign In</button>
+        </form>
+
+    </div>
+</div>
+{% endblock %}

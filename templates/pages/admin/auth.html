@@ -1,0 +1,269 @@
+{% extends "layouts/app.html" %}
+
+{% block title %}{{ site_title }} — Auth Providers{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-100">Authentication Providers</h1>
+            <p class="text-sm text-gray-500 mt-1">Configure and manage authentication backends</p>
+        </div>
+        <button onclick="document.getElementById('add-provider-modal').classList.remove('hidden')"
+                class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+            + Add Provider
+        </button>
+    </div>
+
+    <!-- Providers Table -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
+                    <th class="px-4 py-3 w-8"></th>
+                    <th class="px-4 py-3">Provider Name</th>
+                    <th class="px-4 py-3">Type</th>
+                    <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3">Priority</th>
+                    <th class="px-4 py-3 text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="provider-table-body" class="divide-y divide-gray-800"
+                  hx-get="/api/auth/providers"
+                  hx-trigger="load"
+                  hx-swap="innerHTML">
+                <tr><td colspan="6" class="px-4 py-8 text-center text-gray-500 text-sm">Loading providers...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Add Provider Modal -->
+<div id="add-provider-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-md">
+        <h2 class="text-lg font-bold text-gray-100 mb-4">Add Auth Provider</h2>
+        <form hx-post="/api/auth/providers"
+              hx-target="#provider-table-body"
+              hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('add-provider-modal').classList.add('hidden')">
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1">Provider Name</label>
+                    <input type="text" name="name" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1">Type</label>
+                    <select name="type" id="new-provider-type" onchange="showProviderFields(this.value)"
+                            class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                        <option value="ldap">LDAP / Active Directory</option>
+                        <option value="saml">SAML 2.0</option>
+                        <option value="radius">RADIUS</option>
+                        <option value="database">Database</option>
+                        <option value="totp">TOTP (MFA)</option>
+                    </select>
+                </div>
+
+                <!-- LDAP Fields -->
+                <div id="ldap-fields" class="space-y-4">
+                    <div><label class="block text-sm text-gray-300 mb-1">LDAP Host</label>
+                        <input type="text" name="ldap_host" placeholder="ldap.example.com" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">LDAP Port</label>
+                        <input type="number" name="ldap_port" value="389" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">Bind DN</label>
+                        <input type="text" name="ldap_bind_dn" placeholder="cn=admin,dc=example,dc=com" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">Bind Password</label>
+                        <input type="password" name="ldap_bind_password" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">Search Base DN</label>
+                        <input type="text" name="ldap_search_base" placeholder="ou=users,dc=example,dc=com" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">Search Filter</label>
+                        <input type="text" name="ldap_search_filter" placeholder="(uid={0})" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div class="flex items-center gap-4">
+                        <label class="flex items-center gap-2 text-sm text-gray-300">
+                            <input type="checkbox" name="ldap_start_tls" class="rounded bg-gray-800 border-gray-700 text-emerald-500"> StartTLS
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-gray-300">
+                            <input type="checkbox" name="ldap_tls_skip_verify" class="rounded bg-gray-800 border-gray-700 text-emerald-500"> Skip TLS Verify
+                        </label>
+                    </div>
+                </div>
+
+                <!-- SAML Fields -->
+                <div id="saml-fields" class="hidden space-y-4">
+                    <div><label class="block text-sm text-gray-300 mb-1">IdP Metadata URL</label>
+                        <input type="url" name="saml_metadata_url" placeholder="https://idp.example.com/metadata" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">Entity ID</label>
+                        <input type="text" name="saml_entity_id" placeholder="https://rustguac.example.com/saml" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">ACS URL</label>
+                        <input type="url" name="saml_acs_url" placeholder="https://rustguac.example.com/auth/saml/acs" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">SLO URL</label>
+                        <input type="url" name="saml_slo_url" placeholder="https://rustguac.example.com/auth/saml/slo" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                </div>
+
+                <!-- RADIUS Fields -->
+                <div id="radius-fields" class="hidden space-y-4">
+                    <div><label class="block text-sm text-gray-300 mb-1">RADIUS Host</label>
+                        <input type="text" name="radius_host" placeholder="radius.example.com" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">RADIUS Port</label>
+                        <input type="number" name="radius_port" value="1812" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">Shared Secret</label>
+                        <input type="password" name="radius_secret" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">Timeout (seconds)</label>
+                        <input type="number" name="radius_timeout" value="10" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                </div>
+
+                <!-- Database Fields (minimal) -->
+                <div id="database-fields" class="hidden">
+                    <p class="text-sm text-gray-500">Database authentication uses the built-in users table. No additional configuration required.</p>
+                </div>
+
+                <!-- TOTP Fields -->
+                <div id="totp-fields" class="hidden space-y-4">
+                    <div><label class="block text-sm text-gray-300 mb-1">Issuer</label>
+                        <input type="text" name="totp_issuer" placeholder="rustguac" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="block text-sm text-gray-300 mb-1">Digits</label>
+                        <select name="totp_digits" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                            <option value="6" selected>6</option>
+                            <option value="8">8</option>
+                        </select>
+                    </div>
+                    <div><label class="block text-sm text-gray-300 mb-1">Period (seconds)</label>
+                        <input type="number" name="totp_period" value="30" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div>
+                        <label class="block text-sm text-gray-300 mb-1">Enforcement</label>
+                        <select name="totp_enforcement" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                            <option value="optional">Optional</option>
+                            <option value="required">Required</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button type="button" onclick="document.getElementById('add-provider-modal').classList.add('hidden')"
+                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Cancel</button>
+                <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Provider Config Modal -->
+<div id="provider-config-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-lg">
+        <h2 class="text-lg font-bold text-gray-100 mb-4">Configure Provider</h2>
+        <div id="provider-config-body"></div>
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" onclick="document.getElementById('provider-config-modal').classList.add('hidden')"
+                    class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Close</button>
+            <button onclick="testProvider()"
+                    class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium">Test Connection</button>
+            <button onclick="saveProviderConfig()"
+                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Save</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function showProviderFields(type) {
+    ['ldap', 'saml', 'radius', 'database', 'totp'].forEach(function(t) {
+        var el = document.getElementById(t + '-fields');
+        if (el) el.classList.toggle('hidden', t !== type);
+    });
+}
+
+function providerTypeBadge(type) {
+    var colors = {
+        oidc: 'bg-blue-900/50 text-blue-300 border-blue-800',
+        ldap: 'bg-purple-900/50 text-purple-300 border-purple-800',
+        saml: 'bg-cyan-900/50 text-cyan-300 border-cyan-800',
+        radius: 'bg-orange-900/50 text-orange-300 border-orange-800',
+        database: 'bg-gray-800 text-gray-400 border-gray-700',
+        totp: 'bg-teal-900/50 text-teal-300 border-teal-800'
+    };
+    return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[type] || colors.database) + '">' + type.toUpperCase() + '</span>';
+}
+
+function renderProviderRow(provider) {
+    var statusToggle = provider.enabled
+        ? '<button onclick="toggleProvider(\'' + provider.id + '\', false)" class="text-emerald-400 hover:text-red-400">Enabled</button>'
+        : '<button onclick="toggleProvider(\'' + provider.id + '\', true)" class="text-gray-500 hover:text-emerald-400">Disabled</button>';
+
+    return '<tr class="hover:bg-gray-800/50">' +
+        '<td class="px-4 py-3 text-gray-600 cursor-grab">⠿</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-200">' + provider.name + '</td>' +
+        '<td class="px-4 py-3">' + providerTypeBadge(provider.type) + '</td>' +
+        '<td class="px-4 py-3 text-sm">' + statusToggle + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-500">' + provider.priority + '</td>' +
+        '<td class="px-4 py-3 text-right text-sm">' +
+            '<button onclick="moveProvider(\'' + provider.id + '\', -1)" class="text-gray-400 hover:text-gray-200 mr-2" title="Move up">↑</button>' +
+            '<button onclick="moveProvider(\'' + provider.id + '\', 1)" class="text-gray-400 hover:text-gray-200 mr-2" title="Move down">↓</button>' +
+            '<button onclick="configureProvider(\'' + provider.id + '\')" class="text-gray-400 hover:text-emerald-400 mr-2">Configure</button>' +
+            '<button onclick="testProviderConnection(\'' + provider.id + '\')" class="text-gray-400 hover:text-blue-400 mr-2">Test</button>' +
+            '<button onclick="deleteProvider(\'' + provider.id + '\')" class="text-gray-400 hover:text-red-400">Delete</button>' +
+        '</td></tr>';
+}
+
+function toggleProvider(id, enable) {
+    fetch('/api/auth/providers/' + id + (enable ? '/enable' : '/disable'), { method: 'POST' })
+        .then(function() { htmx.trigger('#provider-table-body', 'load'); });
+}
+
+function moveProvider(id, direction) {
+    fetch('/api/auth/providers/' + id + '/move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction: direction })
+    }).then(function() { htmx.trigger('#provider-table-body', 'load'); });
+}
+
+function configureProvider(id) {
+    document.getElementById('provider-config-body').innerHTML = '<p class="text-sm text-gray-500">Loading configuration...</p>';
+    document.getElementById('provider-config-modal').classList.remove('hidden');
+    fetch('/api/auth/providers/' + id + '/config')
+        .then(function(r) { return r.json(); })
+        .then(function(cfg) {
+            document.getElementById('provider-config-body').innerHTML = buildConfigForm(cfg);
+        });
+}
+
+function buildConfigForm(config) {
+    var html = '<div class="space-y-4">';
+    for (var key in config) {
+        if (!config.hasOwnProperty(key)) continue;
+        var val = config[key];
+        html += '<div><label class="block text-sm text-gray-300 mb-1">' + key.replace(/_/g, ' ') + '</label>';
+        if (typeof val === 'boolean') {
+            html += '<input type="checkbox" name="' + key + '" ' + (val ? 'checked' : '') + ' class="rounded bg-gray-800 border-gray-700 text-emerald-500">';
+        } else if (typeof val === 'number') {
+            html += '<input type="number" name="' + key + '" value="' + val + '" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">';
+        } else {
+            html += '<input type="text" name="' + key + '" value="' + (val || '') + '" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">';
+        }
+        html += '</div>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function testProvider() {
+    alert('Connection test: not yet implemented');
+}
+
+function saveProviderConfig() {
+    alert('Config save: not yet implemented');
+}
+
+function testProviderConnection(id) {
+    fetch('/api/auth/providers/' + id + '/test', { method: 'POST' })
+        .then(function(r) { return r.json(); })
+        .then(function(r) {
+            alert(r.ok ? 'Connection successful' : 'Connection failed: ' + (r.error || 'unknown error'));
+        });
+}
+
+function deleteProvider(id) {
+    if (!confirm('Delete this auth provider?')) return;
+    fetch('/api/auth/providers/' + id, { method: 'DELETE' })
+        .then(function() { htmx.trigger('#provider-table-body', 'load'); });
+}
+</script>
+{% endblock %}

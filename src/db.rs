@@ -1,6 +1,16 @@
 //! SQLite database layer for admin/API key management.
 
-use crate::auth::role_level;
+/// Map role names to numeric levels for comparison (duplicated from auth
+/// module to avoid circular dependency in lib crate).
+fn role_level(role: &str) -> u8 {
+    match role {
+        "admin" => 4,
+        "poweruser" => 3,
+        "operator" => 2,
+        "viewer" => 1,
+        _ => 0,
+    }
+}
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rand::RngExt;
 use rusqlite::{params, Connection};
@@ -256,7 +266,52 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             created_at  TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_ab_audit_created ON addressbook_audit_log(created_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_ab_audit_user ON addressbook_audit_log(user_email);",
+        CREATE INDEX IF NOT EXISTS idx_ab_audit_user ON addressbook_audit_log(user_email);
+
+        CREATE TABLE IF NOT EXISTS audit_events (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type      TEXT NOT NULL,
+            timestamp       TEXT NOT NULL,
+            user_id         TEXT,
+            source_ip       TEXT,
+            outcome         TEXT NOT NULL,
+            details         TEXT,
+            session_id      TEXT,
+            prev_hash       TEXT NOT NULL,
+            event_hash      TEXT NOT NULL,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_audit_user ON audit_events(user_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_events(event_type);
+
+        CREATE TABLE IF NOT EXISTS audit_meta (
+            key     TEXT PRIMARY KEY,
+            value   TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS jump_hosts (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL UNIQUE,
+            hostname    TEXT NOT NULL,
+            port        INTEGER NOT NULL DEFAULT 22,
+            username    TEXT NOT NULL,
+            auth_method TEXT NOT NULL DEFAULT 'password',
+            key_path    TEXT,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at  TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS auth_pending_mfa (
+            token_hash    TEXT PRIMARY KEY,
+            user_id       INTEGER NOT NULL REFERENCES users(id),
+            user_email    TEXT NOT NULL,
+            user_name     TEXT NOT NULL DEFAULT '',
+            user_role     TEXT NOT NULL DEFAULT 'viewer',
+            oidc_subject  TEXT,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            expires_at    TEXT NOT NULL
+        );",
     )?;
 
     // Migration: add oidc_groups column if it doesn't exist
@@ -283,7 +338,25 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         )?;
     }
 
-    Ok(Arc::new(Mutex::new(conn)))
+    // Migration: TOTP secrets table
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS totp_secrets (
+            user_id       INTEGER PRIMARY KEY REFERENCES users(id),
+            secret_b32    TEXT NOT NULL,
+            algorithm     TEXT NOT NULL DEFAULT 'SHA1',
+            digits        INTEGER NOT NULL DEFAULT 6,
+            period        INTEGER NOT NULL DEFAULT 30,
+            enabled       INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    )?;
+
+    let db = Arc::new(Mutex::new(conn));
+
+    // Migration: RBAC tables (connection groups, user-group membership, permissions)
+    crate::rbac::migrate(&db)?;
+
+    Ok(db)
 }
 
 /// Hash an API key with SHA-256 and return hex (unsalted, legacy).
@@ -1448,6 +1521,95 @@ pub fn cleanup_session_history(db: &Db, retain_days: u32) -> rusqlite::Result<us
     )
 }
 
+// ── TOTP secrets ──
+
+/// TOTP secret record for a user.
+#[derive(Debug, Clone)]
+pub struct TotpSecret {
+    pub user_id: i64,
+    pub secret_b32: String,
+    pub algorithm: String,
+    pub digits: u8,
+    pub period: u16,
+    pub enabled: bool,
+}
+
+/// Store a TOTP secret for a user (upsert).
+pub fn store_totp_secret(
+    db: &Db,
+    user_id: i64,
+    secret_b32: &str,
+    algorithm: &str,
+    digits: u8,
+    period: u16,
+) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO totp_secrets (user_id, secret_b32, algorithm, digits, period, enabled)
+         VALUES (?1, ?2, ?3, ?4, ?5, 1)
+         ON CONFLICT(user_id) DO UPDATE SET
+             secret_b32 = excluded.secret_b32,
+             algorithm = excluded.algorithm,
+             digits = excluded.digits,
+             period = excluded.period,
+             enabled = 1",
+        params![user_id, secret_b32, algorithm, digits as i64, period as i64],
+    )?;
+    Ok(())
+}
+
+/// Retrieve a TOTP secret by user_id.
+pub fn get_totp_secret(db: &Db, user_id: i64) -> rusqlite::Result<Option<TotpSecret>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT user_id, secret_b32, algorithm, digits, period, enabled
+         FROM totp_secrets WHERE user_id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![user_id], |row| {
+        Ok(TotpSecret {
+            user_id: row.get(0)?,
+            secret_b32: row.get(1)?,
+            algorithm: row.get(2)?,
+            digits: row.get::<_, i64>(3)? as u8,
+            period: row.get::<_, i64>(4)? as u16,
+            enabled: row.get::<_, i64>(5)? != 0,
+        })
+    })?;
+    rows.next().transpose()
+}
+
+/// Enable or disable TOTP for a user.
+pub fn set_totp_enabled(db: &Db, user_id: i64, enabled: bool) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE totp_secrets SET enabled = ?1 WHERE user_id = ?2",
+        params![enabled as i64, user_id],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Delete a user's TOTP secret.
+pub fn delete_totp_secret(db: &Db, user_id: i64) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "DELETE FROM totp_secrets WHERE user_id = ?1",
+        params![user_id],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Check if a user has TOTP enabled.
+pub fn user_totp_enabled(db: &Db, user_id: i64) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT enabled FROM totp_secrets WHERE user_id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![user_id], |row| {
+        row.get::<_, i64>(0).map(|v| v != 0)
+    })?;
+    rows.next().transpose().map(|opt| opt.unwrap_or(false))
+}
+
 /// Resolve the best role for a user based on their OIDC groups and the group-to-role mappings.
 /// Returns `Some(role)` if at least one group matched a mapping (highest wins),
 /// or `None` if no mappings matched (caller should preserve the existing role).
@@ -1475,6 +1637,193 @@ pub fn resolve_role_from_groups(db: &Db, groups: &[String]) -> rusqlite::Result<
     }
 
     Ok(best_role)
+}
+
+// ── Pending MFA (auth_pending_mfa) ──
+
+/// Pending MFA record for a user mid-login.
+#[derive(Debug, Clone)]
+pub struct PendingMfa {
+    pub user_id: i64,
+    pub user_email: String,
+    pub user_name: String,
+    pub user_role: String,
+    pub oidc_subject: Option<String>,
+    pub created_at: String,
+    pub expires_at: String,
+}
+
+/// Create a pending MFA record. Returns the raw token (set as cookie).
+pub fn create_pending_mfa(
+    db: &Db,
+    user_id: i64,
+    user_email: &str,
+    user_name: &str,
+    user_role: &str,
+    oidc_subject: Option<&str>,
+    ttl_secs: u64,
+) -> rusqlite::Result<String> {
+    let token = generate_key();
+    let token_hash = hash_key(&token);
+    let conn = db.lock().unwrap();
+    let ttl_modifier = format!("+{} seconds", ttl_secs);
+    conn.execute(
+        "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', ?7))",
+        params![token_hash, user_id, user_email, user_name, user_role, oidc_subject, ttl_modifier],
+    )?;
+    Ok(token)
+}
+
+/// Look up a pending MFA record by raw token.
+pub fn get_pending_mfa(db: &Db, token: &str) -> rusqlite::Result<Option<PendingMfa>> {
+    let token_hash = hash_key(token);
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT user_id, user_email, user_name, user_role, oidc_subject, created_at, expires_at
+         FROM auth_pending_mfa WHERE token_hash = ?1 AND expires_at > datetime('now')",
+    )?;
+    let mut rows = stmt.query_map(params![token_hash], |row| {
+        Ok(PendingMfa {
+            user_id: row.get(0)?,
+            user_email: row.get(1)?,
+            user_name: row.get(2)?,
+            user_role: row.get(3)?,
+            oidc_subject: row.get(4)?,
+            created_at: row.get(5)?,
+            expires_at: row.get(6)?,
+        })
+    })?;
+    rows.next().transpose()
+}
+
+/// Delete a pending MFA record by raw token.
+pub fn delete_pending_mfa(db: &Db, token: &str) -> rusqlite::Result<bool> {
+    let token_hash = hash_key(token);
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "DELETE FROM auth_pending_mfa WHERE token_hash = ?1",
+        params![token_hash],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Clean up expired pending MFA records.
+pub fn cleanup_expired_pending_mfa(db: &Db) -> rusqlite::Result<usize> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "DELETE FROM auth_pending_mfa WHERE expires_at <= datetime('now')",
+        [],
+    )
+}
+
+// ── Jump hosts (SSH tunnel management) ──
+
+/// Jump host record for API responses.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct JumpHostRecord {
+    pub id: String,
+    pub name: String,
+    pub hostname: String,
+    pub port: u16,
+    pub username: String,
+    pub auth_method: String,
+    pub key_path: Option<String>,
+    pub created_at: String,
+    pub updated_at: Option<String>,
+}
+
+/// Create a new jump host. Returns the generated ID.
+pub fn create_jump_host(
+    db: &Db,
+    name: &str,
+    hostname: &str,
+    port: u16,
+    username: &str,
+    auth_method: &str,
+    key_path: Option<&str>,
+) -> rusqlite::Result<String> {
+    let id = generate_key();
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO jump_hosts (id, name, hostname, port, username, auth_method, key_path)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![id, name, hostname, port as i64, username, auth_method, key_path],
+    )?;
+    Ok(id)
+}
+
+/// List all jump hosts.
+pub fn list_jump_hosts(db: &Db) -> rusqlite::Result<Vec<JumpHostRecord>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, hostname, port, username, auth_method, key_path, created_at, updated_at
+         FROM jump_hosts ORDER BY name",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(JumpHostRecord {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            hostname: row.get(2)?,
+            port: row.get::<_, i64>(3)? as u16,
+            username: row.get(4)?,
+            auth_method: row.get(5)?,
+            key_path: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Get a single jump host by ID.
+pub fn get_jump_host(db: &Db, id: &str) -> rusqlite::Result<Option<JumpHostRecord>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, hostname, port, username, auth_method, key_path, created_at, updated_at
+         FROM jump_hosts WHERE id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![id], |row| {
+        Ok(JumpHostRecord {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            hostname: row.get(2)?,
+            port: row.get::<_, i64>(3)? as u16,
+            username: row.get(4)?,
+            auth_method: row.get(5)?,
+            key_path: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    })?;
+    rows.next().transpose()
+}
+
+/// Update a jump host by ID.
+pub fn update_jump_host(
+    db: &Db,
+    id: &str,
+    name: &str,
+    hostname: &str,
+    port: u16,
+    username: &str,
+    auth_method: &str,
+    key_path: Option<&str>,
+) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE jump_hosts SET name = ?1, hostname = ?2, port = ?3, username = ?4,
+         auth_method = ?5, key_path = ?6, updated_at = datetime('now') WHERE id = ?7",
+        params![name, hostname, port as i64, username, auth_method, key_path, id],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Delete a jump host by ID.
+pub fn delete_jump_host(db: &Db, id: &str) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute("DELETE FROM jump_hosts WHERE id = ?1", params![id])?;
+    Ok(changed > 0)
 }
 
 #[cfg(test)]

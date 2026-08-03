@@ -1,4 +1,5 @@
 use super::AppState;
+use crate::audit;
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
@@ -112,6 +113,23 @@ pub async fn create_session(
                 target = %target,
                 "Session created successfully"
             );
+            // Audit: session start
+            if let Some(db_audit) = manager.db().cloned() {
+                let sid = info.session_id.to_string();
+                let ip = client_ip.to_string();
+                let user_id = admin_name.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = audit::log_event(
+                        &db_audit,
+                        &mut audit::EventBuilder::new("session.start", "success")
+                            .user_id(&user_id)
+                            .source_ip(&ip)
+                            .session_id(&sid)
+                            .build(),
+                    );
+                })
+                .await;
+            }
             Ok(Json(json!(info)))
         }
         Err(e) => {
@@ -240,6 +258,23 @@ pub async fn delete_session(
             client_ip = %ip,
             "Session deleted"
         );
+        // Audit: session end
+        if let Some(db_audit) = manager.db().cloned() {
+            let sid = id.to_string();
+            let user_id = id_inner.display_name().to_string();
+            let ip_audit = ip.to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = audit::log_event(
+                    &db_audit,
+                    &mut audit::EventBuilder::new("session.end", "success")
+                        .user_id(&user_id)
+                        .source_ip(&ip_audit)
+                        .session_id(&sid)
+                        .build(),
+                );
+            })
+            .await;
+        }
         StatusCode::NO_CONTENT.into_response()
     } else {
         (

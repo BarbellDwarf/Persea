@@ -1,0 +1,281 @@
+{% extends "layouts/app.html" %}
+
+{% block title %}{{ site_title }} — Two-Factor Authentication{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+    <div class="mb-8">
+        <h1 class="text-2xl font-bold text-gray-100">Two-Factor Authentication</h1>
+        <p class="text-sm text-gray-500 mt-1">Add an extra layer of security with TOTP authenticator apps</p>
+    </div>
+
+    <!-- TOTP Status Card -->
+    <div id="totp-status-card" class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
+        <div class="flex items-center gap-4">
+            <div id="totp-icon" class="w-12 h-12 rounded-lg flex items-center justify-center shrink-0">
+                <!-- filled by JS -->
+            </div>
+            <div class="flex-1">
+                <h2 class="text-lg font-semibold text-gray-100" id="totp-title">Loading...</h2>
+                <p class="text-sm text-gray-500" id="totp-description"></p>
+            </div>
+            <div id="totp-actions" class="flex items-center gap-2">
+                <!-- filled by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Enrollment Flow (hidden by default) -->
+    <div id="enrollment-section" class="hidden">
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
+            <h3 class="text-lg font-semibold text-gray-100 mb-4">Step 1: Scan QR Code</h3>
+            <p class="text-sm text-gray-400 mb-4">Scan this QR code with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
+            <div class="flex items-start gap-6">
+                <div class="shrink-0">
+                    <img id="qr-code-img" class="rounded-lg border border-gray-700" alt="TOTP QR Code" style="image-rendering: pixelated;">
+                </div>
+                <div class="flex-1 min-w-0">
+                    <p class="text-xs text-gray-500 mb-2">Or enter this key manually:</p>
+                    <code id="totp-secret" class="block px-3 py-2 bg-gray-800 rounded text-sm text-gray-300 font-mono select-all break-all mb-3"></code>
+                    <p class="text-xs text-gray-500">Issuer: <span id="totp-issuer" class="text-gray-400"></span></p>
+                    <p class="text-xs text-gray-500">Account: <span id="totp-account" class="text-gray-400"></span></p>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-6">
+            <h3 class="text-lg font-semibold text-gray-100 mb-4">Step 2: Verify Code</h3>
+            <p class="text-sm text-gray-400 mb-4">Enter the 6-digit code from your authenticator app to complete setup.</p>
+            <form id="verify-form" class="flex items-end gap-3">
+                <div class="flex-1">
+                    <label for="verify-code" class="block text-sm font-medium text-gray-400 mb-1">Verification Code</label>
+                    <input type="text" id="verify-code" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required
+                        class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-center text-lg tracking-[0.3em] font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        placeholder="000000">
+                </div>
+                <button type="submit" id="btn-verify"
+                    class="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+                    Verify & Enable
+                </button>
+            </form>
+            <p id="verify-error" class="text-sm text-red-400 mt-2 hidden"></p>
+        </div>
+    </div>
+
+    <!-- Recovery Codes Section (shown when enrolled) -->
+    <div id="recovery-codes-section" class="hidden">
+        <div class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-lg font-semibold text-gray-100">Recovery Codes</h3>
+                <button id="btn-copy-codes" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-sm text-gray-300 transition-colors">
+                    Copy All
+                </button>
+            </div>
+            <div class="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 mb-4">
+                <p class="text-xs text-yellow-400">
+                    <strong>Warning:</strong> Each recovery code can only be used once. Save these codes in a secure location.
+                    If you lose access to your authenticator app, you can use these codes to log in.
+                </p>
+            </div>
+            <div id="recovery-codes-list" class="grid grid-cols-2 gap-2">
+                <!-- filled by JS -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Disable Confirmation Modal -->
+    <div id="disable-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+        <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        <div class="relative bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-md shadow-xl">
+            <h2 class="text-lg font-semibold text-gray-100 mb-2">Disable Two-Factor Authentication?</h2>
+            <p class="text-sm text-gray-400 mb-6">This will remove the TOTP requirement from your account. You'll only need your password to log in.</p>
+            <form id="disable-form" class="space-y-4">
+                <div>
+                    <label for="disable-code" class="block text-sm font-medium text-gray-400 mb-1">Enter current code to confirm</label>
+                    <input type="text" id="disable-code" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required
+                        class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-center text-lg tracking-[0.3em] font-mono focus:outline-none focus:ring-2 focus:ring-red-500"
+                        placeholder="000000">
+                </div>
+                <div class="flex items-center justify-end gap-3">
+                    <button type="button" onclick="closeDisableModal()" class="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm transition-colors">
+                        Cancel
+                    </button>
+                    <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-colors">
+                        Disable TOTP
+                    </button>
+                </div>
+            </form>
+            <p id="disable-error" class="text-sm text-red-400 mt-2 hidden"></p>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function() {
+        var totpEnabled = false;
+
+        function escapeHtml(s) {
+            var div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        function setStatus(enabled) {
+            totpEnabled = enabled;
+            var icon = document.getElementById('totp-icon');
+            var title = document.getElementById('totp-title');
+            var desc = document.getElementById('totp-description');
+            var actions = document.getElementById('totp-actions');
+            var enroll = document.getElementById('enrollment-section');
+            var recovery = document.getElementById('recovery-codes-section');
+
+            if (enabled) {
+                icon.className = 'w-12 h-12 rounded-lg bg-emerald-900/50 border border-emerald-800 flex items-center justify-center shrink-0';
+                icon.innerHTML = '<svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>';
+                title.textContent = 'Two-Factor Authentication Enabled';
+                desc.textContent = 'Your account is protected with TOTP.';
+                actions.innerHTML = '<button onclick="showRecoveryCodes()" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-sm text-gray-300 transition-colors">View Recovery Codes</button>' +
+                    '<button onclick="openDisableModal()" class="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/50 border border-red-800 rounded text-sm text-red-300 transition-colors">Disable</button>';
+                enroll.classList.add('hidden');
+            } else {
+                icon.className = 'w-12 h-12 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0';
+                icon.innerHTML = '<svg class="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>';
+                title.textContent = 'Two-Factor Authentication Not Enabled';
+                desc.textContent = 'Add an extra layer of security to your account.';
+                actions.innerHTML = '<button onclick="startEnrollment()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">Enable TOTP</button>';
+                enroll.classList.add('hidden');
+                recovery.classList.add('hidden');
+            }
+        }
+
+        function loadStatus() {
+            fetch('/api/me/totp', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) {
+                    if (!data) return;
+                    setStatus(data.enabled);
+                })
+                .catch(function() {});
+        }
+
+        var pendingEnrollment = null;
+
+        window.startEnrollment = function() {
+            fetch('/api/me/totp/enroll', { method: 'POST', credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) {
+                    if (!data) return;
+                    pendingEnrollment = data;
+                    document.getElementById('qr-code-img').src = 'data:image/png;base64,' + data.qr_png;
+                    document.getElementById('totp-secret').textContent = data.secret_b32;
+                    document.getElementById('totp-issuer').textContent = data.issuer || 'rustguac';
+                    document.getElementById('totp-account').textContent = data.email || '';
+                    document.getElementById('enrollment-section').classList.remove('hidden');
+                    document.getElementById('verify-code').focus();
+                })
+                .catch(function() {});
+        };
+
+        document.getElementById('verify-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var code = document.getElementById('verify-code').value.trim();
+            var errEl = document.getElementById('verify-error');
+            errEl.classList.add('hidden');
+            document.getElementById('btn-verify').disabled = true;
+
+            fetch('/api/me/totp/verify', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: code })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    setStatus(true);
+                    if (data.recovery_codes) showRecoveryCodesList(data.recovery_codes);
+                } else {
+                    errEl.textContent = data.error || 'Invalid code. Try again.';
+                    errEl.classList.remove('hidden');
+                }
+            })
+            .catch(function() {
+                errEl.textContent = 'Network error';
+                errEl.classList.remove('hidden');
+            })
+            .finally(function() { document.getElementById('btn-verify').disabled = false; });
+        });
+
+        window.showRecoveryCodes = function() {
+            fetch('/api/me/totp/recovery-codes', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(data) {
+                    if (data && data.codes) showRecoveryCodesList(data.codes);
+                })
+                .catch(function() {});
+        };
+
+        function showRecoveryCodesList(codes) {
+            var section = document.getElementById('recovery-codes-section');
+            var list = document.getElementById('recovery-codes-list');
+            var html = '';
+            codes.forEach(function(c) {
+                html += '<div class="px-3 py-2 bg-gray-800 rounded font-mono text-sm text-gray-300 text-center">' + escapeHtml(c) + '</div>';
+            });
+            list.innerHTML = html;
+            section.classList.remove('hidden');
+        }
+
+        document.getElementById('btn-copy-codes').addEventListener('click', function() {
+            var codes = [];
+            document.querySelectorAll('#recovery-codes-list div').forEach(function(el) {
+                codes.push(el.textContent.trim());
+            });
+            navigator.clipboard.writeText(codes.join('\n')).then(function() {
+                document.getElementById('btn-copy-codes').textContent = 'Copied!';
+                setTimeout(function() { document.getElementById('btn-copy-codes').textContent = 'Copy All'; }, 2000);
+            });
+        });
+
+        window.openDisableModal = function() {
+            document.getElementById('disable-modal').classList.remove('hidden');
+            document.getElementById('disable-code').focus();
+        };
+        window.closeDisableModal = function() {
+            document.getElementById('disable-modal').classList.add('hidden');
+            document.getElementById('disable-form').reset();
+            document.getElementById('disable-error').classList.add('hidden');
+        };
+
+        document.getElementById('disable-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var code = document.getElementById('disable-code').value.trim();
+            var errEl = document.getElementById('disable-error');
+            errEl.classList.add('hidden');
+
+            fetch('/api/me/totp', {
+                method: 'DELETE',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code: code })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.ok) {
+                    closeDisableModal();
+                    setStatus(false);
+                } else {
+                    errEl.textContent = data.error || 'Invalid code';
+                    errEl.classList.remove('hidden');
+                }
+            })
+            .catch(function() {
+                errEl.textContent = 'Network error';
+                errEl.classList.remove('hidden');
+            });
+        });
+
+        loadStatus();
+    })();
+</script>
+{% endblock %}

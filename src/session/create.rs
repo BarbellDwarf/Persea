@@ -467,7 +467,7 @@ impl SessionManager {
                 };
 
                 let mut cfg = broker
-                    .fetch_spice_config(&node, vmid, None)
+                    .fetch_spice_config(&node, vmid, crate::pve::PveVmType::Qemu, None)
                     .await
                     .map_err(|e| {
                         SessionError::ValidationError(format!("Proxmox SPICE broker failed: {e}"))
@@ -1035,7 +1035,7 @@ impl SessionManager {
             width,
             height,
             active_connections: 0,
-            created_by,
+            created_by: created_by.clone(),
             cancel: tokio_util::sync::CancellationToken::new(),
             browser_session,
             deferred_params,
@@ -1053,6 +1053,9 @@ impl SessionManager {
             share_allowed,
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
             autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
+            last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
+            source_ip: None,
+            user_id: Some(created_by),
         };
 
         let info = session.info();

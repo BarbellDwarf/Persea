@@ -3,6 +3,7 @@
 use crate::auth::extract_cookie;
 use crate::config::OidcConfig;
 use crate::db::{self, Db};
+use crate::totp::TotpEnforcement;
 use axum::{
     extract::{Query, State},
     http::{header, StatusCode},
@@ -183,6 +184,7 @@ pub struct CallbackParams {
 pub async fn callback(
     State(oidc): State<OidcState>,
     Extension(database): Extension<Db>,
+    Extension(totp_enforcement): Extension<TotpEnforcement>,
     headers: axum::http::HeaderMap,
     Query(params): Query<CallbackParams>,
 ) -> Response {
@@ -390,6 +392,79 @@ pub async fn callback(
             .into_response();
     }
 
+    // Check TOTP enforcement before creating session
+    let totp_required = {
+        let db_check = database.clone();
+        let uid = user.id;
+        let role_for_check = effective_role.clone();
+        let enforcement = totp_enforcement;
+        // Check if user has TOTP enabled (synchronous DB call in spawn_blocking)
+        let has_totp = tokio::task::spawn_blocking(move || {
+            db::user_totp_enabled(&db_check, uid)
+        })
+        .await
+        .unwrap_or(Ok(false))
+        .unwrap_or(false);
+
+        match enforcement {
+            TotpEnforcement::Off => false,
+            TotpEnforcement::AdminsOnly => {
+                has_totp && role_for_check == "admin"
+            }
+            TotpEnforcement::All => has_totp,
+        }
+    };
+
+    if totp_required {
+        // Create pending MFA record and redirect to MFA page
+        let ttl_secs = 300u64; // 5 minutes
+        let db_clone = database.clone();
+        let email_for_mfa = email.clone();
+        let pending_token = match tokio::task::spawn_blocking(move || {
+            db::create_pending_mfa(
+                &db_clone,
+                user.id,
+                &email_for_mfa,
+                &name,
+                &effective_role,
+                Some(&subject),
+                ttl_secs,
+            )
+        })
+        .await
+        {
+            Ok(Ok(token)) => token,
+            _ => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::Json(json!({"error": "failed to create MFA session"})),
+                )
+                    .into_response();
+            }
+        };
+
+        tracing::info!(email = %email, "OIDC login requires TOTP — redirecting to MFA");
+
+        let mfa_cookie = format!(
+            "rustguac_mfa_pending={}; Path=/auth/mfa; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
+            pending_token, ttl_secs
+        );
+        let clear_state_cookie =
+            "rustguac_oidc_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+        let clear_next_cookie =
+            "rustguac_next=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+
+        return (
+            AppendHeaders([
+                (header::SET_COOKIE, mfa_cookie),
+                (header::SET_COOKIE, clear_state_cookie),
+                (header::SET_COOKIE, clear_next_cookie),
+            ]),
+            Redirect::temporary("/auth/mfa"),
+        )
+            .into_response();
+    }
+
     // Create auth session
     let user_id = user.id;
     let ttl_secs = oidc.session_ttl_secs;
@@ -410,6 +485,21 @@ pub async fn callback(
     };
 
     tracing::info!(email = %email, role = %effective_role, "OIDC login successful");
+
+    // Audit: OIDC login
+    {
+        let db_audit = database.clone();
+        let uid = user.id.to_string();
+        let _ = tokio::task::spawn_blocking(move || {
+            let _ = crate::audit::log_event(
+                &db_audit,
+                &mut crate::audit::EventBuilder::new("auth.oidc.login", "success")
+                    .user_id(&uid)
+                    .build(),
+            );
+        })
+        .await;
+    }
 
     // Check for post-login redirect cookie
     let redirect_to = extract_cookie(&headers, "rustguac_next")

@@ -1,0 +1,238 @@
+{% extends "layouts/app.html" %}
+
+{% block title %}{{ site_title }} — API Tokens{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-100">API Tokens</h1>
+            <p class="text-sm text-gray-500 mt-1">Manage personal API tokens for scripting and integrations</p>
+        </div>
+        <button id="btn-create-token" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+            + Create Token
+        </button>
+    </div>
+
+    <!-- Tokens Table -->
+    <div class="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-gray-800 text-left">
+                    <th class="px-4 py-3 text-gray-400 font-medium">Name</th>
+                    <th class="px-4 py-3 text-gray-400 font-medium">Max Role</th>
+                    <th class="px-4 py-3 text-gray-400 font-medium">Status</th>
+                    <th class="px-4 py-3 text-gray-400 font-medium">Created</th>
+                    <th class="px-4 py-3 text-gray-400 font-medium">Last Used</th>
+                    <th class="px-4 py-3 text-gray-400 font-medium text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="tokens-tbody">
+                <tr>
+                    <td colspan="6" class="px-4 py-8 text-center text-gray-500">Loading tokens...</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="hidden text-center py-12">
+        <svg class="w-12 h-12 mx-auto text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+        <p class="text-gray-400 mb-2">No API tokens yet</p>
+        <p class="text-gray-500 text-sm mb-4">Create a token to use the API from scripts or integrations.</p>
+        <button onclick="openCreateModal()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+            Create First Token
+        </button>
+    </div>
+
+    <!-- New Token Display (shown once after creation) -->
+    <div id="new-token-banner" class="hidden mt-6 bg-emerald-900/30 border border-emerald-700 rounded-lg p-4">
+        <div class="flex items-start justify-between">
+            <div>
+                <h3 class="text-sm font-semibold text-emerald-300 mb-1">Token Created</h3>
+                <p class="text-xs text-emerald-400/70 mb-3">Copy this token now — it won't be shown again.</p>
+                <div class="flex items-center gap-2">
+                    <code id="new-token-value" class="px-3 py-1.5 bg-gray-800 rounded text-sm text-emerald-300 font-mono select-all break-all"></code>
+                    <button id="btn-copy-token" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-sm text-gray-300 transition-colors shrink-0">
+                        Copy
+                    </button>
+                </div>
+            </div>
+            <button onclick="dismissNewToken()" class="text-gray-500 hover:text-gray-300 ml-4">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Create Token Modal -->
+<div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-md shadow-xl">
+        <h2 class="text-lg font-semibold text-gray-100 mb-4">Create API Token</h2>
+        <form id="create-token-form" class="space-y-4">
+            <div>
+                <label for="token-name" class="block text-sm font-medium text-gray-400 mb-1">Name</label>
+                <input type="text" id="token-name" required maxlength="100"
+                    class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                    placeholder="e.g. CI pipeline, monitoring">
+            </div>
+            <div>
+                <label for="token-max-role" class="block text-sm font-medium text-gray-400 mb-1">Max Role</label>
+                <select id="token-max-role"
+                    class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                    <option value="">Inherit my role</option>
+                    <option value="admin">Admin</option>
+                    <option value="poweruser">Power User</option>
+                    <option value="operator">Operator</option>
+                    <option value="viewer">Viewer</option>
+                </select>
+                <p class="text-xs text-gray-600 mt-1">Limit this token's permissions to at most this role</p>
+            </div>
+            <div>
+                <label for="token-expiry" class="block text-sm font-medium text-gray-400 mb-1">Expiry</label>
+                <select id="token-expiry"
+                    class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                    <option value="">Never</option>
+                    <option value="7d">7 days</option>
+                    <option value="30d">30 days</option>
+                    <option value="90d">90 days</option>
+                    <option value="180d">180 days</option>
+                    <option value="365d">1 year</option>
+                </select>
+            </div>
+            <div class="flex items-center justify-end gap-3 pt-2">
+                <button type="button" onclick="closeCreateModal()" class="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm transition-colors">
+                    Cancel
+                </button>
+                <button type="submit" id="btn-submit-token"
+                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+                    Create Token
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    (function() {
+        var roleColors = {
+            admin: 'bg-red-900/50 text-red-300 border-red-800',
+            poweruser: 'bg-purple-900/50 text-purple-300 border-purple-800',
+            operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
+            viewer: 'bg-gray-700/50 text-gray-400 border-gray-600'
+        };
+
+        function escapeHtml(s) {
+            var div = document.createElement('div');
+            div.textContent = s;
+            return div.innerHTML;
+        }
+
+        function formatDate(d) {
+            if (!d) return '—';
+            try { return new Date(d).toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
+            catch(e) { return d; }
+        }
+
+        function loadTokens() {
+            fetch('/api/me/tokens', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(tokens) {
+                    var tbody = document.getElementById('tokens-tbody');
+                    var empty = document.getElementById('empty-state');
+                    if (!tokens || tokens.length === 0) {
+                        tbody.innerHTML = '';
+                        empty.classList.remove('hidden');
+                        return;
+                    }
+                    empty.classList.add('hidden');
+                    var html = '';
+                    tokens.forEach(function(t) {
+                        var roleBadge = t.max_role
+                            ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ' + (roleColors[t.max_role] || roleColors.viewer) + '">' + escapeHtml(t.max_role) + '</span>'
+                            : '<span class="text-gray-500">—</span>';
+                        var statusClass = t.disabled ? 'bg-red-900/50 text-red-300' : 'bg-emerald-900/50 text-emerald-300';
+                        var statusText = t.disabled ? 'Revoked' : 'Active';
+                        html += '<tr class="border-b border-gray-800/50 hover:bg-gray-800/30">';
+                        html += '<td class="px-4 py-3 text-gray-200 font-medium">' + escapeHtml(t.name) + '</td>';
+                        html += '<td class="px-4 py-3">' + roleBadge + '</td>';
+                        html += '<td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ' + statusClass + '">' + statusText + '</span></td>';
+                        html += '<td class="px-4 py-3 text-gray-400 text-xs">' + formatDate(t.created_at) + '</td>';
+                        html += '<td class="px-4 py-3 text-gray-400 text-xs">' + formatDate(t.last_used_at) + '</td>';
+                        html += '<td class="px-4 py-3 text-right">';
+                        if (!t.disabled) {
+                            html += '<button onclick="revokeToken(' + t.id + ')" class="text-xs text-red-400 hover:text-red-300 transition-colors">Revoke</button>';
+                        }
+                        html += '</td></tr>';
+                    });
+                    tbody.innerHTML = html;
+                })
+                .catch(function() {});
+        }
+
+        window.revokeToken = function(id) {
+            if (!confirm('Revoke this token? It will stop working immediately.')) return;
+            fetch('/api/me/tokens/' + id, { method: 'DELETE', credentials: 'same-origin' })
+                .then(function(r) { if (r.ok) loadTokens(); });
+        };
+
+        window.openCreateModal = function() {
+            document.getElementById('create-modal').classList.remove('hidden');
+            document.getElementById('token-name').focus();
+        };
+        window.closeCreateModal = function() {
+            document.getElementById('create-modal').classList.add('hidden');
+            document.getElementById('create-token-form').reset();
+        };
+
+        function expiryToISO(val) {
+            if (!val) return undefined;
+            var ms = parseInt(val) * 86400000;
+            return new Date(Date.now() + ms).toISOString();
+        }
+
+        document.getElementById('create-token-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var name = document.getElementById('token-name').value.trim();
+            var maxRole = document.getElementById('token-max-role').value || undefined;
+            var expiry = expiryToISO(document.getElementById('token-expiry').value);
+            document.getElementById('btn-submit-token').disabled = true;
+
+            fetch('/api/me/tokens', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name: name, max_role: maxRole, expires_at: expiry })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                closeCreateModal();
+                if (data.token) {
+                    document.getElementById('new-token-value').textContent = data.token;
+                    document.getElementById('new-token-banner').classList.remove('hidden');
+                }
+                loadTokens();
+            })
+            .catch(function() { alert('Failed to create token'); })
+            .finally(function() { document.getElementById('btn-submit-token').disabled = false; });
+        });
+
+        window.dismissNewToken = function() {
+            document.getElementById('new-token-banner').classList.add('hidden');
+        };
+
+        document.getElementById('btn-copy-token').addEventListener('click', function() {
+            var val = document.getElementById('new-token-value').textContent;
+            navigator.clipboard.writeText(val).then(function() {
+                document.getElementById('btn-copy-token').textContent = 'Copied!';
+                setTimeout(function() { document.getElementById('btn-copy-token').textContent = 'Copy'; }, 2000);
+            });
+        });
+
+        document.getElementById('btn-create-token').addEventListener('click', openCreateModal);
+
+        loadTokens();
+    })();
+</script>
+{% endblock %}

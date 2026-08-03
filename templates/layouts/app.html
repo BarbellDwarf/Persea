@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block body %}
+<div style="display:flex;min-height:100vh">
+
+    {% include "partials/sidebar.html" %}
+
+    <div class="main-area">
+        {% include "partials/header.html" %}
+        <main class="content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+</div>
+{% endblock %}

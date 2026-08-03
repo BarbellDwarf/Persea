@@ -322,6 +322,60 @@ fn default_vault_base_path() -> String {
     "rustguac".into()
 }
 
+/// Authentication chain configuration (`[auth]`).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct AuthConfig {
+    /// Ordered list of primary auth methods. Example: ["ldap", "database", "oidc"]
+    #[serde(default = "default_auth_methods")]
+    pub methods: Vec<String>,
+    pub ldap: Option<crate::auth_providers::ldap::LdapConfig>,
+    pub radius: Option<crate::auth_providers::radius::RadiusConfig>,
+    pub saml: Option<crate::auth_providers::saml::SamlConfig>,
+    /// TOTP second-factor configuration.
+    pub totp: Option<AuthTotpConfig>,
+}
+
+/// TOTP configuration for the auth chain (maps to `[auth.totp]` in TOML).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct AuthTotpConfig {
+    /// Issuer name shown in authenticator apps.
+    #[serde(default = "default_totp_issuer")]
+    pub issuer: String,
+    /// TOTP digits (default: 6).
+    #[serde(default = "default_totp_digits")]
+    pub digits: u8,
+    /// TOTP period in seconds (default: 30).
+    #[serde(default = "default_totp_period")]
+    pub period: u16,
+    /// Clock skew tolerance (how many periods ahead/behind to accept).
+    #[serde(default = "default_totp_skew")]
+    pub skew: u8,
+    /// Enforcement policy: "Off", "AdminsOnly", or "All".
+    #[serde(default)]
+    pub enforcement: crate::totp::TotpEnforcement,
+}
+
+fn default_totp_issuer() -> String { "rustguac".into() }
+fn default_totp_digits() -> u8 { 6 }
+fn default_totp_period() -> u16 { 30 }
+fn default_totp_skew() -> u8 { 1 }
+
+impl Default for AuthTotpConfig {
+    fn default() -> Self {
+        Self {
+            issuer: default_totp_issuer(),
+            digits: default_totp_digits(),
+            period: default_totp_period(),
+            skew: default_totp_skew(),
+            enforcement: crate::totp::TotpEnforcement::Off,
+        }
+    }
+}
+
+fn default_auth_methods() -> Vec<String> {
+    vec!["database".to_string()]
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     #[serde(default = "default_listen_addr")]
@@ -435,6 +489,7 @@ pub struct Config {
     #[serde(default = "default_user_credentials_scope")]
     pub user_credentials_default_scope: String,
 
+    pub auth: Option<AuthConfig>,
     pub tls: Option<TlsConfig>,
     pub oidc: Option<OidcConfig>,
     /// Primary/default Vault backend. Serves any address-book scope that does
@@ -455,7 +510,14 @@ pub struct Config {
     pub theme: Option<ThemeConfig>,
     pub recording: Option<RecordingConfig>,
     pub vdi: Option<VdiConfig>,
+    /// VMware vSphere integration for VM inventory and OS-aware protocol routing.
+    pub vsphere: Option<crate::vsphere::VsphereConfig>,
     pub rdp: Option<RdpConfig>,
+    /// Optional SQLx database URL for multi-backend support (PostgreSQL,
+    /// MySQL, or SQLite via SQLx). When set, `DbPool` is initialised and
+    /// made available via Extension. The existing rusqlite `Db` continues
+    /// to work alongside it.
+    pub db_url: Option<String>,
 }
 
 /// RDP-wide defaults applied when an address book entry (or ad-hoc
@@ -1187,6 +1249,7 @@ impl Default for Config {
             trusted_proxies: Vec::new(),
             user_credentials_default_scope: default_user_credentials_scope(),
             tls: None,
+            auth: None,
             oidc: None,
             vault: None,
             vault_shared: None,
@@ -1195,7 +1258,9 @@ impl Default for Config {
             theme: None,
             recording: None,
             vdi: None,
+            vsphere: None,
             rdp: None,
+            db_url: None,
         }
     }
 }

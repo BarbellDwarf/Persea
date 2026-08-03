@@ -1,0 +1,391 @@
+{% extends "layouts/app.html" %}
+
+{% block title %}{{ site_title }} — SSH Tunnels{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="mb-6 flex items-center justify-between">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-100">SSH Tunnels</h1>
+            <p class="text-sm text-gray-500 mt-1">Manage jump hosts and multi-hop tunnel chains</p>
+        </div>
+        <button onclick="showAddJumpHost()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Add Jump Host
+        </button>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Left Panel: Jump Host List -->
+        <div>
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                    Jump Hosts
+                </h2>
+                <div id="jump-hosts-list" class="space-y-2">
+                    <p class="text-gray-500 text-sm" id="empty-state">No jump hosts configured</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Details + Chain Builder -->
+        <div>
+            <!-- Jump Host Details -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
+                <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    Jump Host Details
+                </h2>
+                <div id="jump-host-details">
+                    <p class="text-gray-500 text-sm">Select a jump host to view details</p>
+                </div>
+            </div>
+
+            <!-- Chain Builder -->
+            <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+                <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
+                    <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+                    Chain Builder
+                </h2>
+                <div id="chain-builder">
+                    <div id="chain-visual" class="min-h-[80px] flex items-center gap-2 flex-wrap mb-4">
+                        <span class="text-gray-500 text-sm">Add hops to build a tunnel chain</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <select id="chain-add-select" class="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                            <option value="">Select a jump host...</option>
+                        </select>
+                        <button onclick="addHop()" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors">Add Hop</button>
+                        <button onclick="clearChain()" class="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded-lg transition-colors">Clear</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Tunnels -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mt-6">
+        <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
+            <svg class="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            Active Tunnels
+        </h2>
+        <div id="active-tunnels-table">
+            <p class="text-gray-500 text-sm">No active tunnels</p>
+        </div>
+    </div>
+</div>
+
+<!-- Add/Edit Jump Host Modal -->
+<div id="jump-host-modal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
+        <h3 id="modal-title" class="text-lg font-semibold text-gray-100 mb-4">Add Jump Host</h3>
+        <form id="jump-host-form" onsubmit="saveJumpHost(event)" class="space-y-4">
+            <input type="hidden" id="jh-id" value="">
+            <div>
+                <label class="block text-sm text-gray-300 mb-1">Name</label>
+                <input type="text" id="jh-name" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm" placeholder="e.g. prod-bastion">
+            </div>
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1">Hostname</label>
+                    <input type="text" id="jh-hostname" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm" placeholder="10.0.0.1">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1">Port</label>
+                    <input type="number" id="jh-port" value="22" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm text-gray-300 mb-1">Username</label>
+                <input type="text" id="jh-username" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm" placeholder="root">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-300 mb-1">Auth Method</label>
+                <select id="jh-auth-method" onchange="toggleKeyPath()" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                    <option value="password">Password</option>
+                    <option value="key">Private Key</option>
+                </select>
+            </div>
+            <div id="jh-key-path-group" class="hidden">
+                <label class="block text-sm text-gray-300 mb-1">Key File Path</label>
+                <input type="text" id="jh-key-path" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm" placeholder="/home/user/.ssh/id_ed25519">
+            </div>
+            <div class="flex justify-end gap-2 pt-2">
+                <button type="button" onclick="hideModal()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded-lg transition-colors">Cancel</button>
+                <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+    let jumpHosts = [];
+    let chain = [];
+    let selectedHostId = null;
+
+    // Load jump hosts on page load
+    document.addEventListener('DOMContentLoaded', loadJumpHosts);
+
+    async function loadJumpHosts() {
+        try {
+            const res = await fetch('/api/admin/jump-hosts');
+            jumpHosts = await res.json();
+            renderJumpHostsList();
+            renderChainSelect();
+        } catch (e) {
+            console.error('Failed to load jump hosts:', e);
+        }
+    }
+
+    function renderJumpHostsList() {
+        const el = document.getElementById('jump-hosts-list');
+        const empty = document.getElementById('empty-state');
+        if (jumpHosts.length === 0) {
+            el.innerHTML = '';
+            el.appendChild(empty);
+            empty.classList.remove('hidden');
+            return;
+        }
+        empty.classList.add('hidden');
+        el.innerHTML = jumpHosts.map(jh => `
+            <div class="flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${selectedHostId === jh.id ? 'border-emerald-600 bg-emerald-900/20' : 'border-gray-700 bg-gray-800/50 hover:border-gray-600'}"
+                 onclick="selectJumpHost('${jh.id}')">
+                <div class="flex items-center gap-3">
+                    <span class="w-2 h-2 rounded-full ${jh.status === 'connected' ? 'bg-green-400' : jh.status === 'error' ? 'bg-red-400' : 'bg-gray-500'}"></span>
+                    <div>
+                        <div class="text-sm font-medium text-gray-200">${esc(jh.name)}</div>
+                        <div class="text-xs text-gray-500">${esc(jh.username)}@${esc(jh.hostname)}:${jh.port}</div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-1">
+                    <button onclick="event.stopPropagation(); editJumpHost('${jh.id}')" class="p-1.5 text-gray-500 hover:text-gray-300 rounded" title="Edit">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                    </button>
+                    <button onclick="event.stopPropagation(); deleteJumpHost('${jh.id}')" class="p-1.5 text-gray-500 hover:text-red-400 rounded" title="Delete">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                    </button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function selectJumpHost(id) {
+        selectedHostId = id;
+        renderJumpHostsList();
+        const jh = jumpHosts.find(h => h.id === id);
+        if (!jh) return;
+        document.getElementById('jump-host-details').innerHTML = `
+            <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-3">
+                    <div><span class="text-xs text-gray-500">Name</span><div class="text-sm text-gray-200">${esc(jh.name)}</div></div>
+                    <div><span class="text-xs text-gray-500">Auth</span><div class="text-sm text-gray-200">${jh.auth_method === 'key' ? 'Private Key' : 'Password'}</div></div>
+                    <div><span class="text-xs text-gray-500">Hostname</span><div class="text-sm text-gray-200">${esc(jh.hostname)}</div></div>
+                    <div><span class="text-xs text-gray-500">Port</span><div class="text-sm text-gray-200">${jh.port}</div></div>
+                    <div><span class="text-xs text-gray-500">Username</span><div class="text-sm text-gray-200">${esc(jh.username)}</div></div>
+                    ${jh.auth_method === 'key' && jh.key_path ? `<div><span class="text-xs text-gray-500">Key Path</span><div class="text-sm text-gray-200">${esc(jh.key_path)}</div></div>` : ''}
+                </div>
+                <div class="flex gap-2 pt-2">
+                    <button onclick="testJumpHost('${jh.id}')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded-lg transition-colors flex items-center gap-1">
+                        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                        Test Connection
+                    </button>
+                    <button onclick="editJumpHost('${jh.id}')" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded-lg transition-colors">Edit</button>
+                    <button onclick="deleteJumpHost('${jh.id}')" class="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/50 text-red-300 text-xs rounded-lg transition-colors">Delete</button>
+                </div>
+                <div id="test-result" class="hidden mt-2 p-3 rounded-lg text-sm"></div>
+            </div>
+        `;
+    }
+
+    function showAddJumpHost() {
+        document.getElementById('jh-id').value = '';
+        document.getElementById('jh-name').value = '';
+        document.getElementById('jh-hostname').value = '';
+        document.getElementById('jh-port').value = '22';
+        document.getElementById('jh-username').value = '';
+        document.getElementById('jh-auth-method').value = 'password';
+        document.getElementById('jh-key-path').value = '';
+        document.getElementById('modal-title').textContent = 'Add Jump Host';
+        toggleKeyPath();
+        document.getElementById('jump-host-modal').classList.remove('hidden');
+    }
+
+    function editJumpHost(id) {
+        const jh = jumpHosts.find(h => h.id === id);
+        if (!jh) return;
+        document.getElementById('jh-id').value = jh.id;
+        document.getElementById('jh-name').value = jh.name;
+        document.getElementById('jh-hostname').value = jh.hostname;
+        document.getElementById('jh-port').value = jh.port;
+        document.getElementById('jh-username').value = jh.username;
+        document.getElementById('jh-auth-method').value = jh.auth_method;
+        document.getElementById('jh-key-path').value = jh.key_path || '';
+        document.getElementById('modal-title').textContent = 'Edit Jump Host';
+        toggleKeyPath();
+        document.getElementById('jump-host-modal').classList.remove('hidden');
+    }
+
+    function hideModal() {
+        document.getElementById('jump-host-modal').classList.add('hidden');
+    }
+
+    function toggleKeyPath() {
+        const method = document.getElementById('jh-auth-method').value;
+        document.getElementById('jh-key-path-group').classList.toggle('hidden', method !== 'key');
+    }
+
+    async function saveJumpHost(e) {
+        e.preventDefault();
+        const id = document.getElementById('jh-id').value;
+        const data = {
+            name: document.getElementById('jh-name').value.trim(),
+            hostname: document.getElementById('jh-hostname').value.trim(),
+            port: parseInt(document.getElementById('jh-port').value) || 22,
+            username: document.getElementById('jh-username').value.trim(),
+            auth_method: document.getElementById('jh-auth-method').value,
+            key_path: document.getElementById('jh-auth-method').value === 'key' ? document.getElementById('jh-key-path').value.trim() : null,
+        };
+        try {
+            const url = id ? `/api/admin/jump-hosts/${id}` : '/api/admin/jump-hosts';
+            const method = id ? 'PUT' : 'POST';
+            const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+            if (!res.ok) { alert('Error: ' + await res.text()); return; }
+            hideModal();
+            await loadJumpHosts();
+        } catch (e) {
+            alert('Failed to save: ' + e.message);
+        }
+    }
+
+    async function deleteJumpHost(id) {
+        if (!confirm('Delete this jump host?')) return;
+        try {
+            await fetch(`/api/admin/jump-hosts/${id}`, { method: 'DELETE' });
+            if (selectedHostId === id) { selectedHostId = null; document.getElementById('jump-host-details').innerHTML = '<p class="text-gray-500 text-sm">Select a jump host to view details</p>'; }
+            await loadJumpHosts();
+        } catch (e) {
+            alert('Failed to delete: ' + e.message);
+        }
+    }
+
+    async function testJumpHost(id) {
+        const el = document.getElementById('test-result');
+        el.classList.remove('hidden');
+        el.className = 'mt-2 p-3 rounded-lg text-sm bg-blue-900/30 text-blue-300 border border-blue-800';
+        el.textContent = 'Testing connection...';
+        try {
+            const res = await fetch(`/api/admin/jump-hosts/${id}/test`, { method: 'POST' });
+            const data = await res.json();
+            if (data.ok) {
+                el.className = 'mt-2 p-3 rounded-lg text-sm bg-green-900/30 text-green-300 border border-green-800';
+                el.textContent = 'Connection successful — ' + (data.message || 'OK');
+            } else {
+                el.className = 'mt-2 p-3 rounded-lg text-sm bg-red-900/30 text-red-300 border border-red-800';
+                el.textContent = 'Connection failed — ' + (data.error || 'unknown error');
+            }
+        } catch (e) {
+            el.className = 'mt-2 p-3 rounded-lg text-sm bg-red-900/30 text-red-300 border border-red-800';
+            el.textContent = 'Test request failed: ' + e.message;
+        }
+    }
+
+    function renderChainSelect() {
+        const sel = document.getElementById('chain-add-select');
+        sel.innerHTML = '<option value="">Select a jump host...</option>' +
+            jumpHosts.map(jh => `<option value="${jh.id}">${esc(jh.name)} (${esc(jh.hostname)}:${jh.port})</option>`).join('');
+    }
+
+    function addHop() {
+        const sel = document.getElementById('chain-add-select');
+        const id = sel.value;
+        if (!id) return;
+        const jh = jumpHosts.find(h => h.id === id);
+        if (!jh) return;
+        if (chain.some(c => c.id === id)) { alert('Already in chain'); return; }
+        chain.push(jh);
+        renderChain();
+        sel.value = '';
+    }
+
+    function removeHop(idx) {
+        chain.splice(idx, 1);
+        renderChain();
+    }
+
+    function moveHop(idx, dir) {
+        const newIdx = idx + dir;
+        if (newIdx < 0 || newIdx >= chain.length) return;
+        [chain[idx], chain[newIdx]] = [chain[newIdx], chain[idx]];
+        renderChain();
+    }
+
+    function clearChain() {
+        chain = [];
+        renderChain();
+    }
+
+    function renderChain() {
+        const el = document.getElementById('chain-visual');
+        if (chain.length === 0) {
+            el.innerHTML = '<span class="text-gray-500 text-sm">Add hops to build a tunnel chain</span>';
+            return;
+        }
+        el.innerHTML = chain.map((jh, i) => {
+            const arrow = i < chain.length - 1 ? '<svg class="w-5 h-5 text-gray-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8l4 4m0 0l-4 4m4-4H3"/></svg>' : '';
+            return `
+                <div class="flex items-center gap-1">
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm relative group">
+                        <div class="text-gray-200 font-medium">${esc(jh.name)}</div>
+                        <div class="text-xs text-gray-500">${esc(jh.hostname)}:${jh.port}</div>
+                        <button onclick="removeHop(${i})" class="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-600 hover:bg-red-500 text-white rounded-full text-xs hidden group-hover:flex items-center justify-center">&times;</button>
+                        <div class="absolute top-1/2 -translate-y-1/2 -left-3 hidden group-hover:flex gap-0.5">
+                            ${i > 0 ? `<button onclick="moveHop(${i},-1)" class="w-3 h-3 bg-gray-600 hover:bg-gray-500 rounded text-[8px] text-white">&uarr;</button>` : ''}
+                        </div>
+                        <div class="absolute top-1/2 -translate-y-1/2 -right-6 hidden group-hover:flex gap-0.5">
+                            ${i < chain.length - 1 ? `<button onclick="moveHop(${i},1)" class="w-3 h-3 bg-gray-600 hover:bg-gray-500 rounded text-[8px] text-white">&darr;</button>` : ''}
+                        </div>
+                    </div>
+                    ${arrow}
+                </div>
+            `;
+        }).join('');
+    }
+
+    async function loadActiveTunnels() {
+        try {
+            const res = await fetch('/api/admin/tunnels/active');
+            const tunnels = await res.json();
+            const el = document.getElementById('active-tunnels-table');
+            if (!tunnels.length) {
+                el.innerHTML = '<p class="text-gray-500 text-sm">No active tunnels</p>';
+                return;
+            }
+            el.innerHTML = `<table class="w-full text-sm"><thead><tr class="text-left text-gray-500 border-b border-gray-800">
+                <th class="pb-2 font-medium">Name</th><th class="pb-2 font-medium">Hops</th><th class="pb-2 font-medium">User</th>
+                <th class="pb-2 font-medium">Status</th><th class="pb-2 font-medium">Duration</th><th class="pb-2 font-medium">Actions</th>
+            </tr></thead><tbody>${tunnels.map(t => `<tr class="border-b border-gray-800/50">
+                <td class="py-2 text-gray-200">${esc(t.name || '')}</td>
+                <td class="py-2 text-gray-400">${t.hops || ''}</td>
+                <td class="py-2 text-gray-400">${esc(t.user || '')}</td>
+                <td class="py-2"><span class="px-2 py-0.5 text-xs rounded-full ${t.status === 'connected' ? 'bg-green-900/50 text-green-300' : t.status === 'error' ? 'bg-red-900/50 text-red-300' : 'bg-yellow-900/50 text-yellow-300'}">${t.status || 'unknown'}</span></td>
+                <td class="py-2 text-gray-400">${t.duration || ''}</td>
+                <td class="py-2"><button onclick="disconnectTunnel('${t.id}')" class="text-xs text-red-400 hover:text-red-300">Disconnect</button></td>
+            </tr>`).join('')}</tbody></table>`;
+        } catch (e) {
+            console.error('Failed to load active tunnels:', e);
+        }
+    }
+
+    async function disconnectTunnel(id) {
+        if (!confirm('Disconnect this tunnel?')) return;
+        // Placeholder — actual disconnect API would go here
+    }
+
+    // Refresh active tunnels periodically
+    loadActiveTunnels();
+    setInterval(loadActiveTunnels, 15000);
+
+    function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+</script>
+{% endblock %}

@@ -63,7 +63,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 
 ## Authentication
 
-rustguac supports two parallel authentication paths. See [Roles and Access Control](roles-and-access-control.md) for the full role system.
+rustguac supports a pluggable authentication chain. Providers are tried in config order — first success wins. An optional TOTP second factor can be layered on top. See [Roles and Access Control](roles-and-access-control.md) for the full role system.
 
 ### API key authentication
 
@@ -81,6 +81,34 @@ rustguac supports two parallel authentication paths. See [Roles and Access Contr
 - Configurable TTL (default: 24 hours)
 - PKCE and nonce validation on every login flow
 - Works with any OIDC provider (Authentik, Keycloak, Okta, Azure AD, Google, etc.)
+
+### LDAP authentication
+
+- Bind+search against any LDAP/AD server
+- Supports ldaps://, StartTLS, and configurable TLS verification
+- Group resolution via memberOf or direct group search
+- Configurable user attributes (display name, email)
+
+### RADIUS authentication
+
+- RFC 2865 compliant PAP, CHAP, and MSCHAPv2 protocols
+- Configurable as primary authenticator or MFA step
+- Access-Challenge handling for MFA flows
+- UDP communication with configurable retries and timeout
+
+### SAML 2.0 authentication
+
+- Full SP-side SAML flow: metadata parsing, signed AuthnRequests, ACS callback validation
+- Supports both URL-based and file-based IdP metadata
+- Signature verification with configurable strict mode
+- Group extraction from SAML attributes
+
+### Database (local password) authentication
+
+- Argon2id password hashing with OWASP-recommended parameters
+- Constant-time hash comparison to prevent timing attacks
+- User enumeration prevention via dummy hash computation on unknown accounts
+- See [Password policies](#password-policies) below
 
 ### User API token authentication
 
@@ -160,13 +188,102 @@ All responses include the following headers:
 
 rustguac logs security-relevant events via the `tracing` framework:
 
-- Authentication failures (API key, user token, and OIDC)
+- Authentication failures (API key, user token, OIDC, LDAP, RADIUS, SAML, database)
 - Session creation, connection, and termination
 - WebSocket connect/disconnect events
 - Admin operations (user management, key rotation)
 - Client IP addresses (resolved via trusted proxies)
 
 Additionally, user API token operations are logged to a persistent `token_audit_log` database table (see [User API token authentication](#user-api-token-authentication) above). This provides a queryable audit trail for token creation, revocation, and usage — retained for 90 days.
+
+### Hash chain audit logging
+
+rustguac maintains a SHA-256 hash chain for audit events, providing tamper evidence. Each event includes a hash of the previous event, forming an append-only chain:
+
+- Events include: event type, timestamp, user ID, source IP, outcome, details, and session ID
+- Each event hash is computed from canonical JSON (sorted keys, no whitespace) of all fields plus the previous hash
+- Chain verification can be run via the CLI (`rustguac verify-audit-chain`) or the Admin UI
+- A broken chain indicates tampering — the event at the break point and all subsequent events are flagged
+
+**Verification result:**
+```
+Chain status: Verified
+Events scanned: 1,234
+Errors: 0
+```
+
+Or on tamper detection:
+```
+Chain status: Broken
+Events scanned: 567
+Errors:
+  Event #234: hash mismatch (expected abc123, got def456)
+  Event #235: prev_hash mismatch (expected def456, got ...)
+```
+
+## Password policies
+
+Local database authentication uses Argon2id with OWASP-recommended parameters:
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Memory | 46 MiB | OWASP minimum recommendation |
+| Iterations | 3 | Cost factor |
+| Parallelism | 1 | Thread count |
+| Output | 32 bytes | PHC-encoded hash string |
+
+Passwords are stored as PHC-encoded Argon2id hashes containing all parameters. Verification uses the stored parameters — no need to supply the same params at verify time.
+
+**Additional password security:**
+- Constant-time comparison prevents timing attacks
+- User enumeration prevention: unknown usernames trigger a dummy hash computation
+- No password complexity rules enforced server-side (recommended to enforce via IdP or policy)
+- Passwords are never logged or included in error messages
+
+## Account lockout
+
+Failed authentication attempts are tracked per-user. After a configurable number of failed attempts, the account is temporarily locked with progressive delay:
+
+| Failed attempts | Lockout duration |
+|----------------|------------------|
+| 5 | 30 seconds |
+| 10 | 5 minutes |
+| 15+ | 30 minutes |
+
+Lockout state is per-user and resets on successful authentication. The lockout counter is not exposed to users (no "N attempts remaining" messages) to prevent enumeration.
+
+## RBAC (Role-Based Access Control)
+
+rustguac implements two layers of access control:
+
+### System permissions
+
+System-wide permissions not tied to specific objects:
+
+| Permission | Description |
+|-----------|-------------|
+| `administer` | Full system administration |
+| `create_session` | Create ad-hoc sessions |
+| `create_connection` | Create new connections |
+| `create_connection_group` | Create connection groups |
+| `create_user_group` | Create user groups |
+| `audit` | View and verify audit logs |
+
+### Object permissions (connection-level)
+
+Fine-grained permissions on individual connections and connection groups:
+
+| Permission | Description |
+|-----------|-------------|
+| `read` | View connection details |
+| `connect` | Create sessions from this connection |
+| `update` | Modify connection settings |
+| `delete` | Remove the connection |
+| `administer` | Full control over the connection |
+
+Permissions can be granted to users or groups directly on connections, or inherited from parent groups. Group membership is resolved from OIDC claims, LDAP, or SAML attributes.
+
+See [Roles and Access Control](roles-and-access-control.md) for the full RBAC model.
 
 ## Session security
 
@@ -226,6 +343,43 @@ Each web session gets a unique Chromium profile directory (UUID-based path in `/
 ### Sandbox
 
 Chromium runs with its normal sandbox enabled (via the SUID `chrome-sandbox` helper). The `--no-sandbox` flag is not used.
+
+## TLS hot-reload
+
+TLS certificates can be rotated without restarting rustguac:
+
+- **File watcher** — inotify/kqueue monitors the certificate and key files for changes
+- **SIGHUP** — send `SIGHUP` to the rustguac process to force immediate reload
+- **Admin UI** — upload new certificates via the admin settings page
+
+When a change is detected, rustguac reloads the certificate and key from disk and begins serving the new TLS configuration on subsequent connections. Existing connections are not interrupted.
+
+## Multi-database encryption at rest
+
+When using MySQL, PostgreSQL, or SQLite via `db_url`, connection credentials can be encrypted at rest using AES-256-GCM:
+
+```toml
+[storage]
+encryption_key = "aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344"
+```
+
+Encrypted values are prefixed with `enc:v1:` for future key rotation support. The encryption key can also be provided via the `RGUAC_STORAGE_KEY` environment variable.
+
+**What is encrypted:**
+- Connection passwords
+- SSH private keys
+- Proxmox token secrets
+- Any credential field marked as sensitive in connection entries
+
+**What is not encrypted:**
+- Connection hostnames, ports, and protocol settings
+- User accounts and roles (stored in the admin database)
+- Session recordings and audit logs
+
+**Key management:**
+- The encryption key is never logged or included in API responses
+- Key rotation requires re-encrypting all stored credentials (a migration tool is provided)
+- For maximum security, store the key in a secrets manager and pass via environment variable
 
 ## File permissions
 

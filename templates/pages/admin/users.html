@@ -1,0 +1,210 @@
+{% extends "layouts/app.html" %}
+
+{% block title %}{{ site_title }} — Users{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-100">User Management</h1>
+            <p class="text-sm text-gray-500 mt-1">Manage OIDC and local users, roles, and access</p>
+        </div>
+        <button onclick="document.getElementById('add-user-modal').classList.remove('hidden')"
+                class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+            + Add User
+        </button>
+    </div>
+
+    <!-- Filters -->
+    <div class="flex items-center gap-4 mb-4">
+        <input type="text" id="user-search" placeholder="Search by name or email..."
+               hx-get="/api/users"
+               hx-trigger="keyup changed delay:300ms"
+               hx-target="#user-table-body"
+               hx-include="[name='role_filter'],[name='status_filter']"
+               name="q"
+               class="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm focus:ring-2 focus:ring-emerald-500">
+        <select id="role-filter" name="role_filter"
+                hx-get="/api/users"
+                hx-trigger="change"
+                hx-target="#user-table-body"
+                hx-include="[name='q'],[name='status_filter']"
+                class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+            <option value="">All Roles</option>
+            <option value="admin">Admin</option>
+            <option value="poweruser">Power User</option>
+            <option value="operator">Operator</option>
+            <option value="viewer">Viewer</option>
+        </select>
+        <select id="status-filter" name="status_filter"
+                hx-get="/api/users"
+                hx-trigger="change"
+                hx-target="#user-table-body"
+                hx-include="[name='q'],[name='role_filter']"
+                class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+            <option value="">All Status</option>
+            <option value="active">Active</option>
+            <option value="disabled">Disabled</option>
+        </select>
+    </div>
+
+    <!-- Users Table -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
+                    <th class="px-4 py-3">Name</th>
+                    <th class="px-4 py-3">Email</th>
+                    <th class="px-4 py-3">Role</th>
+                    <th class="px-4 py-3">Auth Source</th>
+                    <th class="px-4 py-3">Status</th>
+                    <th class="px-4 py-3">Last Login</th>
+                    <th class="px-4 py-3 text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="user-table-body" class="divide-y divide-gray-800"
+                  hx-get="/api/users"
+                  hx-trigger="load"
+                  hx-swap="innerHTML">
+                <tr><td colspan="7" class="px-4 py-8 text-center text-gray-500 text-sm">Loading users...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    <div id="user-pagination" class="flex items-center justify-between mt-4 text-sm text-gray-500">
+        <span id="user-count"></span>
+        <div id="user-pages" class="flex gap-1"></div>
+    </div>
+</div>
+
+<!-- Add User Modal -->
+<div id="add-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-md">
+        <h2 class="text-lg font-bold text-gray-100 mb-4">Add User</h2>
+        <form hx-post="/api/users"
+              hx-target="#user-table-body"
+              hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('add-user-modal').classList.add('hidden')">
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1">Name</label>
+                    <input type="text" name="name" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1">Email</label>
+                    <input type="email" name="email" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-300 mb-1">Role</label>
+                    <select name="role" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                        <option value="viewer">Viewer</option>
+                        <option value="operator">Operator</option>
+                        <option value="poweruser">Power User</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button type="button" onclick="document.getElementById('add-user-modal').classList.add('hidden')"
+                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Cancel</button>
+                <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Role Modal -->
+<div id="edit-role-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-sm">
+        <h2 class="text-lg font-bold text-gray-100 mb-4">Change Role</h2>
+        <form hx-target="#user-table-body" hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('edit-role-modal').classList.add('hidden')">
+            <input type="hidden" name="email" id="edit-role-email">
+            <div class="mb-4">
+                <label class="block text-sm text-gray-300 mb-1">New Role</label>
+                <select name="role" id="edit-role-value" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                    <option value="viewer">Viewer</option>
+                    <option value="operator">Operator</option>
+                    <option value="poweruser">Power User</option>
+                    <option value="admin">Admin</option>
+                </select>
+            </div>
+            <div class="flex justify-end gap-3">
+                <button type="button" onclick="document.getElementById('edit-role-modal').classList.add('hidden')"
+                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Cancel</button>
+                <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Confirm Modal -->
+<div id="delete-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-sm">
+        <h2 class="text-lg font-bold text-gray-100 mb-2">Delete User</h2>
+        <p class="text-sm text-gray-400 mb-4">This action cannot be undone. User <span id="delete-user-name" class="text-gray-200"></span> will be permanently removed.</p>
+        <form hx-delete="" id="delete-user-form"
+              hx-target="#user-table-body" hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('delete-user-modal').classList.add('hidden')">
+            <div class="flex justify-end gap-3">
+                <button type="button" onclick="document.getElementById('delete-user-modal').classList.add('hidden')"
+                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Cancel</button>
+                <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium">Delete</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function editUserRole(email, currentRole) {
+    document.getElementById('edit-role-email').value = email;
+    document.getElementById('edit-role-value').value = currentRole;
+    document.getElementById('edit-role-modal').classList.remove('hidden');
+}
+
+function deleteUser(email) {
+    document.getElementById('delete-user-name').textContent = email;
+    document.getElementById('delete-user-form').setAttribute('hx-delete', '/api/users/' + encodeURIComponent(email));
+    document.getElementById('delete-user-modal').classList.remove('hidden');
+}
+
+function toggleUserStatus(email, currentStatus) {
+    var endpoint = currentStatus === 'active'
+        ? '/api/users/' + encodeURIComponent(email) + '/disable'
+        : '/api/users/' + encodeURIComponent(email) + '/enable';
+    fetch(endpoint, { method: 'POST' })
+        .then(function() { htmx.trigger('#user-table-body', 'load'); });
+}
+
+// Role badge colors
+function roleBadge(role) {
+    var colors = {
+        admin: 'bg-red-900/50 text-red-300 border-red-800',
+        poweruser: 'bg-amber-900/50 text-amber-300 border-amber-800',
+        operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
+        viewer: 'bg-gray-800 text-gray-400 border-gray-700'
+    };
+    return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[role] || colors.viewer) + '">' + role + '</span>';
+}
+
+function renderUserRow(user) {
+    var statusClass = user.disabled ? 'text-red-400' : 'text-emerald-400';
+    var statusText = user.disabled ? 'Disabled' : 'Active';
+    var toggleLabel = user.disabled ? 'Enable' : 'Disable';
+    var toggleClass = user.disabled ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300';
+    return '<tr class="hover:bg-gray-800/50">' +
+        '<td class="px-4 py-3 text-sm text-gray-200">' + (user.name || '-') + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-400">' + (user.email || '-') + '</td>' +
+        '<td class="px-4 py-3">' + roleBadge(user.role) + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-500">' + (user.auth_source || 'oidc') + '</td>' +
+        '<td class="px-4 py-3 text-sm ' + statusClass + '">' + statusText + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-500">' + (user.last_login_at || 'never') + '</td>' +
+        '<td class="px-4 py-3 text-right text-sm">' +
+            '<button onclick="editUserRole(\'' + user.email + '\',\'' + user.role + '\')" class="text-gray-400 hover:text-emerald-400 mr-3">Edit Role</button>' +
+            '<button onclick="toggleUserStatus(\'' + user.email + '\',\'' + statusText.toLowerCase() + '\')" class="' + toggleClass + ' mr-3">' + toggleLabel + '</button>' +
+            '<button onclick="deleteUser(\'' + user.email + '\')" class="text-gray-400 hover:text-red-400">Delete</button>' +
+        '</td></tr>';
+}
+</script>
+{% endblock %}

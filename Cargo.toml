@@ -37,18 +37,34 @@ sha2 = "0.11"
 subtle = "2"
 aes = "0.9"
 cbc = "0.2"
+aes-gcm = "0.10"
 pbkdf2 = { version = "0.13", default-features = false }
 hmac = "0.13"
 sha1 = "0.11"
+md-5 = "0.11"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
+sqlx = { version = "0.8", features = [
+    "runtime-tokio",
+    "tls-rustls",
+    "postgres",
+    "mysql",
+    "sqlite",
+    "any",
+    "migrate",
+    "macros",
+    "uuid",
+    "chrono",
+    "json",
+] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
 
 # IP matching
 ipnetwork = "0.21"
+local-ip-address = "0.6"
 
 # TLS
 axum-server = { version = "0.8", features = ["tls-rustls"] }
@@ -93,6 +109,25 @@ serde_urlencoded = "0.7"
 
 # Unified error handling
 thiserror = "2"
+
+# Templates
+minijinja = "1"
+
+# Auth provider architecture
+async-trait = "0.1"
+bitflags = "2"
+
+# SAML 2.0
+quick-xml = "0.41"
+ring = "0.17"
+flate2 = "1"
+ldap3 = { version = "0.12", default-features = false, features = ["sync", "tls-rustls-ring"] }
+
+# TOTP MFA
+totp-rs = { version = "5", features = ["otpauth", "qr", "gen_secret"] }
+
+# Password hashing (Argon2id)
+argon2 = "0.5"
 
 [dev-dependencies]
 proptest = "1"

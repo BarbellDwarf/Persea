@@ -4,19 +4,23 @@
 
 rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, web browser sessions, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
 
-rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication, session recording, VDI container orchestration, and Vault-backed connection storage.
+rustguac sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication (LDAP, OIDC, SAML, RADIUS, TOTP, database, API keys), session recording, VDI container orchestration, connection-level RBAC, and credential storage (Vault or encrypted DB).
 
-The connections feature (the main user-facing UI) requires HashiCorp Vault or OpenBao for credential storage. Without one, rustguac falls back to ad-hoc-only sessions created via the API. See [Vault / OpenBao Connections](integrations.md#vault--openbao-connections) for setup, including the `contrib/vault-quickstart.sh` helper.
+The connections feature supports credential storage in HashiCorp Vault / OpenBao, or directly in the database with AES-256-GCM encryption. See [Configuration](configuration.md) for the full reference.
 
 ## Why not Apache Guacamole?
 
 Apache Guacamole is a mature, feature-rich platform. rustguac is a purpose-built alternative for organisations that want:
 
 - **No Java stack** — rustguac is a single Rust binary. No Tomcat, no WAR files, no JVM tuning.
-- **Security-first design** — CIDR allowlists, TLS everywhere, LUKS-encrypted file transfer, Vault integration, rate limiting, audit logging.
+- **Auth parity** — LDAP, OIDC, SAML, RADIUS, TOTP MFA, local database, and API keys. Pluggable auth chain with configurable provider ordering and MFA support.
+- **Multi-DB support** — MySQL, PostgreSQL, or SQLite. Same binary, same config, different backends.
+- **Security-first design** — CIDR allowlists, TLS everywhere, LUKS-encrypted file transfer, Vault integration, rate limiting, SHA-256 hash chain audit logging, Argon2id password hashing, account lockout.
 - **Simpler deployment** — one binary + guacd. Install with a single script or Docker image.
 - **VDI desktops** — ephemeral Docker containers give each user an isolated Linux desktop on demand. No VM infrastructure required.
-- **Connections in Vault** — connection credentials stored in HashiCorp Vault / OpenBao KV v2. Credentials never reach the browser.
+- **Connections in Vault or DB** — credentials stored in HashiCorp Vault / OpenBao KV v2, or encrypted at rest in the database with AES-256-GCM. Credentials never reach the browser.
+- **VMware vSphere integration** — VM inventory, OS-aware protocol routing (RDP/SSH/VNC), and direct connection to guest IPs via vCenter REST API.
+- **Connection-level RBAC** — fine-grained permissions on individual connections and connection groups, with group-based inheritance.
 - **Zero-trust integration** — works with [Knocknoc](https://knocknoc.io) for identity-aware network access control at the HAProxy layer.
 
 ## Similarities to Apache Guacamole
@@ -26,20 +30,24 @@ rustguac and Apache Guacamole share the same foundation:
 - **guacd** — both use guacd from [guacamole-server](https://github.com/apache/guacamole-server) for protocol translation. This is the same battle-tested C daemon.
 - **Guacamole protocol** — the wire protocol between the webapp and guacd is identical. rustguac uses the same instruction format, the same JavaScript client library (`guac-common-js`), and the same WebSocket framing.
 - **Session recording** — recordings are in the standard Guacamole format and can be played back with the bundled player.
-- **SSH/RDP/VNC support** — the same protocol backends provided by guacd. rustguac adds web browser and VDI container session types on top.
+- **SSH/RDP/VNC support** — the same protocol backends provided by guacd. rustguac adds web browser, VDI container, and Proxmox session types on top.
+- **Auth parity** — LDAP, RADIUS, TOTP, SAML, and local database authentication are all supported, matching Apache Guacamole's provider set. rustguac adds OIDC and a pluggable auth chain with MFA support.
 
 ## Key differences from Apache Guacamole
 
 | Feature | Apache Guacamole | rustguac |
 |---------|-----------------|----------|
 | **Runtime** | Java (Tomcat + Guice + Jersey) | Rust (single binary) |
-| **Database** | MySQL/PostgreSQL | SQLite (embedded) |
-| **Credential storage** | Database tables | Vault KV v2 (server-side only) |
-| **Authentication** | LDAP, RADIUS, TOTP, SAML, database | OIDC SSO + API keys |
+| **Database** | MySQL/PostgreSQL | MySQL, PostgreSQL, SQLite |
+| **Credential storage** | Database tables | Vault KV v2 (optional) or DB with AES-256-GCM encryption at rest |
+| **Authentication** | LDAP, RADIUS, TOTP, SAML, database | LDAP, OIDC, SAML, RADIUS, TOTP MFA, database, API keys — pluggable auth chain |
+| **RBAC** | System permissions only | System permissions + connection-level object permissions with group inheritance |
+| **Audit logging** | Basic | SHA-256 hash chain with tamper evidence, CLI and admin UI verification |
 | **Web sessions** | Not supported | Headless Chromium on Xvnc |
 | **Ephemeral SSH keys** | Not supported | Ed25519 keypair per session |
 | **File transfer encryption** | Not supported | LUKS + Vault key management |
 | **Multi-hop SSH tunnels** | Not supported | Chain multiple SSH bastion hops to reach isolated targets |
+| **VMware vSphere** | Not supported | VM inventory, OS-aware protocol routing (RDP/SSH/VNC) |
 | **Network allowlists** | Not supported | CIDR allowlists per protocol |
 | **Rate limiting** | Not built-in | Per-IP, per-endpoint (tower_governor) |
 | **Reverse proxy integration** | Generic | HAProxy + Knocknoc examples |
@@ -146,29 +154,49 @@ Each hop supports independent credentials (username + password or private key). 
 
 ```
 src/
-  main.rs          Entry point, CLI, server setup
-  api.rs           REST API endpoints
-  auth.rs          API key + OIDC session authentication middleware
-  browser.rs       Xvnc + Chromium process manager
-  config.rs        TOML config loading
-  db.rs            SQLite database (admins, OIDC users, sessions)
-  drive.rs         Drive / file transfer + LUKS lifecycle
-  guacd.rs         guacd TLS/TCP connection & protocol handshake
-  oidc.rs          OpenID Connect login flow
-  protocol.rs      Guacamole wire format parser
-  session.rs       Session state machine
-  tunnel.rs        Multi-hop SSH tunnel chain
-  vault.rs         Vault/OpenBao KV v2 client (AppRole auth)
-  vdi/mod.rs       VDI driver trait and container types
-  vdi/docker.rs    Docker-based VDI driver (bollard)
-  websocket.rs     WebSocket <-> guacd proxy
+  main.rs              Entry point, CLI, server setup
+  config.rs            TOML config loading with defaults
+  auth.rs              Auth middleware (API key, OIDC session, WebSocket tickets)
+  auth_provider.rs     AuthProvider trait, Capabilities bitflags, AuthResult
+  auth_chain.rs        Ordered provider chain with MFA support
+  auth_providers/      Individual auth provider implementations:
+    database.rs          Local password auth (Argon2id)
+    ldap.rs              LDAP bind+search auth
+    oidc.rs              OpenID Connect login flow
+    saml.rs              SAML 2.0 SP (XML metadata, signed requests)
+    radius.rs            RADIUS PAP/CHAP/MSCHAPv2 auth
+    totp.rs              TOTP MFA second factor
+  api.rs               REST API endpoints
+  browser.rs           Xvnc + Chromium process manager
+  crypto.rs            AES-256-GCM credential encryption
+  db.rs                SQLite admin database (rusqlite)
+  db_pool.rs           SQLx multi-backend pool (PostgreSQL/MySQL/SQLite)
+  db_migrate.rs        Vault-to-DB migration tool
+  drive.rs             Drive / file transfer + LUKS lifecycle
+  guacd.rs             guacd TLS/TCP connection & protocol handshake
+  password.rs          Argon2id hashing/verification (OWASP params)
+  protocol.rs          Guacamole wire format parser
+  rbac.rs              RBAC: system + object permissions, connection groups
+  audit.rs             SHA-256 hash chain audit logging
+  session.rs           Session state machine
+  totp.rs              TOTP enrollment, QR codes, verification
+  tunnel.rs            Multi-hop SSH tunnel chain
+  vault.rs             Vault/OpenBao KV v2 client (AppRole auth)
+  vsphere.rs           VMware vSphere REST API (VM inventory, OS detection)
+  vdi/mod.rs           VDI driver trait and container types
+  vdi/docker.rs        Docker-based VDI driver (bollard)
+  websocket.rs         WebSocket <-> guacd proxy
+  recording.rs         Recording rotation and management
+  templates.rs         HTML template rendering (minijinja)
+  metrics.rs           Prometheus metrics
 static/
-  *.html           Web UI pages
-  guac/            Guacamole JS client library
-docs/              This documentation
-patches/           guacd patches for FreeRDP 3.x
-contrib/           Target server setup scripts (xrdp, audio, Windows, VDI test image)
-scripts/           Utility scripts (drive-setup.sh)
+  *.html               Web UI pages
+  guac/                Guacamole JS client library
+docs/                  This documentation
+migrations/            Per-backend schema DDL (PostgreSQL/MySQL/SQLite)
+patches/               guacd patches for FreeRDP 3.x
+contrib/               Target server setup scripts (xrdp, audio, Windows, VDI test image)
+scripts/               Utility scripts (drive-setup.sh)
 ```
 
 ## Documentation
@@ -179,7 +207,7 @@ scripts/           Utility scripts (drive-setup.sh)
 - [Configuration](configuration.md) -- full config.toml reference
 
 ### Features
-- [Roles and Access Control](roles-and-access-control.md) -- 4-tier role hierarchy, OIDC groups, user API tokens
+- [Roles and Access Control](roles-and-access-control.md) -- 4-tier role hierarchy, connection-level RBAC, OIDC groups, user API tokens
 - [Web Browser Sessions](web-sessions.md) -- autofill, domain allowlisting, login scripts
 - [Credential Variables](credential-variables.md) -- shared credentials across entries
 - [Reports](reports.md) -- session analytics, history, CSV export

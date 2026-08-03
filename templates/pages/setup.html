@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Setup — rustguac{% endblock %}
+
+{% block body %}
+<div class="login-wrapper">
+    <div class="login-card" style="max-width:520px">
+
+        <div class="login-logo">
+            <div class="login-logo-icon">rg</div>
+        </div>
+
+        <h1 class="login-title">rustguac Setup</h1>
+        <p class="login-subtitle">Configure your installation</p>
+
+        {% if error %}
+        <div class="alert alert-error">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" action="/setup">
+
+            <!-- Server -->
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:20px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)">Server</h3>
+
+            <div class="form-group">
+                <label class="form-label" for="listen_addr">Listen Address</label>
+                <input type="text" id="listen_addr" name="listen_addr" class="form-input"
+                       value="{{ listen_addr }}" placeholder="0.0.0.0:8089">
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="db_path">Database Path</label>
+                <input type="text" id="db_path" name="db_path" class="form-input"
+                       value="{{ db_path }}" placeholder="/opt/rustguac/data/rustguac.db">
+            </div>
+
+            <!-- guacd -->
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:20px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)">guacd</h3>
+
+            <div class="form-group">
+                <label class="form-label" for="guacd_mode">Mode</label>
+                <select id="guacd_mode" name="guacd_mode" class="form-input">
+                    <option value="embedded" {% if guacd_mode == 'embedded' %}selected{% endif %}>Embedded (run guacd on this server)</option>
+                    <option value="external" {% if guacd_mode == 'external' %}selected{% endif %}>External (connect to remote guacd)</option>
+                </select>
+            </div>
+
+            <div class="form-group" id="guacd-addr-group" style="{% if guacd_mode == 'embedded' %}display:none{% endif %}">
+                <label class="form-label" for="guacd_addr">guacd Address</label>
+                <input type="text" id="guacd_addr" name="guacd_addr" class="form-input"
+                       value="{{ guacd_addr }}" placeholder="127.0.0.1:4822">
+            </div>
+
+            <div class="form-group" id="guacd-path-group" style="{% if guacd_mode == 'external' %}display:none{% endif %}">
+                <label class="form-label" for="guacd_path">guacd Binary Path</label>
+                <input type="text" id="guacd_path" name="guacd_path" class="form-input"
+                       value="{{ guacd_path }}" placeholder="/usr/sbin/guacd">
+            </div>
+
+            <!-- Admin Account -->
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:20px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)">Admin Account</h3>
+
+            <div class="form-group">
+                <label class="form-label" for="admin_email">Email</label>
+                <input type="email" id="admin_email" name="admin_email" class="form-input"
+                       value="{{ admin_email }}" placeholder="admin@example.com" required>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="admin_name">Display Name</label>
+                <input type="text" id="admin_name" name="admin_name" class="form-input"
+                       value="{{ admin_name }}" placeholder="Administrator" required>
+            </div>
+
+            <div class="form-group">
+                <label class="form-label" for="admin_password">Password</label>
+                <input type="password" id="admin_password" name="admin_password" class="form-input"
+                       placeholder="Minimum 8 characters" required minlength="8">
+            </div>
+
+            <!-- Feature Flags -->
+            <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:20px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)">Features</h3>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text-secondary)">
+                    <input type="checkbox" name="feature_proxmox" value="1" checked style="accent-color:var(--accent)"> Proxmox VE
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text-secondary)">
+                    <input type="checkbox" name="feature_vmware" value="1" style="accent-color:var(--accent)"> VMware vSphere
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text-secondary)">
+                    <input type="checkbox" name="feature_recordings" value="1" checked style="accent-color:var(--accent)"> Session Recording
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text-secondary)">
+                    <input type="checkbox" name="feature_tunnels" value="1" checked style="accent-color:var(--accent)"> SSH Tunnels
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text-secondary)">
+                    <input type="checkbox" name="feature_browser" value="1" style="accent-color:var(--accent)"> Web Browser Sessions
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-size:13px;color:var(--text-secondary)">
+                    <input type="checkbox" name="feature_vdi" value="1" style="accent-color:var(--accent)"> VDI Containers
+                </label>
+            </div>
+
+            <button type="submit" class="btn btn-primary mt-6">Complete Setup</button>
+        </form>
+    </div>
+</div>
+
+<script>
+document.getElementById('guacd_mode').addEventListener('change', function() {
+    document.getElementById('guacd-addr-group').style.display = this.value === 'external' ? '' : 'none';
+    document.getElementById('guacd-path-group').style.display = this.value === 'embedded' ? '' : 'none';
+});
+</script>
+{% endblock %}

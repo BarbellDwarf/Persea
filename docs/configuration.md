@@ -16,8 +16,11 @@ See `config.example.toml` for a fully commented reference.
 | `guacd_addr` | `127.0.0.1:4822` | guacd TCP address |
 | `recording_path` | `./recordings` | Session recording directory |
 | `static_path` | `./static` | Static web files directory |
-| `db_path` | `./rustguac.db` | SQLite database path |
+| `db_path` | `./rustguac.db` | SQLite database path (used when `db_url` is not set) |
+| `db_url` | — | Multi-backend database URL: `postgres://...`, `mysql://...`, or `sqlite://...` (see [Multi-database backend](#multi-database-backend)) |
 | `site_title` | `rustguac` | Browser tab and page header title |
+| `max_sessions` | `500` | Maximum concurrent sessions (all types). 0 = unlimited |
+| `max_sessions_per_user` | `50` | Maximum concurrent sessions per user. 0 = unlimited |
 
 ## Session timeouts
 
@@ -116,6 +119,163 @@ Enables OpenID Connect authentication. When configured, the web UI shows a login
 | `tls_skip_verify` | `false` | Skip TLS verification (debugging only — exposes secrets to MITM) |
 
 **Note:** `issuer_url` must match the discovered issuer URI **exactly**, including default ports and trailing slashes. For example, `https://idp.example.com/` and `https://idp.example.com` may be treated as different issuers. Check your provider's `.well-known/openid-configuration` for the canonical value.
+
+## `[auth]` section
+
+Configures the pluggable authentication chain. Providers are tried in the order listed in `methods`. The first provider to succeed wins. An optional TOTP second factor can be layered on top.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `methods` | `["database"]` | Ordered list of primary auth methods. Available: `database`, `ldap`, `oidc`, `saml`, `radius`, `api_key` |
+| `ldap` | — | LDAP provider config (see below) |
+| `radius` | — | RADIUS provider config (see below) |
+| `saml` | — | SAML provider config (see below) |
+| `totp` | — | TOTP MFA second-factor config (see below) |
+
+Example — LDAP primary with TOTP MFA:
+```toml
+[auth]
+methods = ["ldap", "database"]
+
+[auth.ldap]
+url = "ldaps://ldap.example.com:636"
+bind_dn = "cn=binduser,dc=example,dc=com"
+bind_password = "..."
+user_search_base = "ou=users,dc=example,dc=com"
+user_search_filter = "(uid={})"
+
+[auth.totp]
+issuer = "rustguac"
+enforcement = "All"
+```
+
+## `[auth.ldap]` section
+
+LDAP/Active Directory authentication. Performs a bind+search to authenticate users and optionally resolve group memberships.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `url` | — | LDAP server URL, e.g. `ldap://ldap.example.com:389` or `ldaps://ldap.example.com:636` (required) |
+| `bind_dn` | — | Service account bind DN, e.g. `cn=admin,dc=example,dc=com` (required) |
+| `bind_password` | — | Service account password (required) |
+| `user_search_base` | — | Base DN for user searches, e.g. `ou=users,dc=example,dc=com` (required) |
+| `user_search_filter` | — | Search filter with `{}` as username placeholder, e.g. `(uid={})` or `(sAMAccountName={})` (required) |
+| `group_search_base` | — | Base DN for group searches. If omitted, groups are not resolved |
+| `group_search_filter` | — | Group search filter with `{}` as user DN placeholder, e.g. `(member={})` |
+| `tls_skip_verify` | `false` | Skip TLS certificate verification (for self-signed certs) |
+| `starttls` | `false` | Use StartTLS instead of ldaps:// (connects on port 389, upgrades to TLS) |
+| `connect_timeout_secs` | `10` | Connection timeout in seconds |
+| `display_name_attr` | `cn` | LDAP attribute for the user's display name |
+| `email_attr` | `mail` | LDAP attribute for the user's email |
+
+## `[auth.radius]` section
+
+RADIUS authentication (RFC 2865). Supports PAP, CHAP, and MSCHAPv2 protocols. Can operate as primary authenticator or MFA step.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `hostname` | — | RADIUS server hostname or IP (required) |
+| `port` | `1812` | RADIUS server port |
+| `shared_secret` | — | Shared secret for RADIUS communication (required) |
+| `timeout_secs` | `5` | Request timeout in seconds |
+| `retries` | `3` | Number of retries on timeout |
+| `nas_identifier` | `rustguac` | NAS identifier string |
+| `nas_ip` | — | NAS IP address (reported to RADIUS server) |
+| `auth_protocol` | `pap` | Authentication protocol: `pap`, `chap`, or `mschapv2` |
+| `mode` | `primary` | Provider mode: `primary` (first-factor) or `mfa` (second-factor) |
+
+## `[auth.saml]` section
+
+SAML 2.0 Service Provider authentication. Handles the full SP-side flow: metadata parsing, signed AuthnRequest, and SAMLResponse validation.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `idp_metadata_url` | — | URL of the IdP metadata endpoint (XML). Either this or `idp_metadata_file` is required |
+| `idp_metadata_file` | — | Local path to IdP metadata XML file (alternative to URL) |
+| `entity_id` | — | SP entity ID — must match what's registered at the IdP (required) |
+| `acs_url` | — | Assertion Consumer Service URL — where the IdP POSTs the response (required) |
+| `certificate` | — | Base64-encoded SP X.509 certificate (for signing AuthnRequests) |
+| `private_key` | — | PEM-encoded SP private key (for signing AuthnRequests) |
+| `groups_attribute` | — | SAML attribute name to extract group memberships from |
+| `strict_mode` | `true` | When true, reject responses with missing or expired assertions |
+
+## `[auth.totp]` section
+
+TOTP (Time-based One-Time Password) MFA second factor. Users enroll via QR code scanning in authenticator apps (Google Authenticator, Authy, etc.). The TOTP provider is layered on top of the primary auth method.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `issuer` | `rustguac` | Issuer name shown in authenticator apps |
+| `digits` | `6` | Number of TOTP digits |
+| `period` | `30` | TOTP period in seconds |
+| `skew` | `1` | Clock skew tolerance (how many periods ahead/behind to accept) |
+| `enforcement` | `Off` | Enforcement policy: `Off` (optional), `AdminsOnly` (required for admin/poweruser), `All` (required for everyone) |
+
+**Enforcement policies:**
+- `Off` — TOTP enrollment is optional; users who have enrolled are verified
+- `AdminsOnly` — TOTP is required for admin and poweruser roles
+- `All` — TOTP is required for all users
+
+## Multi-database backend
+
+rustguac supports MySQL, PostgreSQL, and SQLite via SQLx. Set `db_url` in the config to use a multi-backend database:
+
+```toml
+# PostgreSQL
+db_url = "postgres://user:password@localhost:5432/rustguac"
+
+# MySQL
+db_url = "mysql://user:password@localhost:3306/rustguac"
+
+# SQLite via SQLx (alternative to the default rusqlite path)
+db_url = "sqlite:///opt/rustguac/data/rustguac.db?mode=rwc"
+```
+
+When `db_url` is set, the SQLx pool is initialised alongside the existing rusqlite `Db`. The `db_path` setting is still used for the admin database (users, API keys, sessions, tokens).
+
+**Note:** Migrations are per-backend. The schema DDL lives in `migrations/postgres/`, `migrations/mysql/`, and `migrations/sqlite/`.
+
+## `[storage]` section
+
+Controls credential encryption for DB-only mode (when not using Vault).
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `encryption_key` | — | 64-character hex string (32 bytes) for AES-256-GCM encryption of credentials at rest in the database. Can also be set via the `RGUAC_STORAGE_KEY` environment variable |
+
+When `encryption_key` is set, connection credentials stored in the database are encrypted with AES-256-GCM. Encrypted values are prefixed with `enc:v1:` for future key rotation support.
+
+```toml
+[storage]
+encryption_key = "aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344"
+```
+
+Or via environment variable:
+```bash
+RGUAC_STORAGE_KEY=aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344
+```
+
+## `[vsphere]` section
+
+VMware vSphere integration for VM inventory and OS-aware protocol routing. Connects to vCenter via the vSphere REST API (vSphere 7.0.3+) to enumerate VMs and auto-detect the right Guacamole protocol (RDP/SSH/VNC) based on the guest OS identifier.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `vcenter_addr` | — | vCenter Server URL, e.g. `https://vcenter.example.com/sdk` (required) |
+| `username` | — | vSphere username, e.g. `administrator@vsphere.local` (required) |
+| `password_env` | `VSPHERE_PASSWORD` | Name of the environment variable holding the password (never stored in config) |
+| `tls_skip_verify` | `false` | Skip TLS certificate verification |
+| `ca_cert` | — | Path to custom CA certificate (PEM) for verifying the vCenter server |
+| `datacenter` | — | Filter VMs by datacenter name |
+| `folder` | — | Filter VMs by VM folder path |
+
+```toml
+[vsphere]
+vcenter_addr = "https://vcenter.example.com/sdk"
+username = "administrator@vsphere.local"
+# password from env: VSPHERE_PASSWORD
+tls_skip_verify = false
+```
 
 ## `[vault]` section
 
@@ -373,6 +533,8 @@ home_base = "/vdi-homes"
 | `VAULT_SECRET_ID` | Vault AppRole secret ID for `[vault]` |
 | `VAULT_SHARED_SECRET_ID` | Vault AppRole secret ID for `[vault_shared]` (only if configured) |
 | `VAULT_LOCAL_SECRET_ID` | Vault AppRole secret ID for `[vault_local]` (only if configured) |
+| `RGUAC_STORAGE_KEY` | 64-char hex encryption key for DB credential storage (alternative to `[storage].encryption_key`) |
+| `VSPHERE_PASSWORD` | VMware vSphere password (alternative to `[vsphere].password_env`) |
 | `RUST_LOG` | Log level (e.g., `info`, `debug`, `rustguac=debug`) |
 
 ### Setting environment variables for systemd

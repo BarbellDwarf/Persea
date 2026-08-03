@@ -2,6 +2,7 @@ use super::{AppState, VaultBackends, VaultState};
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
+use crate::rbac;
 use crate::session::{CreateSessionRequest, SessionType};
 use crate::vault::{AddressBookEntry, FolderConfig, VaultError};
 use axum::{
@@ -424,6 +425,37 @@ pub async fn ab_connect_entry(
     };
 
     check_folder_access(&vault, &scope, &folder, &id).await?;
+
+    // RBAC connection permission check (skip for admin role)
+    if !id.has_role("admin") {
+        if let Some(db_ref) = manager.db() {
+            let db_rbac = db_ref.clone();
+            let email = id.display_name().to_string();
+            let conn_id = format!("{}/{}/{}", scope, folder, entry);
+            let has_perm = tokio::task::spawn_blocking(move || {
+                // Look up user by email to get numeric ID
+                let user = db::get_user_by_email(&db_rbac, &email).ok();
+                match user {
+                    Some(u) => rbac::check_connection_permission(
+                        &db_rbac,
+                        u.id,
+                        &conn_id,
+                        rbac::ObjectPermission::Connect,
+                    )
+                    .unwrap_or(false),
+                    // Unknown user — deny
+                    None => false,
+                }
+            })
+            .await
+            .unwrap_or(false);
+            if !has_perm {
+                return Err(AppError::Forbidden(
+                    "No permission to connect to this resource".into(),
+                ));
+            }
+        }
+    }
 
     let ab_entry = match vault.get_entry(&scope, &folder, &entry).await {
         Ok(e) => e,

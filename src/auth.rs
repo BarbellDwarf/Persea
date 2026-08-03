@@ -340,7 +340,7 @@ pub async fn optional_auth(
     let ip = client_ip(request.headers(), addr.ip(), &proxies);
 
     // Path 1: API key from Authorization header
-    let api_key = request
+    let _api_key = request
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())

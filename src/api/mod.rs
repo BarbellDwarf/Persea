@@ -8,7 +8,6 @@ pub mod tokens;
 pub mod users;
 
 use crate::vault::{AddressBookEntry, FolderConfig, VaultClient, VaultError};
-use serde::Deserialize;
 use std::sync::Arc;
 
 pub type AppState = Arc<crate::session::SessionManager>;

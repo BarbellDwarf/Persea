@@ -3,6 +3,7 @@ use crate::guacd::GuacdStream;
 use crate::tunnel;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicI64, Ordering};
 use uuid::Uuid;
 
 /// Session type: SSH terminal, web browser, RDP, VNC, VDI container, direct
@@ -285,6 +286,14 @@ pub struct Session {
     /// Surfaced in `SessionInfo` so client.html can auto-hide the
     /// clipboard/files side tabs.
     pub autohide_side_tabs: bool,
+    /// Last activity timestamp (epoch seconds). Updated on every WebSocket
+    /// input event from the browser. Used by the idle-session reaper.
+    pub last_activity: AtomicI64,
+    /// IP address of the client that created this session.
+    pub source_ip: Option<String>,
+    /// OIDC user ID (or created_by for non-OIDC sessions) for per-user
+    /// concurrent session limits.
+    pub user_id: Option<String>,
 }
 
 /// A short-lived viewer token issued by an admin to shadow an active session.
@@ -339,6 +348,17 @@ impl std::fmt::Display for SessionError {
 }
 
 impl Session {
+    /// Update last_activity to the current epoch seconds (atomic, lock-free).
+    pub fn touch_activity(&self) {
+        let now = Utc::now().timestamp();
+        self.last_activity.store(now, Ordering::Relaxed);
+    }
+
+    /// Read the last_activity timestamp (epoch seconds).
+    pub fn last_activity_secs(&self) -> i64 {
+        self.last_activity.load(Ordering::Relaxed)
+    }
+
     pub fn info(&self) -> SessionInfo {
         SessionInfo {
             session_id: self.id,

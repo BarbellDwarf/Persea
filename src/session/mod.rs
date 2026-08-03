@@ -11,6 +11,7 @@ use crate::drive;
 use crate::tunnel;
 use chrono::{DateTime, Utc};
 use rand::RngExt;
+use std::sync::Arc;
 
 /// Pure token-matching helper — constant-time comparison of a provided
 /// token against the owner's long-lived `share_token` and the in-memory
@@ -143,6 +144,72 @@ pub(super) fn drive_cleanup_settings(drive: &Option<DriveConfig>) -> (bool, u64)
         Some(d) => (d.cleanup_on_close, d.retention_secs),
         None => (true, 0),
     }
+}
+
+/// Spawn a background reaper that periodically:
+/// 1. Reaps sessions idle longer than `idle_secs` (calls `delete_session`).
+/// 2. Reaps sessions exceeding `max_secs` of total lifetime.
+/// 3. Persists session metadata to the DB audit trail for reaped sessions.
+///
+/// The reaper runs every `max(min(idle_secs, max_secs) / 2, 30)` seconds.
+pub async fn spawn_reaper(
+    manager: Arc<SessionManager>,
+    idle_secs: i64,
+    max_secs: i64,
+) {
+    let check_secs = std::cmp::max(
+        std::cmp::min(idle_secs, max_secs) / 2,
+        30,
+    ) as u64;
+
+    tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(std::time::Duration::from_secs(check_secs));
+        interval.tick().await; // skip immediate first tick
+        loop {
+            interval.tick().await;
+
+            // 1. Reap idle sessions
+            if idle_secs > 0 {
+                let idle_sessions = manager.get_idle_sessions(idle_secs).await;
+                for id in &idle_sessions {
+                    // Save metadata before deletion
+                    {
+                        let sessions = manager.sessions.read().await;
+                        if let Some(session) = sessions.get(id) {
+                            let session = session.lock().await;
+                            manager.save_session_metadata(&session);
+                        }
+                    }
+                    tracing::warn!(session_id = %id, idle_secs = idle_secs, "Reaping idle session");
+                    manager.delete_session(*id).await;
+                }
+                if !idle_sessions.is_empty() {
+                    tracing::info!("Reaped {} idle sessions", idle_sessions.len());
+                }
+            }
+
+            // 2. Reap expired sessions (max duration)
+            if max_secs > 0 {
+                let expired = manager.get_expired_sessions(max_secs).await;
+                for id in &expired {
+                    // Save metadata before deletion
+                    {
+                        let sessions = manager.sessions.read().await;
+                        if let Some(session) = sessions.get(id) {
+                            let session = session.lock().await;
+                            manager.save_session_metadata(&session);
+                        }
+                    }
+                    tracing::warn!(session_id = %id, max_secs = max_secs, "Reaping expired session (max duration)");
+                    manager.delete_session(*id).await;
+                }
+                if !expired.is_empty() {
+                    tracing::info!("Reaped {} expired sessions (max duration)", expired.len());
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -318,6 +385,9 @@ mod tests {
             share_allowed: true,
             fullscreen_on_connect: false,
             autohide_side_tabs: false,
+            last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
+            source_ip: None,
+            user_id: Some("alice".into()),
         }
     }
 

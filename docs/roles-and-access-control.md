@@ -6,12 +6,62 @@ rustguac implements a 4-tier role hierarchy:
 
 | Role | Level | Description |
 |------|-------|-------------|
-| **admin** | 4 | Full access — manage users, connections, recordings, sessions, group mappings, all API tokens |
+| **admin** | 4 | Full access — manage users, connections, recordings, sessions, group mappings, RBAC, all API tokens |
 | **poweruser** | 3 | Ad-hoc session creation + connections connect + self-service API tokens |
 | **operator** | 2 | Connections connect only (no ad-hoc sessions); can view own API tokens |
 | **viewer** | 1 | Read-only — view sessions and recordings; no API token access |
 
 Roles are hierarchical: each role includes all permissions of lower roles. For example, a poweruser can do everything an operator can, plus create ad-hoc sessions.
+
+## Connection-level RBAC
+
+Beyond the 4-tier role hierarchy, rustguac supports fine-grained, connection-level permissions. This allows granting specific users or groups access to individual connections without elevating their system-wide role.
+
+### System permissions
+
+System-wide permissions (not tied to specific objects):
+
+| Permission | Description | Typical role |
+|-----------|-------------|-------------|
+| `administer` | Full system administration | admin |
+| `create_session` | Create ad-hoc sessions | poweruser+ |
+| `create_connection` | Create new connections | admin |
+| `create_connection_group` | Create connection groups | admin |
+| `create_user_group` | Create user groups | admin |
+| `audit` | View and verify audit logs | admin |
+
+### Object permissions
+
+Fine-grained permissions on individual connections and connection groups:
+
+| Permission | Description |
+|-----------|-------------|
+| `read` | View connection details |
+| `connect` | Create sessions from this connection |
+| `update` | Modify connection settings |
+| `delete` | Remove the connection |
+| `administer` | Full control over the connection |
+
+### Permission inheritance
+
+Permissions are inherited through the connection group hierarchy:
+
+- **Direct grants** — a permission granted on a connection applies to that connection only
+- **Group inheritance** — a permission granted on a connection group applies to all connections within it (recursively)
+- **User + group grants** — permissions can be granted to individual users or to groups
+- **Group membership** — resolved from OIDC claims, LDAP memberOf, or SAML attributes
+
+Example: granting `connect` on the "Engineering" group gives all members of that group (and subgroups) the ability to create sessions from any connection in the Engineering tree.
+
+### Permission evaluation
+
+When a user attempts an action, permissions are evaluated as follows:
+
+1. **System role check** — does the user's role (admin/poweruser/operator/viewer) allow this action?
+2. **Object permission check** — does the user have the required object permission on this specific connection or group?
+3. **Group membership** — are any of the user's groups granted this permission via inheritance?
+
+Admins bypass all object permission checks — they always have full access.
 
 ## Authentication paths
 
@@ -35,11 +85,11 @@ rustguac add-admin --name ci-bot \
 
 User API tokens authenticate as the OIDC user who owns the token, with an effective role capped by the token's `max_role`. Tokens use the same `Authorization: Bearer <token>` header as admin API keys — rustguac tries admin keys first, then user tokens. See [User API tokens](#user-api-tokens) below for details.
 
-### OIDC users
+### OIDC / LDAP / SAML / database users
 
-OIDC users are assigned a role through three mechanisms (in order of precedence):
+Users authenticating via any primary provider (OIDC, LDAP, SAML, or local database) are assigned a role through three mechanisms (in order of precedence):
 
-1. **Group-to-role mappings** — evaluated on every OIDC login. If the user's OIDC groups match any mappings, the highest matching role is applied.
+1. **Group-to-role mappings** — evaluated on every login. If the user's groups match any mappings, the highest matching role is applied.
 2. **Manual role assignment** — admins can set a user's role via CLI, API, or the Admin page.
 3. **Default role** — new users get the `default_role` from OIDC config on first login (default: `operator`).
 
@@ -96,6 +146,23 @@ OIDC users are assigned a role through three mechanisms (in order of precedence)
 | `PUT /api/admin/group-mappings/:id` | admin |
 | `DELETE /api/admin/group-mappings/:id` | admin |
 
+### RBAC (connection-level permissions)
+
+| Endpoint | Required role | Notes |
+|----------|--------------|-------|
+| `GET /api/rbac/groups` | admin | List connection groups |
+| `POST /api/rbac/groups` | admin | Create connection group |
+| `PUT /api/rbac/groups/:id` | admin | Update connection group |
+| `DELETE /api/rbac/groups/:id` | admin | Delete connection group |
+| `GET /api/rbac/permissions` | admin | List all permission grants |
+| `POST /api/rbac/permissions` | admin | Grant a permission |
+| `DELETE /api/rbac/permissions/:id` | admin | Revoke a permission |
+| `GET /api/rbac/user-groups` | admin | List user groups |
+| `POST /api/rbac/user-groups` | admin | Create user group |
+| `DELETE /api/rbac/user-groups/:id` | admin | Delete user group |
+| `POST /api/rbac/user-groups/:id/members` | admin | Add member to user group |
+| `DELETE /api/rbac/user-groups/:id/members/:user` | admin | Remove member from user group |
+
 ### User API tokens (self-service)
 
 | Endpoint | Required role | Notes |
@@ -125,7 +192,7 @@ Operators can view their tokens (created by an admin on their behalf) but cannot
 
 ## Folder access control
 
-Connections folders have group-based access control. Each folder has an `allowed_groups` list stored in its `.config` entry in Vault.
+Connections folders have group-based access control. Each folder has an `allowed_groups` list stored in its `.config` entry in Vault or the database.
 
 - **Admins** bypass group checks and see all folders
 - **Operators and powerusers** see only folders where their OIDC groups intersect with the folder's `allowed_groups`
@@ -136,6 +203,19 @@ Connections folders have group-based access control. Each folder has an `allowed
 ### Inheritance
 
 A subfolder created with `inherit_from_parent: true` (the default for new subfolders) grants access to anyone who can access its parent. A subfolder with its own non-empty `allowed_groups` and `inherit_from_parent: false` is gated solely by its own list, independent of the parent.
+
+### Connection groups (RBAC)
+
+Beyond folder access control, rustguac supports a separate RBAC system for connection-level permissions:
+
+- **Connection groups** are hierarchical containers for connections (similar to folders but for RBAC)
+- **User groups** map to OIDC/LDAP/SAML group memberships
+- **Permission grants** assign system or object permissions to users or groups on specific connection groups or connections
+
+This allows scenarios like:
+- Granting a support team `connect` permission on the "Production Servers" group without elevating them to poweruser
+- Giving a contractor read-only access to specific connections without access to the full address book
+- Inheriting permissions through the connection group tree for automatic access management
 
 ### Example
 
@@ -216,6 +296,17 @@ rustguac enable-user --email user@example.com
 # Delete a user
 rustguac delete-user --email user@example.com
 ```
+
+## Admin UI for permission management
+
+The admin page provides a visual interface for managing RBAC:
+
+- **Connection Groups** — create, edit, and delete connection groups; set descriptions and parent groups
+- **Permission Grants** — grant or revoke system and object permissions on connection groups and individual connections
+- **User Groups** — manage user groups and their members; map groups to connection group permissions
+- **Audit Log** — view the hash chain audit log and verify chain integrity
+
+Access the admin page at `/admin.html` (requires admin role).
 
 ## Admin (API key) management CLI
 
