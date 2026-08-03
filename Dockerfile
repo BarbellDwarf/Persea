@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 # Pin to known-good commit to avoid upstream -Werror breakage
-RUN git clone https://github.com/apache/guacamole-server.git \
+RUN git clone --depth 1 https://github.com/apache/guacamole-server.git \
     && cd guacamole-server && git checkout 6719b20d
 
 # Apply patches for FreeRDP 3.x / Debian 13 compatibility
@@ -83,7 +83,10 @@ COPY src/ src/
 COPY docs/ docs/
 COPY static/ static/
 
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/usr/local/rustup \
+    cargo build --release
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image
@@ -238,6 +241,9 @@ VOLUME ["/opt/rustguac/data", "/opt/rustguac/recordings", "/opt/rustguac/drives"
 ENV RUST_LOG=info
 ENV GUACD_LOG_LEVEL=info
 ENV HOME=/home/rustguac
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8089/api/health || exit 1
 
 USER rustguac
 ENTRYPOINT ["/opt/rustguac/entrypoint.sh"]

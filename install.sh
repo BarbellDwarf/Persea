@@ -503,10 +503,13 @@ RestartSec=5
 Environment=RUST_LOG=info
 EnvironmentFile=-$PREFIX/env
 LimitNOFILE=65535
-ProtectSystem=strict
-ProtectHome=true
-NoNewPrivileges=true
-PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 ReadWritePaths=$PREFIX
 
 [Install]
