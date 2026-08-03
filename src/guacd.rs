@@ -681,25 +681,25 @@ mod tests {
     async fn send_handshake_ssh_wiresize() {
         let mut s = MockStream::new();
         send_handshake(&mut s, 1920, 1080, 96, false).await.unwrap();
-        assert_eq!(s.output(), "4.size,4.1920,4.1080,3.96;5.audio,10.audio/L16,9.audio/L8;5.video;5.image,9.image/png,11.image/jpeg,10.image/webp;8.timezone,18.Australia/Brisbane;");
+        assert_eq!(s.output(), "4.size,4.1920,4.1080,2.96;5.audio,9.audio/L16,8.audio/L8;5.video;5.image,9.image/png,10.image/jpeg,10.image/webp;8.timezone,18.Australia/Brisbane;");
     }
     #[tokio::test]
     async fn send_handshake_rdp_with_h264() {
         let mut s = MockStream::new();
         send_handshake(&mut s, 1280, 720, 72, true).await.unwrap();
-        assert_eq!(s.output(), "4.size,4.1280,3.720,2.72;5.audio,10.audio/L16,9.audio/L8;5.video,10.video/h264;5.image,9.image/png,11.image/jpeg,10.image/webp;8.timezone,18.Australia/Brisbane;");
+        assert_eq!(s.output(), "4.size,4.1280,3.720,2.72;5.audio,9.audio/L16,8.audio/L8;5.video,10.video/h264;5.image,9.image/png,10.image/jpeg,10.image/webp;8.timezone,18.Australia/Brisbane;");
     }
     #[tokio::test]
     async fn send_handshake_vnc() {
         let mut s = MockStream::new();
         send_handshake(&mut s, 1024, 768, 72, false).await.unwrap();
-        assert_eq!(s.output(), "4.size,4.1024,3.768,2.72;5.audio,10.audio/L16,9.audio/L8;5.video;5.image,9.image/png,11.image/jpeg,10.image/webp;8.timezone,18.Australia/Brisbane;");
+        assert_eq!(s.output(), "4.size,4.1024,3.768,2.72;5.audio,9.audio/L16,8.audio/L8;5.video;5.image,9.image/png,10.image/jpeg,10.image/webp;8.timezone,18.Australia/Brisbane;");
     }
     #[tokio::test]
     async fn send_handshake_spice() {
         let mut s = MockStream::new();
         send_handshake(&mut s, 2560, 1440, 120, false).await.unwrap();
-        assert_eq!(s.output(), "4.size,4.2560,4.1440,3.120;5.audio,10.audio/L16,9.audio/L8;5.video;5.image,9.image/png,11.image/jpeg,10.image/webp;8.timezone,18.Australia/Brisbane;");
+        assert_eq!(s.output(), "4.size,4.2560,4.1440,3.120;5.audio,9.audio/L16,8.audio/L8;5.video;5.image,9.image/png,10.image/jpeg,10.image/webp;8.timezone,18.Australia/Brisbane;");
     }
     #[tokio::test]
     async fn send_handshake_each_instruction_is_well_formed() {
