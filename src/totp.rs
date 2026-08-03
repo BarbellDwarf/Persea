@@ -163,6 +163,7 @@ pub fn algorithm_from_str(s: &str) -> Algorithm {
 
 /// Error type for TOTP operations.
 #[derive(Debug)]
+#[must_use]
 pub enum TotpError {
     Generation(String),
     QrCode(String),

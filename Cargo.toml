@@ -11,7 +11,7 @@ tower = "0.5"
 tower-http = { version = "0.7", features = ["fs", "cors", "trace"] }
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "io-util", "time", "signal", "process", "fs"] }
 tokio-util = "0.7"
 
 # Serialization

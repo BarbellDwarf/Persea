@@ -95,7 +95,7 @@ fn encode_element(s: &str) -> String {
     format!("{}.{}", s.len(), s)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[must_use]
 pub enum ParseError {
     Empty,

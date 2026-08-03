@@ -42,6 +42,7 @@ impl EncryptionKey {
 
 /// Errors during encryption / decryption.
 #[derive(Debug, thiserror::Error)]
+#[must_use]
 pub enum CryptoError {
     #[error("invalid encryption key: {0}")]
     InvalidKey(String),
