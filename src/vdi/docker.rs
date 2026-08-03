@@ -336,7 +336,10 @@ impl DockerDriver {
                     cmd: Some(vec![
                         "sh",
                         "-c",
-                        &format!("printf '%s:%s' '{}' '{}' | chpasswd", username, password),
+                        "printf '%s:%s\\n' \"$1\" \"$2\" | chpasswd",
+                        "sh",
+                        username,
+                        password,,
                     ]),
                     attach_stdout: Some(false),
                     attach_stderr: Some(false),

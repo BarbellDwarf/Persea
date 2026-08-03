@@ -129,6 +129,9 @@ totp-rs = { version = "5", features = ["otpauth", "qr", "gen_secret"] }
 # Password hashing (Argon2id)
 argon2 = "0.5"
 
+# Memory zeroize for sensitive data
+zeroize = "1"
+
 [dev-dependencies]
 proptest = "1"
 

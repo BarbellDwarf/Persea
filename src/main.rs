@@ -59,6 +59,8 @@ use tower_governor::{
 };
 use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
+use base64::Engine as _;
+use base64::Engine as _;
 
 #[derive(Parser)]
 #[command(name = "rustguac", about = "Lightweight Guacamole SSH proxy")]
@@ -576,6 +578,13 @@ async fn security_headers(
     request: Request,
     next: middleware::Next,
 ) -> Response {
+    let nonce = {
+        use rand::RngExt;
+        let mut bytes = [0u8; 16];
+        rand::rng().fill(&mut bytes);
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
+    };
+
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
@@ -590,9 +599,17 @@ async fn security_headers(
     );
     headers.insert(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:".parse().unwrap(),
+        format!(
+            "default-src 'self'; script-src 'self' 'nonce-{}' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com",
+            nonce
+        )
+        .parse()
+        .unwrap(),
     );
+    let _ = headers;
+    response.extensions_mut().insert(CspNonce(nonce));
     if tls.0 .0 {
+        let headers = response.headers_mut();
         headers.insert(
             "Strict-Transport-Security",
             "max-age=31536000; includeSubDomains".parse().unwrap(),
@@ -600,6 +617,10 @@ async fn security_headers(
     }
     response
 }
+
+/// CSP nonce stored as a response extension for handlers/templates to access.
+#[derive(Clone)]
+struct CspNonce(String);
 
 /// Connect a single Vault backend into `cell`. On a failed initial connect,
 /// spawns a background 30s retry loop; the cell stays `None` (and that scope's
@@ -1336,19 +1357,17 @@ async fn run_server(config: Config, database: Db) {
         .layer(Extension(credential_default_scope.clone()))
         .layer(Extension(database.clone()));
 
-    // WebSocket route with optional auth
-    let mut ws_route = Router::new()
+    // WebSocket route with optional auth + always rate-limited
+    let ws_conf = GovernorConfigBuilder::default()
+        .per_second(5)
+        .burst_size(50)
+        .key_extractor(SmartIpKeyExtractor)
+        .finish()
+        .expect("Failed to build WebSocket rate limit config");
+    let ws_route = Router::new()
         .route("/ws/{session_id}", get(websocket::ws_handler))
-        .with_state(manager.clone());
-    if rate_limit_enabled {
-        let conf = GovernorConfigBuilder::default()
-            .per_second(5)
-            .burst_size(50)
-            .key_extractor(SmartIpKeyExtractor)
-            .finish()
-            .expect("Failed to build WebSocket rate limit config");
-        ws_route = ws_route.layer(GovernorLayer::new(conf));
-    }
+        .with_state(manager.clone())
+        .layer(GovernorLayer::new(ws_conf));
     let ws_route = ws_route
         .layer(middleware::from_fn(auth::optional_auth))
         .layer(Extension(ws_ticket_store.clone()))
