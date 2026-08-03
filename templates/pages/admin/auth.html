@@ -10,22 +10,22 @@
             <p class="text-sm text-gray-500 mt-1">Configure and manage authentication backends</p>
         </div>
         <button onclick="document.getElementById('add-provider-modal').classList.remove('hidden')"
-                class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+                class="btn btn-primary btn-sm">
             + Add Provider
         </button>
     </div>
 
     <!-- Providers Table -->
-    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div class="card table-wrapper">
         <table class="w-full">
             <thead>
                 <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
-                    <th class="px-4 py-3 w-8"></th>
-                    <th class="px-4 py-3">Provider Name</th>
-                    <th class="px-4 py-3">Type</th>
-                    <th class="px-4 py-3">Status</th>
-                    <th class="px-4 py-3">Priority</th>
-                    <th class="px-4 py-3 text-right">Actions</th>
+                    <th class="w-8"></th>
+                    <th>Provider Name</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th class="text-right">Actions</th>
                 </tr>
             </thead>
             <tbody id="provider-table-body" class="divide-y divide-gray-800"
@@ -39,8 +39,8 @@
 </div>
 
 <!-- Add Provider Modal -->
-<div id="add-provider-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-md">
+<div id="add-provider-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+    <div class="card w-full max-w-md">
         <h2 class="text-lg font-bold text-gray-100 mb-4">Add Auth Provider</h2>
         <form hx-post="/api/auth/providers"
               hx-target="#provider-table-body"
@@ -48,13 +48,13 @@
               hx-on::after-request="document.getElementById('add-provider-modal').classList.add('hidden')">
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1">Provider Name</label>
-                    <input type="text" name="name" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                    <label class="form-label">Provider Name</label>
+                    <input type="text" name="name" required class="form-input">
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1">Type</label>
+                    <label class="form-label">Type</label>
                     <select name="type" id="new-provider-type" onchange="showProviderFields(this.value)"
-                            class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                            class="form-input">
                         <option value="ldap">LDAP / Active Directory</option>
                         <option value="saml">SAML 2.0</option>
                         <option value="radius">RADIUS</option>
@@ -65,18 +65,18 @@
 
                 <!-- LDAP Fields -->
                 <div id="ldap-fields" class="space-y-4">
-                    <div><label class="block text-sm text-gray-300 mb-1">LDAP Host</label>
-                        <input type="text" name="ldap_host" placeholder="ldap.example.com" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">LDAP Port</label>
-                        <input type="number" name="ldap_port" value="389" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">Bind DN</label>
-                        <input type="text" name="ldap_bind_dn" placeholder="cn=admin,dc=example,dc=com" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">Bind Password</label>
-                        <input type="password" name="ldap_bind_password" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">Search Base DN</label>
-                        <input type="text" name="ldap_search_base" placeholder="ou=users,dc=example,dc=com" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">Search Filter</label>
-                        <input type="text" name="ldap_search_filter" placeholder="(uid={0})" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="form-label">LDAP Host</label>
+                        <input type="text" name="ldap_host" placeholder="ldap.example.com" class="form-input"></div>
+                    <div><label class="form-label">LDAP Port</label>
+                        <input type="number" name="ldap_port" value="389" class="form-input"></div>
+                    <div><label class="form-label">Bind DN</label>
+                        <input type="text" name="ldap_bind_dn" placeholder="cn=admin,dc=example,dc=com" class="form-input"></div>
+                    <div><label class="form-label">Bind Password</label>
+                        <input type="password" name="ldap_bind_password" class="form-input"></div>
+                    <div><label class="form-label">Search Base DN</label>
+                        <input type="text" name="ldap_search_base" placeholder="ou=users,dc=example,dc=com" class="form-input"></div>
+                    <div><label class="form-label">Search Filter</label>
+                        <input type="text" name="ldap_search_filter" placeholder="(uid={0})" class="form-input"></div>
                     <div class="flex items-center gap-4">
                         <label class="flex items-center gap-2 text-sm text-gray-300">
                             <input type="checkbox" name="ldap_start_tls" class="rounded bg-gray-800 border-gray-700 text-emerald-500"> StartTLS
@@ -89,26 +89,26 @@
 
                 <!-- SAML Fields -->
                 <div id="saml-fields" class="hidden space-y-4">
-                    <div><label class="block text-sm text-gray-300 mb-1">IdP Metadata URL</label>
-                        <input type="url" name="saml_metadata_url" placeholder="https://idp.example.com/metadata" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">Entity ID</label>
-                        <input type="text" name="saml_entity_id" placeholder="https://rustguac.example.com/saml" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">ACS URL</label>
-                        <input type="url" name="saml_acs_url" placeholder="https://rustguac.example.com/auth/saml/acs" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">SLO URL</label>
-                        <input type="url" name="saml_slo_url" placeholder="https://rustguac.example.com/auth/saml/slo" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="form-label">IdP Metadata URL</label>
+                        <input type="url" name="saml_metadata_url" placeholder="https://idp.example.com/metadata" class="form-input"></div>
+                    <div><label class="form-label">Entity ID</label>
+                        <input type="text" name="saml_entity_id" placeholder="https://rustguac.example.com/saml" class="form-input"></div>
+                    <div><label class="form-label">ACS URL</label>
+                        <input type="url" name="saml_acs_url" placeholder="https://rustguac.example.com/auth/saml/acs" class="form-input"></div>
+                    <div><label class="form-label">SLO URL</label>
+                        <input type="url" name="saml_slo_url" placeholder="https://rustguac.example.com/auth/saml/slo" class="form-input"></div>
                 </div>
 
                 <!-- RADIUS Fields -->
                 <div id="radius-fields" class="hidden space-y-4">
-                    <div><label class="block text-sm text-gray-300 mb-1">RADIUS Host</label>
-                        <input type="text" name="radius_host" placeholder="radius.example.com" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">RADIUS Port</label>
-                        <input type="number" name="radius_port" value="1812" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">Shared Secret</label>
-                        <input type="password" name="radius_secret" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">Timeout (seconds)</label>
-                        <input type="number" name="radius_timeout" value="10" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="form-label">RADIUS Host</label>
+                        <input type="text" name="radius_host" placeholder="radius.example.com" class="form-input"></div>
+                    <div><label class="form-label">RADIUS Port</label>
+                        <input type="number" name="radius_port" value="1812" class="form-input"></div>
+                    <div><label class="form-label">Shared Secret</label>
+                        <input type="password" name="radius_secret" class="form-input"></div>
+                    <div><label class="form-label">Timeout (seconds)</label>
+                        <input type="number" name="radius_timeout" value="10" class="form-input"></div>
                 </div>
 
                 <!-- Database Fields (minimal) -->
@@ -118,19 +118,19 @@
 
                 <!-- TOTP Fields -->
                 <div id="totp-fields" class="hidden space-y-4">
-                    <div><label class="block text-sm text-gray-300 mb-1">Issuer</label>
-                        <input type="text" name="totp_issuer" placeholder="rustguac" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
-                    <div><label class="block text-sm text-gray-300 mb-1">Digits</label>
-                        <select name="totp_digits" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                    <div><label class="form-label">Issuer</label>
+                        <input type="text" name="totp_issuer" placeholder="rustguac" class="form-input"></div>
+                    <div><label class="form-label">Digits</label>
+                        <select name="totp_digits" class="form-input">
                             <option value="6" selected>6</option>
                             <option value="8">8</option>
                         </select>
                     </div>
-                    <div><label class="block text-sm text-gray-300 mb-1">Period (seconds)</label>
-                        <input type="number" name="totp_period" value="30" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm"></div>
+                    <div><label class="form-label">Period (seconds)</label>
+                        <input type="number" name="totp_period" value="30" class="form-input"></div>
                     <div>
-                        <label class="block text-sm text-gray-300 mb-1">Enforcement</label>
-                        <select name="totp_enforcement" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                        <label class="form-label">Enforcement</label>
+                        <select name="totp_enforcement" class="form-input">
                             <option value="optional">Optional</option>
                             <option value="required">Required</option>
                         </select>
@@ -139,7 +139,7 @@
             </div>
             <div class="flex justify-end gap-3 mt-6">
                 <button type="button" onclick="document.getElementById('add-provider-modal').classList.add('hidden')"
-                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Cancel</button>
+                        class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Create</button>
             </div>
         </form>
@@ -147,15 +147,15 @@
 </div>
 
 <!-- Provider Config Modal -->
-<div id="provider-config-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-lg">
+<div id="provider-config-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+    <div class="card w-full max-w-lg">
         <h2 class="text-lg font-bold text-gray-100 mb-4">Configure Provider</h2>
         <div id="provider-config-body"></div>
         <div class="flex justify-end gap-3 mt-6">
             <button type="button" onclick="document.getElementById('provider-config-modal').classList.add('hidden')"
-                    class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Close</button>
+                    class="btn btn-secondary btn-sm">Close</button>
             <button onclick="testProvider()"
-                    class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium">Test Connection</button>
+                    class="btn btn-sm" style="background:#2563eb;color:#fff">Test Connection</button>
             <button onclick="saveProviderConfig()"
                     class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Save</button>
         </div>
@@ -230,13 +230,13 @@ function buildConfigForm(config) {
     for (var key in config) {
         if (!config.hasOwnProperty(key)) continue;
         var val = config[key];
-        html += '<div><label class="block text-sm text-gray-300 mb-1">' + key.replace(/_/g, ' ') + '</label>';
+        html += '<div><label class="form-label">' + key.replace(/_/g, ' ') + '</label>';
         if (typeof val === 'boolean') {
             html += '<input type="checkbox" name="' + key + '" ' + (val ? 'checked' : '') + ' class="rounded bg-gray-800 border-gray-700 text-emerald-500">';
         } else if (typeof val === 'number') {
-            html += '<input type="number" name="' + key + '" value="' + val + '" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">';
+            html += '<input type="number" name="' + key + '" value="' + val + '" class="form-input">';
         } else {
-            html += '<input type="text" name="' + key + '" value="' + (val || '') + '" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">';
+            html += '<input type="text" name="' + key + '" value="' + (val || '') + '" class="form-input">';
         }
         html += '</div>';
     }

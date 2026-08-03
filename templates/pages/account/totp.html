@@ -10,7 +10,7 @@
     </div>
 
     <!-- TOTP Status Card -->
-    <div id="totp-status-card" class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
+    <div id="totp-status-card" class="card mb-6">
         <div class="flex items-center gap-4">
             <div id="totp-icon" class="w-12 h-12 rounded-lg flex items-center justify-center shrink-0">
                 <!-- filled by JS -->
@@ -27,7 +27,7 @@
 
     <!-- Enrollment Flow (hidden by default) -->
     <div id="enrollment-section" class="hidden">
-        <div class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
+        <div class="card mb-6">
             <h3 class="text-lg font-semibold text-gray-100 mb-4">Step 1: Scan QR Code</h3>
             <p class="text-sm text-gray-400 mb-4">Scan this QR code with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
             <div class="flex items-start gap-6">
@@ -43,18 +43,18 @@
             </div>
         </div>
 
-        <div class="bg-gray-900 border border-gray-800 rounded-lg p-6">
+        <div class="card">
             <h3 class="text-lg font-semibold text-gray-100 mb-4">Step 2: Verify Code</h3>
             <p class="text-sm text-gray-400 mb-4">Enter the 6-digit code from your authenticator app to complete setup.</p>
             <form id="verify-form" class="flex items-end gap-3">
                 <div class="flex-1">
-                    <label for="verify-code" class="block text-sm font-medium text-gray-400 mb-1">Verification Code</label>
+                    <label for="verify-code" class="form-label">Verification Code</label>
                     <input type="text" id="verify-code" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required
-                        class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-center text-lg tracking-[0.3em] font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        class="form-input text-center text-lg tracking-[0.3em] font-mono"
                         placeholder="000000">
                 </div>
                 <button type="submit" id="btn-verify"
-                    class="px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+                    class="btn btn-primary btn-sm">
                     Verify & Enable
                 </button>
             </form>
@@ -64,10 +64,10 @@
 
     <!-- Recovery Codes Section (shown when enrolled) -->
     <div id="recovery-codes-section" class="hidden">
-        <div class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
+        <div class="card mb-6">
             <div class="flex items-center justify-between mb-4">
                 <h3 class="text-lg font-semibold text-gray-100">Recovery Codes</h3>
-                <button id="btn-copy-codes" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-sm text-gray-300 transition-colors">
+                <button id="btn-copy-codes" class="btn btn-secondary btn-sm">
                     Copy All
                 </button>
             </div>
@@ -84,23 +84,23 @@
     </div>
 
     <!-- Disable Confirmation Modal -->
-    <div id="disable-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+    <div id="disable-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
         <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
-        <div class="relative bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-md shadow-xl">
+        <div class="relative card w-full max-w-md shadow-xl">
             <h2 class="text-lg font-semibold text-gray-100 mb-2">Disable Two-Factor Authentication?</h2>
             <p class="text-sm text-gray-400 mb-6">This will remove the TOTP requirement from your account. You'll only need your password to log in.</p>
             <form id="disable-form" class="space-y-4">
                 <div>
-                    <label for="disable-code" class="block text-sm font-medium text-gray-400 mb-1">Enter current code to confirm</label>
+                    <label for="disable-code" class="form-label">Enter current code to confirm</label>
                     <input type="text" id="disable-code" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required
-                        class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-center text-lg tracking-[0.3em] font-mono focus:outline-none focus:ring-2 focus:ring-red-500"
+                        class="form-input text-center text-lg tracking-[0.3em] font-mono"
                         placeholder="000000">
                 </div>
                 <div class="flex items-center justify-end gap-3">
                     <button type="button" onclick="closeDisableModal()" class="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm transition-colors">
                         Cancel
                     </button>
-                    <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium transition-colors">
+                    <button type="submit" class="btn btn-danger btn-sm">
                         Disable TOTP
                     </button>
                 </div>
@@ -134,8 +134,8 @@
                 icon.innerHTML = '<svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>';
                 title.textContent = 'Two-Factor Authentication Enabled';
                 desc.textContent = 'Your account is protected with TOTP.';
-                actions.innerHTML = '<button onclick="showRecoveryCodes()" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-sm text-gray-300 transition-colors">View Recovery Codes</button>' +
-                    '<button onclick="openDisableModal()" class="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/50 border border-red-800 rounded text-sm text-red-300 transition-colors">Disable</button>';
+                actions.innerHTML = '<button onclick="showRecoveryCodes()" class="btn btn-secondary btn-sm">View Recovery Codes</button>' +
+                    '<button onclick="openDisableModal()" class="btn btn-danger btn-sm">Disable</button>';
                 enroll.classList.add('hidden');
             } else {
                 icon.className = 'w-12 h-12 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0';

@@ -10,51 +10,51 @@
     </div>
 
     <!-- Profile Card -->
-    <div class="bg-gray-900 border border-gray-800 rounded-lg p-6 mb-6">
+    <div class="card mb-6">
         <h2 class="text-lg font-semibold text-gray-100 mb-4">Account Information</h2>
         <form id="profile-form" class="space-y-5">
             <!-- Display Name -->
             <div>
-                <label for="display-name" class="block text-sm font-medium text-gray-400 mb-1">Display Name</label>
+                <label for="display-name" class="form-label">Display Name</label>
                 <input type="text" id="display-name" name="display_name"
-                    class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                    class="form-input"
                     placeholder="Your display name">
             </div>
 
             <!-- Email (readonly) -->
             <div>
-                <label for="email" class="block text-sm font-medium text-gray-400 mb-1">Email</label>
+                <label for="email" class="form-label">Email</label>
                 <input type="email" id="email" name="email" readonly
-                    class="w-full px-4 py-2 bg-gray-800/50 border border-gray-700 rounded-lg text-gray-500 text-sm cursor-not-allowed">
+                    class="form-input" style="opacity:0.5;cursor:not-allowed">
                 <p class="text-xs text-gray-600 mt-1">Managed by your identity provider</p>
             </div>
 
             <!-- Auth Source -->
             <div>
-                <label class="block text-sm font-medium text-gray-400 mb-1">Auth Source</label>
-                <div id="auth-source-badge" class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-blue-900/50 text-blue-300 border border-blue-800">
+                <label class="form-label">Auth Source</label>
+                <div id="auth-source-badge" class="badge badge-blue">
                     Loading...
                 </div>
             </div>
 
             <!-- Role -->
             <div>
-                <label class="block text-sm font-medium text-gray-400 mb-1">Role</label>
-                <div id="role-badge" class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-900/50 text-emerald-300 border border-emerald-800">
+                <label class="form-label">Role</label>
+                <div id="role-badge" class="badge badge-green">
                     Loading...
                 </div>
             </div>
 
             <!-- Member Since -->
             <div>
-                <label class="block text-sm font-medium text-gray-400 mb-1">Member Since</label>
+                <label class="form-label">Member Since</label>
                 <p id="member-since" class="text-sm text-gray-300">Loading...</p>
             </div>
 
             <!-- Save Button -->
             <div class="pt-2">
                 <button type="submit" id="save-btn"
-                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+                    class="btn btn-primary btn-sm">
                     Save Changes
                 </button>
                 <span id="save-status" class="ml-3 text-sm text-gray-500 hidden"></span>
@@ -63,7 +63,7 @@
     </div>
 
     <!-- Quick Links -->
-    <div class="bg-gray-900 border border-gray-800 rounded-lg p-6">
+    <div class="card">
         <h2 class="text-lg font-semibold text-gray-100 mb-4">Security</h2>
         <div class="space-y-3">
             <a href="/account/totp.html" class="flex items-center justify-between p-3 bg-gray-800 rounded-lg hover:bg-gray-750 transition-colors group">

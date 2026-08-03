@@ -10,7 +10,7 @@
             <p class="text-sm text-gray-500 mt-1">Manage OIDC and local users, roles, and access</p>
         </div>
         <button onclick="document.getElementById('add-user-modal').classList.remove('hidden')"
-                class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+                class="btn btn-primary btn-sm">
             + Add User
         </button>
     </div>
@@ -23,13 +23,13 @@
                hx-target="#user-table-body"
                hx-include="[name='role_filter'],[name='status_filter']"
                name="q"
-               class="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm focus:ring-2 focus:ring-emerald-500">
+               class="form-input flex-1">
         <select id="role-filter" name="role_filter"
                 hx-get="/api/users"
                 hx-trigger="change"
                 hx-target="#user-table-body"
                 hx-include="[name='q'],[name='status_filter']"
-                class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                class="form-input">
             <option value="">All Roles</option>
             <option value="admin">Admin</option>
             <option value="poweruser">Power User</option>
@@ -41,7 +41,7 @@
                 hx-trigger="change"
                 hx-target="#user-table-body"
                 hx-include="[name='q'],[name='role_filter']"
-                class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                class="form-input">
             <option value="">All Status</option>
             <option value="active">Active</option>
             <option value="disabled">Disabled</option>
@@ -49,17 +49,17 @@
     </div>
 
     <!-- Users Table -->
-    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div class="card table-wrapper">
         <table class="w-full">
             <thead>
                 <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
-                    <th class="px-4 py-3">Name</th>
-                    <th class="px-4 py-3">Email</th>
-                    <th class="px-4 py-3">Role</th>
-                    <th class="px-4 py-3">Auth Source</th>
-                    <th class="px-4 py-3">Status</th>
-                    <th class="px-4 py-3">Last Login</th>
-                    <th class="px-4 py-3 text-right">Actions</th>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Role</th>
+                    <th>Auth Source</th>
+                    <th>Status</th>
+                    <th>Last Login</th>
+                    <th class="text-right">Actions</th>
                 </tr>
             </thead>
             <tbody id="user-table-body" class="divide-y divide-gray-800"
@@ -79,8 +79,8 @@
 </div>
 
 <!-- Add User Modal -->
-<div id="add-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-md">
+<div id="add-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+    <div class="card w-full max-w-md">
         <h2 class="text-lg font-bold text-gray-100 mb-4">Add User</h2>
         <form hx-post="/api/users"
               hx-target="#user-table-body"
@@ -88,16 +88,16 @@
               hx-on::after-request="document.getElementById('add-user-modal').classList.add('hidden')">
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1">Name</label>
-                    <input type="text" name="name" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                    <label class="form-label">Name</label>
+                    <input type="text" name="name" required class="form-input">
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1">Email</label>
-                    <input type="email" name="email" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                    <label class="form-label">Email</label>
+                    <input type="email" name="email" required class="form-input">
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1">Role</label>
-                    <select name="role" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                    <label class="form-label">Role</label>
+                    <select name="role" class="form-input">
                         <option value="viewer">Viewer</option>
                         <option value="operator">Operator</option>
                         <option value="poweruser">Power User</option>
@@ -107,7 +107,7 @@
             </div>
             <div class="flex justify-end gap-3 mt-6">
                 <button type="button" onclick="document.getElementById('add-user-modal').classList.add('hidden')"
-                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Cancel</button>
+                        class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Create</button>
             </div>
         </form>
@@ -115,15 +115,15 @@
 </div>
 
 <!-- Edit Role Modal -->
-<div id="edit-role-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-sm">
+<div id="edit-role-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+    <div class="card w-full max-w-sm">
         <h2 class="text-lg font-bold text-gray-100 mb-4">Change Role</h2>
         <form hx-target="#user-table-body" hx-swap="innerHTML"
               hx-on::after-request="document.getElementById('edit-role-modal').classList.add('hidden')">
             <input type="hidden" name="email" id="edit-role-email">
             <div class="mb-4">
-                <label class="block text-sm text-gray-300 mb-1">New Role</label>
-                <select name="role" id="edit-role-value" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                <label class="form-label">New Role</label>
+                <select name="role" id="edit-role-value" class="form-input">
                     <option value="viewer">Viewer</option>
                     <option value="operator">Operator</option>
                     <option value="poweruser">Power User</option>
@@ -132,7 +132,7 @@
             </div>
             <div class="flex justify-end gap-3">
                 <button type="button" onclick="document.getElementById('edit-role-modal').classList.add('hidden')"
-                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Cancel</button>
+                        class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Save</button>
             </div>
         </form>
@@ -140,8 +140,8 @@
 </div>
 
 <!-- Delete Confirm Modal -->
-<div id="delete-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 w-full max-w-sm">
+<div id="delete-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+    <div class="card w-full max-w-sm">
         <h2 class="text-lg font-bold text-gray-100 mb-2">Delete User</h2>
         <p class="text-sm text-gray-400 mb-4">This action cannot be undone. User <span id="delete-user-name" class="text-gray-200"></span> will be permanently removed.</p>
         <form hx-delete="" id="delete-user-form"
@@ -149,8 +149,8 @@
               hx-on::after-request="document.getElementById('delete-user-modal').classList.add('hidden')">
             <div class="flex justify-end gap-3">
                 <button type="button" onclick="document.getElementById('delete-user-modal').classList.add('hidden')"
-                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm">Cancel</button>
-                <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-sm font-medium">Delete</button>
+                        class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
             </div>
         </form>
     </div>
