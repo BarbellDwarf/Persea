@@ -10,19 +10,17 @@ No Java. No Tomcat. Single binary + guacd.
 
 ## Why this exists
 
-I love Apache Guacamole. Both the dish and the program. But it has always looked like it came straight out of 2005. The functionality is solid and I am glad Apache keeps it in development, but the frontend has been the sticking point whenever I tried to offer it as a solution at work or for clients. I mostly used it in my homelab.
+Guacamole is great software. Apache maintains it well and the protocol handling under the hood is solid. The frontend looks like it was designed in 2005 though, and that kept me from recommending it at work or for clients. I ran it in my homelab and that was about it.
 
-Then [Sol1](https://www.sol1.com.au) released RustGuac — a Rust replacement for the Guacamole Java webapp. Exactly what I had been waiting for. Open source does what open source does best.
+Sol1 put out [RustGuac](https://github.com/sol1/rustguac) and it scratched the itch. A Rust frontend for Guacamole, open source, community-driven. It lacked broader SSO support beyond OIDC, had rough edges in the UI, and gaps in the docs.
 
-But RustGuac was not complete in my eyes. It was missing broader SSO and auth provider support, the frontend felt clunky in spots, and some documentation gaps made it hard to adopt confidently.
+I do not write code. Ten years in IT taught me how the pieces connect. AI coding tools changed what I could build with that knowledge. I forked Sol1's repo, pointed [OpenCode](https://opencode.ai) at it, and got to work.
 
-I am not a developer. I have been in IT for over a decade, I know the technology stack and how the pieces fit together, but I do not write code. With AI coding assistants, I did not need to. I needed a solid plan and enough direction to guide the implementation.
+This is a side project alongside a day job. Progress comes in bursts.
 
-So I forked Sol1's work, spun up [OpenCode](https://opencode.ai) (the Go subscription — great tool, not sponsored, just respect the OSS philosophy), and started mapping out what needed to change.
+If you get use out of this, star Sol1's repo too — they built the base layer.
 
-This is a work in progress. I have a day job, so progress comes in waves. If you find value in this upgrade from Sol1's work, give them a star too. They built the foundation.
-
-If you hit issues, open one with details — logs, screenshots, reproduction steps. That helps me fix things faster.
+Found something broken? Open an issue with logs and screenshots.
 
 ## Architecture
 
