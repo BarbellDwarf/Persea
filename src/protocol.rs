@@ -5,6 +5,11 @@
 
 use std::fmt;
 
+/// Maximum protocol buffer size in bytes (1 MiB). If the parser's buffer
+/// exceeds this, it is cleared to prevent unbounded memory growth from a
+/// misbehaving or malicious peer.
+const MAX_PROTOCOL_BUFFER_LEN: usize = 1_048_576;
+
 /// A single Guacamole protocol instruction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instruction {
@@ -220,7 +225,7 @@ impl InstructionParser {
     pub fn receive(&mut self, data: &str) -> Vec<Result<Instruction, ParseError>> {
         self.buffer.push_str(data);
 
-        if self.buffer.len() > 1_048_576 {
+        if self.buffer.len() > MAX_PROTOCOL_BUFFER_LEN {
             self.buffer.clear();
             return vec![];
         }

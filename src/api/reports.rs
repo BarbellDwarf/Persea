@@ -13,6 +13,9 @@ use serde::Deserialize;
 use serde_json::json;
 use tokio_util::io::ReaderStream;
 
+/// Maximum number of rows returned by CSV export queries.
+const MAX_CSV_EXPORT_ROWS: u32 = 100_000;
+
 #[derive(Deserialize)]
 pub struct ReportQuery {
     pub user: Option<String>,
@@ -242,7 +245,7 @@ pub async fn report_sessions_csv(
         q.session_type.as_deref(),
         q.from.as_deref(),
         q.to.as_deref(),
-        100_000,
+        MAX_CSV_EXPORT_ROWS,
         0,
     ) {
         Ok((rows, _total)) => {

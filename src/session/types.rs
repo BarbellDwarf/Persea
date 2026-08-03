@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 /// Session type: SSH terminal, web browser, RDP, VNC, VDI container, direct
 /// SPICE, or Proxmox VE console (SPICE brokered via the PVE spiceproxy API).
-#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionType {
     #[default]
@@ -171,7 +171,7 @@ pub struct CreateSessionRequest {
 }
 
 /// Session status in the lifecycle.
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
     /// guacd connected, waiting for browser
