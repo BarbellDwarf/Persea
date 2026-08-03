@@ -1,7 +1,7 @@
 listen_addr = "0.0.0.0:8089"
 guacd_addr = "127.0.0.1:4822"
-static_path = "/opt/rustguac/static"
-db_path = "/opt/rustguac/data/rustguac.db"
+static_path = "/opt/persea/static"
+db_path = "/opt/persea/data/persea.db"
 session_pending_timeout_secs = 60
 xvnc_path = "Xvnc"
 chromium_path = "chromium"
@@ -18,36 +18,36 @@ display_range_end = 199
 # web_allowed_networks = ["0.0.0.0/0", "::/0"]
 
 # DEPRECATED: use [recording] section below
-# recording_path = "/opt/rustguac/recordings"
+# recording_path = "/opt/persea/recordings"
 
 [recording]
-path = "/opt/rustguac/recordings"
+path = "/opt/persea/recordings"
 enabled = true
 max_disk_percent = 80
 max_recordings = 0
 rotation_interval_secs = 300
 
 [tls]
-cert_path = "/opt/rustguac/tls/cert.pem"
-key_path = "/opt/rustguac/tls/key.pem"
-guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+cert_path = "/opt/persea/tls/cert.pem"
+key_path = "/opt/persea/tls/key.pem"
+guacd_cert_path = "/opt/persea/tls/cert.pem"
 
 # [vault]
 # addr = "https://vault.example.com:8200"
 # mount = "secret"
-# base_path = "rustguac"
+# base_path = "persea"
 # role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # # namespace = "my-ns"
 # # instance_name = "prod-1"
 
 # [drive]
 # enabled = true
-# drive_path = "/mnt/rustguac-drives"
+# drive_path = "/mnt/persea-drives"
 # drive_name = "Shared Drive"
 # allow_download = true
 # allow_upload = true
 # cleanup_on_close = true
 # retention_secs = 0
-# luks_device = "/opt/rustguac/drives.luks"
-# luks_name = "rustguac-drives"
-# luks_key_path = "rustguac/luks-key"
+# luks_device = "/opt/persea/drives.luks"
+# luks_name = "persea-drives"
+# luks_key_path = "persea/luks-key"

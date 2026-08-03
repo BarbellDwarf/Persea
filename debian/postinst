@@ -2,14 +2,14 @@
 set -e
 
 # Ensure data directories have correct ownership
-chown -R rustguac:rustguac /opt/rustguac/data
-chown -R rustguac:rustguac /opt/rustguac/recordings
+chown -R persea:persea /opt/persea/data
+chown -R persea:persea /opt/persea/recordings
 
 # Chromium policy: web session hardening.
 # DeveloperToolsAvailability=0: CDP needed for login scripts. Users can't reach DevTools
 # through the UI anyway — chrome://* is in URLBlocklist.
 mkdir -p /etc/chromium/policies/managed
-cat > /etc/chromium/policies/managed/rustguac.json <<'POLICY'
+cat > /etc/chromium/policies/managed/persea.json <<'POLICY'
 {"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 0, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}
 POLICY
 
@@ -17,7 +17,7 @@ POLICY
 # Versions prior to 0.4.1 shipped a config.toml with db_path, static_path,
 # and other top-level keys placed after the [recording] header, causing them
 # to be silently ignored.  Detect and fix this.
-CONFIG="/opt/rustguac/config.toml"
+CONFIG="/opt/persea/config.toml"
 if [ -f "$CONFIG" ]; then
     # Check if db_path appears ONLY after a [recording] header (i.e. is missing
     # from the top-level section).  A quick heuristic: if "db_path" exists in
@@ -84,23 +84,23 @@ else:
 fi
 
 # Generate self-signed TLS certificate if none exists
-if [ ! -f /opt/rustguac/tls/cert.pem ] || [ ! -f /opt/rustguac/tls/key.pem ]; then
+if [ ! -f /opt/persea/tls/cert.pem ] || [ ! -f /opt/persea/tls/key.pem ]; then
     CERT_HOSTNAME=$(hostname -f 2>/dev/null || hostname)
     echo "Generating self-signed TLS certificate for ${CERT_HOSTNAME}..."
-    /opt/rustguac/bin/rustguac generate-cert \
+    /opt/persea/bin/persea generate-cert \
         --hostname "$CERT_HOSTNAME" \
-        --out-dir /opt/rustguac/tls
-    chmod 600 /opt/rustguac/tls/key.pem
-    chmod 644 /opt/rustguac/tls/cert.pem
+        --out-dir /opt/persea/tls
+    chmod 600 /opt/persea/tls/key.pem
+    chmod 644 /opt/persea/tls/cert.pem
 fi
-chown -R rustguac:rustguac /opt/rustguac/tls
+chown -R persea:persea /opt/persea/tls
 
 # Update shared library cache for guacd libs
 ldconfig
 
 echo ""
 echo "  To set up encrypted file transfer (LUKS drive), run:"
-echo "    sudo /opt/rustguac/bin/drive-setup.sh"
+echo "    sudo /opt/persea/bin/drive-setup.sh"
 echo ""
 
 #DEBHELPER#

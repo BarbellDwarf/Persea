@@ -1,24 +1,24 @@
 # =============================================================================
-# Multi-stage Dockerfile for rustguac
+# Multi-stage Dockerfile for persea
 #
 # Stages:
 #   1. guacd-builder  — compile guacd from guacamole-server source
-#   2. rust-builder   — compile rustguac binary
+#   2. rust-builder   — compile persea binary
 #   3. runtime        — minimal image with both binaries + runtime deps
 #
 # Build:
-#   docker build -t rustguac .
+#   docker build -t persea .
 #
 # Run:
-#   docker run -d -p 8089:8089 rustguac
+#   docker run -d -p 8089:8089 persea
 #
 # Run with VDI (Docker desktop containers):
 #   docker run -d -p 8089:8089 \
 #     -v /var/run/docker.sock:/var/run/docker.sock \
 #     --group-add $(getent group docker | cut -d: -f3) \
-#     rustguac
+#     persea
 #
-# The image runs both guacd and rustguac under a simple entrypoint script.
+# The image runs both guacd and persea under a simple entrypoint script.
 # =============================================================================
 
 # ---------------------------------------------------------------------------
@@ -54,7 +54,7 @@ RUN autoreconf -fi
 
 WORKDIR /build/guacd-build
 RUN /build/guacamole-server/configure \
-        --prefix=/opt/rustguac \
+        --prefix=/opt/persea \
         --with-ssh \
         --with-vnc \
         --with-rdp \
@@ -67,12 +67,12 @@ RUN /build/guacamole-server/configure \
         --disable-static \
     && make -j"$(nproc)" \
     && make install \
-    && mkdir -p /opt/rustguac/lib/freerdp3 \
-    && cp /opt/rustguac/lib/libguac*.so* /opt/rustguac/lib/freerdp3/ \
-    && cp /usr/lib/x86_64-linux-gnu/freerdp3/libguac*.so* /opt/rustguac/lib/freerdp3/ 2>/dev/null || true
+    && mkdir -p /opt/persea/lib/freerdp3 \
+    && cp /opt/persea/lib/libguac*.so* /opt/persea/lib/freerdp3/ \
+    && cp /usr/lib/x86_64-linux-gnu/freerdp3/libguac*.so* /opt/persea/lib/freerdp3/ 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Stage 2: Build rustguac
+# Stage 2: Build persea
 # ---------------------------------------------------------------------------
 FROM rust:1.96.1-bookworm AS rust-builder
 
@@ -110,56 +110,56 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install guacd
-COPY --from=guacd-builder /opt/rustguac/sbin/ /opt/rustguac/sbin/
-COPY --from=guacd-builder /opt/rustguac/lib/ /opt/rustguac/lib/
+COPY --from=guacd-builder /opt/persea/sbin/ /opt/persea/sbin/
+COPY --from=guacd-builder /opt/persea/lib/ /opt/persea/lib/
 
-# Install rustguac binary
-COPY --from=rust-builder /build/target/release/rustguac /opt/rustguac/bin/rustguac
+# Install persea binary
+COPY --from=rust-builder /build/target/release/rustguac /opt/persea/bin/persea
 
 # Install static web assets
-COPY static/ /opt/rustguac/static/
+COPY static/ /opt/persea/static/
 
 # Library path for guacd
-RUN echo "/opt/rustguac/lib" > /etc/ld.so.conf.d/rustguac.conf && ldconfig
+RUN echo "/opt/persea/lib" > /etc/ld.so.conf.d/persea.conf && ldconfig
 
 # FreeRDP plugin setup: guacd loads "guac-common-svc" by name, which FreeRDP
 # resolves to "guac-common-svc.so" in its plugin path. The build installs it as
 # "libguac-common-svc-client.so", so we create a symlink with the expected name.
 # We also ensure the system FreeRDP plugin dir exists and contains the plugins.
 RUN mkdir -p /usr/lib/x86_64-linux-gnu/freerdp3 && \
-    if [ -d /opt/rustguac/lib/freerdp3 ]; then \
-        cp /opt/rustguac/lib/freerdp3/*.so* /usr/lib/x86_64-linux-gnu/freerdp3/ 2>/dev/null; \
-        ln -sf libguac-common-svc-client.so /opt/rustguac/lib/freerdp3/guac-common-svc.so; \
+    if [ -d /opt/persea/lib/freerdp3 ]; then \
+        cp /opt/persea/lib/freerdp3/*.so* /usr/lib/x86_64-linux-gnu/freerdp3/ 2>/dev/null; \
+        ln -sf libguac-common-svc-client.so /opt/persea/lib/freerdp3/guac-common-svc.so; \
         ln -sf libguac-common-svc-client.so /usr/lib/x86_64-linux-gnu/freerdp3/guac-common-svc.so; \
         echo "FreeRDP plugins installed:"; \
-        ls /usr/lib/x86_64-linux-gnu/freerdp3/guac* /opt/rustguac/lib/freerdp3/guac-common-svc.so 2>/dev/null; \
+        ls /usr/lib/x86_64-linux-gnu/freerdp3/guac* /opt/persea/lib/freerdp3/guac-common-svc.so 2>/dev/null; \
     fi
 
 # Create writable runtime directories
-RUN mkdir -p /opt/rustguac/data /opt/rustguac/recordings /opt/rustguac/tls \
-    /opt/rustguac/certs /opt/rustguac/drives /opt/rustguac/scripts \
-    /opt/rustguac/vdi-homes
+RUN mkdir -p /opt/persea/data /opt/persea/recordings /opt/persea/tls \
+    /opt/persea/certs /opt/persea/drives /opt/persea/scripts \
+    /opt/persea/vdi-homes
 
 # Chromium policy: web session hardening.
 # DeveloperToolsAvailability=0: CDP needed for login scripts. Users can't reach DevTools
 # through the UI anyway — chrome://* is in URLBlocklist.
 RUN mkdir -p /etc/chromium/policies/managed && \
     echo '{"AllowFileSelectionDialogs": false, "PasswordManagerEnabled": true, "ImportSavedPasswords": false, "DeveloperToolsAvailability": 0, "DownloadRestrictions": 3, "PrintingEnabled": false, "EditBookmarksEnabled": false, "BrowserSignin": 0, "SyncDisabled": true, "ExtensionInstallBlocklist": ["*"], "URLBlocklist": ["file://*", "chrome://*", "chrome-extension://*", "view-source:*", "javascript:*"], "URLAllowlist": ["chrome://policy"]}' \
-    > /etc/chromium/policies/managed/rustguac.json
+    > /etc/chromium/policies/managed/persea.json
 
 # Create non-root user with a real home directory (Chromium crashpad needs it)
-RUN groupadd -r rustguac && useradd -r -g rustguac -m -d /home/rustguac -s /bin/sh rustguac
+RUN groupadd -r persea && useradd -r -g persea -m -d /home/persea -s /bin/sh persea
 
 # Generate self-signed cert for guacd TLS (internal loopback encryption)
-RUN /opt/rustguac/bin/rustguac generate-cert --hostname localhost --out-dir /opt/rustguac/tls
+RUN /opt/persea/bin/persea generate-cert --hostname localhost --out-dir /opt/persea/tls
 
 # Default config template (copied to config.toml on first run if not mounted)
-RUN cat > /opt/rustguac/config.toml.default <<'EOF'
+RUN cat > /opt/persea/config.toml.default <<'EOF'
 listen_addr = "0.0.0.0:8089"
 guacd_addr = "127.0.0.1:4822"
-recording_path = "/opt/rustguac/recordings"
-static_path = "/opt/rustguac/static"
-db_path = "/opt/rustguac/data/rustguac.db"
+recording_path = "/opt/persea/recordings"
+static_path = "/opt/persea/static"
+db_path = "/opt/persea/data/persea.db"
 session_pending_timeout_secs = 60
 xvnc_path = "Xvnc"
 chromium_path = "chromium"
@@ -167,43 +167,43 @@ display_range_start = 100
 display_range_end = 199
 
 [tls]
-cert_path = "/opt/rustguac/tls/cert.pem"
-key_path = "/opt/rustguac/tls/key.pem"
-guacd_cert_path = "/opt/rustguac/tls/cert.pem"
+cert_path = "/opt/persea/tls/cert.pem"
+key_path = "/opt/persea/tls/key.pem"
+guacd_cert_path = "/opt/persea/tls/cert.pem"
 
 # VDI Docker desktop containers (uncomment to enable)
 # Requires: -v /var/run/docker.sock:/var/run/docker.sock
 # [vdi]
 # enabled = true
 # idle_timeout_mins = 60
-# home_base = "/opt/rustguac/vdi-homes"
+# home_base = "/opt/persea/vdi-homes"
 EOF
 
 # Set ownership so the non-root user can write to runtime dirs.
 # The top-level dir is chowned (not recursive) so loaders can create config.toml;
 # subdirs are chowned recursively for data, certs, etc.
-RUN chown rustguac:rustguac /opt/rustguac && \
-    chown -R rustguac:rustguac /opt/rustguac/data /opt/rustguac/recordings \
-    /opt/rustguac/tls /opt/rustguac/certs /opt/rustguac/drives \
-    /opt/rustguac/scripts /opt/rustguac/vdi-homes /opt/rustguac/config.toml.default
+RUN chown persea:persea /opt/persea && \
+    chown -R persea:persea /opt/persea/data /opt/persea/recordings \
+    /opt/persea/tls /opt/persea/certs /opt/persea/drives \
+    /opt/persea/scripts /opt/persea/vdi-homes /opt/persea/config.toml.default
 
-# Entrypoint script: starts guacd in background, then rustguac in foreground
-RUN cat > /opt/rustguac/entrypoint.sh <<'SCRIPT'
+# Entrypoint script: starts guacd in background, then persea in foreground
+RUN cat > /opt/persea/entrypoint.sh <<'SCRIPT'
 #!/bin/sh
 set -e
 
 # Copy default config on first run (if no config file is mounted/present)
-CONFIG_PATH="/opt/rustguac/config.toml"
+CONFIG_PATH="/opt/persea/config.toml"
 if [ ! -f "$CONFIG_PATH" ]; then
     echo "No config.toml found — copying default configuration."
-    cp /opt/rustguac/config.toml.default "$CONFIG_PATH"
+    cp /opt/persea/config.toml.default "$CONFIG_PATH"
 fi
 
 # Create admin API key on first run (if no DB exists yet)
-DB_PATH="/opt/rustguac/data/rustguac.db"
+DB_PATH="/opt/persea/data/persea.db"
 if [ ! -f "$DB_PATH" ]; then
     echo "First run detected — creating admin API key..."
-    /opt/rustguac/bin/rustguac --config "$CONFIG_PATH" add-admin --name docker-admin
+    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin
     echo ""
     echo "==> SAVE THE API KEY ABOVE — it is only shown once! <=="
     echo ""
@@ -211,10 +211,10 @@ fi
 
 # Start guacd in background
 echo "Starting guacd..."
-LD_LIBRARY_PATH=/opt/rustguac/lib FREERDP_ADDIN_PATH=/opt/rustguac/lib/freerdp3 \
-    /opt/rustguac/sbin/guacd \
+LD_LIBRARY_PATH=/opt/persea/lib FREERDP_ADDIN_PATH=/opt/persea/lib/freerdp3 \
+    /opt/persea/sbin/guacd \
     -b 127.0.0.1 -l 4822 -L "${GUACD_LOG_LEVEL:-info}" -f \
-    -C /opt/rustguac/tls/cert.pem -K /opt/rustguac/tls/key.pem &
+    -C /opt/persea/tls/cert.pem -K /opt/persea/tls/key.pem &
 GUACD_PID=$!
 
 # Wait briefly to confirm guacd started
@@ -228,22 +228,22 @@ echo "guacd started (pid=$GUACD_PID)"
 # Trap signals to shut down both processes
 trap 'kill $GUACD_PID 2>/dev/null; wait; exit 0' TERM INT
 
-# Run rustguac in foreground
-echo "Starting rustguac..."
-exec /opt/rustguac/bin/rustguac --config "$CONFIG_PATH" serve
+# Run persea in foreground
+echo "Starting persea..."
+exec /opt/persea/bin/persea --config "$CONFIG_PATH" serve
 SCRIPT
-RUN chmod +x /opt/rustguac/entrypoint.sh
+RUN chmod +x /opt/persea/entrypoint.sh
 
-WORKDIR /opt/rustguac
+WORKDIR /opt/persea
 EXPOSE 8089
-VOLUME ["/opt/rustguac/data", "/opt/rustguac/recordings", "/opt/rustguac/drives", "/opt/rustguac/vdi-homes"]
+VOLUME ["/opt/persea/data", "/opt/persea/recordings", "/opt/persea/drives", "/opt/persea/vdi-homes"]
 
 ENV RUST_LOG=info
 ENV GUACD_LOG_LEVEL=info
-ENV HOME=/home/rustguac
+ENV HOME=/home/persea
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:8089/api/health || exit 1
 
-USER rustguac
-ENTRYPOINT ["/opt/rustguac/entrypoint.sh"]
+USER persea
+ENTRYPOINT ["/opt/persea/entrypoint.sh"]

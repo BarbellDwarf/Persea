@@ -1,11 +1,11 @@
-Source: rustguac
+Source: persea
 Section: net
 Priority: optional
-Maintainer: rustguac maintainers <rustguac@localhost>
+Maintainer: persea maintainers <persea@localhost>
 Build-Depends: debhelper-compat (= 13)
 Standards-Version: 4.6.2
 
-Package: rustguac
+Package: persea
 Architecture: any
 Depends: ${shlibs:Depends}, ${misc:Depends},
  libcairo2,
@@ -34,7 +34,7 @@ Depends: ${shlibs:Depends}, ${misc:Depends},
  cryptsetup-bin
 Recommends: haproxy
 Description: Lightweight Rust replacement for Apache Guacamole webapp
- rustguac proxies the Guacamole protocol over WebSockets between web
+ persea proxies the Guacamole protocol over WebSockets between web
  browsers and guacd. Supports SSH, VNC, RDP, SPICE, and web browser
- sessions (headless Chromium on Xvnc). This package bundles both rustguac
+ sessions (headless Chromium on Xvnc). This package bundles both persea
  and guacd.

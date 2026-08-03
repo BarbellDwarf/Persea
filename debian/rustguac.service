@@ -1,17 +1,17 @@
 [Unit]
-Description=rustguac web session proxy
-After=network.target rustguac-guacd.service
-Requires=rustguac-guacd.service
+Description=persea web session proxy
+After=network.target persea-guacd.service
+Requires=persea-guacd.service
 
 [Service]
 Type=simple
-User=rustguac
-WorkingDirectory=/opt/rustguac
-ExecStart=/opt/rustguac/bin/rustguac --config /opt/rustguac/config.toml serve
+User=persea
+WorkingDirectory=/opt/persea
+ExecStart=/opt/persea/bin/persea --config /opt/persea/config.toml serve
 Restart=on-failure
 RestartSec=5
 Environment=RUST_LOG=info
-EnvironmentFile=-/opt/rustguac/env
+EnvironmentFile=-/opt/persea/env
 LimitNOFILE=65535
 ProtectSystem=full
 NoNewPrivileges=yes
@@ -20,7 +20,7 @@ ProtectHome=yes
 ProtectKernelTunables=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-ReadWritePaths=/opt/rustguac
+ReadWritePaths=/opt/persea
 
 [Install]
 WantedBy=multi-user.target

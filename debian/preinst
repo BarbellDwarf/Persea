@@ -1,10 +1,10 @@
 #!/bin/sh
 set -e
 
-# Create rustguac system user if it doesn't exist.
+# Create persea system user if it doesn't exist.
 # Chromium's crashpad requires a real home directory.
-if ! getent passwd rustguac >/dev/null 2>&1; then
-    adduser --system --group --home /home/rustguac --quiet rustguac
+if ! getent passwd persea >/dev/null 2>&1; then
+    adduser --system --group --home /home/persea --quiet persea
 fi
 
 #DEBHELPER#

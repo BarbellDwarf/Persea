@@ -1,14 +1,14 @@
 [Unit]
-Description=Guacamole proxy daemon (guacd) for rustguac
+Description=Guacamole proxy daemon (guacd) for persea
 After=network.target
 
 [Service]
 Type=simple
-User=rustguac
-ExecStart=/opt/rustguac/sbin/guacd -b 127.0.0.1 -l 4822 -L info -f -C /opt/rustguac/tls/cert.pem -K /opt/rustguac/tls/key.pem
+User=persea
+ExecStart=/opt/persea/sbin/guacd -b 127.0.0.1 -l 4822 -L info -f -C /opt/persea/tls/cert.pem -K /opt/persea/tls/key.pem
 Restart=on-failure
 RestartSec=5
-Environment=LD_LIBRARY_PATH=/opt/rustguac/lib
+Environment=LD_LIBRARY_PATH=/opt/persea/lib
 
 [Install]
 WantedBy=multi-user.target

@@ -6,18 +6,18 @@ ldconfig
 
 # On purge, remove runtime data and user
 if [ "$1" = "purge" ]; then
-    rm -rf /opt/rustguac/data
-    rm -rf /opt/rustguac/recordings
-    rm -rf /opt/rustguac/tls
-    rm -rf /opt/rustguac
-    rm -f /etc/ld.so.conf.d/rustguac.conf
+    rm -rf /opt/persea/data
+    rm -rf /opt/persea/recordings
+    rm -rf /opt/persea/tls
+    rm -rf /opt/persea
+    rm -f /etc/ld.so.conf.d/persea.conf
     ldconfig
 
-    if getent passwd rustguac >/dev/null 2>&1; then
-        deluser --quiet --system rustguac || true
+    if getent passwd persea >/dev/null 2>&1; then
+        deluser --quiet --system persea || true
     fi
-    if getent group rustguac >/dev/null 2>&1; then
-        delgroup --quiet --system rustguac || true
+    if getent group persea >/dev/null 2>&1; then
+        delgroup --quiet --system persea || true
     fi
 fi
 
