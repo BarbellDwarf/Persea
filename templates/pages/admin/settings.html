@@ -6,7 +6,7 @@
 <div class="max-w-4xl mx-auto">
     <div class="mb-6">
         <h1 class="text-2xl font-bold text-gray-100">System Settings</h1>
-        <p class="text-sm text-muted mt-1">Configure server, session, and feature settings</p>
+        <p class="text-sm text-gray-500 mt-1">Configure server, session, and feature settings</p>
     </div>
 
     <form id="settings-form" hx-put="/api/system/settings"
@@ -20,22 +20,22 @@
                 Server
             </h2>
             <div class="grid grid-cols-2 gap-4">
-                <div class="form-group">
+                <div>
                     <label class="form-label">Listen Address</label>
                     <input type="text" name="listen_addr" value="0.0.0.0:8089" class="form-input">
                 </div>
-                <div class="form-group">
+                <div>
                     <label class="form-label">guacd Address</label>
                     <input type="text" name="guacd_addr" value="127.0.0.1:4822" class="form-input">
                 </div>
-                <div class="form-group">
+                <div>
                     <label class="form-label">TLS Certificate</label>
                     <div class="flex items-center gap-2">
-                        <input type="text" name="tls_cert_path" placeholder="Not configured" class="form-input flex-1">
-                        <span id="tls-status" class="badge badge-gray">Not Set</span>
+                        <input type="text" name="tls_cert_path" placeholder="Not configured" class="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                        <span id="tls-status" class="px-2 py-0.5 text-xs rounded border bg-gray-800 text-gray-500 border-gray-700">Not Set</span>
                     </div>
                 </div>
-                <div class="form-group">
+                <div>
                     <label class="form-label">TLS Key</label>
                     <input type="text" name="tls_key_path" placeholder="Not configured" class="form-input">
                 </div>
@@ -49,22 +49,22 @@
                 Session
             </h2>
             <div class="grid grid-cols-2 gap-4">
-                <div class="form-group">
+                <div>
                     <label class="form-label">Max Duration (seconds)</label>
                     <input type="number" name="session_max_duration_secs" value="28800" class="form-input">
-                    <p class="text-xs text-muted mt-1">8 hours default</p>
+                    <p class="text-xs text-gray-600 mt-1">8 hours default</p>
                 </div>
-                <div class="form-group">
+                <div>
                     <label class="form-label">Idle Timeout (seconds)</label>
                     <input type="number" name="session_idle_timeout_secs" value="1800" class="form-input">
-                    <p class="text-xs text-muted mt-1">30 minutes default</p>
+                    <p class="text-xs text-gray-600 mt-1">30 minutes default</p>
                 </div>
-                <div class="form-group">
+                <div>
                     <label class="form-label">Concurrent Session Limit</label>
                     <input type="number" name="max_concurrent_sessions" value="0" class="form-input">
-                    <p class="text-xs text-muted mt-1">0 = unlimited</p>
+                    <p class="text-xs text-gray-600 mt-1">0 = unlimited</p>
                 </div>
-                <div class="form-group">
+                <div>
                     <label class="form-label">History Retention (days)</label>
                     <input type="number" name="session_history_retention_days" value="90" class="form-input">
                 </div>
@@ -81,30 +81,30 @@
                 <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
                     <div>
                         <span class="text-sm text-gray-200">Browser Sessions</span>
-                        <p class="text-xs text-muted">Headless Chromium via Xvnc (requires Xvnc + Chromium)</p>
+                        <p class="text-xs text-gray-500">Headless Chromium via Xvnc (requires Xvnc + Chromium)</p>
                     </div>
-                    <input type="checkbox" name="enable_browser_sessions">
+                    <input type="checkbox" name="enable_browser_sessions" class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
                 </label>
                 <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
                     <div>
                         <span class="text-sm text-gray-200">VDI (Docker)</span>
-                        <p class="text-xs text-muted">Per-user Docker desktop containers</p>
+                        <p class="text-xs text-gray-500">Per-user Docker desktop containers</p>
                     </div>
-                    <input type="checkbox" name="enable_vdi">
+                    <input type="checkbox" name="enable_vdi" class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
                 </label>
                 <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
                     <div>
                         <span class="text-sm text-gray-200">Proxmox Integration</span>
-                        <p class="text-xs text-muted">VM management via Proxmox VE API</p>
+                        <p class="text-xs text-gray-500">VM management via Proxmox VE API</p>
                     </div>
-                    <input type="checkbox" name="enable_proxmox">
+                    <input type="checkbox" name="enable_proxmox" class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
                 </label>
                 <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
                     <div>
                         <span class="text-sm text-gray-200">VMware Integration</span>
-                        <p class="text-xs text-muted">VM management via vSphere API</p>
+                        <p class="text-xs text-gray-500">VM management via vSphere API</p>
                     </div>
-                    <input type="checkbox" name="enable_vmware">
+                    <input type="checkbox" name="enable_vmware" class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
                 </label>
             </div>
         </div>
@@ -119,36 +119,40 @@
                 <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
                     <div>
                         <span class="text-sm text-gray-200">Vault Address Book</span>
-                        <p class="text-xs text-muted">Use Vault/OpenBao for connection storage</p>
+                        <p class="text-xs text-gray-500">Use Vault/OpenBao for connection storage</p>
                     </div>
-                    <input type="checkbox" name="vault_enabled">
+                    <input type="checkbox" name="vault_enabled" class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
                 </label>
                 <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
                     <div>
                         <span class="text-sm text-gray-200">DB-Only Mode</span>
-                        <p class="text-xs text-muted">Store connections in SQLite (no Vault required)</p>
+                        <p class="text-xs text-gray-500">Store connections in SQLite (no Vault required)</p>
                     </div>
-                    <input type="checkbox" name="db_only_mode">
+                    <input type="checkbox" name="db_only_mode" class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
                 </label>
             </div>
         </div>
 
         <!-- Save -->
         <div class="flex justify-end">
-            <button type="submit" class="btn btn-primary">Save Settings</button>
+            <button type="submit"
+                    class="btn btn-primary">
+                Save Settings
+            </button>
         </div>
     </form>
 </div>
 
 <!-- Save Confirmation -->
-<div id="save-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-label="Settings saved">
+<div id="save-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
     <div class="card w-full max-w-sm text-center">
         <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-emerald-900/50 flex items-center justify-center">
             <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
         </div>
         <h2 class="text-lg font-bold text-gray-100 mb-2">Settings Saved</h2>
-        <p class="text-sm text-muted mb-4">Changes will take effect on the next request.</p>
-        <button onclick="document.getElementById('save-confirm').classList.add('hidden')" class="btn btn-secondary btn-sm">OK</button>
+        <p class="text-sm text-gray-500 mb-4">Changes will take effect on the next request.</p>
+        <button onclick="document.getElementById('save-confirm').classList.add('hidden')"
+                class="btn btn-secondary btn-sm">OK</button>
     </div>
 </div>
 
