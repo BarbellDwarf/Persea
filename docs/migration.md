@@ -20,7 +20,7 @@ mysqldump -u guacamole_user -p guacamole_db \
   > guacamole-dump.sql
 ```
 
-Only these three tables are needed. Both the default multi-row dump format and `--skip-extended-insert` single-row dumps are supported; the dump just needs `INSERT INTO` statements for those tables.
+Only these three tables are needed. Both the default multi-row dump format and `--skip-extended-insert` single-row dumps are supported; the dump needs `INSERT INTO` statements for those tables.
 
 ## Step 2: Preview the import
 
@@ -122,9 +122,9 @@ Once imported, connections appear in the connections UI. You can:
 
 ## Notes
 
-- The import is additive: existing entries in the target folder are not deleted or overwritten. If you re-run the import, entries with the same name will be updated.
+- The import is additive: existing entries in the target folder are left untouched. If you re-run the import, entries with the same name will be updated.
 - Guacamole user/group permissions are not imported. Use persea's OIDC group mappings and folder `allowed_groups` instead.
-- Credentials (passwords, private keys) are imported into Vault where they are stored encrypted at rest and never touch disk.
+- Credentials (passwords, private keys) are imported into Vault, stored encrypted at rest and never touching disk.
 
 # Splitting to multiple Vaults (disaster recovery)
 
