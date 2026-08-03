@@ -18,7 +18,7 @@
 ### Server won't start
 - Check `systemctl status persea`
 - Verify config: `persea --config /opt/persea/config.toml serve`
-- Common: port 8089 already in use — check `ss -tlnp | grep 8089`
+- Port 8089 already in use is a frequent culprit; check `ss -tlnp | grep 8089`
 
 ### WebSocket connection fails
 - Check if rate limiting is enabled and blocking
@@ -35,7 +35,7 @@
 ### Chromium won't start
 - Verify `chromium` is installed: `which chromium`
 - Check the `persea` user has a home directory: `ls -la /home/persea`
-- Common: missing `--in-process-gpu` flag — check Chromium flags in config
+- The `--in-process-gpu` flag is often missing; check Chromium flags in config
 - Check Xvnc: `ps aux | grep Xvnc`
 
 ### Black screen in browser session
