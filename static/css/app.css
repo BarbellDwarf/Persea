@@ -168,6 +168,8 @@ body {
     min-height: 100vh;
     display: flex;
     flex-direction: column;
+    flex: 1;
+    min-width: 0;
 }
 
 .header {

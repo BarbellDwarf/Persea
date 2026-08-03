@@ -1,13 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
-  <!-- Avocado outer shape -->
-  <path d="M64 8C40 8 24 28 20 52c-4 24 4 48 20 60 8 6 16 8 24 8s16-2 24-8c16-12 24-36 20-60C104 28 88 8 64 8z" fill="#5bc0be"/>
-  <!-- Avocado pit / terminal screen -->
-  <ellipse cx="64" cy="72" rx="26" ry="30" fill="#1a1a2e"/>
-  <!-- Eyes -->
-  <circle cx="55" cy="62" r="3" fill="#e0e0e0"/>
-  <circle cx="73" cy="62" r="3" fill="#e0e0e0"/>
-  <!-- Smile -->
-  <path d="M56 72 Q64 80 72 72" fill="none" stroke="#e0e0e0" stroke-width="2" stroke-linecap="round"/>
-  <!-- Terminal prompt -->
-  <text x="48" y="92" font-family="monospace" font-weight="bold" font-size="18" fill="#e94560">&gt;_</text>
+  <defs>
+    <linearGradient id="leaf" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#10b981"/>
+    </linearGradient>
+    <linearGradient id="inner" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#047857"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <!-- Abstract avocado leaf silhouette -->
+  <path d="M64 10C42 10 22 30 18 54c-3 18 5 40 22 54 9 7 18 10 24 10s15-3 24-10c17-14 25-36 22-54C106 30 86 10 64 10z" fill="url(#leaf)"/>
+  <!-- Inner pit shape (dark) -->
+  <ellipse cx="64" cy="68" rx="22" ry="26" fill="url(#inner)"/>
+  <!-- Clean "P" monogram -->
+  <path d="M54 48h16c6 0 10 4 10 10s-4 10-10 10H62v14h-8V48zm8 14h8c2 0 3-1 3-3s-1-3-3-3h-8v6z" fill="#ffffff" fill-opacity="0.95"/>
 </svg>
