@@ -1,3 +1,8 @@
+#![warn(clippy::pedantic)]
+#![warn(clippy::unwrap_used)]
+#![warn(clippy::expect_used)]
+#![allow(missing_docs)]
+
 /// Re-export modules for fuzz targets and testing.
 pub mod protocol;
 pub mod password;

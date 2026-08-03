@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use zeroize::Zeroizing;
+use zeroize::Zeroizing;
 
 use crate::config::VaultConfig;
 use crate::tunnel;
@@ -558,7 +560,7 @@ pub struct VaultClient {
     base_path: String,
     namespace: Option<String>,
     instance_name: Option<String>,
-    token: Arc<RwLock<String>>,
+    token: Arc<RwLock<Zeroizing<String>>>,
     role_id: String,
     secret_id: String,
 }
@@ -580,20 +582,14 @@ impl VaultClient {
             base_path: config.base_path.clone(),
             namespace: config.namespace.clone(),
             instance_name: config.instance_name.clone(),
-            // NOTE: The Vault token is stored as a plain String. For defense
-            // in depth, it should be wrapped in `zeroize::Zeroizing<String>` to
-            // ensure the memory is zeroed on drop. However, `zeroize` is not
-            // currently a direct dependency (only transitive). The token lives
-            // behind an RwLock and is refreshed periodically, so the practical
-            // risk of residual plaintext in freed memory is low but nonzero.
-            token: Arc::new(RwLock::new(String::new())),
+            token: Arc::new(RwLock::new(Zeroizing::new(String::new()))),
             role_id: config.role_id.clone(),
             secret_id: secret_id.to_string(),
         };
 
         // Perform initial login
         let (token, _ttl) = client.approle_login().await?;
-        *client.token.write().await = token;
+        *client.token.write().await = Zeroizing::new(token);
 
         Ok(client)
     }
@@ -669,7 +665,7 @@ impl VaultClient {
                         tracing::warn!("Vault token renewal failed, attempting re-login");
                         match client.approle_login().await {
                             Ok((new_token, new_ttl)) => {
-                                *client.token.write().await = new_token;
+                                *client.token.write().await = Zeroizing::new(new_token);
                                 ttl = new_ttl;
                                 tracing::info!("Vault re-login successful, TTL: {}s", new_ttl);
                             }
@@ -734,7 +730,7 @@ impl VaultClient {
             tracing::debug!("Vault 403, attempting re-login and retry");
             match self.approle_login().await {
                 Ok((new_token, _)) => {
-                    *self.token.write().await = new_token.clone();
+                    *self.token.write().await = Zeroizing::new(new_token.clone());
                     let resp = do_request(new_token).await?;
                     Ok(resp)
                 }

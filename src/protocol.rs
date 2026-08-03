@@ -95,7 +95,7 @@ fn encode_element(s: &str) -> String {
     format!("{}.{}", s.len(), s)
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[must_use]
 pub enum ParseError {
     Empty,
@@ -518,5 +518,33 @@ mod tests {
         // should still report the first boundary so the proxy can flush it.
         let s = b"3.nop;garbage";
         assert_eq!(last_instruction_boundary(s), Some(6));
+    }
+
+    use proptest::prelude::*;
+    fn valid_instruction_strategy() -> impl Strategy<Value = Instruction> {
+        ("[a-z]{1,12}", proptest::collection::vec("[a-zA-Z0-9._/: -]{0,64}", 0..6))
+            .prop_map(|(opcode, args)| Instruction::new(opcode, args))
+    }
+    proptest! {
+        #[test]
+        fn proptest_roundtrip_encode_decode(ins in valid_instruction_strategy()) {
+            let encoded = ins.encode();
+            let parsed = Instruction::parse(&encoded).expect("encode then parse should never fail");
+            prop_assert_eq!(&ins, &parsed);
+        }
+        #[test]
+        fn proptest_length_prefix_matches_content(opcode in "[a-z]{1,12}", args in proptest::collection::vec("[a-zA-Z0-9._/: -]{0,64}", 0..6)) {
+            let ins = Instruction::new(opcode, args);
+            let encoded = ins.encode();
+            let dot = encoded.find('.').expect("must have dot");
+            let len: usize = encoded[..dot].parse().expect("length must be numeric");
+            let after_dot = &encoded[dot + 1..];
+            prop_assert!(after_dot.len() >= len);
+            prop_assert_eq!(after_dot[..len].as_bytes(), ins.opcode.as_bytes());
+        }
+        #[test]
+        fn proptest_invalid_input_is_error_not_panic(input in ".*") {
+            let _ = Instruction::parse(&input);
+        }
     }
 }
