@@ -97,7 +97,7 @@
 <script>
     (function() {
         // Load current user info
-        fetch('/api/me', { credentials: 'same-origin' })
+        fetch('/api/me', { headers: apiHeaders() })
             .then(function(r) { return r.ok ? r.json() : null; })
             .then(function(data) {
                 if (!data) return;
@@ -122,8 +122,7 @@
             status.classList.remove('hidden');
             fetch('/api/me', {
                 method: 'PUT',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
+                headers: apiHeaders(),
                 body: JSON.stringify({
                     display_name: document.getElementById('display-name').value
                 })

@@ -149,7 +149,7 @@
         }
 
         function loadStatus() {
-            fetch('/api/me/totp', { credentials: 'same-origin' })
+            fetch('/api/me/totp', { headers: apiHeaders() })
                 .then(function(r) { return r.ok ? r.json() : null; })
                 .then(function(data) {
                     if (!data) return;
@@ -161,7 +161,7 @@
         var pendingEnrollment = null;
 
         window.startEnrollment = function() {
-            fetch('/api/me/totp/enroll', { method: 'POST', credentials: 'same-origin' })
+            fetch('/api/me/totp/enroll', { method: 'POST', headers: apiHeaders() })
                 .then(function(r) { return r.ok ? r.json() : null; })
                 .then(function(data) {
                     if (!data) return;
@@ -185,8 +185,8 @@
 
             fetch('/api/me/totp/verify', {
                 method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
+                headers: apiHeaders(),
+                headers: apiHeaders(),
                 body: JSON.stringify({ code: code })
             })
             .then(function(r) { return r.json(); })
@@ -207,7 +207,7 @@
         });
 
         window.showRecoveryCodes = function() {
-            fetch('/api/me/totp/recovery-codes', { credentials: 'same-origin' })
+            fetch('/api/me/totp/recovery-codes', { headers: apiHeaders() })
                 .then(function(r) { return r.ok ? r.json() : null; })
                 .then(function(data) {
                     if (data && data.codes) showRecoveryCodesList(data.codes);
@@ -255,8 +255,8 @@
 
             fetch('/api/me/totp', {
                 method: 'DELETE',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
+                headers: apiHeaders(),
+                headers: apiHeaders(),
                 body: JSON.stringify({ code: code })
             })
             .then(function(r) { return r.json(); })

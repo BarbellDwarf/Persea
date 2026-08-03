@@ -615,12 +615,9 @@ async fn security_headers(
     );
     headers.insert(
         "Content-Security-Policy",
-        format!(
-            "default-src 'self'; script-src 'self' 'nonce-{}' 'strict-dynamic'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com",
-            nonce
-        )
-        .parse()
-        .unwrap(),
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com"
+            .parse()
+            .unwrap(),
     );
     let _ = headers;
     response.extensions_mut().insert(CspNonce(nonce));

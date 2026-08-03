@@ -210,7 +210,7 @@ function toggleProvider(id, enable) {
 function moveProvider(id, direction) {
     fetch('/api/auth/providers/' + id + '/move', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: apiHeaders(),
         body: JSON.stringify({ direction: direction })
     }).then(function() { htmx.trigger('#provider-table-body', 'load'); });
 }

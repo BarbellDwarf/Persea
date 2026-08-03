@@ -43,6 +43,21 @@
 
     <!-- htmx -->
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script>
+    // Configure htmx to send API key on every request
+    htmx.config.defaultHeaders = { 'Authorization': 'Bearer ' + (sessionStorage.getItem('persea_api_key') || '') };
+    document.body.addEventListener('htmx:configRequest', function(evt) {
+        var key = sessionStorage.getItem('persea_api_key');
+        if (key) {
+            evt.detail.headers['Authorization'] = 'Bearer ' + key;
+        }
+    });
+    // Global API helper for inline fetch calls
+    function apiHeaders() {
+        var key = sessionStorage.getItem('persea_api_key');
+        return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (key || '') };
+    }
+    </script>
 
     <!-- Theme detection -->
     <script>

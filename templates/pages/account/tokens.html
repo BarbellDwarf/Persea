@@ -136,7 +136,7 @@
         }
 
         function loadTokens() {
-            fetch('/api/me/tokens', { credentials: 'same-origin' })
+            fetch('/api/me/tokens', { headers: apiHeaders() })
                 .then(function(r) { return r.ok ? r.json() : []; })
                 .then(function(tokens) {
                     var tbody = document.getElementById('tokens-tbody');
@@ -173,7 +173,7 @@
 
         window.revokeToken = function(id) {
             if (!confirm('Revoke this token? It will stop working immediately.')) return;
-            fetch('/api/me/tokens/' + id, { method: 'DELETE', credentials: 'same-origin' })
+            fetch('/api/me/tokens/' + id, { method: 'DELETE', headers: apiHeaders() })
                 .then(function(r) { if (r.ok) loadTokens(); });
         };
 
@@ -201,8 +201,8 @@
 
             fetch('/api/me/tokens', {
                 method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
+                headers: apiHeaders(),
+                headers: apiHeaders(),
                 body: JSON.stringify({ name: name, max_role: maxRole, expires_at: expiry })
             })
             .then(function(r) { return r.json(); })

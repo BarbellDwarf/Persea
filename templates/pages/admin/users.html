@@ -62,10 +62,7 @@
                     <th class="text-right">Actions</th>
                 </tr>
             </thead>
-            <tbody id="user-table-body" class="divide-y divide-gray-800"
-                  hx-get="/api/users"
-                  hx-trigger="load"
-                  hx-swap="innerHTML">
+            <tbody id="user-table-body" class="divide-y divide-gray-800">
                 <tr><td colspan="7" class="px-4 py-8 text-center text-gray-500 text-sm">Loading users...</td></tr>
             </tbody>
         </table>
@@ -206,5 +203,24 @@ function renderUserRow(user) {
             '<button onclick="deleteUser(\'' + user.email + '\')" class="text-gray-400 hover:text-red-400">Delete</button>' +
         '</td></tr>';
 }
+</script>
+<script>
+// Load users on page load
+(function() {
+    fetch('/api/users', { headers: apiHeaders() })
+        .then(function(r) { return r.ok ? r.json() : []; })
+        .then(function(users) {
+            var tbody = document.getElementById('user-table-body');
+            if (!users.length) {
+                tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-gray-500 text-sm">No users found</td></tr>';
+                return;
+            }
+            tbody.innerHTML = users.map(renderUserRow).join('');
+        })
+        .catch(function() {
+            document.getElementById('user-table-body').innerHTML =
+                '<tr><td colspan="7" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load users</td></tr>';
+        });
+})();
 </script>
 {% endblock %}
