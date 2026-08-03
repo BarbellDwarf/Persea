@@ -8,12 +8,21 @@ use axum::{
     http::StatusCode,
     Extension, Json,
 };
+use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
 
 #[derive(Deserialize)]
 pub struct SetRoleRequest {
     pub role: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateUserRequest {
+    pub email: String,
+    pub name: String,
+    pub password: String,
+    pub role: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -43,6 +52,63 @@ pub async fn list_users(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
     Ok(Json(json!(users)))
+}
+
+pub async fn create_user(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Json(body): Json<CreateUserRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    if let Some(Extension(ref id)) = identity {
+        if !id.has_role("admin") {
+            return Err(AppError::Forbidden("admin role required".into()));
+        }
+    }
+
+    let role = body.role.unwrap_or_else(|| "viewer".to_string());
+    let db_clone = database.clone();
+    let email = body.email.clone();
+    let name = body.name.clone();
+    let password = body.password.clone();
+    let role_clone = role.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let password_hash = crate::password::hash_password(&password)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let conn = db_clone.lock().unwrap();
+        conn.execute(
+            "INSERT INTO users (email, name, password_hash, role, auth_source, disabled, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'local', 0, datetime('now'))",
+            params![email, name, password_hash, role_clone],
+        )?;
+        Ok::<_, AppError>(())
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    ?;
+
+    let role_for_response = role.clone();
+
+    let admin_name = identity
+        .as_ref()
+        .map(|id| id.display_name().to_string())
+        .unwrap_or_default();
+    let email_audit = body.email.clone();
+    let role_audit = role.clone();
+    let db_audit = database.clone();
+    tokio::task::spawn_blocking(move || {
+        let _ = audit::log_event(
+            &db_audit,
+            &mut audit::EventBuilder::new("admin.user.create", "success")
+                .user_id(&admin_name)
+                .details(serde_json::json!({"email": email_audit, "role": role_audit}))
+                .build(),
+        );
+    })
+    .await
+    .ok();
+
+    Ok((StatusCode::CREATED, Json(json!({"email": body.email, "role": role_for_response}))))
 }
 
 pub async fn set_user_role(
