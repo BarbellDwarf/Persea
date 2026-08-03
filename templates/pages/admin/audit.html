@@ -12,12 +12,12 @@
         <div class="flex items-center gap-3">
             <div id="chain-status" class="px-3 py-1.5 rounded-lg text-sm font-medium border"></div>
             <button onclick="verifyChain()"
-                    class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-medium transition-colors">
+                    class="btn btn-sm" style="background:#2563eb;color:#fff">
                 Verify Chain
             </button>
             <div class="relative">
                 <button onclick="document.getElementById('export-menu').classList.toggle('hidden')"
-                        class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded-lg text-sm font-medium transition-colors">
+                        class="btn btn-secondary btn-sm">
                     Export ▾
                 </button>
                 <div id="export-menu" class="hidden absolute right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-lg py-1 z-10">
@@ -37,7 +37,7 @@
                    hx-trigger="change"
                    hx-target="#audit-table-body"
                    hx-include="[name='to'],[name='user'],[name='event_type'],[name='outcome']"
-                   class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                   class="form-input">
         </div>
         <div class="flex items-center gap-2">
             <label class="text-sm text-gray-500">To</label>
@@ -46,20 +46,20 @@
                    hx-trigger="change"
                    hx-target="#audit-table-body"
                    hx-include="[name='from'],[name='user'],[name='event_type'],[name='outcome']"
-                   class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                   class="form-input">
         </div>
         <input type="text" name="user" placeholder="User..."
                hx-get="/api/audit/events"
                hx-trigger="keyup changed delay:300ms"
                hx-target="#audit-table-body"
                hx-include="[name='from'],[name='to'],[name='event_type'],[name='outcome']"
-               class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+               class="form-input">
         <select name="event_type"
                 hx-get="/api/audit/events"
                 hx-trigger="change"
                 hx-target="#audit-table-body"
                 hx-include="[name='from'],[name='to'],[name='user'],[name='outcome']"
-                class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                class="form-input">
             <option value="">All Events</option>
             <option value="login">Login</option>
             <option value="logout">Logout</option>
@@ -74,7 +74,7 @@
                 hx-trigger="change"
                 hx-target="#audit-table-body"
                 hx-include="[name='from'],[name='to'],[name='user'],[name='event_type']"
-                class="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                class="form-input">
             <option value="">All Outcomes</option>
             <option value="success">Success</option>
             <option value="failure">Failure</option>
@@ -82,17 +82,17 @@
     </div>
 
     <!-- Audit Events Table -->
-    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+    <div class="card table-wrapper">
         <table class="w-full">
             <thead>
                 <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
-                    <th class="px-4 py-3">Timestamp</th>
-                    <th class="px-4 py-3">Event Type</th>
-                    <th class="px-4 py-3">User</th>
-                    <th class="px-4 py-3">IP</th>
-                    <th class="px-4 py-3">Outcome</th>
-                    <th class="px-4 py-3">Details</th>
-                    <th class="px-4 py-3 text-right">Hash</th>
+                    <th>Timestamp</th>
+                    <th>Event Type</th>
+                    <th>User</th>
+                    <th>IP</th>
+                    <th>Outcome</th>
+                    <th>Details</th>
+                    <th class="text-right">Hash</th>
                 </tr>
             </thead>
             <tbody id="audit-table-body" class="divide-y divide-gray-800"

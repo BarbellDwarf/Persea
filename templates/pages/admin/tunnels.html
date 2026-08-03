@@ -9,7 +9,7 @@
             <h1 class="text-2xl font-bold text-gray-100">SSH Tunnels</h1>
             <p class="text-sm text-gray-500 mt-1">Manage jump hosts and multi-hop tunnel chains</p>
         </div>
-        <button onclick="showAddJumpHost()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2">
+        <button onclick="showAddJumpHost()" class="btn btn-primary btn-sm flex items-center gap-2">
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             Add Jump Host
         </button>
@@ -18,7 +18,7 @@
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <!-- Left Panel: Jump Host List -->
         <div>
-            <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <div class="card">
                 <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
                     <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
                     Jump Hosts
@@ -43,7 +43,7 @@
             </div>
 
             <!-- Chain Builder -->
-            <div class="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            <div class="card">
                 <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
                     <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
                     Chain Builder
@@ -56,8 +56,8 @@
                         <select id="chain-add-select" class="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
                             <option value="">Select a jump host...</option>
                         </select>
-                        <button onclick="addHop()" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg transition-colors">Add Hop</button>
-                        <button onclick="clearChain()" class="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded-lg transition-colors">Clear</button>
+                        <button onclick="addHop()" class="btn btn-sm" style="background:#2563eb;color:#fff">Add Hop</button>
+                        <button onclick="clearChain()" class="btn btn-secondary btn-sm">Clear</button>
                     </div>
                 </div>
             </div>
@@ -77,42 +77,42 @@
 </div>
 
 <!-- Add/Edit Jump Host Modal -->
-<div id="jump-host-modal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center">
-    <div class="bg-gray-900 border border-gray-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
+<div id="jump-host-modal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center" role="dialog" aria-modal="true">
+    <div class="card w-full max-w-md shadow-2xl">
         <h3 id="modal-title" class="text-lg font-semibold text-gray-100 mb-4">Add Jump Host</h3>
         <form id="jump-host-form" onsubmit="saveJumpHost(event)" class="space-y-4">
             <input type="hidden" id="jh-id" value="">
             <div>
-                <label class="block text-sm text-gray-300 mb-1">Name</label>
-                <input type="text" id="jh-name" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm" placeholder="e.g. prod-bastion">
+                <label class="form-label">Name</label>
+                <input type="text" id="jh-name" required class="form-input" placeholder="e.g. prod-bastion">
             </div>
             <div class="grid grid-cols-2 gap-4">
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1">Hostname</label>
-                    <input type="text" id="jh-hostname" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm" placeholder="10.0.0.1">
+                    <label class="form-label">Hostname</label>
+                    <input type="text" id="jh-hostname" required class="form-input" placeholder="10.0.0.1">
                 </div>
                 <div>
-                    <label class="block text-sm text-gray-300 mb-1">Port</label>
-                    <input type="number" id="jh-port" value="22" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                    <label class="form-label">Port</label>
+                    <input type="number" id="jh-port" value="22" class="form-input">
                 </div>
             </div>
             <div>
-                <label class="block text-sm text-gray-300 mb-1">Username</label>
-                <input type="text" id="jh-username" required class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm" placeholder="root">
+                <label class="form-label">Username</label>
+                <input type="text" id="jh-username" required class="form-input" placeholder="root">
             </div>
             <div>
-                <label class="block text-sm text-gray-300 mb-1">Auth Method</label>
-                <select id="jh-auth-method" onchange="toggleKeyPath()" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
+                <label class="form-label">Auth Method</label>
+                <select id="jh-auth-method" onchange="toggleKeyPath()" class="form-input">
                     <option value="password">Password</option>
                     <option value="key">Private Key</option>
                 </select>
             </div>
             <div id="jh-key-path-group" class="hidden">
-                <label class="block text-sm text-gray-300 mb-1">Key File Path</label>
-                <input type="text" id="jh-key-path" class="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm" placeholder="/home/user/.ssh/id_ed25519">
+                <label class="form-label">Key File Path</label>
+                <input type="text" id="jh-key-path" class="form-input" placeholder="/home/user/.ssh/id_ed25519">
             </div>
             <div class="flex justify-end gap-2 pt-2">
-                <button type="button" onclick="hideModal()" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-300 text-sm rounded-lg transition-colors">Cancel</button>
+                <button type="button" onclick="hideModal()" class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg transition-colors">Save</button>
             </div>
         </form>
@@ -159,10 +159,10 @@
                     </div>
                 </div>
                 <div class="flex items-center gap-1">
-                    <button onclick="event.stopPropagation(); editJumpHost('${jh.id}')" class="p-1.5 text-gray-500 hover:text-gray-300 rounded" title="Edit">
+                    <button onclick="event.stopPropagation(); editJumpHost('${jh.id}')" class="p-1.5 text-gray-500 hover:text-gray-300 rounded" title="Edit" aria-label="Edit jump host">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                     </button>
-                    <button onclick="event.stopPropagation(); deleteJumpHost('${jh.id}')" class="p-1.5 text-gray-500 hover:text-red-400 rounded" title="Delete">
+                    <button onclick="event.stopPropagation(); deleteJumpHost('${jh.id}')" class="p-1.5 text-gray-500 hover:text-red-400 rounded" title="Delete" aria-label="Delete jump host">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                     </button>
                 </div>

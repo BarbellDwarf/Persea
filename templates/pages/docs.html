@@ -8,7 +8,7 @@
     <aside class="w-56 shrink-0 hidden lg:block">
         <div class="sticky top-6">
             <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">On this page</h3>
-            <nav id="toc" class="space-y-1">
+            <nav id="toc" class="space-y-1" role="navigation" aria-label="Table of contents">
                 <a href="#getting-started" class="toc-link active">Getting Started</a>
                 <a href="#configuration" class="toc-link">Configuration</a>
                 <a href="#auth-methods" class="toc-link">Auth Methods</a>
@@ -25,7 +25,7 @@
             <p class="text-gray-400 mb-4">rustguac is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd.</p>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Quick Start</h2>
-            <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-4">
+            <div class="card mb-4">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code># Clone and build
 git clone https://github.com/your-org/rustguac.git
 cd rustguac
@@ -45,7 +45,7 @@ cargo build --release
             </ul>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Docker</h2>
-            <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
+            <div class="card">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>docker build -t rustguac .
 docker run -p 8089:8089 rustguac</code></pre>
             </div>
@@ -57,7 +57,7 @@ docker run -p 8089:8089 rustguac</code></pre>
             <p class="text-gray-400 mb-4">rustguac uses a TOML configuration file. Key settings:</p>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Core Settings</h2>
-            <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-4">
+            <div class="card mb-4">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[server]
 listen_addr = "0.0.0.0:8089"
 guacd_addr = "127.0.0.1:4822"
@@ -76,7 +76,7 @@ max_recordings = 1000</code></pre>
             </div>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">TLS</h2>
-            <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-4">
+            <div class="card mb-4">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[tls]
 cert_path = "/etc/rustguac/cert.pem"
 key_path = "/etc/rustguac/key.pem"
@@ -84,7 +84,7 @@ guacd_cert_path = "/etc/guacd/ca.pem"  # Optional</code></pre>
             </div>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Vault Integration</h2>
-            <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-4">
+            <div class="card mb-4">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[vault]
 addr = "https://vault.example.com:8200"
 mount = "secret"
@@ -102,7 +102,7 @@ role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
             <p class="text-gray-400 mb-4">rustguac supports multiple authentication backends.</p>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">OIDC (OpenID Connect)</h2>
-            <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 mb-4">
+            <div class="card mb-4">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[oidc]
 issuer_url = "https://auth.example.com"
 client_id = "rustguac"
@@ -123,7 +123,7 @@ groups_claim = "groups"</code></pre>
 
             <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">TOTP (Two-Factor)</h2>
             <p class="text-gray-400 text-sm">Optional TOTP 2FA. Users can enroll from the account settings page. Configure enforcement in <code>[totp]</code>:</p>
-            <div class="bg-gray-900 border border-gray-800 rounded-lg p-4 mt-3">
+            <div class="card mt-3">
                 <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[totp]
 enabled = true
 issuer = "rustguac"

@@ -9,22 +9,22 @@
             <h1 class="text-2xl font-bold text-gray-100">API Tokens</h1>
             <p class="text-sm text-gray-500 mt-1">Manage personal API tokens for scripting and integrations</p>
         </div>
-        <button id="btn-create-token" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+        <button id="btn-create-token" class="btn btn-primary btn-sm">
             + Create Token
         </button>
     </div>
 
     <!-- Tokens Table -->
-    <div class="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+    <div class="card table-wrapper">
         <table class="w-full text-sm">
             <thead>
                 <tr class="border-b border-gray-800 text-left">
-                    <th class="px-4 py-3 text-gray-400 font-medium">Name</th>
-                    <th class="px-4 py-3 text-gray-400 font-medium">Max Role</th>
-                    <th class="px-4 py-3 text-gray-400 font-medium">Status</th>
-                    <th class="px-4 py-3 text-gray-400 font-medium">Created</th>
-                    <th class="px-4 py-3 text-gray-400 font-medium">Last Used</th>
-                    <th class="px-4 py-3 text-gray-400 font-medium text-right">Actions</th>
+                    <th>Name</th>
+                    <th>Max Role</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Last Used</th>
+                    <th class="text-right">Actions</th>
                 </tr>
             </thead>
             <tbody id="tokens-tbody">
@@ -40,7 +40,7 @@
         <svg class="w-12 h-12 mx-auto text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
         <p class="text-gray-400 mb-2">No API tokens yet</p>
         <p class="text-gray-500 text-sm mb-4">Create a token to use the API from scripts or integrations.</p>
-        <button onclick="openCreateModal()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+        <button onclick="openCreateModal()" class="btn btn-primary btn-sm">
             Create First Token
         </button>
     </div>
@@ -53,12 +53,12 @@
                 <p class="text-xs text-emerald-400/70 mb-3">Copy this token now — it won't be shown again.</p>
                 <div class="flex items-center gap-2">
                     <code id="new-token-value" class="px-3 py-1.5 bg-gray-800 rounded text-sm text-emerald-300 font-mono select-all break-all"></code>
-                    <button id="btn-copy-token" class="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-sm text-gray-300 transition-colors shrink-0">
+                    <button id="btn-copy-token" class="btn btn-secondary btn-sm shrink-0">
                         Copy
                     </button>
                 </div>
             </div>
-            <button onclick="dismissNewToken()" class="text-gray-500 hover:text-gray-300 ml-4">
+            <button onclick="dismissNewToken()" class="text-gray-500 hover:text-gray-300 ml-4" aria-label="Dismiss">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
         </div>
@@ -66,21 +66,21 @@
 </div>
 
 <!-- Create Token Modal -->
-<div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+<div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
     <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
-    <div class="relative bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-md shadow-xl">
+    <div class="relative card w-full max-w-md shadow-xl">
         <h2 class="text-lg font-semibold text-gray-100 mb-4">Create API Token</h2>
         <form id="create-token-form" class="space-y-4">
             <div>
-                <label for="token-name" class="block text-sm font-medium text-gray-400 mb-1">Name</label>
+                <label for="token-name" class="form-label">Name</label>
                 <input type="text" id="token-name" required maxlength="100"
-                    class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
+                    class="form-input"
                     placeholder="e.g. CI pipeline, monitoring">
             </div>
             <div>
-                <label for="token-max-role" class="block text-sm font-medium text-gray-400 mb-1">Max Role</label>
+                <label for="token-max-role" class="form-label">Max Role</label>
                 <select id="token-max-role"
-                    class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                    class="form-input">
                     <option value="">Inherit my role</option>
                     <option value="admin">Admin</option>
                     <option value="poweruser">Power User</option>
@@ -90,9 +90,9 @@
                 <p class="text-xs text-gray-600 mt-1">Limit this token's permissions to at most this role</p>
             </div>
             <div>
-                <label for="token-expiry" class="block text-sm font-medium text-gray-400 mb-1">Expiry</label>
+                <label for="token-expiry" class="form-label">Expiry</label>
                 <select id="token-expiry"
-                    class="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm">
+                    class="form-input">
                     <option value="">Never</option>
                     <option value="7d">7 days</option>
                     <option value="30d">30 days</option>
@@ -106,7 +106,7 @@
                     Cancel
                 </button>
                 <button type="submit" id="btn-submit-token"
-                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">
+                    class="btn btn-primary btn-sm">
                     Create Token
                 </button>
             </div>
