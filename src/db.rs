@@ -690,6 +690,16 @@ pub fn get_user_by_email(db: &Db, email: &str) -> rusqlite::Result<User> {
     )
 }
 
+/// Get the auth_source for a user by email.
+pub fn get_user_auth_source(db: &Db, email: &str) -> rusqlite::Result<String> {
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT auth_source FROM users WHERE email = ?1",
+        params![email],
+        |row| row.get(0),
+    )
+}
+
 /// Validate an auth session token. Returns the user if valid and not expired/disabled.
 /// The token is hashed before lookup — only hashes are stored in the database.
 pub fn validate_auth_session(db: &Db, token: &str) -> Result<User, AuthError> {

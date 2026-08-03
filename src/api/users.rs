@@ -265,16 +265,32 @@ pub async fn delete_user_sessions(
 
 pub async fn me(
     identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Extension(vault_configured): Extension<VaultConfigured>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     match identity {
         Some(Extension(id)) => {
             let vault_available = vault.any_connected().await;
+            let email = match &id {
+                AuthIdentity::ApiKey(name) => name.clone(),
+                AuthIdentity::User { email, .. } => email.clone(),
+            };
+            // Look up the user's actual auth_source from the database
+            let db_clone = database.clone();
+            let email_clone = email.clone();
+            let auth_source = tokio::task::spawn_blocking(move || {
+                db::get_user_auth_source(&db_clone, &email_clone)
+            })
+            .await
+            .unwrap_or(Ok("unknown".to_string()))
+            .unwrap_or_else(|_| "unknown".to_string());
             Ok(Json(json!({
                 "name": id.display_name(),
+                "email": email,
                 "role": id.role(),
                 "groups": id.groups(),
+                "auth_source": auth_source,
                 "vault_enabled": vault_available,
                 "vault_configured": vault_configured.0,
             })))
