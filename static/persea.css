@@ -1,5 +1,5 @@
 /* ============================================================
-   rustguac — shared operator-console stylesheet
+   persea — shared operator-console stylesheet
    - 8px baseline grid for chrome controls (px units).
    - Body copy 18px, control heights 38/44/54px.
    - CSS variable theming is driven by the theme picker; only

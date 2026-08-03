@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>rustguac - Recordings</title>
+    <title>persea - Recordings</title>
     <link rel="stylesheet" href="/css/tailwind.min.css">
-    <link rel="stylesheet" href="/rustguac.css">
+    <link rel="stylesheet" href="/persea.css">
     <style>
         #player-section {
             display: none;
@@ -105,7 +105,7 @@
         .btn-delete { color: var(--primary); }
         .btn-delete:hover { color: var(--primary-hover); }
     </style>
-    <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
+    <script>(function(){var c=localStorage.getItem('persea_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 
     <!-- Guacamole JS modules (same as client.html) -->
     <script src="/guac/Namespace.js"></script>
@@ -145,7 +145,7 @@
 <body>
     <div class="brand-row">
         <img id="site-logo" src="/logo.svg" alt="">
-        <h1>rustguac</h1>
+        <h1>persea</h1>
     </div>
     <nav>
         <a href="/connections.html">Connections</a>
@@ -189,7 +189,7 @@
         <p style="color:var(--text-muted);font-size:0.9em;margin-top:0;max-width:70ch">
             Plain-text audit logs of SSH terminal sessions. Listed here for
             accountability; the content is not downloadable through the web UI.
-            Retrieving a typescript requires direct access to the rustguac host
+            Retrieving a typescript requires direct access to the persea host
             or storage.
         </p>
         <p id="typescript-path" style="color:var(--text-muted);font-size:0.85em;margin-top:0"></p>
@@ -205,7 +205,7 @@
             if(d.site_title){document.title=d.site_title+' - Recordings';document.querySelector('h1').textContent=d.site_title;}
             initTheme(d.theme);
         });
-        var apiKey = sessionStorage.getItem('rustguac_api_key');
+        var apiKey = sessionStorage.getItem('persea_api_key');
 
         // Check auth: either API key or cookie
         var roleLevel = { admin: 4, poweruser: 3, operator: 2, viewer: 1 };
@@ -236,7 +236,7 @@
         }
 
         document.getElementById('logout-item').addEventListener('click', function() {
-            sessionStorage.removeItem('rustguac_api_key');
+            sessionStorage.removeItem('persea_api_key');
             fetch('/auth/logout', { credentials: 'same-origin' })
             .finally(function() { window.location.href = '/'; });
         });
@@ -309,7 +309,7 @@
                 if (!tsItems.length) { section.style.display = 'none'; return; }
                 section.style.display = '';
                 var pathEl = document.getElementById('typescript-path');
-                pathEl.textContent = data.path ? ('Stored at ' + data.path + ' on the rustguac host.') : '';
+                pathEl.textContent = data.path ? ('Stored at ' + data.path + ' on the persea host.') : '';
                 renderTsPage();
             })
             .catch(function() { /* feature off or unauthorised, leave hidden */ });

@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>rustguac</title>
+    <title>persea</title>
     <link rel="stylesheet" href="/css/tailwind.min.css">
-    <link rel="stylesheet" href="/rustguac.css">
+    <link rel="stylesheet" href="/persea.css">
     <style>
         body { display: flex; flex-direction: column; align-items: center; }
         .login-container { max-width: 380px; width: 100%; margin: var(--s-4) 0; }
@@ -55,12 +55,12 @@
             font-size: var(--fz-md);
         }
     </style>
-    <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
+    <script>(function(){var c=localStorage.getItem('persea_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
 <body>
     <div class="brand-row">
         <img id="site-logo" src="/logo.svg" alt="">
-        <h1>rustguac</h1>
+        <h1>persea</h1>
     </div>
 
     <div class="login-container">
@@ -90,7 +90,7 @@
         }
 
         // If already logged in via API key, redirect
-        if (sessionStorage.getItem('rustguac_api_key')) {
+        if (sessionStorage.getItem('persea_api_key')) {
             window.location.href = '/connections.html';
         }
 
@@ -147,7 +147,7 @@
             })
             .then(function(res) {
                 if (!res.ok) throw new Error('Invalid API key');
-                sessionStorage.setItem('rustguac_api_key', key);
+                sessionStorage.setItem('persea_api_key', key);
                 window.location.href = '/connections.html';
             })
             .catch(function(err) {

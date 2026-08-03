@@ -4,7 +4,7 @@ function applyThemeColors(colors) {
     var s = document.getElementById('bg-pattern-style');
     if (!s) { s = document.createElement('style'); s.id = 'bg-pattern-style'; document.head.appendChild(s); }
     s.textContent = colors.bg_pattern && colors.bg_pattern !== 'none' ? 'body{background-image:' + colors.bg_pattern + ';background-attachment:fixed}' : '';
-    localStorage.setItem('rustguac_theme_colors', JSON.stringify(colors));
+    localStorage.setItem('persea_theme_colors', JSON.stringify(colors));
 }
 var _themePresets = {}, _adminPreset = 'aurora';
 var _themeDescriptions = { dark: 'Navy & cyan \u2014 the default', light: 'Clean white & blue', 'high-contrast': 'Maximum readability', terminal: 'Retro green-on-black', nord: 'Arctic, muted blues', corporate: 'Slate & steel blue', aurora: 'Midnight blue with ambient glow', jaguar: 'Racing green & gold' };
@@ -12,7 +12,7 @@ function initTheme(t) {
     if (!t) return;
     _themePresets = t.presets || {};
     _adminPreset = t.admin_preset || 'aurora';
-    var u = localStorage.getItem('rustguac_theme'), active = u && _themePresets[u] ? u : _adminPreset, colors = (active === _adminPreset) ? t.admin_colors : _themePresets[active];
+    var u = localStorage.getItem('persea_theme'), active = u && _themePresets[u] ? u : _adminPreset, colors = (active === _adminPreset) ? t.admin_colors : _themePresets[active];
     if (colors) applyThemeColors(colors);
     if (t.logo_url) { var l = document.getElementById('site-logo'); if (l) { if (l.src !== t.logo_url && !l.src.endsWith(t.logo_url)) l.src = t.logo_url; l.style.display = ''; } }
     var menu = document.getElementById('um-theme-list');
@@ -38,7 +38,7 @@ function initTheme(t) {
             info.appendChild(desc);
             item.appendChild(info);
             item.addEventListener('click', function() {
-                localStorage.setItem('rustguac_theme', name);
+                localStorage.setItem('persea_theme', name);
                 applyThemeColors(_themePresets[name]);
                 menu.querySelectorAll('.um-item').forEach(function(el) { el.classList.remove('active'); });
                 item.classList.add('active');

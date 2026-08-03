@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>rustguac - API Tokens</title>
+    <title>persea - API Tokens</title>
     <link rel="stylesheet" href="/css/tailwind.min.css">
-    <link rel="stylesheet" href="/rustguac.css">
+    <link rel="stylesheet" href="/persea.css">
     <style>
         .no-permission {
             background: var(--surface);
@@ -17,12 +17,12 @@
             max-width: 560px;
         }
     </style>
-    <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
+    <script>(function(){var c=localStorage.getItem('persea_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
 <body>
     <div class="brand-row">
         <img id="site-logo" src="/logo.svg" alt="">
-        <h1>rustguac</h1>
+        <h1>persea</h1>
     </div>
     <nav>
         <a href="/connections.html">Connections</a>
@@ -85,7 +85,7 @@
             initTheme(d.theme);
         });
 
-        var apiKey = sessionStorage.getItem('rustguac_api_key');
+        var apiKey = sessionStorage.getItem('persea_api_key');
 
         var errorEl = document.getElementById('error');
         var currentRole = '';
@@ -95,7 +95,7 @@
         function showError(msg) { errorEl.textContent = msg; setTimeout(function(){ errorEl.textContent = ''; }, 5000); }
 
         document.getElementById('logout-item').addEventListener('click', function() {
-            sessionStorage.removeItem('rustguac_api_key');
+            sessionStorage.removeItem('persea_api_key');
             fetch('/auth/logout', { credentials: 'same-origin' })
             .finally(function() { window.location.href = '/'; });
         });

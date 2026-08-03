@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>rustguac - Connections</title>
+    <title>persea - Connections</title>
     <link rel="stylesheet" href="/css/tailwind.min.css">
-    <link rel="stylesheet" href="/rustguac.css">
+    <link rel="stylesheet" href="/persea.css">
     <style>
         /* ============================================================
            Connections — page-specific styles only. Shared design
-           system lives in /rustguac.css.
+           system lives in /persea.css.
            ============================================================ */
 
         /* Two-column connections layout */
@@ -323,12 +323,12 @@
         }
         .onboard-hl { color: var(--accent); font-weight: bold; }
     </style>
-    <script>(function(){var c=localStorage.getItem('rustguac_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
+    <script>(function(){var c=localStorage.getItem('persea_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);if(o.bg_pattern&&o.bg_pattern!=='none'){var s=document.createElement('style');s.id='bg-pattern-style';s.textContent='body{background-image:'+o.bg_pattern+';background-attachment:fixed}';document.head.appendChild(s)}}catch(e){}}})();</script>
 </head>
 <body>
     <div class="brand-row">
         <img id="site-logo" src="/logo.svg" alt="">
-        <h1>rustguac</h1>
+        <h1>persea</h1>
     </div>
     <nav>
         <a href="/connections.html" class="active">Connections</a>
@@ -362,7 +362,7 @@
     <div id="vault-unavailable" class="no-vault" style="display:none">
         <strong>Connections is temporarily unavailable.</strong><br>
         Cannot reach the Vault server. The service will retry automatically every 30 seconds.<br>
-        Check the rustguac logs for details: <code>journalctl -u rustguac -f</code>
+        Check the persea logs for details: <code>journalctl -u persea -f</code>
     </div>
 
     <div id="empty-state" class="empty-state" style="display:none">
@@ -643,13 +643,13 @@
                 <label style="margin-top:0.8em">
                     <input type="checkbox" id="em-proxmox-verify-tls" style="display:inline;width:auto;margin-right:0.4em"> Verify the PVE cluster TLS certificate
                 </label>
-                <div class="field-hint">Opens a Proxmox VE VM console via SPICE. rustguac calls the PVE <code>spiceproxy</code> API at connect to fetch a one-time ticket, so nothing sensitive is stored beyond the API token. Leave <strong>Node</strong> blank to auto-detect which cluster node hosts the VM. The token needs <code>VM.Console</code> (and <code>VM.Audit</code> for node auto-detect) on the target VM. PVE ships a self-signed cluster certificate, so leave TLS verification off unless the cluster CA is trusted.</div>
+                <div class="field-hint">Opens a Proxmox VE VM console via SPICE. persea calls the PVE <code>spiceproxy</code> API at connect to fetch a one-time ticket, so nothing sensitive is stored beyond the API token. Leave <strong>Node</strong> blank to auto-detect which cluster node hosts the VM. The token needs <code>VM.Console</code> (and <code>VM.Audit</code> for node auto-detect) on the target VM. PVE ships a self-signed cluster certificate, so leave TLS verification off unless the cluster CA is trusted.</div>
             </div>
             <div id="em-web-fields" style="display:none">
                 <label>URL
                     <input type="text" id="em-url" placeholder="https://example.com">
                 </label>
-                <div class="field-hint">Use <code>$RUSTGUAC_USERNAME</code> and <code>$RUSTGUAC_PASSWORD</code> in the URL for basic auth (e.g. <code>https://$RUSTGUAC_USERNAME:$RUSTGUAC_PASSWORD@host</code>).</div>
+                <div class="field-hint">Use <code>$PERSEA_USERNAME</code> and <code>$PERSEA_PASSWORD</code> in the URL for basic auth (e.g. <code>https://$PERSEA_USERNAME:$PERSEA_PASSWORD@host</code>).</div>
                 <label>Banner <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
                     <input type="text" id="em-banner" placeholder="Shown before session starts (user must click Continue)">
                 </label>
@@ -658,7 +658,7 @@
                         <span id="em-automation-arrow">&#9654;</span> Automation
                     </label>
                     <div id="em-automation-fields" style="display:none">
-                        <div class="field-hint" style="margin-bottom:0.5em">Credentials and scripts for automated login. Username and password are also used for URL substitution (<code>$RUSTGUAC_USERNAME</code> / <code>$RUSTGUAC_PASSWORD</code>).</div>
+                        <div class="field-hint" style="margin-bottom:0.5em">Credentials and scripts for automated login. Username and password are also used for URL substitution (<code>$PERSEA_USERNAME</code> / <code>$PERSEA_PASSWORD</code>).</div>
                         <label>Username <span style="color:var(--text-muted);font-size:0.85em">(optional)</span>
                             <input type="text" id="em-web-username" placeholder="For URL substitution or login script">
                         </label>
@@ -698,7 +698,7 @@
                 <label>Container Image
                     <input type="text" id="em-vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest">
                 </label>
-                <div class="field-hint">Docker image with xrdp on port 3389. By default the entrypoint should read <code>VDI_USERNAME</code> / <code>VDI_PASSWORD</code> env vars (rustguac derives them from your identity and generates an ephemeral password per connect). For images with a baked-in account, fill in the Container username / password fields below. Container is ephemeral - persists while idle, then removed.</div>
+                <div class="field-hint">Docker image with xrdp on port 3389. By default the entrypoint should read <code>VDI_USERNAME</code> / <code>VDI_PASSWORD</code> env vars (persea derives them from your identity and generates an ephemeral password per connect). For images with a baked-in account, fill in the Container username / password fields below. Container is ephemeral - persists while idle, then removed.</div>
                 <label>CPU Limit <span style="color:var(--text-muted);font-size:0.85em">(optional, cores)</span>
                     <input type="number" id="em-vdi-cpu" step="0.5" min="0" placeholder="e.g. 2.0 (0 = use default)">
                 </label>
@@ -714,7 +714,7 @@
                 <label>Container password <span style="color:var(--text-muted);font-size:0.85em">(optional, overrides ephemeral)</span>
                     <input type="password" id="em-vdi-container-password" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
                 </label>
-                <div class="field-hint">Use these only when the container image has a fixed account (Pattern B in the <a href="/docs.html#vdi" style="color:var(--accent)">VDI docs</a>). When set, rustguac uses these creds for the RDP login into the container, and the same container is shared by everyone connecting through this entry (deterministic name from the username). When left blank, rustguac derives a per-operator username and generates a fresh password every connect. Both fields support <a href="/docs.html#credential-variables" style="color:var(--accent)">credential variables</a> (e.g. <code>$corp_username</code>).</div>
+                <div class="field-hint">Use these only when the container image has a fixed account (Pattern B in the <a href="/docs.html#vdi" style="color:var(--accent)">VDI docs</a>). When set, persea uses these creds for the RDP login into the container, and the same container is shared by everyone connecting through this entry (deterministic name from the username). When left blank, persea derives a per-operator username and generates a fresh password every connect. Both fields support <a href="/docs.html#credential-variables" style="color:var(--accent)">credential variables</a> (e.g. <code>$corp_username</code>).</div>
                 <label>Idle Timeout <span style="color:var(--text-muted);font-size:0.85em">(optional, minutes)</span>
                     <input type="number" id="em-vdi-idle-timeout" min="0" placeholder="e.g. 60 (0 = use global default)">
                 </label>
@@ -857,7 +857,7 @@
                     On the first user gesture after the session connects, enter browser fullscreen
                     and lock the Escape key so it reaches the remote session (Chromium-based
                     browsers; Firefox / Safari fall back to standard fullscreen). Reduces the risk
-                    of users accidentally closing the rustguac tab.
+                    of users accidentally closing the persea tab.
                 </div>
                 <label style="text-transform:none;letter-spacing:0;cursor:pointer;margin-top:0.8em">
                     <input type="checkbox" id="em-autohide-side-tabs" style="display:inline;width:auto;margin-right:0.5em">
@@ -977,7 +977,7 @@
             _driveConfigured = !!d.drive_configured;
             initTheme(d.theme);
         });
-        var apiKey = sessionStorage.getItem('rustguac_api_key');
+        var apiKey = sessionStorage.getItem('persea_api_key');
 
         if (!apiKey) {
             fetch('/api/me', { credentials: 'same-origin' })
@@ -988,7 +988,7 @@
         }
 
         document.getElementById('logout-item').addEventListener('click', function() {
-            sessionStorage.removeItem('rustguac_api_key');
+            sessionStorage.removeItem('persea_api_key');
             fetch('/auth/logout', { credentials: 'same-origin' })
             .finally(function() { window.location.href = '/'; });
         });
@@ -1005,8 +1005,8 @@
         var folderEntries = {};    // "scope|path" -> entries array
         var subfolderCache = {};   // "scope|path" -> [FolderInfo] (lazy-loaded children)
         var expandedPaths = {};    // "scope|path" -> true (tree expansion state; persisted)
-        var EXPANDED_STORAGE_KEY = 'rustguac_connections_expanded';
-        var SELECTED_STORAGE_KEY = 'rustguac_connections_selected';
+        var EXPANDED_STORAGE_KEY = 'persea_connections_expanded';
+        var SELECTED_STORAGE_KEY = 'persea_connections_selected';
         // Quick-find search state
         var searchIndex = null;        // [{scope, folderPath, entry, label, host, haystack}]
         var searchIndexLoading = false;
@@ -1248,7 +1248,7 @@
         // so the next fresh login auto-opens again.
         function maybeAutoOpenSingleton() {
             try {
-                if (sessionStorage.getItem('rustguac_auto_opened') === '1') return;
+                if (sessionStorage.getItem('persea_auto_opened') === '1') return;
             } catch (e) { /* no sessionStorage */ }
 
             // Gather every entry the user currently sees across top-level
@@ -1271,7 +1271,7 @@
             var scope = hit.key.slice(0, sep);
             var path = hit.key.slice(sep + 1);
             var name = hit.entry.name;
-            try { sessionStorage.setItem('rustguac_auto_opened', '1'); } catch (e) {}
+            try { sessionStorage.setItem('persea_auto_opened', '1'); } catch (e) {}
 
             // Use the same connect path the table's Connect button uses,
             // minus the UI chrome. Open the resulting session in a new tab.
@@ -1770,7 +1770,7 @@
                 scopeBadge.className = 'folder-scope';
                 scopeBadge.setAttribute('data-scope', f.scope);
                 scopeBadge.title = f.scope === 'shared'
-                    ? 'Shared — visible across all rustguac instances'
+                    ? 'Shared — visible across all persea instances'
                     : 'Instance — this server only';
                 nameRow.appendChild(scopeBadge);
             }
@@ -2176,7 +2176,7 @@
         // genuinely NEW unset credential shows up (not merely because the set
         // shrank after a partial save) — dismissing silences today's set, not
         // future needs.
-        var CREDS_DISMISS_KEY = 'rustguac_creds_banner_dismissed';
+        var CREDS_DISMISS_KEY = 'persea_creds_banner_dismissed';
         var currentUnsetCreds = []; // names behind the banner right now (for dismiss)
         function getDismissedCreds() {
             try {
@@ -4144,7 +4144,7 @@
 
         // ── Onboarding Wizard ──
         var onboardSteps = [
-            { title: 'Welcome to rustguac', minRole: 1, body:
+            { title: 'Welcome to persea', minRole: 1, body:
                 'This is your remote access gateway. Browse connection entries organised by folder, then click <span class="onboard-hl">Connect</span> to launch a session in a new browser tab.' +
                 '<br><br>This quick tour covers the essentials &mdash; you can dismiss it at any time.'
             },
@@ -4190,7 +4190,7 @@
         var onboardFiltered = [];
 
         function startOnboarding(role) {
-            if (localStorage.getItem('rustguac_onboarding_dismissed')) return;
+            if (localStorage.getItem('persea_onboarding_dismissed')) return;
             var level = roleLevel[role] || 1;
             onboardFiltered = onboardSteps.filter(function(s) { return s.minRole <= level; });
             if (onboardFiltered.length === 0) return;
@@ -4213,7 +4213,7 @@
         function closeOnboarding() {
             document.getElementById('onboarding-modal').classList.remove('active');
             if (document.getElementById('onboard-dismiss').checked) {
-                localStorage.setItem('rustguac_onboarding_dismissed', '1');
+                localStorage.setItem('persea_onboarding_dismissed', '1');
             }
         }
 
@@ -4222,7 +4222,7 @@
                 onboardCurrent++;
                 renderOnboardStep();
             } else {
-                localStorage.setItem('rustguac_onboarding_dismissed', '1');
+                localStorage.setItem('persea_onboarding_dismissed', '1');
                 closeOnboarding();
             }
         });
@@ -4238,7 +4238,7 @@
 
         document.getElementById('show-tour-item').addEventListener('click', function() {
             document.getElementById('user-menu').style.display = 'none';
-            localStorage.removeItem('rustguac_onboarding_dismissed');
+            localStorage.removeItem('persea_onboarding_dismissed');
             startOnboarding(currentUserRole);
         });
 

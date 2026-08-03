@@ -1514,7 +1514,7 @@ Guacamole.Client = function(tunnel) {
                     );
                 } catch (e) {
                     if (typeof console !== 'undefined')
-                        console.error('[rustguac] H.264 base64 decode error:', e);
+                        console.error('[persea] H.264 base64 decode error:', e);
                 }
             };
 

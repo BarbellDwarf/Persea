@@ -131,7 +131,7 @@ Guacamole.H264Decoder = function H264Decoder(display) {
             return;
 
         if (typeof VideoDecoder === 'undefined') {
-            console.warn('[rustguac] WebCodecs VideoDecoder not available');
+            console.warn('[persea] WebCodecs VideoDecoder not available');
             return;
         }
 
@@ -157,7 +157,7 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                 self.framesDropped++;
                 pendingDecodes--;
                 resolveIfIdle();
-                console.error('[rustguac] H.264 decode error:', e.message);
+                console.error('[persea] H.264 decode error:', e.message);
             }
         });
 
@@ -169,7 +169,7 @@ Guacamole.H264Decoder = function H264Decoder(display) {
         });
 
         configured = true;
-        console.log('[rustguac] H.264 WebCodecs decoder initialised (' + width + 'x' + height + ')');
+        console.log('[persea] H.264 WebCodecs decoder initialised (' + width + 'x' + height + ')');
     }
 
     /**
@@ -210,7 +210,7 @@ Guacamole.H264Decoder = function H264Decoder(display) {
             decoder.decode(chunk);
         } catch (e) {
             self.framesDropped++;
-            console.error('[rustguac] H.264 chunk error:', e.message);
+            console.error('[persea] H.264 chunk error:', e.message);
         }
     };
 
@@ -238,7 +238,7 @@ Guacamole.H264Decoder = function H264Decoder(display) {
         var timer = setTimeout(function() {
             if (!resolved) {
                 resolved = true;
-                console.warn('[rustguac] H.264: sync wait timeout (' + waitingOn + ' frames pending), forcing flush');
+                console.warn('[persea] H.264: sync wait timeout (' + waitingOn + ' frames pending), forcing flush');
                 callback();
             }
         }, 1000);
@@ -249,7 +249,7 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                 clearTimeout(timer);
                 var elapsed = (performance.now() - waitStart).toFixed(1);
                 if (elapsed > 16) // only log if wait was > 1 frame (~16ms)
-                    console.log('[rustguac] H.264: sync gated ' + elapsed + 'ms (' + waitingOn + ' frames)');
+                    console.log('[persea] H.264: sync gated ' + elapsed + 'ms (' + waitingOn + ' frames)');
                 callback();
             }
         });
@@ -265,7 +265,7 @@ Guacamole.H264Decoder = function H264Decoder(display) {
                 decoder.reset();
                 configured = false;
                 timestamp = 0;
-                console.log('[rustguac] H.264 decoder reset');
+                console.log('[persea] H.264 decoder reset');
             } catch (e) {
                 // Decoder may be in error state
             }
