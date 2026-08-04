@@ -6,6 +6,7 @@ pub mod reports;
 pub mod sessions;
 pub mod tokens;
 pub mod users;
+pub mod vsphere;
 
 use crate::vault::{AddressBookEntry, FolderConfig, VaultClient, VaultError};
 use std::sync::Arc;
