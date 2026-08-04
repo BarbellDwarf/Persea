@@ -8,6 +8,12 @@ A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Prox
 
 Single binary plus guacd. No Java, no Tomcat.
 
+## Why "Persea"?
+
+Someone will ask why the name Persea. Fair question. Guacamole is a fine name for open source software, but pitching it to enterprise leadership runs into the problem that it sounds like a dip. I wanted something that felt more professional for client-facing use.
+
+I cycled through food names that pay homage to the original. Tortilla Chip. Salsa. Corn Chip. They all sound like side projects. Then Persea came up. It is the genus of avocados. Sounds polished, works in a business context, and still connects to the Guacamole roots. [Learn more about the Persea genus](https://en.wikipedia.org/wiki/Persea).
+
 ## Why this exists
 
 Guacamole is great software. Apache maintains it well, and the protocol handling under the hood is solid. The frontend looks like it was designed in 2005, which kept me from recommending it at work or for clients. I ran it in my homelab and that was about it.
