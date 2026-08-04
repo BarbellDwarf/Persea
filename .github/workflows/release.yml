@@ -241,9 +241,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract version
+      - name: Extract version and lowercase repo
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "repo=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - name: Build and push amd64
         id: build
         uses: docker/build-push-action@v7
@@ -251,7 +253,7 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}-amd64
+          tags: ghcr.io/${{ steps.version.outputs.repo }}:${{ steps.version.outputs.version }}-amd64
           cache-from: type=gha,scope=docker-amd64
           cache-to: type=gha,mode=max,scope=docker-amd64
 
@@ -271,9 +273,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract version
+      - name: Extract version and lowercase repo
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "repo=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - name: Build and push arm64
         id: build
         uses: docker/build-push-action@v7
@@ -281,7 +285,7 @@ jobs:
           context: .
           platforms: linux/arm64
           push: true
-          tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}-arm64
+          tags: ghcr.io/${{ steps.version.outputs.repo }}:${{ steps.version.outputs.version }}-arm64
           cache-from: type=gha,scope=docker-arm64
           cache-to: type=gha,mode=max,scope=docker-arm64
 
@@ -299,17 +303,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract version
+      - name: Extract version and lowercase repo
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "repo=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
       - name: Create and push multi-arch manifests
         run: |
           VER="${{ steps.version.outputs.version }}"
+          REPO="${{ steps.version.outputs.repo }}"
           docker buildx imagetools create \
-            -t "ghcr.io/${{ github.repository }}:${VER}" \
-            -t "ghcr.io/${{ github.repository }}:latest" \
-            "ghcr.io/${{ github.repository }}:${VER}-amd64" \
-            "ghcr.io/${{ github.repository }}:${VER}-arm64"
+            -t "ghcr.io/${REPO}:${VER}" \
+            -t "ghcr.io/${REPO}:latest" \
+            "ghcr.io/${REPO}:${VER}-amd64" \
+            "ghcr.io/${REPO}:${VER}-arm64"
 
   # ---------------------------------------------------------------------------
   # Create GitHub Release with all packages
