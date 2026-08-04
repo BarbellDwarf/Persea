@@ -833,6 +833,13 @@ async fn run_server(config: Config, database: Db) {
         local: local_cell,
     });
 
+    // Connect to vSphere if configured
+    let vsphere_client: api::vsphere::VsphereState = if let Some(ref vsphere_cfg) = config.vsphere {
+        api::vsphere::connect_vsphere(vsphere_cfg).await
+    } else {
+        None
+    };
+
     // Build auth chain from [auth] config.
     let auth_chain = match config.auth.as_ref() {
         Some(ref auth_cfg) => {
@@ -1266,6 +1273,9 @@ async fn run_server(config: Config, database: Db) {
         // Login scripts listing
         .route("/api/login-scripts", get(api::list_login_scripts))
         .route("/api/ws-ticket", post(api::create_ws_ticket))
+        // vSphere routes
+        .route("/api/vsphere/vms", get(api::vsphere::list_vms))
+        .route("/api/vsphere/vms/{vm_id}/power", post(api::vsphere::power_action))
         // Address book routes
         .route("/api/addressbook", get(api::ab_list_all))
         .route("/api/addressbook/search-index", get(api::ab_search_index))
@@ -1371,6 +1381,7 @@ async fn run_server(config: Config, database: Db) {
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(credential_default_scope.clone()))
+        .layer(Extension(vsphere_client))
         .layer(Extension(database.clone()));
 
     // WebSocket route with optional auth + always rate-limited
