@@ -9,8 +9,8 @@ use persea::db;
 use persea::password;
 use persea::rbac;
 use persea::totp;
-use totp_rs::{Algorithm, TOTP};
-
+use totp_rs::Algorithm;
+#[allow(unused_imports)]
 use std::sync::Arc;
 
 // ── Helper ──────────────────────────────────────────────────────────────────
@@ -417,7 +417,7 @@ fn rbac_permission_as_str_roundtrip() {
         rbac::ObjectPermission::Delete,
         rbac::ObjectPermission::Administer,
     ] {
-        assert_eq!(rbac::ObjectPermission::from_str(perm.as_str()), Some(perm));
+        assert_eq!(rbac::ObjectPermission::parse(perm.as_str()), Some(perm));
     }
 }
 
@@ -431,7 +431,7 @@ fn rbac_system_permission_as_str_roundtrip() {
         rbac::SystemPermission::CreateUserGroup,
         rbac::SystemPermission::Audit,
     ] {
-        assert_eq!(rbac::SystemPermission::from_str(perm.as_str()), Some(perm));
+        assert_eq!(rbac::SystemPermission::parse(perm.as_str()), Some(perm));
     }
 }
 

@@ -496,3 +496,162 @@ async fn tunnel_task(
     // Dropping the handle closes the SSH session
     tracing::debug!("SSH tunnel task exiting");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_port_is_22() {
+        assert_eq!(default_ssh_port(), 22);
+    }
+
+    #[test]
+    fn tunnel_error_display_ssh() {
+        let err = TunnelError::Ssh(2, "connection refused".into());
+        assert_eq!(err.to_string(), "hop 2: SSH tunnel error: connection refused");
+    }
+
+    #[test]
+    fn tunnel_error_display_auth() {
+        let err = TunnelError::Auth(0, "bad credentials".into());
+        assert_eq!(err.to_string(), "hop 0: SSH tunnel auth failed: bad credentials");
+    }
+
+    #[test]
+    fn tunnel_error_display_bind() {
+        let err = TunnelError::Bind(1, "address in use".into());
+        assert_eq!(err.to_string(), "hop 1: SSH tunnel bind failed: address in use");
+    }
+
+    #[test]
+    fn tunnel_error_display_key() {
+        let err = TunnelError::Key(0, "invalid format".into());
+        assert_eq!(err.to_string(), "hop 0: SSH tunnel key error: invalid format");
+    }
+
+    #[test]
+    fn jump_host_serde_roundtrip() {
+        let host = JumpHost {
+            hostname: "bastion.example.com".into(),
+            port: 2222,
+            username: "admin".into(),
+            password: Some("secret".into()),
+            private_key: None,
+            host_key: None,
+        };
+        let json = serde_json::to_string(&host).unwrap();
+        let deserialized: JumpHost = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.hostname, "bastion.example.com");
+        assert_eq!(deserialized.port, 2222);
+        assert_eq!(deserialized.username, "admin");
+        assert_eq!(deserialized.password.as_deref(), Some("secret"));
+        assert!(deserialized.private_key.is_none());
+    }
+
+    #[test]
+    fn jump_host_default_port_deserialized() {
+        let json = r#"{"hostname":"h","username":"u"}"#;
+        let host: JumpHost = serde_json::from_str(json).unwrap();
+        assert_eq!(host.port, 22);
+        assert!(host.password.is_none());
+        assert!(host.private_key.is_none());
+        assert!(host.host_key.is_none());
+    }
+
+    #[test]
+    fn jump_host_optional_fields_skipped_when_none() {
+        let host = JumpHost {
+            hostname: "h".into(),
+            port: 22,
+            username: "u".into(),
+            password: None,
+            private_key: None,
+            host_key: None,
+        };
+        let json = serde_json::to_string(&host).unwrap();
+        assert!(!json.contains("password"));
+        assert!(!json.contains("private_key"));
+        assert!(!json.contains("host_key"));
+    }
+
+    #[test]
+    fn jump_host_info_serialization() {
+        let info = JumpHostInfo {
+            hostname: "jumphost.local".into(),
+            port: 22,
+            username: "user".into(),
+            host_key_fingerprint: Some("SHA256:abc123".into()),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("jumphost.local"));
+        assert!(json.contains("SHA256:abc123"));
+    }
+
+    #[test]
+    fn jump_host_info_fingerprint_skipped_when_none() {
+        let info = JumpHostInfo {
+            hostname: "h".into(),
+            port: 22,
+            username: "u".into(),
+            host_key_fingerprint: None,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(!json.contains("fingerprint"));
+    }
+
+    #[test]
+    fn fingerprint_openssh_key_invalid_input() {
+        let result = fingerprint_openssh_key("not-a-valid-key");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("invalid host key"));
+    }
+
+    #[test]
+    fn fingerprint_openssh_key_empty_string() {
+        let result = fingerprint_openssh_key("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn tunnel_config_fields() {
+        let config = TunnelConfig {
+            jump_host: "10.0.0.1".into(),
+            jump_port: 22,
+            jump_username: "tunnel".into(),
+            jump_password: Some("p".into()),
+            jump_private_key: None,
+            target_host: "192.168.1.100".into(),
+            target_port: 3389,
+            expected_host_key: None,
+        };
+        assert_eq!(config.jump_host, "10.0.0.1");
+        assert_eq!(config.target_port, 3389);
+        assert!(config.expected_host_key.is_none());
+    }
+
+    #[test]
+    fn tunnel_handler_with_no_expected_key_is_tofu() {
+        // TunnelHandler with None expected_key should accept (TOFU mode).
+        // We can't easily test check_server_key without a real PublicKey,
+        // but we verify the struct construction.
+        let handler = TunnelHandler {
+            expected_key: None,
+            hop_index: 0,
+            jump_host: "test.host".into(),
+        };
+        assert!(handler.expected_key.is_none());
+        assert_eq!(handler.hop_index, 0);
+    }
+
+    #[test]
+    fn tunnel_handler_with_expected_key() {
+        let handler = TunnelHandler {
+            expected_key: Some("ssh-ed25519 AAAA...".into()),
+            hop_index: 1,
+            jump_host: "bastion".into(),
+        };
+        assert!(handler.expected_key.is_some());
+        assert_eq!(handler.hop_index, 1);
+    }
+}

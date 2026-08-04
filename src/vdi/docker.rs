@@ -328,19 +328,19 @@ impl DockerDriver {
         if !password.chars().all(|c| c.is_ascii_alphanumeric()) {
             return Err(VdiError::Docker("invalid characters in password".into()));
         }
+        // Use a quoted-heredoc to avoid shell variable expansion.
+        // The username and password are interpolated by Rust's format!, not
+        // by the shell, so no quoting or escaping is needed inside the body.
+        let script = format!(
+            "chpasswd <<'CPASSWD'\n{}:{}\nCPASSWD",
+            username, password
+        );
         let exec = self
             .client
             .create_exec(
                 container,
                 CreateExecOptions {
-                    cmd: Some(vec![
-                        "sh",
-                        "-c",
-                        "printf '%s:%s\\n' \"$1\" \"$2\" | chpasswd",
-                        "sh",
-                        username,
-                        password,
-                    ]),
+                    cmd: Some(vec!["sh", "-c", &script]),
                     attach_stdout: Some(false),
                     attach_stderr: Some(false),
                     ..Default::default()

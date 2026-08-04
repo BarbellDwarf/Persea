@@ -215,3 +215,302 @@ pub fn rotate_per_entry(recording_dir: &Path, entry_key: &str, max: u32) -> usiz
     }
     deleted
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("persea_test_{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn recording_meta_serde_roundtrip() {
+        let meta = RecordingMeta {
+            address_book_entry: Some("shared/folder/server1".into()),
+            created_at: "2025-01-15T10:30:00Z".into(),
+            user: Some("admin@example.com".into()),
+            folder: Some("shared/folder".into()),
+            entry_display_name: Some("Production Server".into()),
+            session_type: Some("rdp".into()),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let deserialized: RecordingMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.address_book_entry.as_deref(), Some("shared/folder/server1"));
+        assert_eq!(deserialized.created_at, "2025-01-15T10:30:00Z");
+        assert_eq!(deserialized.user.as_deref(), Some("admin@example.com"));
+        assert_eq!(deserialized.session_type.as_deref(), Some("rdp"));
+    }
+
+    #[test]
+    fn recording_meta_optional_fields_skipped() {
+        let meta = RecordingMeta {
+            address_book_entry: None,
+            created_at: "2025-01-01T00:00:00Z".into(),
+            user: None,
+            folder: None,
+            entry_display_name: None,
+            session_type: None,
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(!json.contains("address_book_entry"));
+        assert!(!json.contains("user"));
+        assert!(!json.contains("folder"));
+        assert!(!json.contains("entry_display_name"));
+        assert!(!json.contains("session_type"));
+        assert!(json.contains("created_at"));
+    }
+
+    #[test]
+    fn recording_meta_minimal_json() {
+        let json = r#"{"created_at":"2025-01-01T00:00:00Z"}"#;
+        let meta: RecordingMeta = serde_json::from_str(json).unwrap();
+        assert_eq!(meta.created_at, "2025-01-01T00:00:00Z");
+        assert!(meta.address_book_entry.is_none());
+        assert!(meta.user.is_none());
+    }
+
+    #[test]
+    fn disk_usage_percent_returns_value() {
+        let usage = disk_usage_percent(Path::new("/"));
+        assert!(usage.is_ok());
+        let pct = usage.unwrap();
+        assert!((0.0..=100.0).contains(&pct));
+    }
+
+    #[test]
+    fn disk_usage_percent_invalid_path() {
+        let result = disk_usage_percent(Path::new("/nonexistent_path_12345"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_recordings_by_age_empty_dir() {
+        let dir = temp_dir();
+        let result = list_recordings_by_age(&dir);
+        assert!(result.is_empty());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_recordings_by_age_nonexistent_dir() {
+        let result = list_recordings_by_age(Path::new("/nonexistent_dir_12345"));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn list_recordings_by_age_filters_non_guac() {
+        let dir = temp_dir();
+        fs::write(dir.join("test.txt"), "not a recording").unwrap();
+        fs::write(dir.join("session.guac"), "fake guac").unwrap();
+        fs::write(dir.join("another.log"), "log file").unwrap();
+
+        let result = list_recordings_by_age(&dir);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0.file_name().unwrap(), "session.guac");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn list_recordings_by_age_sorted_oldest_first() {
+        let dir = temp_dir();
+        // Create files with different names (OS will set mtime to creation time)
+        fs::write(dir.join("c.guac"), "c").unwrap();
+        fs::write(dir.join("a.guac"), "a").unwrap();
+        fs::write(dir.join("b.guac"), "b").unwrap();
+
+        let result = list_recordings_by_age(&dir);
+        assert_eq!(result.len(), 3);
+        // All should be .guac files
+        for (path, _, _) in &result {
+            assert_eq!(path.extension().unwrap(), "guac");
+        }
+        // Should be sorted by modification time
+        for i in 1..result.len() {
+            assert!(result[i - 1].1 <= result[i].1);
+        }
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn write_and_read_meta() {
+        let dir = temp_dir();
+        let guac_path = dir.join("test.guac");
+        fs::write(&guac_path, "fake data").unwrap();
+
+        let meta = RecordingMeta {
+            address_book_entry: Some("entry/key".into()),
+            created_at: "2025-06-01T12:00:00Z".into(),
+            user: Some("test@example.com".into()),
+            folder: None,
+            entry_display_name: None,
+            session_type: Some("ssh".into()),
+        };
+
+        write_meta(&guac_path, &meta).unwrap();
+
+        let read = read_meta(&guac_path);
+        assert!(read.is_some());
+        let read = read.unwrap();
+        assert_eq!(read.address_book_entry.as_deref(), Some("entry/key"));
+        assert_eq!(read.created_at, "2025-06-01T12:00:00Z");
+        assert_eq!(read.user.as_deref(), Some("test@example.com"));
+        assert_eq!(read.session_type.as_deref(), Some("ssh"));
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn read_meta_missing_file() {
+        let result = read_meta(Path::new("/nonexistent/file.guac"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn read_meta_invalid_json() {
+        let dir = temp_dir();
+        let guac_path = dir.join("bad.guac");
+        fs::write(&guac_path, "").unwrap();
+        let meta_path = guac_path.with_extension("meta");
+        fs::write(&meta_path, "not valid json {{{").unwrap();
+
+        let result = read_meta(&guac_path);
+        assert!(result.is_none());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotate_zero_max_recordings_is_noop() {
+        let dir = temp_dir();
+        fs::write(dir.join("test.guac"), "data").unwrap();
+
+        let config = RecordingConfig {
+            path: dir.clone(),
+            max_recordings: 0,
+            max_disk_percent: 0,
+            ..Default::default()
+        };
+        let deleted = rotate(&config);
+        assert_eq!(deleted, 0);
+        assert!(dir.join("test.guac").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotate_enforces_max_recordings() {
+        let dir = temp_dir();
+        for i in 0..5 {
+            fs::write(dir.join(format!("{}.guac", i)), "data").unwrap();
+        }
+
+        let config = RecordingConfig {
+            path: dir.clone(),
+            max_recordings: 3,
+            max_disk_percent: 0,
+            ..Default::default()
+        };
+        let deleted = rotate(&config);
+        assert_eq!(deleted, 2);
+        let remaining = list_recordings_by_age(&dir);
+        assert_eq!(remaining.len(), 3);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotate_no_op_when_under_limit() {
+        let dir = temp_dir();
+        for i in 0..3 {
+            fs::write(dir.join(format!("{}.guac", i)), "data").unwrap();
+        }
+
+        let config = RecordingConfig {
+            path: dir.clone(),
+            max_recordings: 5,
+            max_disk_percent: 0,
+            ..Default::default()
+        };
+        let deleted = rotate(&config);
+        assert_eq!(deleted, 0);
+        assert_eq!(list_recordings_by_age(&dir).len(), 3);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotate_per_entry_zero_max_is_noop() {
+        let dir = temp_dir();
+        fs::write(dir.join("test.guac"), "data").unwrap();
+
+        let deleted = rotate_per_entry(&dir, "entry/key", 0);
+        assert_eq!(deleted, 0);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotate_per_entry_no_matching_metas() {
+        let dir = temp_dir();
+        fs::write(dir.join("test.guac"), "data").unwrap();
+        // No .meta file, so nothing matches
+        let deleted = rotate_per_entry(&dir, "entry/key", 1);
+        assert_eq!(deleted, 0);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotate_per_entry_matches_and_deletes_oldest() {
+        let dir = temp_dir();
+        // Create 3 recordings all for the same entry
+        for i in 0..3 {
+            let guac_path = dir.join(format!("{}.guac", i));
+            fs::write(&guac_path, "data").unwrap();
+            let meta = RecordingMeta {
+                address_book_entry: Some("target/entry".into()),
+                created_at: format!("2025-01-0{}T00:00:00Z", i + 1),
+                user: None,
+                folder: None,
+                entry_display_name: None,
+                session_type: None,
+            };
+            write_meta(&guac_path, &meta).unwrap();
+        }
+
+        let deleted = rotate_per_entry(&dir, "target/entry", 2);
+        assert_eq!(deleted, 1);
+        // Two should remain
+        let remaining: Vec<_> = list_recordings_by_age(&dir)
+            .into_iter()
+            .filter(|(p, _, _)| {
+                read_meta(p)
+                    .map(|m| m.address_book_entry.as_deref() == Some("target/entry"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(remaining.len(), 2);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rotate_per_entry_ignores_other_entries() {
+        let dir = temp_dir();
+        // Create recordings for different entries
+        for (i, entry) in ["other/entry", "target/entry", "other/entry"].iter().enumerate() {
+            let guac_path = dir.join(format!("{}.guac", i));
+            fs::write(&guac_path, "data").unwrap();
+            let meta = RecordingMeta {
+                address_book_entry: Some(entry.to_string()),
+                created_at: format!("2025-01-0{}T00:00:00Z", i + 1),
+                user: None,
+                folder: None,
+                entry_display_name: None,
+                session_type: None,
+            };
+            write_meta(&guac_path, &meta).unwrap();
+        }
+
+        let deleted = rotate_per_entry(&dir, "target/entry", 1);
+        assert_eq!(deleted, 0); // only 1 match, at limit
+        fs::remove_dir_all(&dir).ok();
+    }
+}

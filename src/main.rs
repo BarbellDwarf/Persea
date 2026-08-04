@@ -9,6 +9,7 @@ mod auth_provider;
 mod auth_providers;
 mod browser;
 mod config;
+mod csrf;
 mod crypto;
 mod db;
 mod db_migrate;
@@ -1408,6 +1409,7 @@ async fn run_server(config: Config, database: Db) {
         api_routes = api_routes.layer(GovernorLayer::new(conf));
     }
     let api_routes = api_routes
+        .layer(csrf::CsrfLayer)
         .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(vault_client.clone()))
@@ -1461,6 +1463,7 @@ async fn run_server(config: Config, database: Db) {
     let setup_routes = Router::new()
         .route("/setup", get(handlers::setup::setup_page))
         .route("/setup", post(handlers::setup::setup_submit))
+        .layer(csrf::CsrfLayer)
         .layer(Extension(database.clone()))
         .layer(Extension(site_title.clone()));
 
@@ -1471,6 +1474,7 @@ async fn run_server(config: Config, database: Db) {
         .route("/auth/mfa", get(handlers::auth::mfa_page))
         .route("/auth/mfa", post(handlers::auth::mfa_submit))
         .with_state(manager.clone())
+        .layer(csrf::CsrfLayer)
         .layer(Extension(database.clone()))
         .layer(Extension(oidc_enabled.clone()))
         .layer(Extension(auth_chain.clone()))
@@ -1484,6 +1488,7 @@ async fn run_server(config: Config, database: Db) {
         saml_routes = Router::new()
             .route("/auth/saml/acs", post(handlers::auth::saml_acs))
             .route("/auth/saml/metadata", get(handlers::auth::saml_metadata))
+            .layer(csrf::CsrfLayer)
             .layer(Extension(sp_acs))
             .layer(Extension(sp_meta))
             .layer(Extension(database.clone()))

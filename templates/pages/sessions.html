@@ -27,7 +27,7 @@
         </div>
     </div>
     <div id="session-form" class="hidden mb-6 card">
-        <div id="new-session-toggle" class="flex items-center gap-2 cursor-pointer mb-4">
+        <div id="new-session-toggle" class="flex items-center gap-2 cursor-pointer mb-4" role="button" tabindex="0" aria-expanded="false" aria-controls="new-session-fields">
             <svg id="new-session-arrow" class="w-4 h-4 text-emerald-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
             <span class="text-emerald-400 font-semibold">New Ad-Hoc Session</span>
         </div>
@@ -62,4 +62,22 @@
     </div>
 </div>
 <style>.proto-ssh{background:rgba(34,197,94,.15);color:#4ade80;border-color:rgba(34,197,94,.3)}.proto-rdp{background:rgba(59,130,246,.15);color:#60a5fa;border-color:rgba(59,130,246,.3)}.proto-vnc{background:rgba(249,115,22,.15);color:#fb923c;border-color:rgba(249,115,22,.3)}.proto-spice{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}.proto-web,.proto-vmware{background:rgba(20,184,166,.15);color:#2dd4bf;border-color:rgba(20,184,166,.3)}.proto-proxmox{background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.3)}.proto-vdi{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}</style>
+<script>
+(function() {
+    var toggle = document.getElementById('new-session-toggle');
+    var fields = document.getElementById('new-session-fields');
+    var arrow = document.getElementById('new-session-arrow');
+    var expanded = false;
+    function doToggle() {
+        expanded = !expanded;
+        fields.classList.toggle('hidden', !expanded);
+        toggle.setAttribute('aria-expanded', String(expanded));
+        if (arrow) arrow.style.transform = expanded ? 'rotate(90deg)' : '';
+    }
+    toggle.addEventListener('click', doToggle);
+    toggle.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); doToggle(); }
+    });
+})();
+</script>
 {% endblock %}

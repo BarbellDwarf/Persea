@@ -76,9 +76,9 @@
 </div>
 
 <!-- Add User Modal -->
-<div id="add-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+<div id="add-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="add-user-title">
     <div class="card w-full max-w-md">
-        <h2 class="text-lg font-bold text-gray-100 mb-4">Add User</h2>
+        <h2 id="add-user-title" class="text-lg font-bold text-gray-100 mb-4">Add User</h2>
         <form hx-post="/api/users"
               hx-target="#user-table-body"
               hx-swap="innerHTML"
@@ -112,9 +112,9 @@
 </div>
 
 <!-- Edit Role Modal -->
-<div id="edit-role-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+<div id="edit-role-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="edit-role-title">
     <div class="card w-full max-w-sm">
-        <h2 class="text-lg font-bold text-gray-100 mb-4">Change Role</h2>
+        <h2 id="edit-role-title" class="text-lg font-bold text-gray-100 mb-4">Change Role</h2>
         <form hx-target="#user-table-body" hx-swap="innerHTML"
               hx-on::after-request="document.getElementById('edit-role-modal').classList.add('hidden')">
             <input type="hidden" name="email" id="edit-role-email">

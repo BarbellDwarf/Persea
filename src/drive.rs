@@ -302,3 +302,151 @@ pub async fn unmount_luks(config: &DriveConfig) -> Result<(), DriveError> {
 pub fn luks_configured(config: &DriveConfig) -> bool {
     config.luks_device.is_some() && config.luks_key_path.is_some()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_drive_enabled_override_true() {
+        let result = is_drive_enabled(&None, Some(true));
+        assert!(result);
+    }
+
+    #[test]
+    fn is_drive_enabled_override_false() {
+        let result = is_drive_enabled(&Some(DriveConfig { enabled: true, ..Default::default() }), Some(false));
+        assert!(!result);
+    }
+
+    #[test]
+    fn is_drive_enabled_no_override_with_config_enabled() {
+        let config = DriveConfig { enabled: true, ..Default::default() };
+        assert!(is_drive_enabled(&Some(config), None));
+    }
+
+    #[test]
+    fn is_drive_enabled_no_override_with_config_disabled() {
+        let config = DriveConfig { enabled: false, ..Default::default() };
+        assert!(!is_drive_enabled(&Some(config), None));
+    }
+
+    #[test]
+    fn is_drive_enabled_no_override_no_config() {
+        assert!(!is_drive_enabled(&None, None));
+    }
+
+    #[test]
+    fn drive_config_or_default_returns_config_when_present() {
+        let config = DriveConfig {
+            enabled: true,
+            drive_path: PathBuf::from("/custom"),
+            drive_name: "My Drive".into(),
+            allow_download: false,
+            allow_upload: false,
+            cleanup_on_close: false,
+            retention_secs: 60,
+            luks_device: Some(PathBuf::from("/dev/sda1")),
+            luks_name: "my-luks".into(),
+            luks_key_path: Some("secret/path".into()),
+        };
+        let result = drive_config_or_default(&Some(config));
+        assert!(result.enabled);
+        assert_eq!(result.drive_path, PathBuf::from("/custom"));
+        assert_eq!(result.drive_name, "My Drive");
+        assert!(!result.allow_download);
+        assert!(!result.allow_upload);
+        assert!(!result.cleanup_on_close);
+        assert_eq!(result.retention_secs, 60);
+    }
+
+    #[test]
+    fn drive_config_or_default_returns_default_when_none() {
+        let result = drive_config_or_default(&None);
+        assert!(!result.enabled);
+        assert_eq!(result.drive_path, PathBuf::from("./drives"));
+        assert_eq!(result.drive_name, "Shared Drive");
+        assert!(result.allow_download);
+        assert!(result.allow_upload);
+        assert!(result.cleanup_on_close);
+        assert_eq!(result.retention_secs, 0);
+        assert!(result.luks_device.is_none());
+        assert_eq!(result.luks_name, "persea-drives");
+        assert!(result.luks_key_path.is_none());
+    }
+
+    #[test]
+    fn luks_configured_both_present() {
+        let config = DriveConfig {
+            luks_device: Some(PathBuf::from("/dev/sda1")),
+            luks_key_path: Some("path/key".into()),
+            ..Default::default()
+        };
+        assert!(luks_configured(&config));
+    }
+
+    #[test]
+    fn luks_configured_only_device() {
+        let config = DriveConfig {
+            luks_device: Some(PathBuf::from("/dev/sda1")),
+            luks_key_path: None,
+            ..Default::default()
+        };
+        assert!(!luks_configured(&config));
+    }
+
+    #[test]
+    fn luks_configured_only_key_path() {
+        let config = DriveConfig {
+            luks_device: None,
+            luks_key_path: Some("path/key".into()),
+            ..Default::default()
+        };
+        assert!(!luks_configured(&config));
+    }
+
+    #[test]
+    fn luks_configured_neither() {
+        let config = DriveConfig::default();
+        assert!(!luks_configured(&config));
+    }
+
+    #[test]
+    fn drive_error_display_io() {
+        let err = DriveError::Io("permission denied".into());
+        assert_eq!(err.to_string(), "drive I/O error: permission denied");
+    }
+
+    #[test]
+    fn drive_error_display_luks() {
+        let err = DriveError::Luks("device busy".into());
+        assert_eq!(err.to_string(), "LUKS error: device busy");
+    }
+
+    #[test]
+    fn drive_error_display_vault() {
+        let err = DriveError::Vault("unreachable".into());
+        assert_eq!(err.to_string(), "vault error: unreachable");
+    }
+
+    #[test]
+    fn drive_error_is_std_error() {
+        let err: Box<dyn std::error::Error> = Box::new(DriveError::Io("test".into()));
+        assert!(err.to_string().contains("drive I/O error"));
+    }
+
+    #[test]
+    fn drive_config_defaults() {
+        let config = DriveConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.drive_path, PathBuf::from("./drives"));
+        assert_eq!(config.drive_name, "Shared Drive");
+        assert!(config.allow_download);
+        assert!(config.allow_upload);
+        assert!(config.cleanup_on_close);
+        assert_eq!(config.retention_secs, 0);
+        assert!(config.luks_device.is_none());
+        assert_eq!(config.luks_name, "persea-drives");
+        assert!(config.luks_key_path.is_none());
+    }
+}
