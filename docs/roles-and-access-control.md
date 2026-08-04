@@ -46,10 +46,10 @@ Fine-grained permissions on individual connections and connection groups:
 
 Permissions are inherited through the connection group hierarchy:
 
-- **Direct grants** — a permission granted on a connection applies to that connection only
-- **Group inheritance** — a permission granted on a connection group applies to all connections within it (recursively)
-- **User + group grants** — permissions can be granted to individual users or to groups
-- **Group membership** — resolved from OIDC claims, LDAP memberOf, or SAML attributes
+- **Direct grants**: a permission granted on a connection applies to that connection only
+- **Group inheritance**: a permission granted on a connection group applies to all connections within it (recursively)
+- **User + group grants**: permissions can be granted to individual users or to groups
+- **Group membership**: resolved from OIDC claims, LDAP memberOf, or SAML attributes
 
 Example: granting `connect` on the "Engineering" group gives all members of that group (and subgroups) the ability to create sessions from any connection in the Engineering tree.
 
@@ -57,9 +57,9 @@ Example: granting `connect` on the "Engineering" group gives all members of that
 
 When a user attempts an action, permissions are evaluated as follows:
 
-1. **System role check** — does the user's role (admin/poweruser/operator/viewer) allow this action?
-2. **Object permission check** — does the user have the required object permission on this specific connection or group?
-3. **Group membership** — are any of the user's groups granted this permission via inheritance?
+1. **System role check**: does the user's role (admin/poweruser/operator/viewer) allow this action?
+2. **Object permission check**: does the user have the required object permission on this specific connection or group?
+3. **Group membership**: are any of the user's groups granted this permission via inheritance?
 
 Admins bypass all object permission checks — they always have full access.
 
@@ -83,15 +83,15 @@ persea add-admin --name ci-bot \
 
 ### User API tokens
 
-User API tokens authenticate as the OIDC user who owns the token, with an effective role capped by the token's `max_role`. Tokens use the same `Authorization: Bearer <token>` header as admin API keys — persea tries admin keys first, then user tokens. See [User API tokens](#user-api-tokens) below for details.
+User API tokens authenticate as the OIDC user who owns the token, with an effective role capped by the token's `max_role`. Tokens use the same `Authorization: Bearer <token>` header as admin API keys, and persea tries admin keys first, then user tokens. See [User API tokens](#user-api-tokens) below for details.
 
 ### OIDC / LDAP / SAML / database users
 
 Users authenticating via any primary provider (OIDC, LDAP, SAML, or local database) are assigned a role through three mechanisms (in order of precedence):
 
-1. **Group-to-role mappings** — evaluated on every login. If the user's groups match any mappings, the highest matching role is applied.
-2. **Manual role assignment** — admins can set a user's role via CLI, API, or the Admin page.
-3. **Default role** — new users get the `default_role` from OIDC config on first login (default: `operator`).
+1. **Group-to-role mappings**: evaluated on every login. If the user's groups match any mappings, the highest matching role is applied.
+2. **Manual role assignment**: admins can set a user's role via CLI, API, or the Admin page.
+3. **Default role**: new users get the `default_role` from OIDC config on first login (default: `operator`).
 
 ## Endpoint access control
 
