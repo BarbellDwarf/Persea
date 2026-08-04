@@ -21,8 +21,7 @@ impl EncryptionKey {
     /// Create from a 32-byte raw key.
     pub fn from_bytes(bytes: &[u8; 32]) -> Self {
         Self {
-            key: Key::<Aes256Gcm>::try_from(bytes.as_slice())
-                .expect("key length mismatch"),
+            key: Key::<Aes256Gcm>::try_from(bytes.as_slice()).expect("key length mismatch"),
         }
     }
 
@@ -61,8 +60,7 @@ pub fn encrypt_value(key: &EncryptionKey, plaintext: &str) -> Result<String, Cry
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     rand::fill(&mut nonce_bytes[..]);
-    let nonce = Nonce::try_from(nonce_bytes.as_slice())
-        .expect("nonce length mismatch");
+    let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("nonce length mismatch");
 
     let ciphertext = cipher
         .encrypt(&nonce, plaintext.as_bytes())

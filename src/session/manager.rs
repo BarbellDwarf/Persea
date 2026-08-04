@@ -394,7 +394,7 @@ impl SessionManager {
             let sessions = self.sessions.read().await;
             let session = sessions.get(&id);
             if let Some(session) = session {
-            let mut session = session.lock().await;
+                let mut session = session.lock().await;
                 session.container_id.take()
             } else {
                 None

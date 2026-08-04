@@ -150,7 +150,10 @@ pub async fn cmd_db_migrate_from_vault(
             };
 
             // Check idempotency: skip if entry already exists
-            if !overwrite && !dry_run && entry_exists(&database, entry_name, parent_group_id.as_deref()) {
+            if !overwrite
+                && !dry_run
+                && entry_exists(&database, entry_name, parent_group_id.as_deref())
+            {
                 println!("  skip (exists): {}/{}", folder_path, entry_name);
                 entries_skipped += 1;
                 continue;

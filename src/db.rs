@@ -420,7 +420,7 @@ fn validate_stored_hash(key: &str, stored: &str) -> bool {
         // Salted format: recompute with extracted salt.
         if let (Ok(salt), Ok(expected)) = (hex::decode(salt_hex), hex::decode(hash_hex)) {
             let mut hasher = Sha256::new();
-    hasher.update(salt);
+            hasher.update(salt);
             hasher.update(key.as_bytes());
             let computed = hasher.finalize();
             computed.as_slice().ct_eq(&expected).into()

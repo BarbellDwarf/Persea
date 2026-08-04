@@ -1737,8 +1737,14 @@ mod tests {
         "#;
         let config: VaultConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.ca_cert.as_deref(), Some("/opt/persea/certs/ca.pem"));
-        assert_eq!(config.client_cert.as_deref(), Some("/opt/persea/certs/client.pem"));
-        assert_eq!(config.client_key.as_deref(), Some("/opt/persea/certs/client-key.pem"));
+        assert_eq!(
+            config.client_cert.as_deref(),
+            Some("/opt/persea/certs/client.pem")
+        );
+        assert_eq!(
+            config.client_key.as_deref(),
+            Some("/opt/persea/certs/client-key.pem")
+        );
         assert!(config.tls_skip_verify);
     }
 
