@@ -53,3 +53,9 @@ rpm/staging/
 
 # Wayfinding - planning artifacts
 wayfinding/
+
+# Screenshots (local only)
+screenshots/
+
+# Benchmarks (local only)
+bench/

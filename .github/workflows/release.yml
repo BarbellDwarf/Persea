@@ -248,7 +248,7 @@ jobs:
           context: .
           platforms: linux/amd64
           push: true
-          tags: sol1/persea:${{ steps.version.outputs.version }}-amd64
+          tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}-amd64
           cache-from: type=gha,scope=docker-amd64
           cache-to: type=gha,mode=max,scope=docker-amd64
 
@@ -276,7 +276,7 @@ jobs:
           context: .
           platforms: linux/arm64
           push: true
-          tags: sol1/persea:${{ steps.version.outputs.version }}-arm64
+          tags: ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}-arm64
           cache-from: type=gha,scope=docker-arm64
           cache-to: type=gha,mode=max,scope=docker-arm64
 
@@ -299,10 +299,10 @@ jobs:
         run: |
           VER="${{ steps.version.outputs.version }}"
           docker buildx imagetools create \
-            -t "sol1/persea:${VER}" \
-            -t "sol1/persea:latest" \
-            "sol1/persea:${VER}-amd64" \
-            "sol1/persea:${VER}-arm64"
+            -t "ghcr.io/${{ github.repository }}:${VER}" \
+            -t "ghcr.io/${{ github.repository }}:latest" \
+            "ghcr.io/${{ github.repository }}:${VER}-amd64" \
+            "ghcr.io/${{ github.repository }}:${VER}-arm64"
 
   # ---------------------------------------------------------------------------
   # Create GitHub Release

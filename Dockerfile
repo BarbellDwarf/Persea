@@ -114,7 +114,7 @@ COPY --from=guacd-builder /opt/persea/sbin/ /opt/persea/sbin/
 COPY --from=guacd-builder /opt/persea/lib/ /opt/persea/lib/
 
 # Install persea binary
-COPY --from=rust-builder /build/target/release/rustguac /opt/persea/bin/persea
+COPY --from=rust-builder /build/target/release/persea /opt/persea/bin/persea
 
 # Install static web assets
 COPY static/ /opt/persea/static/
