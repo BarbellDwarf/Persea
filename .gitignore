@@ -51,8 +51,11 @@ rpm/staging/
 # Claude Code project memory
 .claude/
 
-# Wayfinder - planning artifacts
+# Wayfinder - planning artifacts (local only)
 wayfinder/
+
+# Research (local only)
+research/
 
 # Screenshots (local only)
 screenshots/
