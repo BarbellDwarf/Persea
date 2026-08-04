@@ -1,6 +1,6 @@
 use crate::error::AppError;
 use crate::vsphere::{self, VsphereClient, VsphereConfig};
-use axum::extract::State;
+use axum::extract::Extension;
 use axum::Json;
 use serde_json::json;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ pub async fn connect_vsphere(config: &VsphereConfig) -> VsphereState {
 ///
 /// List VMs from vCenter. Returns the cached inventory or fetches fresh data.
 pub async fn list_vms(
-    State(client): State<VsphereState>,
+    Extension(client): Extension<VsphereState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let Some(client) = client else {
         return Err(AppError::Vsphere("vSphere not configured or unavailable".into()));
@@ -39,7 +39,7 @@ pub async fn list_vms(
 ///
 /// Perform a power action on a VM. Body: `{ "action": "on|off|suspend|reset" }`
 pub async fn power_action(
-    State(client): State<VsphereState>,
+    Extension(client): Extension<VsphereState>,
     axum::extract::Path(vm_id): axum::extract::Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
