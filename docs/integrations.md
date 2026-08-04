@@ -960,6 +960,97 @@ This is belt-and-suspenders for environments where even loopback traffic should 
 
 ---
 
+## VMware vSphere Integration
+
+persea connects to vCenter Server via the vSphere REST API to list VMs and auto-detect the right connection protocol. Windows VMs route through RDP, Linux VMs through SSH, and everything else through VNC. guacd connects to the guest IP directly.
+
+### Requirements
+
+- vCenter Server 7.03 or later with REST API access
+- HTTPS access from persea to vCenter
+- A vSphere user with `VM Inventory List` and `Virtual Machine Interaction` privileges
+- VMware Tools running on guests for IP address detection
+
+### Setup
+
+**1. Create a vSphere user** (or use an existing one):
+
+The user needs at minimum these privileges on the target VMs:
+- `VirtualMachine.Inventory.List`
+- `VirtualMachine.Interact.PowerOn`
+- `VirtualMachine.Interact.PowerOff`
+- `VirtualMachine.Interact.Reset`
+- `VirtualMachine.Interact.Suspend`
+
+**2. Set the password environment variable:**
+
+```bash
+echo 'VSPHERE_PASSWORD=your-vcenter-password' >> /opt/persea/env
+chmod 600 /opt/persea/env
+```
+
+**3. Add the vSphere section to config.toml:**
+
+```toml
+[vsphere]
+vcenter_addr = "https://vcenter.example.com/sdk"
+username = "administrator@vsphere.local"
+# password_env = "VSPHERE_PASSWORD"  # default, matches step 2
+# insecure = false                   # set true for self-signed certs
+# refresh_interval_secs = 300        # VM cache refresh interval (5 min)
+```
+
+**4. Restart persea:**
+
+```bash
+sudo systemctl restart persea
+```
+
+### Configuration reference
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `vcenter_addr` | (required) | vCenter SDK URL (e.g. `https://vcenter.example.com/sdk`) |
+| `username` | (required) | vSphere username (e.g. `administrator@vsphere.local`) |
+| `password_env` | `VSPHERE_PASSWORD` | Name of the environment variable holding the password |
+| `insecure` | `false` | Skip TLS certificate verification (dev/test only) |
+| `refresh_interval_secs` | `300` | How often to refresh the VM inventory (seconds) |
+
+### Per-VM credential overrides
+
+For VMs where the guest OS user differs from the global vSphere credentials:
+
+```toml
+[vsphere.vm_credentials]
+"web-server-01" = { username = "deploy", password_env = "WEB_DEPLOY_PASS" }
+"db-server-02" = { username = "admin", password_env = "DB_ADMIN_PASS" }
+```
+
+VMs without an override use the global `username` and password from the environment variable.
+
+### Protocol detection
+
+persea maps the vSphere guest OS identifier to a Guacamole protocol:
+
+| Guest OS family | Protocol | Port |
+|----------------|----------|------|
+| Windows (`win*`) | RDP | 3389 |
+| Linux (`linux*`, `ubuntu*`, `debian*`, `rhel*`, etc.) | SSH | 22 |
+| BSD, Solaris | SSH | 22 |
+| Everything else | VNC | 5900 |
+
+The detection is automatic based on the `guest_OS` field reported by vCenter. No manual mapping needed.
+
+### Troubleshooting
+
+**Cannot connect to vCenter:** Check that `vcenter_addr` ends with `/sdk` and that HTTPS is reachable from the persea server. If using self-signed certs, set `insecure = true` (or add vCenter's CA to the system trust store).
+
+**Empty VM list:** Verify the vSphere user has `VirtualMachine.Inventory.List` permission on the VMs you want to see. The user also needs access at the correct scope (datacenter, cluster, or folder).
+
+**No IP address shown:** VMware Tools must be installed and running on the guest. Without it, persea cannot detect the guest IP and cannot route the session.
+
+---
+
 ## Knocknoc Zero-Trust Access
 
 [Knocknoc](https://knocknoc.io) provides identity-aware network access control. The integration works at the HAProxy layer: knocknoc-agent dynamically adds and removes client IPs to HAProxy ACLs via the admin socket.
