@@ -43,6 +43,13 @@ See `config.example.toml` for a fully commented reference.
 | `login_scripts_dir` | `/opt/persea/scripts` | Directory containing login scripts |
 | `login_script_timeout_secs` | `120` | Maximum runtime for login scripts before they are killed |
 
+## SSH session settings
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ssh_scrollback` | `10000` | SSH terminal scrollback lines |
+| `ssh_tmux_detach` | `false` | When true, SSH sessions start under a tmux wrapper (`tmux attach-session -d \|\| tmux new-session`) instead of a plain shell. On reconnect, `-d` detaches any stale client a dead connection left attached, so the user never lands on a frozen tmux screen. Requires tmux on the remote host. |
+
 ## Connection allowlists
 
 CIDR ranges controlling which hosts sessions can connect to. All default to localhost only.
@@ -538,6 +545,7 @@ home_base = "/vdi-homes"
 | `PERSEA_STORAGE_KEY` | 64-char hex encryption key for DB credential storage (alternative to `[storage].encryption_key`) |
 | `VSPHERE_PASSWORD` | VMware vSphere password (alternative to `[vsphere].password_env`) |
 | `RUST_LOG` | Log level (e.g., `info`, `debug`, `persea=debug`) |
+| `RUST_LOG_FORMAT` | Log format: `text` (default) or `json` for JSON lines (structured logging). Equivalent to the `--log-format` CLI flag, which takes precedence. |
 
 ### Setting environment variables for systemd
 

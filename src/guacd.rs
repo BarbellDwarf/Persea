@@ -60,6 +60,11 @@ pub struct SshParams {
     pub typescript_name: Option<String>,
     /// Ask guacd to create `typescript_path` if it doesn't exist.
     pub create_typescript_path: bool,
+    /// Command to run instead of the default shell (guacd SSH `command`
+    /// connect arg). When set, guacd runs `libssh2_channel_exec` with this
+    /// command rather than a login shell. Used for the optional tmux
+    /// wrapper (`ssh_tmux_detach`); `None` means plain shell.
+    pub command: Option<String>,
 }
 
 /// VNC connection parameters to pass to guacd.
@@ -264,7 +269,7 @@ pub async fn connect_and_handshake(
                 "read-only" => "false".into(),
                 "locale" => "en_US.UTF-8".into(),
                 "server-alive-interval" => "0".into(),
-                "command" => String::new(),
+                "command" => p.command.clone().unwrap_or_default(),
                 "typescript-path" => p.typescript_path.clone().unwrap_or_default(),
                 "typescript-name" => p.typescript_name.clone().unwrap_or_default(),
                 "create-typescript-path" => if p.create_typescript_path {

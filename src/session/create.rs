@@ -11,6 +11,11 @@ use uuid::Uuid;
 
 use tokio::time;
 
+/// Command used when `ssh_tmux_detach` is enabled: attach to the most
+/// recent tmux session with `-d` (kicking any stale client left attached
+/// by an abrupt disconnect), or create a fresh session if none exists.
+const TMUX_DETACH_WRAPPER: &str = "tmux attach-session -d 2>/dev/null || tmux new-session";
+
 impl SessionManager {
     /// Create a new session: connect to guacd, perform handshake, return session info.
     pub async fn create_session(
@@ -231,6 +236,10 @@ impl SessionManager {
                         .as_ref()
                         .map(|(_, _, c)| *c)
                         .unwrap_or(false),
+                    command: self
+                        .config
+                        .ssh_tmux_detach
+                        .then(|| TMUX_DETACH_WRAPPER.to_string()),
                 });
                 (
                     params, hostname, username, None, None, ssh_banner, None, None, None,
