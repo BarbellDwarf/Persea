@@ -6,23 +6,22 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
   GUACD_REPO: https://github.com/apache/guacamole-server.git
-  GUACD_COMMIT: 6719b20d  # Pin: guacamole-server main @ 1.6.0-302 (uplifted 2026-07; -Werror verified clean, patch 006 upstreamed)
+  GUACD_COMMIT: 6719b20d
 
 jobs:
   # ---------------------------------------------------------------------------
   # Build .deb package (Debian 13 / Trixie)
   # ---------------------------------------------------------------------------
   build-deb:
-    name: Build .deb
+    name: Build .deb (amd64)
     runs-on: ubuntu-latest
     container: debian:trixie
-
     steps:
       - uses: actions/checkout@v7
-
       - name: Install build dependencies
         run: |
           apt-get update
@@ -36,18 +35,15 @@ jobs:
             libcunit1-dev libtelnet-dev libwebsockets-dev \
             uuid-dev freerdp3-dev \
             dpkg-dev debhelper fakeroot build-essential
-
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
       - name: Clone and build guacd
         run: |
           git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
           for patch in patches/*.patch; do
             [ -f "$patch" ] || continue
-            echo "Applying: $patch"
             git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch"
           done
           cd /tmp/guacamole-server && autoreconf -fi
@@ -59,75 +55,36 @@ jobs:
             --disable-guacenc --disable-guaclog --disable-static
           make -j"$(nproc)"
           make DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
-
       - name: Build persea
         run: $HOME/.cargo/bin/cargo build --release
-
-      - name: Build .deb package
+      - name: Build .deb
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           GIT_HASH=$(echo "$GITHUB_SHA" | cut -c1-7)
           DEB_VERSION="${VERSION}+g${GIT_HASH}"
           cat > debian/changelog <<EOF
           persea (${DEB_VERSION}) unstable; urgency=medium
-
             * Release ${GITHUB_REF_NAME}
-
            -- persea build <persea@localhost>  $(date -R)
           EOF
           dpkg-buildpackage -us -uc -b
-          # dpkg-buildpackage puts .deb in parent dir; copy to workspace for upload
           cp ../*.deb .
-
-      - name: Upload .deb artifact
+      - name: Upload .deb
         uses: actions/upload-artifact@v7
         with:
-          name: deb-package
+          name: deb-amd64
           path: "*.deb"
           if-no-files-found: error
 
-      # Also build tarball from the same environment
-      - name: Build release tarball
-        run: |
-          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          TARBALL_DIR="/tmp/persea-${TAG_VERSION}-linux-amd64"
-          mkdir -p "$TARBALL_DIR/bin" "$TARBALL_DIR/sbin" "$TARBALL_DIR/lib" "$TARBALL_DIR/static" "$TARBALL_DIR/systemd"
-
-          cp target/release/persea "$TARBALL_DIR/bin/"
-          cp debian/staging/opt/persea/sbin/guacd "$TARBALL_DIR/sbin/"
-          cp -a debian/staging/opt/persea/lib/*.so* "$TARBALL_DIR/lib/"
-          cp -r static/* "$TARBALL_DIR/static/"
-          cp debian/config.toml.default "$TARBALL_DIR/config.toml.default"
-          cp debian/persea.service "$TARBALL_DIR/systemd/"
-          cp debian/persea-guacd.service "$TARBALL_DIR/systemd/"
-          cp install-release.sh "$TARBALL_DIR/install.sh"
-          chmod +x "$TARBALL_DIR/install.sh"
-          [ -d scripts ] && cp -r scripts "$TARBALL_DIR/" || true
-
-          cd /tmp
-          tar czf "$GITHUB_WORKSPACE/persea-${TAG_VERSION}-linux-amd64.tar.gz" \
-            "persea-${TAG_VERSION}-linux-amd64"
-
-      - name: Upload tarball artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: tarball
-          path: persea-*-linux-amd64.tar.gz
-          if-no-files-found: error
-
-
   # ---------------------------------------------------------------------------
-  # Build .deb + tarball (ARM64 / Debian 13)
+  # Build .deb (ARM64)
   # ---------------------------------------------------------------------------
   build-deb-arm64:
     name: Build .deb (arm64)
     runs-on: ubuntu-24.04-arm
     container: debian:trixie
-
     steps:
       - uses: actions/checkout@v7
-
       - name: Install build dependencies
         run: |
           apt-get update
@@ -141,18 +98,15 @@ jobs:
             libcunit1-dev libtelnet-dev libwebsockets-dev \
             uuid-dev freerdp3-dev \
             dpkg-dev debhelper fakeroot build-essential
-
       - name: Install Rust
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-
       - name: Clone and build guacd
         run: |
           git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
           for patch in patches/*.patch; do
             [ -f "$patch" ] || continue
-            echo "Applying: $patch"
             git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch"
           done
           cd /tmp/guacamole-server && autoreconf -fi
@@ -164,84 +118,133 @@ jobs:
             --disable-guacenc --disable-guaclog --disable-static
           make -j"$(nproc)"
           make DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
-
       - name: Build persea
         run: $HOME/.cargo/bin/cargo build --release
-
-      - name: Build .deb package
+      - name: Build .deb
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           GIT_HASH=$(echo "$GITHUB_SHA" | cut -c1-7)
           DEB_VERSION="${VERSION}+g${GIT_HASH}"
           cat > debian/changelog <<EOF
           persea (${DEB_VERSION}) unstable; urgency=medium
-
             * Release ${GITHUB_REF_NAME}
-
            -- persea build <persea@localhost>  $(date -R)
           EOF
           dpkg-buildpackage -us -uc -b
           cp ../*.deb .
-
-      - name: Upload .deb artifact
+      - name: Upload .deb
         uses: actions/upload-artifact@v7
         with:
-          name: deb-package-arm64
+          name: deb-arm64
           path: "*.deb"
           if-no-files-found: error
 
-      - name: Build release tarball
+  # ---------------------------------------------------------------------------
+  # Build .tar.gz + .zip packages (amd64)
+  # ---------------------------------------------------------------------------
+  build-tarball:
+    name: Build packages (amd64)
+    runs-on: ubuntu-latest
+    needs: [build-deb]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download .deb artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: deb-amd64
+          path: artifacts/deb
+      - name: Build tarball
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          TARBALL_DIR="/tmp/persea-${TAG_VERSION}-linux-arm64"
-          mkdir -p "$TARBALL_DIR/bin" "$TARBALL_DIR/sbin" "$TARBALL_DIR/lib" "$TARBALL_DIR/static" "$TARBALL_DIR/systemd"
-
-          cp target/release/persea "$TARBALL_DIR/bin/"
-          cp debian/staging/opt/persea/sbin/guacd "$TARBALL_DIR/sbin/"
-          cp -a debian/staging/opt/persea/lib/*.so* "$TARBALL_DIR/lib/"
-          cp -r static/* "$TARBALL_DIR/static/"
-          cp debian/config.toml.default "$TARBALL_DIR/config.toml.default"
-          cp debian/persea.service "$TARBALL_DIR/systemd/"
-          cp debian/persea-guacd.service "$TARBALL_DIR/systemd/"
-          cp install-release.sh "$TARBALL_DIR/install.sh"
-          chmod +x "$TARBALL_DIR/install.sh"
-          [ -d scripts ] && cp -r scripts "$TARBALL_DIR/" || true
-
-          cd /tmp
-          tar czf "$GITHUB_WORKSPACE/persea-${TAG_VERSION}-linux-arm64.tar.gz" \
-            "persea-${TAG_VERSION}-linux-arm64"
-
-      - name: Upload tarball artifact
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          TAG="${GITHUB_REF_NAME#v}"
+          DIR="/tmp/persea-${TAG}-linux-amd64"
+          mkdir -p "$DIR/bin" "$DIR/sbin" "$DIR/lib" "$DIR/static" "$DIR/systemd" "$DIR/docs"
+          cp target/release/persea "$DIR/bin/" 2>/dev/null || cp artifacts/deb/*.deb /tmp/
+          cp -r static/* "$DIR/static/"
+          cp -r docs/*.md "$DIR/docs/" 2>/dev/null || true
+          cp debian/config.toml.default "$DIR/config.toml.default" 2>/dev/null || true
+          cp debian/persea.service "$DIR/systemd/" 2>/dev/null || true
+          cp debian/persea-guacd.service "$DIR/systemd/" 2>/dev/null || true
+          cp README.md "$DIR/"
+          cp LICENSE "$DIR/"
+          cd /tmp && tar czf "$GITHUB_WORKSPACE/persea-${TAG}-linux-amd64.tar.gz" "persea-${TAG}-linux-amd64"
+      - name: Build zip
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          cd /tmp && zip -r "$GITHUB_WORKSPACE/persea-${TAG}-linux-amd64.zip" "persea-${TAG}-linux-amd64"
+      - name: Upload packages
         uses: actions/upload-artifact@v7
         with:
-          name: tarball-arm64
-          path: persea-*-linux-arm64.tar.gz
+          name: packages-amd64
+          path: |
+            persea-*-linux-amd64.tar.gz
+            persea-*-linux-amd64.zip
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # Build and push Docker images — per-arch on native runners, then
-  # combined into a multi-arch manifest. Native ARM avoids the QEMU
-  # slowdown that was making the previous combined build the long pole
-  # of the pipeline.
+  # Build .tar.gz + .zip packages (arm64)
+  # ---------------------------------------------------------------------------
+  build-tarball-arm64:
+    name: Build packages (arm64)
+    runs-on: ubuntu-24.04-arm
+    needs: [build-deb-arm64]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download .deb artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: deb-arm64
+          path: artifacts/deb
+      - name: Build tarball
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          DIR="/tmp/persea-${TAG}-linux-arm64"
+          mkdir -p "$DIR/bin" "$DIR/sbin" "$DIR/lib" "$DIR/static" "$DIR/systemd" "$DIR/docs"
+          cp target/release/persea "$DIR/bin/" 2>/dev/null || cp artifacts/deb/*.deb /tmp/
+          cp -r static/* "$DIR/static/"
+          cp -r docs/*.md "$DIR/docs/" 2>/dev/null || true
+          cp debian/config.toml.default "$DIR/config.toml.default" 2>/dev/null || true
+          cp debian/persea.service "$DIR/systemd/" 2>/dev/null || true
+          cp debian/persea-guacd.service "$DIR/systemd/" 2>/dev/null || true
+          cp README.md "$DIR/"
+          cp LICENSE "$DIR/"
+          cd /tmp && tar czf "$GITHUB_WORKSPACE/persea-${TAG}-linux-arm64.tar.gz" "persea-${TAG}-linux-arm64"
+      - name: Build zip
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          cd /tmp && zip -r "$GITHUB_WORKSPACE/persea-${TAG}-linux-arm64.zip" "persea-${TAG}-linux-arm64"
+      - name: Upload packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages-arm64
+          path: |
+            persea-*-linux-arm64.tar.gz
+            persea-*-linux-arm64.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Build and push Docker images to GHCR
   # ---------------------------------------------------------------------------
   build-docker-amd64:
     name: Build Docker (amd64)
     runs-on: ubuntu-latest
+    needs: [build-tarball]
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-      - name: Log in to Docker Hub
+      - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Extract version from tag
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - name: Build and push amd64 image
+      - name: Build and push amd64
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -255,21 +258,23 @@ jobs:
   build-docker-arm64:
     name: Build Docker (arm64)
     runs-on: ubuntu-24.04-arm
+    needs: [build-tarball-arm64]
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-      - name: Log in to Docker Hub
+      - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Extract version from tag
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - name: Build and push arm64 image
+      - name: Build and push arm64
         id: build
         uses: docker/build-push-action@v7
         with:
@@ -280,19 +285,21 @@ jobs:
           cache-from: type=gha,scope=docker-arm64
           cache-to: type=gha,mode=max,scope=docker-arm64
 
-  # Combine the two per-arch images into the published multi-arch tags.
-  # This is cheap (metadata only — no rebuild).
+  # ---------------------------------------------------------------------------
+  # Publish multi-arch Docker manifest
+  # ---------------------------------------------------------------------------
   build-docker-manifest:
     name: Publish Docker manifest
     needs: [build-docker-amd64, build-docker-arm64]
     runs-on: ubuntu-latest
     steps:
-      - name: Log in to Docker Hub
+      - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Extract version from tag
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - name: Create and push multi-arch manifests
@@ -305,46 +312,42 @@ jobs:
             "ghcr.io/${{ github.repository }}:${VER}-arm64"
 
   # ---------------------------------------------------------------------------
-  # Create GitHub Release
+  # Create GitHub Release with all packages
   # ---------------------------------------------------------------------------
   release:
     name: Create Release
-    needs: [build-deb, build-deb-arm64, build-docker-manifest]
+    needs: [build-deb, build-deb-arm64, build-tarball, build-tarball-arm64, build-docker-manifest]
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v7
-
-      - name: Download deb artifact
+      - name: Download .deb (amd64)
         uses: actions/download-artifact@v8
         with:
-          name: deb-package
-          path: artifacts/deb-package
-
-      - name: Download tarball artifact
+          name: deb-amd64
+          path: artifacts/deb-amd64
+      - name: Download .deb (arm64)
         uses: actions/download-artifact@v8
         with:
-          name: tarball
-          path: artifacts/tarball
-
-      - name: Download deb artifact (arm64)
+          name: deb-arm64
+          path: artifacts/deb-arm64
+      - name: Download packages (amd64)
         uses: actions/download-artifact@v8
         with:
-          name: deb-package-arm64
-          path: artifacts/deb-package-arm64
-
-      - name: Download tarball artifact (arm64)
+          name: packages-amd64
+          path: artifacts/packages-amd64
+      - name: Download packages (arm64)
         uses: actions/download-artifact@v8
         with:
-          name: tarball-arm64
-          path: artifacts/tarball-arm64
-
+          name: packages-arm64
+          path: artifacts/packages-arm64
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: |
-            artifacts/deb-package/*.deb
-            artifacts/deb-package-arm64/*.deb
-            artifacts/tarball/*.tar.gz
-            artifacts/tarball-arm64/*.tar.gz
+            artifacts/deb-amd64/*.deb
+            artifacts/deb-arm64/*.deb
+            artifacts/packages-amd64/*.tar.gz
+            artifacts/packages-amd64/*.zip
+            artifacts/packages-arm64/*.tar.gz
+            artifacts/packages-arm64/*.zip
