@@ -4,8 +4,8 @@
 
 ```bash
 # Clone the repo
-git clone https://github.com/sol1/persea.git
-cd persea
+git clone https://github.com/BarbellDwarf/rustguac.git
+cd rustguac
 
 # Install dependencies and build guacd
 ./dev.sh
