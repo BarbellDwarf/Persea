@@ -255,26 +255,28 @@ Or via environment variable:
 PERSEA_STORAGE_KEY=aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344
 ```
 
-## `[vsphere]` section *(in development)*
+## `[vsphere]` section
 
-VMware vSphere integration for VM inventory and OS-aware protocol routing. Connects to vCenter via the vSphere REST API (vSphere 7.0.3+) to enumerate VMs and auto-detect the right Guacamole protocol (RDP/SSH/VNC) based on the guest OS identifier. This feature is in development and may change.
+VMware vSphere integration for VM inventory and OS-aware protocol routing. Connects to vCenter via the vSphere REST API (vSphere 7.0.3+) to enumerate VMs and auto-detect the right Guacamole protocol (RDP/SSH/VNC) based on the guest OS identifier. See [integrations.md](integrations.md) for setup.
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `vcenter_addr` | — | vCenter Server URL, e.g. `https://vcenter.example.com/sdk` (required) |
 | `username` | — | vSphere username, e.g. `administrator@vsphere.local` (required) |
 | `password_env` | `VSPHERE_PASSWORD` | Name of the environment variable holding the password (never stored in config) |
-| `tls_skip_verify` | `false` | Skip TLS certificate verification |
-| `ca_cert` | — | Path to custom CA certificate (PEM) for verifying the vCenter server |
-| `datacenter` | — | Filter VMs by datacenter name |
-| `folder` | — | Filter VMs by VM folder path |
+| `insecure` | `false` | Skip TLS certificate verification (dev/test only) |
+| `refresh_interval_secs` | `300` | How often to refresh the VM inventory (seconds) |
+
+Optional per-VM guest credential overrides (keyed by VM name or ID):
 
 ```toml
 [vsphere]
 vcenter_addr = "https://vcenter.example.com/sdk"
 username = "administrator@vsphere.local"
 # password from env: VSPHERE_PASSWORD
-tls_skip_verify = false
+
+[vsphere.vm_credentials]
+"web-server-01" = { username = "deploy", password_env = "WEB_DEPLOY_PASS" }
 ```
 
 ## `[vault]` section

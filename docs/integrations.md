@@ -1041,6 +1041,16 @@ persea maps the vSphere guest OS identifier to a Guacamole protocol:
 
 The detection is automatic based on the `guest_OS` field reported by vCenter. No manual mapping needed.
 
+### Connections page
+
+When `[vsphere]` is configured, the Connections page (`/connections.html`) shows a **vSphere Virtual Machines** section listing every VM in the inventory with its power state, guest OS, and IP address. Per VM:
+
+- **Connect** opens a session to the guest IP, routed through the protocol detected from the guest OS (RDP for Windows, SSH for Linux). The VM must be powered on and report a guest IP (VMware Tools).
+- Guest credentials come from the matching `[vsphere.vm_credentials]` override keyed by VM name or ID, falling back to the global vSphere `username` and the password from the environment variable.
+- The list auto-refreshes on page load; use **Refresh** to re-fetch the inventory.
+
+The connect flow is server-side (same pattern as `/api/connect`): `GET /api/vsphere/vms/{vm_id}/connect` creates the session and redirects to its client page. The session shows up in the Sessions page and in recordings/reports like any other connection.
+
 ### Troubleshooting
 
 **Cannot connect to vCenter:** Check that `vcenter_addr` ends with `/sdk` and that HTTPS is reachable from the persea server. If using self-signed certs, set `insecure = true` (or add vCenter's CA to the system trust store).

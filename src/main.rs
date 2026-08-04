@@ -1303,6 +1303,10 @@ async fn run_server(config: Config, database: Db) {
             "/api/vsphere/vms/{vm_id}/power",
             post(api::vsphere::power_action),
         )
+        .route(
+            "/api/vsphere/vms/{vm_id}/connect",
+            get(api::vsphere::connect_vm),
+        )
         // Address book routes
         .route("/api/addressbook", get(api::ab_list_all))
         .route("/api/addressbook/search-index", get(api::ab_search_index))
