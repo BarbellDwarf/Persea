@@ -37,9 +37,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-# Pin to known-good commit to avoid upstream -Werror breakage
-RUN git clone --depth 1 https://github.com/apache/guacamole-server.git \
-    && cd guacamole-server && git checkout 6719b20d
+# Pin to main HEAD (de97609, 2026-07-28) — the base the patch set is built
+# against. The 1.6.0 tag predates the display-layer refactor the H.264 patch
+# needs; staging/1.6.1 lacks the clipboard-recording API the SPICE patch uses.
+RUN git clone --depth 1 --branch main https://github.com/apache/guacamole-server.git \
+    && cd guacamole-server && git checkout de97609007c088b5e6afd827eff5e9076013a247
 
 # Apply patches for FreeRDP 3.x / Debian 13 compatibility
 COPY patches/ /build/patches/
@@ -80,6 +82,8 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
 COPY src/ src/
+COPY templates/ templates/
+COPY migrations/ migrations/
 COPY docs/ docs/
 COPY static/ static/
 
@@ -106,6 +110,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     x11-utils \
     # Minimal runtime utilities
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Install guacd
@@ -120,6 +125,22 @@ COPY static/ /opt/persea/static/
 
 # Library path for guacd
 RUN echo "/opt/persea/lib" > /etc/ld.so.conf.d/persea.conf && ldconfig
+
+# guacd config file. guacd main (post-1.6.0) requires this file to exist and
+# fails with EBADF when it is missing, so ship a default matching the
+# entrypoint's command-line settings.
+RUN mkdir -p /etc/guacamole && cat > /etc/guacamole/guacd.conf <<'GUACD'
+[server]
+bind_host = 127.0.0.1
+bind_port = 4822
+
+[daemon]
+log_level = info
+
+[ssl]
+server_certificate = /opt/persea/tls/cert.pem
+server_key = /opt/persea/tls/key.pem
+GUACD
 
 # FreeRDP plugin setup: guacd loads "guac-common-svc" by name, which FreeRDP
 # resolves to "guac-common-svc.so" in its plugin path. The build installs it as
@@ -242,7 +263,7 @@ ENV GUACD_LOG_LEVEL=info
 ENV HOME=/home/persea
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD curl -f http://localhost:8089/api/health || exit 1
+    CMD curl -skf https://localhost:8089/api/health || exit 1
 
 USER persea
 ENTRYPOINT ["/opt/persea/entrypoint.sh"]
