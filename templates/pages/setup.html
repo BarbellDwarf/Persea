@@ -103,6 +103,32 @@
 
             <button type="submit" class="btn btn-primary mt-6">Complete Setup</button>
         </form>
+
+        <script>
+        // CSRF: submit via fetch with the X-CSRF-Token header (same pattern as
+        // the login form). The server responds with a redirect on success or
+        // an error page; follow it.
+        document.querySelector('form[action="/setup"]').addEventListener('submit', function(evt) {
+            evt.preventDefault();
+            var btn = this.querySelector('button[type="submit"]');
+            btn.disabled = true;
+            var csrf = readCookie('csrf_token');
+            fetch('/setup', {
+                method: 'POST',
+                headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+                body: new URLSearchParams(new FormData(evt.target)),
+                credentials: 'same-origin',
+                redirect: 'follow'
+            }).then(function(resp) {
+                if (resp.redirected) { location.href = resp.url; }
+                else if (resp.ok) { location.href = '/'; }
+                else { location.href = '/setup?error=failed'; }
+            }).catch(function() {
+                btn.disabled = false;
+                location.href = '/setup?error=network_error';
+            });
+        });
+        </script>
     </div>
 </div>
 

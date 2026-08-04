@@ -77,6 +77,19 @@ where
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let method = req.method().clone();
+        // Secure cookie attribute only over HTTPS. Hyper sets the URI scheme
+        // on TLS connections; behind a reverse proxy, honour X-Forwarded-Proto.
+        let is_https = req
+            .uri()
+            .scheme()
+            .map(|s| s.as_str() == "https")
+            .unwrap_or(false)
+            || req
+                .headers()
+                .get("x-forwarded-proto")
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.split(',').next().unwrap_or("").trim() == "https")
+                .unwrap_or(false);
 
         // Check CSRF for state-changing methods
         if is_state_changing(&method) {
@@ -111,14 +124,129 @@ where
         Box::pin(async move {
             let mut resp = inner.call(req).await?;
 
-            // Set csrf_token cookie on responses that don't have one yet
+            // Set csrf_token cookie on responses that don't have one yet.
+            // Not HttpOnly: the double-submit pattern needs JS (htmx/fetch)
+            // to read the token and echo it back as X-CSRF-Token.
             if !resp.headers().contains_key(header::SET_COOKIE) {
                 let token = generate_token();
-                let cookie = format!("{}={}; Path=/; SameSite=Lax; HttpOnly", CSRF_COOKIE, token);
+                let secure = if is_https { "; Secure" } else { "" };
+                let cookie = format!(
+                    "{}={}; Path=/; SameSite=Lax;{}",
+                    CSRF_COOKIE, token, secure
+                );
                 resp.headers_mut()
                     .insert(header::SET_COOKIE, cookie.parse().unwrap());
             }
             Ok(resp)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::service_fn;
+    use tower::ServiceExt;
+
+    async fn ok_handler(_req: Request<Body>) -> Result<Response<Body>, std::convert::Infallible> {
+        Ok(Response::new(Body::from("ok")))
+    }
+
+    async fn run(req: Request<Body>) -> Response<Body> {
+        CsrfService {
+            inner: service_fn(ok_handler),
+        }
+        .oneshot(req)
+        .await
+        .unwrap()
+    }
+
+    fn cookie_value<'a>(resp: &'a Response<Body>, name: &str) -> Option<&'a str> {
+        let set_cookie = resp.headers().get(header::SET_COOKIE)?.to_str().ok()?;
+        let (n, v) = set_cookie.split(';').next()?.split_once('=')?;
+        (n == name).then_some(v)
+    }
+
+    #[tokio::test]
+    async fn sets_cookie_not_httponly_on_plain_get() {
+        let resp = run(Request::get("/").body(Body::empty()).unwrap()).await;
+
+        let set_cookie = resp
+            .headers()
+            .get(header::SET_COOKIE)
+            .expect("csrf cookie must be set")
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.starts_with("csrf_token="), "got {set_cookie}");
+        assert!(
+            !set_cookie.to_lowercase().contains("httponly"),
+            "cookie must be readable by JS (double-submit pattern): {set_cookie}"
+        );
+        assert!(set_cookie.contains("SameSite=Lax"), "got {set_cookie}");
+        assert!(!set_cookie.contains("Secure"), "no Secure over plain HTTP: {set_cookie}");
+    }
+
+    #[tokio::test]
+    async fn secure_flag_set_over_https_scheme() {
+        let resp = run(
+            Request::builder()
+                .uri("https://persea.test/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        let set_cookie = resp
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.contains("Secure"), "got {set_cookie}");
+    }
+
+    #[tokio::test]
+    async fn post_without_header_is_rejected() {
+        let resp = run(Request::post("/").body(Body::empty()).unwrap()).await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn post_without_cookie_but_header_is_rejected() {
+        let resp = run(
+            Request::post("/")
+                .header("x-csrf-token", "attacker-guess")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn post_with_matching_cookie_and_header_passes() {
+        // First request to learn the token the server issued.
+        let first = run(Request::get("/").body(Body::empty()).unwrap()).await;
+        let token = cookie_value(&first, CSRF_COOKIE)
+            .expect("csrf cookie")
+            .to_string();
+        assert!(!token.is_empty());
+
+        let resp = run(
+            Request::post("/")
+                .header(header::COOKIE, format!("{CSRF_COOKIE}={token}"))
+                .header("x-csrf-token", token)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK, "matching token must pass");
+    }
+
+    #[tokio::test]
+    async fn get_requests_are_exempt() {
+        let resp = run(Request::get("/").body(Body::empty()).unwrap()).await;
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

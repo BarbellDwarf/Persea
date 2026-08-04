@@ -310,6 +310,41 @@
         var wantAutohideTabs = false;
         var protocol = '';
         var targetHost = '';
+
+        // ── CSRF: this page is standalone (no base.html), so patch fetch()
+        // here to carry the X-CSRF-Token header on state-changing requests.
+        function readCookie(name) {
+            var parts = document.cookie.split(';');
+            for (var i = 0; i < parts.length; i++) {
+                var part = parts[i].trim();
+                if (part.indexOf(name + '=') === 0) return decodeURIComponent(part.substring(name.length + 1));
+            }
+            return null;
+        }
+        (function() {
+            var origFetch = window.fetch;
+            window.fetch = function(input, init) {
+                init = init || {};
+                var headers = init.headers || {};
+                if (headers instanceof Headers) {
+                    if (!headers.has('X-CSRF-Token')) {
+                        var t = readCookie('csrf_token');
+                        if (t) headers.set('X-CSRF-Token', t);
+                    }
+                } else {
+                    var has = false;
+                    for (var k in headers) {
+                        if (k.toLowerCase() === 'x-csrf-token') { has = true; break; }
+                    }
+                    if (!has) {
+                        var t = readCookie('csrf_token');
+                        if (t) headers['X-CSRF-Token'] = t;
+                    }
+                }
+                init.headers = headers;
+                return origFetch(input, init);
+            };
+        })();
         var connectStartTime = Date.now();
 
         // ── Settings state ──

@@ -342,13 +342,47 @@ pub async fn mfa_page(Query(params): Query<MfaQueryParams>) -> Response {
     <div class="mfa-container">
         <h1 class="mfa-title">Multi-Factor Authentication</h1>
         {error_html}
-        <form method="POST" action="/auth/mfa">
+        <form method="POST" action="/auth/mfa" id="mfa-form">
             <div class="form-group">
                 <label for="code">Verification Code</label>
                 <input type="text" id="code" name="code" maxlength="6" pattern="[0-9]{{6}}" autocomplete="one-time-code" required autofocus>
             </div>
-            <button type="submit" class="btn">Verify</button>
+            <button type="submit" class="btn" id="mfa-submit">Verify</button>
         </form>
+        <script>
+        // CSRF: the csrf_token cookie is readable by JS (not HttpOnly), so
+        // submit via fetch with the X-CSRF-Token header.
+        (function() {{
+            var form = document.getElementById('mfa-form');
+            form.addEventListener('submit', function(evt) {{
+                evt.preventDefault();
+                var btn = document.getElementById('mfa-submit');
+                btn.disabled = true;
+                var csrf = (function() {{
+                    var parts = document.cookie.split(';');
+                    for (var i = 0; i < parts.length; i++) {{
+                        var part = parts[i].trim();
+                        if (part.indexOf('csrf_token=') === 0) return decodeURIComponent(part.substring(11));
+                    }}
+                    return null;
+                }})();
+                fetch('/auth/mfa', {{
+                    method: 'POST',
+                    headers: csrf ? {{ 'X-CSRF-Token': csrf }} : {{}},
+                    body: new URLSearchParams(new FormData(form)),
+                    credentials: 'same-origin',
+                    redirect: 'follow'
+                }}).then(function(resp) {{
+                    if (resp.redirected) {{ location.href = resp.url; }}
+                    else if (resp.ok) {{ location.href = '/'; }}
+                    else {{ location.href = '/auth/mfa?error=invalid_code'; }}
+                }}).catch(function() {{
+                    btn.disabled = false;
+                    location.href = '/auth/mfa?error=expired';
+                }});
+            }});
+        }})();
+        </script>
     </div>
 </body>
 </html>"#
