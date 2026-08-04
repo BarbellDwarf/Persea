@@ -47,7 +47,7 @@ See `config.example.toml` for a fully commented reference.
 
 CIDR ranges controlling which hosts sessions can connect to. All default to localhost only.
 
-**Important:** These are top-level TOML keys and must appear *before* any `[section]` header. Keys placed after a section header (e.g., `[tls]`) are scoped to that section and will be silently ignored.
+**Important:** These are top-level TOML keys and must appear *before* any `[section]` header. Keys placed after a section header (e.g., `[tls]`) are scoped to that section and will be ignored.
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -66,7 +66,7 @@ CIDR ranges controlling which hosts sessions can connect to. All default to loca
 
 ## `[tls]` section
 
-Configures TLS for the web server and/or the guacd connection. There is no `enabled` toggle — the presence of the relevant fields controls behaviour:
+Configures TLS for the web server and/or the guacd connection. There is no `enabled` toggle, the presence of the relevant fields controls behaviour:
 
 - **Server HTTPS**: Provide both `cert_path` and `key_path` to serve HTTPS. Omit them to serve plain HTTP (useful behind a TLS-terminating reverse proxy like Traefik/HAProxy).
 - **guacd TLS**: Provide `guacd_cert_path` to connect to guacd over TLS. This is independent of server HTTPS.
@@ -132,7 +132,7 @@ Configures the pluggable authentication chain. Providers are tried in the order 
 | `saml` | — | SAML provider config (see below) |
 | `totp` | — | TOTP MFA second-factor config (see below) |
 
-Example — LDAP primary with TOTP MFA:
+Example, LDAP primary with TOTP MFA:
 ```toml
 [auth]
 methods = ["ldap", "database"]
@@ -212,9 +212,9 @@ TOTP (Time-based One-Time Password) MFA second factor. Users enroll via QR code 
 | `enforcement` | `Off` | Enforcement policy: `Off` (optional), `AdminsOnly` (required for admin/poweruser), `All` (required for everyone) |
 
 **Enforcement policies:**
-- `Off` — TOTP enrollment is optional; users who have enrolled are verified
-- `AdminsOnly` — TOTP is required for admin and poweruser roles
-- `All` — TOTP is required for all users
+- `Off`, TOTP enrollment is optional; users who have enrolled are verified
+- `AdminsOnly`, TOTP is required for admin and poweruser roles
+- `All`, TOTP is required for all users
 
 ## Multi-database backend
 
@@ -255,9 +255,9 @@ Or via environment variable:
 PERSEA_STORAGE_KEY=aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344
 ```
 
-## `[vsphere]` section
+## `[vsphere]` section *(in development)*
 
-VMware vSphere integration for VM inventory and OS-aware protocol routing. Connects to vCenter via the vSphere REST API (vSphere 7.0.3+) to enumerate VMs and auto-detect the right Guacamole protocol (RDP/SSH/VNC) based on the guest OS identifier.
+VMware vSphere integration for VM inventory and OS-aware protocol routing. Connects to vCenter via the vSphere REST API (vSphere 7.0.3+) to enumerate VMs and auto-detect the right Guacamole protocol (RDP/SSH/VNC) based on the guest OS identifier. This feature is in development and may change.
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -356,7 +356,7 @@ Enables file transfer for RDP (drive redirection) and SSH (SFTP).
 
 ## `[theme]` section
 
-Customises the UI appearance — base preset, individual colours, and logo. All fields are optional. A minimal example:
+Customises the UI appearance, base preset, individual colours, and logo. All fields are optional. A minimal example:
 
 ```toml
 [theme]
@@ -574,7 +574,7 @@ sudo systemctl daemon-reload
 sudo systemctl restart persea
 ```
 
-The override persists across package upgrades — `dpkg` will not overwrite files in the `.d/` directory.
+The override persists across package upgrades, `dpkg` will not overwrite files in the `.d/` directory.
 
 ### Verifying the environment
 
