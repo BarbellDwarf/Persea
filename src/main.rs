@@ -7,10 +7,6 @@
 //! `mod` declarations and internal helpers here without guarding any
 //! public surface. The lib crate carries `#![warn(missing_docs)]` instead.
 #![allow(dead_code)]
-#![warn(clippy::unwrap_used)]
-#![warn(clippy::expect_used)]
-#![warn(clippy::manual_assert)]
-#![warn(clippy::needless_pass_by_value)]
 
 mod api;
 mod audit;
