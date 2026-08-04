@@ -6,6 +6,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
       - run: cargo check
 
   fmt:
@@ -13,6 +15,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
       - run: cargo fmt --check
 
   clippy:
@@ -20,6 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
       # Deliberate visibility lints (missing_docs, clippy::unwrap_used) in
       # lib.rs generate ~800 warnings; run clippy without -D warnings so the
       # warnings are visible but never fail the job.
@@ -30,6 +36,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
       - run: cargo test
 
   audit:
@@ -37,6 +45,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
       - run: cargo install cargo-audit && cargo audit
 
   # Integration test - starts server and runs health check
@@ -45,6 +55,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          rustflags: ""
       - run: cargo build
       - run: |
           # Start server in background, wait for it, hit health endpoint
