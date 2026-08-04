@@ -524,6 +524,36 @@ pub struct Config {
     /// made available via Extension. The existing rusqlite `Db` continues
     /// to work alongside it.
     pub db_url: Option<String>,
+    /// Storage backend for the address book (connections, credentials).
+    /// When `backend = "db"` (default), the DB stores folder/entry metadata
+    /// and encrypted credentials. When `backend = "vault"`, metadata stays
+    /// in DB but credentials are stored in Vault.
+    pub storage: Option<StorageConfig>,
+}
+
+/// Storage backend configuration for the address book.
+#[derive(Debug, Deserialize, Clone)]
+pub struct StorageConfig {
+    /// Backend for address book credentials: "db" (default) or "vault".
+    #[serde(default = "default_storage_backend")]
+    pub backend: String,
+    /// Encryption key for DB-stored credentials (required when backend = "db").
+    /// 64-character hex string (32 bytes). Generate with: openssl rand -hex 32
+    #[serde(default)]
+    pub encryption_key: Option<String>,
+}
+
+fn default_storage_backend() -> String {
+    "db".into()
+}
+
+impl Default for StorageConfig {
+    fn default() -> Self {
+        Self {
+            backend: default_storage_backend(),
+            encryption_key: None,
+        }
+    }
 }
 
 /// RDP-wide defaults applied when an address book entry (or ad-hoc
@@ -1272,6 +1302,7 @@ impl Default for Config {
             vsphere: None,
             rdp: None,
             db_url: None,
+            storage: None,
         }
     }
 }
@@ -1506,6 +1537,26 @@ impl Config {
                 ..RecordingConfig::default()
             },
         }
+    }
+
+    /// Whether the address book uses DB as the primary credential backend.
+    /// Defaults to true when no `[storage]` section is configured.
+    pub fn db_storage_backend(&self) -> bool {
+        self.storage
+            .as_ref()
+            .map(|s| s.backend == "db")
+            .unwrap_or(true)
+    }
+
+    /// Get the encryption key for DB-stored credentials.
+    /// Also checks the `PERSEA_STORAGE_KEY` environment variable.
+    pub fn storage_encryption_key(&self) -> Option<String> {
+        if let Some(ref key) = self.storage.as_ref().and_then(|s| s.encryption_key.as_ref()) {
+            if !key.is_empty() {
+                return Some(key.clone());
+            }
+        }
+        std::env::var("PERSEA_STORAGE_KEY").ok().filter(|k| !k.is_empty())
     }
 }
 
