@@ -17,7 +17,7 @@ pub const CSRF_COOKIE: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 32;
 
 fn generate_token() -> String {
-    use rand::Rng;
+    use rand::RngExt;
     let mut buf = [0u8; CSRF_TOKEN_LEN];
     rand::rng().fill(&mut buf);
     hex::encode(buf)
@@ -64,10 +64,10 @@ pub struct CsrfService<S> {
 
 impl<S> Service<Request<Body>> for CsrfService<S>
 where
-    S: Service<Request<Body>, Response = Response> + Clone + Send + 'static,
+    S: Service<Request<Body>, Response = Response<Body>> + Clone + Send + 'static,
     S::Future: Send,
 {
-    type Response = Response;
+    type Response = Response<Body>;
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -92,15 +92,14 @@ where
                     // Valid — proceed
                 }
                 _ => {
-                    let mut inner = self.inner.clone();
-                    return Box::pin(async move {
+                    return Box::pin(async {
+                        let body_text =
+                            serde_json::json!({"error": "CSRF token missing or invalid"})
+                                .to_string();
                         let resp = Response::builder()
                             .status(StatusCode::FORBIDDEN)
                             .header(header::CONTENT_TYPE, "application/json")
-                            .body(axum::body::to_body(
-                                serde_json::json!({"error": "CSRF token missing or invalid"})
-                                    .to_string(),
-                            ))
+                            .body(Body::from(body_text))
                             .unwrap_or_else(|_| Response::new(Body::empty()));
                         Ok(resp)
                     });

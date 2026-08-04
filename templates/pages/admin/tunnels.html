@@ -77,7 +77,7 @@
 </div>
 
 <!-- Add/Edit Jump Host Modal -->
-<div id="jump-host-modal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center" role="dialog" aria-modal="true">
+<div id="jump-host-modal" class="fixed inset-0 bg-black/60 z-50 hidden flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="card w-full max-w-md shadow-2xl">
         <h3 id="modal-title" class="text-lg font-semibold text-gray-100 mb-4">Add Jump Host</h3>
         <form id="jump-host-form" onsubmit="saveJumpHost(event)" class="space-y-4">
@@ -193,7 +193,7 @@
                     <button onclick="editJumpHost('${jh.id}')" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded-lg transition-colors">Edit</button>
                     <button onclick="deleteJumpHost('${jh.id}')" class="px-3 py-1.5 bg-red-900/50 hover:bg-red-800/50 text-red-300 text-xs rounded-lg transition-colors">Delete</button>
                 </div>
-                <div id="test-result" class="hidden mt-2 p-3 rounded-lg text-sm"></div>
+                <div id="test-result" class="hidden mt-2 p-3 rounded-lg text-sm" aria-live="polite"></div>
             </div>
         `;
     }

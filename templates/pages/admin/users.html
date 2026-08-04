@@ -49,6 +49,7 @@
     </div>
 
     <!-- Users Table -->
+    <div id="users-feedback" class="mb-4" aria-live="polite"></div>
     <div class="card table-wrapper">
         <table class="w-full">
             <thead>
@@ -137,9 +138,9 @@
 </div>
 
 <!-- Delete Confirm Modal -->
-<div id="delete-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+<div id="delete-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="delete-user-title">
     <div class="card w-full max-w-sm">
-        <h2 class="text-lg font-bold text-gray-100 mb-2">Delete User</h2>
+        <h2 id="delete-user-title" class="text-lg font-bold text-gray-100 mb-2">Delete User</h2>
         <p class="text-sm text-gray-400 mb-4">This action cannot be undone. User <span id="delete-user-name" class="text-gray-200"></span> will be permanently removed.</p>
         <form hx-delete="" id="delete-user-form"
               hx-target="#user-table-body" hx-swap="innerHTML"

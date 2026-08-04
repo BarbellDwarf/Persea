@@ -39,9 +39,9 @@
 </div>
 
 <!-- Add Provider Modal -->
-<div id="add-provider-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+<div id="add-provider-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="add-provider-title">
     <div class="card w-full max-w-md">
-        <h2 class="text-lg font-bold text-gray-100 mb-4">Add Auth Provider</h2>
+        <h2 id="add-provider-title" class="text-lg font-bold text-gray-100 mb-4">Add Auth Provider</h2>
         <form hx-post="/api/auth/providers"
               hx-target="#provider-table-body"
               hx-swap="innerHTML"
@@ -147,9 +147,9 @@
 </div>
 
 <!-- Provider Config Modal -->
-<div id="provider-config-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+<div id="provider-config-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="provider-config-title">
     <div class="card w-full max-w-lg">
-        <h2 class="text-lg font-bold text-gray-100 mb-4">Configure Provider</h2>
+        <h2 id="provider-config-title" class="text-lg font-bold text-gray-100 mb-4">Configure Provider</h2>
         <div id="provider-config-body"></div>
         <div class="flex justify-end gap-3 mt-6">
             <button type="button" onclick="document.getElementById('provider-config-modal').classList.add('hidden')"

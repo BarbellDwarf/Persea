@@ -141,15 +141,16 @@
             </button>
         </div>
     </form>
+    <div id="settings-feedback" class="mt-4" aria-live="polite"></div>
 </div>
 
 <!-- Save Confirmation -->
-<div id="save-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+<div id="save-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="save-confirm-title">
     <div class="card w-full max-w-sm text-center">
         <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-emerald-900/50 flex items-center justify-center">
             <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
         </div>
-        <h2 class="text-lg font-bold text-gray-100 mb-2">Settings Saved</h2>
+        <h2 id="save-confirm-title" class="text-lg font-bold text-gray-100 mb-2">Settings Saved</h2>
         <p class="text-sm text-gray-500 mb-4">Changes will take effect on the next request.</p>
         <button onclick="document.getElementById('save-confirm').classList.add('hidden')"
                 class="btn btn-secondary btn-sm">OK</button>
