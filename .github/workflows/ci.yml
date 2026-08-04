@@ -45,7 +45,7 @@ jobs:
       - run: cargo build
       - run: |
           # Start server in background, wait for it, hit health endpoint
-          ./target/debug/persea &
+          ./target/debug/persea --config /dev/null &
           sleep 5
-          curl -f http://localhost:9090/api/health || exit 1
+          curl -f http://localhost:8089/api/health || exit 1
           kill %1

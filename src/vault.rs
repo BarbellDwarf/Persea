@@ -1854,6 +1854,13 @@ mod tests {
             .expect("openssl needed");
         assert!(status.status.success(), "CSR gen failed");
 
+        let ext_path = dir.join("client-ext.cnf");
+        std::fs::write(
+            &ext_path,
+            "basicConstraints=CA:FALSE\nsubjectAltName=DNS:client,DNS:localhost\n",
+        )
+        .unwrap();
+
         let status = std::process::Command::new("openssl")
             .args([
                 "x509",
@@ -1869,10 +1876,8 @@ mod tests {
                 cert_path.to_str().unwrap(),
                 "-days",
                 "1",
-                "-addext",
-                "basicConstraints=CA:FALSE",
-                "-addext",
-                "subjectAltName=DNS:client,DNS:localhost",
+                "-extfile",
+                ext_path.to_str().unwrap(),
             ])
             .output()
             .expect("openssl needed");
@@ -1956,6 +1961,13 @@ mod tests {
             .expect("openssl needed");
         assert!(status.status.success());
 
+        let ext_path = dir.join("leaf-ext.cnf");
+        std::fs::write(
+            &ext_path,
+            "basicConstraints=CA:FALSE\nsubjectAltName=DNS:client,DNS:localhost\n",
+        )
+        .unwrap();
+
         let status = std::process::Command::new("openssl")
             .args([
                 "x509",
@@ -1971,6 +1983,8 @@ mod tests {
                 leaf_path.to_str().unwrap(),
                 "-days",
                 "1",
+                "-extfile",
+                ext_path.to_str().unwrap(),
             ])
             .output()
             .expect("openssl needed");
