@@ -1,6 +1,6 @@
 # Deployment Guide
 
-A step-by-step guide for planning and deploying persea in production. Covers network architecture, server preparation, RDP target setup, security hardening, and ongoing operations.
+This guide covers network architecture, server preparation, RDP target setup, security hardening, and ongoing operations for a production persea deployment.
 
 ## Architecture Overview
 
@@ -35,7 +35,7 @@ Internet
 
 ```bash
 # Download the latest .deb from GitHub releases
-wget https://github.com/sol1/persea/releases/latest/download/persea_amd64.deb
+wget https://github.com/BarbellDwarf/rustguac/releases/latest/download/persea_amd64.deb
 sudo apt install ./persea_amd64.deb
 ```
 
@@ -44,13 +44,13 @@ This installs persea + guacd to `/opt/persea` with systemd services.
 ### Docker (recommended for non-Debian-13 hosts)
 
 ```bash
-docker pull ghcr.io/sol1/persea:latest
+docker pull ghcr.io/BarbellDwarf/rustguac:latest
 docker run -d \
   -p 443:8089 \
   -v persea-data:/opt/persea/data \
   -v persea-recordings:/opt/persea/recordings \
   -v ./config.toml:/opt/persea/config.toml \
-  ghcr.io/sol1/persea:latest
+  ghcr.io/BarbellDwarf/rustguac:latest
 ```
 
 The Docker image bundles guacd + FreeRDP + dependencies, so it runs cleanly on Ubuntu, RHEL, Rocky, Arch, and other distros where the bare-metal `.deb` would hit a FreeRDP ABI mismatch. See [installation.md](installation.md#other-linux-distributions) for the full story on non-Debian-13 targets.
@@ -65,7 +65,7 @@ See [installation.md](installation.md) for all install options.
 /opt/persea/bin/persea --config /opt/persea/config.toml add-admin --name admin
 ```
 
-Save the printed key (`rgu_...`) — it is shown only once. Use it for initial setup, then **delete it once OIDC is configured** (see Step 5).
+Save the printed key (`rgu_...`), it is shown only once. Use it for initial setup, then **delete it once OIDC is configured** (see Step 5).
 
 ### Edit config.toml
 
@@ -167,15 +167,15 @@ sudo systemctl restart haproxy
 
 ### Linux (xrdp with H.264)
 
-For the best video experience with Linux desktops, use xrdp with x264 H.264 encoding. A single setup script handles everything — desktop environment, audio, xrdp rebuild with x264, and GFX configuration:
+For the best video experience with Linux desktops, use xrdp with x264 H.264 encoding. A single setup script handles everything: desktop environment, audio, xrdp rebuild with x264, and GFX configuration:
 
 ```bash
 # On the RDP target machine (not the persea server):
-wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/sol1/persea/main/contrib/setup-xrdp-gfx.sh
+wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/BarbellDwarf/rustguac/main/contrib/setup-xrdp-gfx.sh
 sudo bash setup-xrdp-gfx.sh --desktop mate
 ```
 
-The `--desktop` flag installs a desktop environment (default: `mate`). Options: `mate`, `xfce`, `kde`, `gnome`, `none`. MATE is recommended — it's lightweight, Windows-like, and works reliably over xrdp without GPU.
+The `--desktop` flag installs a desktop environment (default: `mate`). Options: `mate`, `xfce`, `kde`, `gnome`, `none`. MATE is recommended, it is lightweight, Windows-like, and works reliably over xrdp without GPU.
 
 The script runs in three phases:
 1. **Phase 1 (pure trixie):** Installs desktop, Firefox, Chromium, build tools, PulseAudio xrdp audio module, switches from PipeWire to real PulseAudio
@@ -205,7 +205,7 @@ Windows RDP works out of the box. For video-heavy workloads:
 
 This enables AVC 4:4:4, 60 FPS, desktop composition, and GPU encoding.
 
-**Note:** Windows only sends H.264 when a GPU (physical or virtual) is available. Without GPU, it uses Planar/RemoteFX which guacd re-encodes as JPEG/WebP. This is still good quality — just not as low-latency as H.264 passthrough.
+**Note:** Windows only sends H.264 when a GPU (physical or virtual) is available. Without GPU, it uses Planar/RemoteFX which guacd re-encodes as JPEG/WebP. This is still good quality, just not as low-latency as H.264 passthrough.
 
 ## Step 5: Configure Authentication
 
@@ -253,13 +253,13 @@ API keys are powerful (full admin, no MFA). For day-to-day use, OIDC with group-
 
 ## Step 6: Set Up the Connections (Vault)
 
-The connections stores connection entries in HashiCorp Vault or OpenBao. Credentials stay server-side — they never reach the browser.
+Connections stores connection entries in HashiCorp Vault or OpenBao. Credentials stay server-side, they never reach the browser.
 
 ### Step 6: Configure Vault (optional, for Connections UI)
 
 If you want the Vault-backed Connections UI:
 
-1. **Install and initialize Vault** — see [Vault from Zero](integrations.md#vault-from-zero) in the integrations guide
+1. **Install and initialize Vault**, see [Vault from Zero](integrations.md#vault-from-zero) in the integrations guide
 2. **Enable KV v2** at the `secret` mount path
 3. **Create the persea policy** with read/write access to `secret/data/persea/*`
 4. **Enable AppRole** and get role_id + secret_id
@@ -371,17 +371,17 @@ sudo apt install ./persea_new-version.deb
 sudo systemctl restart persea
 ```
 
-Config files are preserved across upgrades (`--force-confold`). Database migrations run automatically on startup.
+Config files are preserved across upgrades (`--force-confold`). Database migrations run on startup.
 
 ### Backup
 
 Back up these paths:
-- `/opt/persea/config.toml` — configuration
-- `/opt/persea/data/persea.db` — users, tokens, session history
-- `/opt/persea/env` — secrets (Vault secret ID, OIDC client secret)
-- `/opt/persea/recordings/` — session recordings (if needed for compliance)
+- `/opt/persea/config.toml`, configuration
+- `/opt/persea/data/persea.db`, users, tokens, session history
+- `/opt/persea/env`, secrets (Vault secret ID, OIDC client secret)
+- `/opt/persea/recordings/`, session recordings (if needed for compliance)
 
-The connections is in Vault — back up Vault separately.
+Connections data lives in Vault. Back up Vault separately.
 
 ### Security checklist
 
