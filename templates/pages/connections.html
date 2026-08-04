@@ -95,6 +95,19 @@
             </div>
         </div>
     </div>
+
+    <!-- vSphere virtual machines (hidden when vSphere is not configured) -->
+    <div id="vsphere-section" class="hidden" style="max-width:1200px;margin:36px auto 0;padding-top:28px;border-top:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+            <h2 style="font-size:16px;font-weight:600;color:white;margin:0">vSphere Virtual Machines</h2>
+            <span id="vsphere-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
+            <div style="flex:1"></div>
+            <button id="btn-vsphere-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+        </div>
+        <div id="vsphere-error" class="hidden" role="alert" style="padding:12px 16px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:16px"></div>
+        <div id="vsphere-empty" class="hidden" style="text-align:center;padding:32px 0;color:var(--text-muted);font-size:13px">No virtual machines found in vCenter.</div>
+        <div id="vsphere-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px"></div>
+    </div>
 </div>
 
 <style>
@@ -110,6 +123,11 @@
     .entry-row { display:flex;align-items:center;padding:10px 12px;border-radius:8px;cursor:pointer;transition:all 0.15s }
     .entry-row:hover { background:var(--bg-hover) }
     .entry-row.selected { background:rgba(59,130,246,0.1) }
+    .vm-state { width:8px;height:8px;border-radius:50%;flex-shrink:0 }
+    .vm-on { background:#34d399;box-shadow:0 0 6px rgba(52,211,153,0.6) }
+    .vm-off { background:#6b7280 }
+    .vm-susp { background:#fbbf24 }
+    .vm-unknown { background:#9ca3af }
 </style>
 
 <script>
@@ -147,6 +165,54 @@
                 }).join('');
             });
     };
+
+    // ── vSphere virtual machines ────────────────────────────────────────────
+    function loadVSphere(){
+        var section=document.getElementById('vsphere-section');
+        fetch('/api/vsphere/vms',{credentials:'same-origin'})
+            .then(function(r){return r.ok?r.json():null})
+            .then(function(vms){
+                if(vms===null){ section.classList.add('hidden'); return; }
+                section.classList.remove('hidden');
+                renderVSphere(vms);
+            })
+            .catch(function(){ section.classList.add('hidden'); });
+    }
+    function vmStateClass(state){
+        var map={powered_on:'vm-on',powered_off:'vm-off',suspended:'vm-susp'};
+        return map[state]||'vm-unknown';
+    }
+    function renderVSphere(vms){
+        var list=document.getElementById('vsphere-list');
+        var empty=document.getElementById('vsphere-empty');
+        var count=document.getElementById('vsphere-count');
+        var err=document.getElementById('vsphere-error');
+        err.classList.add('hidden');
+        count.textContent=vms.length+' VM'+(vms.length===1?'':'s');
+        empty.classList.toggle('hidden',vms.length>0);
+        list.innerHTML=vms.map(function(vm){
+            var proto=((vm.protocol||'vnc')+'').toUpperCase();
+            var powered=vm.power_state==='powered_on';
+            var canConnect=powered&&vm.ip_address;
+            var btn=canConnect
+                ? '<a href="/api/vsphere/vms/'+encodeURIComponent(vm.vm_id)+'/connect" class="btn btn-primary btn-sm">Connect</a>'
+                : '<span style="font-size:12px;color:var(--text-muted)">'+(powered?'No guest IP':'Powered off')+'</span>';
+            return '<div class="card" style="padding:14px 16px">'
+                +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+                +'<span class="vm-state '+vmStateClass(vm.power_state)+'"></span>'
+                +'<strong style="font-size:14px;color:white;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(vm.name)+'</strong>'
+                +'<span class="proto-vmware" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">'+proto+'</span>'
+                +'</div>'
+                +'<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px"><span style="color:var(--text-muted)">Guest OS</span><span style="color:var(--text-secondary);max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(vm.guest_os||'Unknown')+'</span></div>'
+                +'<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px"><span style="color:var(--text-muted)">IP Address</span><span style="color:var(--text-secondary)">'+escapeHtml(vm.ip_address||'\u2014')+'</span></div>'
+                +'<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;margin-bottom:10px"><span style="color:var(--text-muted)">Host</span><span style="color:var(--text-secondary);max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(vm.host||'\u2014')+'</span></div>'
+                +'<div style="display:flex;justify-content:flex-end;border-top:1px solid var(--border);padding-top:12px">'+btn+'</div>'
+                +'</div>';
+        }).join('');
+    }
+
+    document.getElementById('btn-vsphere-refresh').addEventListener('click',loadVSphere);
+    loadVSphere();
 })();
 </script>
 {% endblock %}

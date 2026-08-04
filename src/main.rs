@@ -1,4 +1,11 @@
 //! persea — lightweight Guacamole proxy. CLI entry point and server setup.
+//!
+//! This crate root (the `persea` binary) only wires CLI parsing, config
+//! loading, and the axum server. All public API lives in the library
+//! (see `src/lib.rs`), which is why `missing_docs` is intentionally NOT
+//! enabled on the bin root: a blanket warn would flag the dozens of
+//! `mod` declarations and internal helpers here without guarding any
+//! public surface. The lib crate carries `#![warn(missing_docs)]` instead.
 #![allow(dead_code)]
 
 mod api;
@@ -70,8 +77,21 @@ struct Cli {
     #[arg(short, long)]
     config: Option<String>,
 
+    /// Log output format. Overrides the RUST_LOG_FORMAT env var.
+    #[arg(long, value_enum, default_value_t = LogFormat::Text)]
+    log_format: LogFormat,
+
     #[command(subcommand)]
     command: Option<Command>,
+}
+
+/// Structured log output format.
+#[derive(clap::ValueEnum, Clone, Copy, PartialEq, Eq, Debug)]
+enum LogFormat {
+    /// Human-readable text lines (default)
+    Text,
+    /// JSON lines, one record per line
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -270,8 +290,17 @@ async fn main() {
     // Open database
     let database = db::init_db(&config.db_path).expect("Failed to open database");
 
+    // Resolve log format: CLI flag wins, then RUST_LOG_FORMAT=json env var.
+    let log_format = match cli.log_format {
+        LogFormat::Json => LogFormat::Json,
+        LogFormat::Text => match std::env::var("RUST_LOG_FORMAT").as_deref() {
+            Ok("json") => LogFormat::Json,
+            _ => LogFormat::Text,
+        },
+    };
+
     match cli.command {
-        None | Some(Command::Serve) => run_server(config, database).await,
+        None | Some(Command::Serve) => run_server(config, database, log_format).await,
         Some(Command::CreateUser {
             email,
             name,
@@ -725,14 +754,17 @@ async fn connect_vault_backend(
     }
 }
 
-async fn run_server(config: Config, database: Db) {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
-        )
-        .init();
+async fn run_server(config: Config, database: Db, log_format: LogFormat) {
+    // Initialize logging. RUST_LOG_FORMAT=json (or --log-format json) selects
+    // JSON lines for structured log ingestion; plain fmt is the default.
+    let subscriber = tracing_subscriber::fmt().with_env_filter(
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
+    );
+    match log_format {
+        LogFormat::Json => subscriber.json().init(),
+        LogFormat::Text => subscriber.init(),
+    }
 
     let listen_addr = config.listen_addr.clone();
     let static_path = config.static_path.clone();
@@ -1298,6 +1330,10 @@ async fn run_server(config: Config, database: Db) {
         .route(
             "/api/vsphere/vms/{vm_id}/power",
             post(api::vsphere::power_action),
+        )
+        .route(
+            "/api/vsphere/vms/{vm_id}/connect",
+            get(api::vsphere::connect_vm),
         )
         // Address book routes
         .route("/api/addressbook", get(api::ab_list_all))

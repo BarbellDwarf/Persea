@@ -10,7 +10,7 @@ permissions:
 
 env:
   GUACD_REPO: https://github.com/apache/guacamole-server.git
-  GUACD_COMMIT: 6719b20d
+  GUACD_COMMIT: de97609007c088b5e6afd827eff5e9076013a247
 
 jobs:
   # ---------------------------------------------------------------------------

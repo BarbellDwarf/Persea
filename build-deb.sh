@@ -22,7 +22,7 @@ GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
 # Pinned guacamole-server commit. The patches in patches/ are rebased onto this
 # EXACT commit, so it MUST stay in sync with release.yml (GUACD_COMMIT) and
 # install.sh (GUACD_COMMIT). Do not bump it without re-rebasing the patch set.
-GUACD_COMMIT="6719b20d"
+GUACD_COMMIT="de97609007c088b5e6afd827eff5e9076013a247"
 STAGING="${SCRIPT_DIR}/debian/staging"
 PREFIX="/opt/persea"
 

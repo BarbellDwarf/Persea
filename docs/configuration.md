@@ -43,6 +43,13 @@ See `config.example.toml` for a fully commented reference.
 | `login_scripts_dir` | `/opt/persea/scripts` | Directory containing login scripts |
 | `login_script_timeout_secs` | `120` | Maximum runtime for login scripts before they are killed |
 
+## SSH session settings
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `ssh_scrollback` | `10000` | SSH terminal scrollback lines |
+| `ssh_tmux_detach` | `false` | When true, SSH sessions start under a tmux wrapper (`tmux attach-session -d \|\| tmux new-session`) instead of a plain shell. On reconnect, `-d` detaches any stale client a dead connection left attached, so the user never lands on a frozen tmux screen. Requires tmux on the remote host. |
+
 ## Connection allowlists
 
 CIDR ranges controlling which hosts sessions can connect to. All default to localhost only.
@@ -255,26 +262,28 @@ Or via environment variable:
 PERSEA_STORAGE_KEY=aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344
 ```
 
-## `[vsphere]` section *(in development)*
+## `[vsphere]` section
 
-VMware vSphere integration for VM inventory and OS-aware protocol routing. Connects to vCenter via the vSphere REST API (vSphere 7.0.3+) to enumerate VMs and auto-detect the right Guacamole protocol (RDP/SSH/VNC) based on the guest OS identifier. This feature is in development and may change.
+VMware vSphere integration for VM inventory and OS-aware protocol routing. Connects to vCenter via the vSphere REST API (vSphere 7.0.3+) to enumerate VMs and auto-detect the right Guacamole protocol (RDP/SSH/VNC) based on the guest OS identifier. See [integrations.md](integrations.md) for setup.
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `vcenter_addr` | — | vCenter Server URL, e.g. `https://vcenter.example.com/sdk` (required) |
 | `username` | — | vSphere username, e.g. `administrator@vsphere.local` (required) |
 | `password_env` | `VSPHERE_PASSWORD` | Name of the environment variable holding the password (never stored in config) |
-| `tls_skip_verify` | `false` | Skip TLS certificate verification |
-| `ca_cert` | — | Path to custom CA certificate (PEM) for verifying the vCenter server |
-| `datacenter` | — | Filter VMs by datacenter name |
-| `folder` | — | Filter VMs by VM folder path |
+| `insecure` | `false` | Skip TLS certificate verification (dev/test only) |
+| `refresh_interval_secs` | `300` | How often to refresh the VM inventory (seconds) |
+
+Optional per-VM guest credential overrides (keyed by VM name or ID):
 
 ```toml
 [vsphere]
 vcenter_addr = "https://vcenter.example.com/sdk"
 username = "administrator@vsphere.local"
 # password from env: VSPHERE_PASSWORD
-tls_skip_verify = false
+
+[vsphere.vm_credentials]
+"web-server-01" = { username = "deploy", password_env = "WEB_DEPLOY_PASS" }
 ```
 
 ## `[vault]` section
@@ -536,6 +545,7 @@ home_base = "/vdi-homes"
 | `PERSEA_STORAGE_KEY` | 64-char hex encryption key for DB credential storage (alternative to `[storage].encryption_key`) |
 | `VSPHERE_PASSWORD` | VMware vSphere password (alternative to `[vsphere].password_env`) |
 | `RUST_LOG` | Log level (e.g., `info`, `debug`, `persea=debug`) |
+| `RUST_LOG_FORMAT` | Log format: `text` (default) or `json` for JSON lines (structured logging). Equivalent to the `--log-format` CLI flag, which takes precedence. |
 
 ### Setting environment variables for systemd
 

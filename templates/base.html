@@ -44,18 +44,60 @@
     <!-- htmx -->
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script>
-    // Configure htmx to send API key on every request
-    htmx.config.defaultHeaders = { 'Authorization': 'Bearer ' + (sessionStorage.getItem('persea_api_key') || '') };
+    // Configure htmx to send API key + CSRF token on every request
+    htmx.config.defaultHeaders = {
+        'Authorization': 'Bearer ' + (sessionStorage.getItem('persea_api_key') || ''),
+        'X-CSRF-Token': (function() {
+            var parts = document.cookie.split(';');
+            for (var i = 0; i < parts.length; i++) {
+                var part = parts[i].trim();
+                if (part.indexOf('csrf_token=') === 0) return decodeURIComponent(part.substring(11));
+            }
+            return '';
+        })()
+    };
     document.body.addEventListener('htmx:configRequest', function(evt) {
         var key = sessionStorage.getItem('persea_api_key');
         if (key) {
             evt.detail.headers['Authorization'] = 'Bearer ' + key;
         }
+        var csrf = readCookie('csrf_token');
+        if (csrf) {
+            evt.detail.headers['X-CSRF-Token'] = csrf;
+        }
     });
     </script>
 
-    <!-- API auth helper (defines apiHeaders) -->
+    <!-- API auth helper (defines apiHeaders, readCookie) -->
     <script src="/js/auth.js"></script>
+
+    <!-- CSRF: patch fetch() so every XHR carries the X-CSRF-Token header -->
+    <script>
+    (function() {
+        var origFetch = window.fetch;
+        window.fetch = function(input, init) {
+            init = init || {};
+            var headers = init.headers || {};
+            if (headers instanceof Headers) {
+                if (!headers.has('X-CSRF-Token')) {
+                    var t = readCookie('csrf_token');
+                    if (t) headers.set('X-CSRF-Token', t);
+                }
+            } else {
+                var has = false;
+                for (var k in headers) {
+                    if (k.toLowerCase() === 'x-csrf-token') { has = true; break; }
+                }
+                if (!has) {
+                    var t = readCookie('csrf_token');
+                    if (t) headers['X-CSRF-Token'] = t;
+                }
+            }
+            init.headers = headers;
+            return origFetch(input, init);
+        };
+    })();
+    </script>
 
     <!-- Theme detection -->
     <script>

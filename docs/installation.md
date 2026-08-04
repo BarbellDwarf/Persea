@@ -385,7 +385,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 git clone https://github.com/BarbellDwarf/rustguac.git
 git clone https://github.com/apache/guacamole-server.git
 cd guacamole-server
-git checkout 6719b20d   # same pin persea uses
+git checkout de97609007c088b5e6afd827eff5e9076013a247   # same pin persea uses
 autoreconf -fi
 ./configure --prefix=/opt/persea --with-rdp
 make -j"$(nproc)"

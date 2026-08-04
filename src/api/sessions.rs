@@ -83,16 +83,29 @@ pub async fn create_session(
         crate::session::SessionType::Proxmox => {
             format!(
                 "{}/{}",
-                req.proxmox_node.as_deref().unwrap_or("?"),
-                req.proxmox_vmid
+                req.proxmox
+                    .as_ref()
+                    .and_then(|p| p.proxmox_node.as_deref())
+                    .unwrap_or("?"),
+                req.proxmox
+                    .as_ref()
+                    .and_then(|p| p.proxmox_vmid)
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "?".into())
             )
         }
-        crate::session::SessionType::Web => req.url.as_deref().unwrap_or("?").to_string(),
-        crate::session::SessionType::Vdi => {
-            req.container_image.as_deref().unwrap_or("?").to_string()
-        }
+        crate::session::SessionType::Web => req
+            .web
+            .as_ref()
+            .and_then(|w| w.url.as_deref())
+            .unwrap_or("?")
+            .to_string(),
+        crate::session::SessionType::Vdi => req
+            .vdi
+            .as_ref()
+            .and_then(|v| v.container_image.as_deref())
+            .unwrap_or("?")
+            .to_string(),
     };
 
     tracing::info!(

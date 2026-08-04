@@ -165,6 +165,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_false() -> bool {
+    false
+}
+
 fn default_luks_name() -> String {
     "persea-drives".into()
 }
@@ -448,6 +452,14 @@ pub struct Config {
     /// SSH terminal scrollback lines (default: 10000).
     #[serde(default = "default_ssh_scrollback")]
     pub ssh_scrollback: u32,
+
+    /// When true, SSH sessions start under a tmux wrapper
+    /// (`tmux attach-session -d || tmux new-session`) instead of a plain
+    /// shell, so a reconnecting user takes over the remote session and any
+    /// stale client left attached by an abrupt disconnect is kicked.
+    /// Default: false (plain shell, no behavior change).
+    #[serde(default = "default_false")]
+    pub ssh_tmux_detach: bool,
 
     /// CIDR allowlist for SSH session targets. Default: localhost only.
     #[serde(default = "default_localhost_networks")]
@@ -1286,6 +1298,7 @@ impl Default for Config {
             site_title: default_site_title(),
             ssh_allowed_networks: default_localhost_networks(),
             ssh_scrollback: default_ssh_scrollback(),
+            ssh_tmux_detach: default_false(),
             rdp_allowed_networks: default_localhost_networks(),
             vnc_allowed_networks: default_localhost_networks(),
             web_allowed_networks: default_localhost_networks(),

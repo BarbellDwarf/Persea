@@ -19,7 +19,7 @@ Apache Guacamole is a mature, feature-rich platform. persea is a purpose-built a
 - **Simpler deployment** — one binary + guacd. Install with a single script or Docker image.
 - **VDI desktops** — ephemeral Docker containers give each user an isolated Linux desktop on demand. No VM infrastructure required.
 - **Connections in Vault or DB** — credentials stored in HashiCorp Vault / OpenBao KV v2, or encrypted at rest in the database with AES-256-GCM. Credentials never reach the browser.
-- **VMware vSphere integration** — VM inventory, OS-aware protocol routing (RDP/SSH/VNC), and direct connection to guest IPs via vCenter REST API. In development.
+- **VMware vSphere integration** — VM inventory, OS-aware protocol routing (RDP/SSH/VNC), and direct connection to guest IPs via vCenter REST API, with VM list and one-click connect on the Connections page.
 - **Connection-level RBAC** — fine-grained permissions on individual connections and connection groups, with group-based inheritance.
 - **Zero-trust integration** — works with [Knocknoc](https://knocknoc.io) for identity-aware network access control at the HAProxy layer.
 
@@ -47,7 +47,7 @@ persea and Apache Guacamole share the same foundation:
 | **Ephemeral SSH keys** | Not supported | Ed25519 keypair per session |
 | **File transfer encryption** | Not supported | LUKS + Vault key management |
 | **Multi-hop SSH tunnels** | Not supported | Chain multiple SSH bastion hops to reach isolated targets |
-| **VMware vSphere** | Not supported | VM inventory, OS-aware protocol routing (RDP/SSH/VNC). In development. |
+| **VMware vSphere** | Not supported | VM inventory, OS-aware protocol routing (RDP/SSH/VNC), one-click connect from the Connections page. |
 | **Network allowlists** | Not supported | CIDR allowlists per protocol |
 | **Rate limiting** | Not built-in | Per-IP, per-endpoint (tower_governor) |
 | **Reverse proxy integration** | Generic | HAProxy + Knocknoc examples |
@@ -182,7 +182,7 @@ src/
   totp.rs              TOTP enrollment, QR codes, verification
   tunnel.rs            Multi-hop SSH tunnel chain
   vault.rs             Vault/OpenBao KV v2 client (AppRole auth)
-  vsphere.rs           VMware vSphere REST API (VM inventory, OS detection). In development.
+  vsphere.rs           VMware vSphere REST API (VM inventory, OS detection, one-click connect).
   vdi/mod.rs           VDI driver trait and container types
   vdi/docker.rs        Docker-based VDI driver (bollard)
   websocket.rs         WebSocket <-> guacd proxy

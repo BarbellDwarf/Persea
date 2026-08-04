@@ -27,14 +27,14 @@ override_dh_auto_install:
 	install -d debian/persea/etc/ld.so.conf.d
 
 	# persea binary
-	install -m 755 target/release/rustguac debian/persea/opt/persea/bin/persea
+	install -m 755 target/release/persea debian/persea/opt/persea/bin/persea
 
 	# Drive setup helper script
 	install -m 755 scripts/drive-setup.sh debian/persea/opt/persea/bin/drive-setup.sh
 
 	# guacd binary and libraries from staging
-	install -m 755 debian/staging/opt/rustguac/sbin/guacd debian/persea/opt/persea/sbin/guacd
-	cp -a debian/staging/opt/rustguac/lib/*.so* debian/persea/opt/persea/lib/
+	install -m 755 debian/staging/opt/persea/sbin/guacd debian/persea/opt/persea/sbin/guacd
+	cp -a debian/staging/opt/persea/lib/*.so* debian/persea/opt/persea/lib/
 
 	# FreeRDP plugin for RDPDR/RDPSND channels (drive redirection, audio, printing)
 	install -d debian/persea/usr/lib/$(DEB_HOST_MULTIARCH)/freerdp3

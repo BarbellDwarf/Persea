@@ -11,6 +11,11 @@ use uuid::Uuid;
 
 use tokio::time;
 
+/// Command used when `ssh_tmux_detach` is enabled: attach to the most
+/// recent tmux session with `-d` (kicking any stale client left attached
+/// by an abrupt disconnect), or create a fresh session if none exists.
+const TMUX_DETACH_WRAPPER: &str = "tmux attach-session -d 2>/dev/null || tmux new-session";
+
 impl SessionManager {
     /// Create a new session: connect to guacd, perform handshake, return session info.
     pub async fn create_session(
@@ -61,6 +66,15 @@ impl SessionManager {
         }
 
         let session_id = Uuid::new_v4();
+        // Protocol-specific params land in flattened sub-structs (see
+        // CreateSessionRequest); bind them up-front for ergonomic access.
+        let ssh = req.ssh.as_ref();
+        let rdp = req.rdp.as_ref();
+        let vnc = req.vnc.as_ref();
+        let web = req.web.as_ref();
+        let vdi_params = req.vdi.as_ref();
+        let spice = req.spice.as_ref();
+        let proxmox = req.proxmox.as_ref();
         let raw_width = req.width.unwrap_or(1920);
         let raw_height = req.height.unwrap_or(1080);
         let raw_dpi = req.dpi.unwrap_or(96);
@@ -129,7 +143,10 @@ impl SessionManager {
                     "Creating new SSH session"
                 );
 
-                let (private_key, ssh_banner) = if req.generate_keypair.unwrap_or(false) {
+                let (private_key, ssh_banner) = if ssh
+                    .and_then(|s| s.generate_keypair)
+                    .unwrap_or(false)
+                {
                     let keypair = ssh_key::PrivateKey::random(
                         &mut ssh_key::rand_core::OsRng,
                         ssh_key::Algorithm::Ed25519,
@@ -169,7 +186,7 @@ impl SessionManager {
                     tracing::info!(session_id = %session_id, "Generated ephemeral SSH keypair");
                     (Some(private_pem.to_string()), Some(banner))
                 } else {
-                    (req.private_key.clone(), None)
+                    (ssh.and_then(|s| s.private_key.clone()), None)
                 };
 
                 let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
@@ -183,7 +200,7 @@ impl SessionManager {
                 let typescript = self
                     .config
                     .ssh_typescript()
-                    .filter(|_| req.record_typescript == Some(true))
+                    .filter(|_| ssh.map_or(false, |s| s.record_typescript == Some(true)))
                     .map(|(path, name, create)| {
                         let template = name.as_deref().unwrap_or(DEFAULT_TYPESCRIPT_NAME);
                         let connection = req
@@ -222,6 +239,10 @@ impl SessionManager {
                         .as_ref()
                         .map(|(_, _, c)| *c)
                         .unwrap_or(false),
+                    command: self
+                        .config
+                        .ssh_tmux_detach
+                        .then(|| TMUX_DETACH_WRAPPER.to_string()),
                 });
                 (
                     params, hostname, username, None, None, ssh_banner, None, None, None,
@@ -269,7 +290,7 @@ impl SessionManager {
                 };
 
                 let rdp_ignore_cert = req.ignore_cert.unwrap_or(false);
-                let rdp_security = req.security.clone();
+                let rdp_security = rdp.and_then(|s| s.security.clone());
                 let rdp_enable_drive = session_drive_path.is_some();
                 tracing::info!(
                     %session_id,
@@ -277,7 +298,7 @@ impl SessionManager {
                     security = ?rdp_security,
                     enable_drive = rdp_enable_drive,
                     drive_path = ?session_drive_path,
-                    domain = ?req.domain,
+                    domain = ?rdp.and_then(|s| s.domain.as_ref()),
                     has_password = req.password.is_some(),
                     "RDP session params"
                 );
@@ -286,7 +307,7 @@ impl SessionManager {
                     port,
                     username: username.clone(),
                     password: req.password.clone(),
-                    domain: req.domain.clone(),
+                    domain: rdp.and_then(|s| s.domain.clone()),
                     security: rdp_security,
                     width,
                     height,
@@ -299,21 +320,28 @@ impl SessionManager {
                     drive_name: drive_cfg.drive_name.clone(),
                     disable_download: !drive_cfg.allow_download,
                     disable_upload: !drive_cfg.allow_upload,
-                    auth_pkg: super::resolve_rdp_auth_pkg(req.auth_pkg.as_deref(), &self.config),
-                    kdc_url: req.kdc_url.clone(),
-                    kerberos_cache: req.kerberos_cache.clone(),
-                    remote_app: req.remote_app.clone(),
-                    remote_app_dir: req.remote_app_dir.clone(),
-                    remote_app_args: req.remote_app_args.clone(),
+                    auth_pkg: super::resolve_rdp_auth_pkg(
+                        rdp.and_then(|s| s.auth_pkg.as_deref()),
+                        &self.config,
+                    ),
+                    kdc_url: rdp.and_then(|s| s.kdc_url.clone()),
+                    kerberos_cache: rdp.and_then(|s| s.kerberos_cache.clone()),
+                    remote_app: rdp.and_then(|s| s.remote_app.clone()),
+                    remote_app_dir: rdp.and_then(|s| s.remote_app_dir.clone()),
+                    remote_app_args: rdp.and_then(|s| s.remote_app_args.clone()),
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
-                    enable_gfx: req.enable_gfx.unwrap_or(false),
-                    enable_desktop_composition: req.enable_desktop_composition.unwrap_or(false),
-                    enable_wallpaper: req.enable_wallpaper.unwrap_or(false),
-                    enable_theming: req.enable_theming.unwrap_or(false),
-                    enable_full_window_drag: req.enable_full_window_drag.unwrap_or(false),
-                    force_lossless: req.force_lossless.unwrap_or(false),
-                    enable_h264: req.enable_h264.unwrap_or(false),
+                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(false),
+                    enable_desktop_composition: rdp
+                        .and_then(|s| s.enable_desktop_composition)
+                        .unwrap_or(false),
+                    enable_wallpaper: rdp.and_then(|s| s.enable_wallpaper).unwrap_or(false),
+                    enable_theming: rdp.and_then(|s| s.enable_theming).unwrap_or(false),
+                    enable_full_window_drag: rdp
+                        .and_then(|s| s.enable_full_window_drag)
+                        .unwrap_or(false),
+                    force_lossless: rdp.and_then(|s| s.force_lossless).unwrap_or(false),
+                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(false),
                     secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                 }));
                 (
@@ -348,7 +376,7 @@ impl SessionManager {
                     hostname: hostname.clone(),
                     port,
                     password: req.password.clone(),
-                    color_depth: req.color_depth,
+                    color_depth: vnc.and_then(|s| s.color_depth),
                     width,
                     height,
                     dpi,
@@ -374,13 +402,13 @@ impl SessionManager {
                     port,
                     password: req.password.clone(),
                     username: req.username.clone(),
-                    tls: req.spice_tls.unwrap_or(false),
-                    tls_port: req.spice_tls_port,
-                    ca_cert: req.spice_ca_cert.clone(),
-                    cert_subject: req.spice_cert_subject.clone(),
+                    tls: spice.and_then(|s| s.spice_tls).unwrap_or(false),
+                    tls_port: spice.and_then(|s| s.spice_tls_port),
+                    ca_cert: spice.and_then(|s| s.spice_ca_cert.clone()),
+                    cert_subject: spice.and_then(|s| s.spice_cert_subject.clone()),
                     ignore_cert: req.ignore_cert.unwrap_or(false),
-                    proxy: req.spice_proxy.clone(),
-                    color_depth: req.color_depth,
+                    proxy: spice.and_then(|s| s.spice_proxy.clone()),
+                    color_depth: vnc.and_then(|s| s.color_depth),
                     width,
                     height,
                     dpi,
@@ -408,22 +436,26 @@ impl SessionManager {
                 // Proxmox VE console: SPICE brokered through the PVE spiceproxy
                 // API. Tickets are one-time and short-lived, so fetch a
                 // just-in-time SPICE config at connect rather than storing it.
-                let pve_url = req.proxmox_url.clone().ok_or_else(|| {
+                let pve_url = proxmox.and_then(|s| s.proxmox_url.clone()).ok_or_else(|| {
                     SessionError::ValidationError("Proxmox sessions require proxmox_url".into())
                 })?;
-                let vmid = req.proxmox_vmid.unwrap_or(0);
+                let vmid = proxmox.and_then(|s| s.proxmox_vmid).unwrap_or(0);
                 if vmid == 0 {
                     return Err(SessionError::ValidationError(
                         "Proxmox sessions require proxmox_vmid".into(),
                     ));
                 }
-                let verify_tls = req.proxmox_verify_tls.unwrap_or(false);
+                let verify_tls = proxmox.and_then(|s| s.proxmox_verify_tls).unwrap_or(false);
 
                 // Join the token id and secret into PVE's "id=secret" form. If
                 // the secret is empty, treat the id as already-joined (lenient:
                 // allows pasting a full "id=secret" into the id field).
-                let token_id = req.proxmox_token_id.clone().unwrap_or_default();
-                let secret = req.proxmox_token_secret.clone().unwrap_or_default();
+                let token_id = proxmox
+                    .and_then(|s| s.proxmox_token_id.clone())
+                    .unwrap_or_default();
+                let secret = proxmox
+                    .and_then(|s| s.proxmox_token_secret.clone())
+                    .unwrap_or_default();
                 let api_token = if secret.is_empty() {
                     token_id
                 } else {
@@ -466,7 +498,10 @@ impl SessionManager {
                 // The node is optional: if not given, resolve which node hosts
                 // the VM via /cluster/resources (as the PVE web UI does), so the
                 // node-scoped console API can be reached with only the VM id.
-                let node = match req.proxmox_node.clone().filter(|n| !n.trim().is_empty()) {
+                let node = match proxmox
+                    .and_then(|s| s.proxmox_node.clone())
+                    .filter(|n| !n.trim().is_empty())
+                {
                     Some(n) => n,
                     None => broker.resolve_node(vmid).await.map_err(|e| {
                         SessionError::ValidationError(format!("Proxmox node lookup failed: {e}"))
@@ -530,7 +565,7 @@ impl SessionManager {
                     },
                     ignore_cert: !verify_tls,
                     proxy: Some(cfg.proxy),
-                    color_depth: req.color_depth,
+                    color_depth: vnc.and_then(|s| s.color_depth),
                     width,
                     height,
                     dpi,
@@ -550,7 +585,7 @@ impl SessionManager {
                 )
             }
             SessionType::Web => {
-                let raw_url = req.url.ok_or_else(|| {
+                let raw_url = web.and_then(|s| s.url.clone()).ok_or_else(|| {
                     SessionError::ValidationError("url is required for web sessions".into())
                 })?;
 
@@ -605,7 +640,7 @@ impl SessionManager {
                 tracing::info!(
                     session_id = %session_id,
                     url = %url,
-                    has_login_script = req.login_script.is_some(),
+                    has_login_script = web.map_or(false, |s| s.login_script.is_some()),
                     "Creating new web session"
                 );
 
@@ -649,11 +684,13 @@ impl SessionManager {
                     .as_ref()
                     .ok_or_else(|| SessionError::VdiError("VDI driver not initialized".into()))?;
 
-                let image = req.container_image.clone().ok_or_else(|| {
-                    SessionError::ValidationError(
-                        "container_image is required for VDI sessions".into(),
-                    )
-                })?;
+                let image = vdi_params
+                    .and_then(|s| s.container_image.clone())
+                    .ok_or_else(|| {
+                        SessionError::ValidationError(
+                            "container_image is required for VDI sessions".into(),
+                        )
+                    })?;
 
                 // Check allowed images whitelist
                 if !vdi_cfg.allowed_images.is_empty() && !vdi_cfg.allowed_images.contains(&image) {
@@ -670,9 +707,8 @@ impl SessionManager {
                 // are scoped per-operator. When the override is set the same
                 // container is shared by everyone connecting with that entry,
                 // which is the desired behaviour for shared baked-in accounts.
-                let vdi_username = req
-                    .container_username
-                    .as_ref()
+                let vdi_username = vdi_params
+                    .and_then(|s| s.container_username.as_ref())
                     .filter(|s| !s.is_empty())
                     .cloned()
                     .unwrap_or_else(|| {
@@ -685,9 +721,8 @@ impl SessionManager {
                             .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
                             .collect::<String>()
                     });
-                let vdi_password = req
-                    .container_password
-                    .as_ref()
+                let vdi_password = vdi_params
+                    .and_then(|s| s.container_password.as_ref())
                     .filter(|s| !s.is_empty())
                     .cloned()
                     .unwrap_or_else(super::generate_share_token); // 32 hex chars
@@ -697,14 +732,18 @@ impl SessionManager {
                 // the env vars get the right values, and images which ignore
                 // them aren't affected. User-provided env never overrides the
                 // core VDI vars.
-                let mut env = req.container_env.unwrap_or_default();
+                let mut env = vdi_params
+                    .and_then(|s| s.container_env.clone())
+                    .unwrap_or_default();
                 env.insert("VDI_USERNAME".into(), vdi_username.clone());
                 env.insert("VDI_PASSWORD".into(), vdi_password.clone());
 
                 // Resolve resource limits: entry overrides > config defaults
-                let cpu_limit = req.container_cpu_limit.unwrap_or(vdi_cfg.default_cpu_limit);
-                let memory_limit_mb = req
-                    .container_memory_limit
+                let cpu_limit = vdi_params
+                    .and_then(|s| s.container_cpu_limit)
+                    .unwrap_or(vdi_cfg.default_cpu_limit);
+                let memory_limit_mb = vdi_params
+                    .and_then(|s| s.container_memory_limit)
                     .unwrap_or(vdi_cfg.default_memory_limit);
 
                 let spec = crate::vdi::ContainerSpec {
@@ -716,7 +755,7 @@ impl SessionManager {
                     env,
                     home_base: vdi_cfg.home_base.clone(),
                     entry_key: req.address_book_entry.clone(),
-                    idle_timeout_mins: req.container_idle_timeout_mins,
+                    idle_timeout_mins: vdi_params.and_then(|s| s.container_idle_timeout_mins),
                 };
 
                 tracing::info!(
@@ -898,11 +937,11 @@ impl SessionManager {
                 url.as_ref().unwrap().clone()
             };
 
-            let need_cdp = req.login_script.is_some();
+            let need_cdp = web.map_or(false, |s| s.login_script.is_some());
 
             // Parse autofill credentials JSON and substitute placeholders
             let autofill_creds = parse_autofill_credentials(
-                req.autofill.as_deref(),
+                web.and_then(|s| s.autofill.as_deref()),
                 req.username.as_deref(),
                 req.password.as_deref(),
             );
@@ -915,7 +954,7 @@ impl SessionManager {
                     height,
                     need_cdp,
                     autofill_creds.as_deref(),
-                    req.allowed_domains.as_deref(),
+                    web.and_then(|s| s.allowed_domains.as_deref()),
                 )
                 .await
                 .map_err(|e| SessionError::BrowserSpawn(e.to_string()))?;
@@ -985,38 +1024,40 @@ impl SessionManager {
             .unwrap_or(self.config.recording_enabled());
 
         // Spawn login script if configured (web sessions with CDP port)
-        let login_script_handle =
-            if let (Some(ref script), Some(ref bs)) = (&req.login_script, &browser_session) {
-                if let Some(cdp_port) = bs.cdp_port {
-                    match self.browser_manager.run_login_script(
-                        script,
-                        bs.display,
-                        cdp_port,
-                        url.as_deref().unwrap_or(""),
-                        req.username.as_deref(),
-                        req.password.as_deref(),
-                        &session_id.to_string(),
-                    ) {
-                        Ok(handle) => Some(handle),
-                        Err(e) => {
-                            tracing::warn!(
-                                session_id = %session_id,
-                                error = %e,
-                                "Login script failed to start (session continues)"
-                            );
-                            None
-                        }
+        let login_script_handle = if let (Some(script), Some(bs)) = (
+            web.and_then(|s| s.login_script.as_ref()),
+            browser_session.as_ref(),
+        ) {
+            if let Some(cdp_port) = bs.cdp_port {
+                match self.browser_manager.run_login_script(
+                    script,
+                    bs.display,
+                    cdp_port,
+                    url.as_deref().unwrap_or(""),
+                    req.username.as_deref(),
+                    req.password.as_deref(),
+                    &session_id.to_string(),
+                ) {
+                    Ok(handle) => Some(handle),
+                    Err(e) => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            error = %e,
+                            "Login script failed to start (session continues)"
+                        );
+                        None
                     }
-                } else {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        "Login script configured but no CDP port allocated"
-                    );
-                    None
                 }
             } else {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "Login script configured but no CDP port allocated"
+                );
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         // Gate:
         //  - If the request explicitly sets allow_sharing, honour it.

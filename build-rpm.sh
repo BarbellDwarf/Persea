@@ -21,7 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
 # Pinned guacamole-server commit — must match build-deb.sh, install.sh, and release.yml
-GUACD_COMMIT="6719b20d"
+GUACD_COMMIT="de97609007c088b5e6afd827eff5e9076013a247"
 GUACD_SRC="${SCRIPT_DIR}/../guacamole-server"
 STAGING="${SCRIPT_DIR}/rpm/staging"
 PREFIX="/opt/persea"

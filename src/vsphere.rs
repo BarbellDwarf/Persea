@@ -267,6 +267,9 @@ pub struct VsphereClient {
     http: reqwest::Client,
     /// Cached VM inventory.
     cache: VmCache,
+    /// Original config, kept for resolving guest credentials on connect
+    /// (global username + `vm_credentials` overrides).
+    pub config: VsphereConfig,
 }
 
 impl VsphereClient {
@@ -365,6 +368,7 @@ pub async fn connect(config: &VsphereConfig) -> Result<VsphereClient, VsphereErr
         insecure: config.insecure,
         http,
         cache: VmCache::default(),
+        config: config.clone(),
     })
 }
 

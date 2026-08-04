@@ -49,7 +49,7 @@
         {% endif %}
 
         <!-- Form -->
-        <form method="POST" action="/auth/login">
+        <form method="POST" action="/auth/login" id="login-form">
             <div class="form-group">
                 <label class="form-label" for="username">Email</label>
                 <input type="text" id="username" name="username" autocomplete="username" required
@@ -60,8 +60,34 @@
                 <input type="password" id="password" name="password" autocomplete="current-password" required
                        class="form-input" placeholder="Password">
             </div>
-            <button type="submit" class="btn btn-primary mt-4">Sign In</button>
+            <button type="submit" class="btn btn-primary mt-4" id="login-submit">Sign In</button>
         </form>
+
+        <script>
+        // CSRF: the csrf_token cookie is readable by JS (not HttpOnly), so
+        // submit the login via fetch with the X-CSRF-Token header. The server
+        // always answers with a redirect; follow it to the final page.
+        document.getElementById('login-form').addEventListener('submit', function(evt) {
+            evt.preventDefault();
+            var btn = document.getElementById('login-submit');
+            btn.disabled = true;
+            var csrf = readCookie('csrf_token');
+            fetch('/auth/login', {
+                method: 'POST',
+                headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+                body: new URLSearchParams(new FormData(evt.target)),
+                credentials: 'same-origin',
+                redirect: 'follow'
+            }).then(function(resp) {
+                if (resp.redirected) { location.href = resp.url; }
+                else if (resp.ok) { location.href = '/'; }
+                else { location.href = '/?error=login_failed'; }
+            }).catch(function() {
+                btn.disabled = false;
+                location.href = '/?error=network_error';
+            });
+        });
+        </script>
 
     </div>
 </div>

@@ -14,7 +14,7 @@ set -euo pipefail
 PREFIX="/opt/persea"
 GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
 GUACD_BRANCH="main"
-GUACD_COMMIT="6719b20d"  # Pin to known-good commit
+GUACD_COMMIT="de97609007c088b5e6afd827eff5e9076013a247"  # main HEAD, matches patch base
 BUILD_DIR="/tmp/persea-build-$$"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
