@@ -191,11 +191,29 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # # WARNING: Only use for debugging — exposes client_secret and tokens to MITM attacks.
 # # tls_skip_verify = false
 
+# ─── Storage ────────────────────────────────────────────────────────────────
+#
+# Controls the address book (connections) storage backend.
+# When backend = "db" (default), all connection entries and credentials are
+# stored in the database with AES-256-GCM encryption. No Vault required.
+# When backend = "vault", credentials are stored in Vault; metadata stays in DB.
+
+# [storage]
+# backend = "db"   # "db" (default) or "vault"
+# # encryption_key for DB-stored credentials. Required when backend = "db".
+# # Generate with: openssl rand -hex 32
+# # Can also be set via PERSEA_STORAGE_KEY env var.
+# encryption_key = ""
+
 # ─── Vault / Address Book ──────────────────────────────────────────────────
 #
-# Enables the Vault-backed address book. Connection entries (SSH, RDP, Web)
-# are stored in HashiVault or OpenBao KV v2. Credentials never reach the
-# browser — the server reads them from Vault and creates sessions directly.
+# Optional external secrets store for address book credentials.
+# When [storage].backend = "vault", Vault is used for credential storage.
+# When [storage].backend = "db" (default), Vault is not needed for connections.
+#
+# Connection entries (SSH, RDP, Web) are stored in HashiVault or OpenBao KV v2.
+# Credentials never reach the browser — the server reads them from Vault and
+# creates sessions directly.
 #
 # Authentication uses AppRole. The secret_id is provided via the
 # VAULT_SECRET_ID environment variable.
@@ -325,3 +343,26 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 
 # [rdp]
 # default_auth_pkg = "ntlm"
+
+# ─── VMware vSphere ─────────────────────────────────────────────────────────
+#
+# Enables vSphere integration for VM inventory and OS-aware protocol routing.
+# Connects to vCenter via the vSphere REST API (vSphere 7.03+) to list VMs
+# and auto-detect the right Guacamole protocol (RDP for Windows, SSH for Linux,
+# VNC for everything else).
+#
+# Credentials are read from environment variables (not stored in config).
+# guacd connects directly to the guest IP address.
+
+# [vsphere]
+# vcenter_addr = "https://vcenter.example.com/sdk"
+# username = "administrator@vsphere.local"
+# password_env = "VSPHERE_PASSWORD"    # env var holding the password (default)
+# insecure = false                     # skip TLS cert verification (default)
+# refresh_interval_secs = 300          # VM inventory refresh interval (default: 5 min)
+#
+# # Optional per-VM credential overrides (keyed by VM name or ID).
+# # When set, these credentials override the global username/password for that VM.
+# [vsphere.vm_credentials]
+# "my-windows-server" = { username = "Administrator", password_env = "WIN_PASS" }
+# "my-linux-box" = { username = "root", password_env = "LINUX_PASS" }
