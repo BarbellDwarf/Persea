@@ -1869,6 +1869,10 @@ mod tests {
                 cert_path.to_str().unwrap(),
                 "-days",
                 "1",
+                "-addext",
+                "basicConstraints=CA:FALSE",
+                "-addext",
+                "subjectAltName=DNS:client,DNS:localhost",
             ])
             .output()
             .expect("openssl needed");
