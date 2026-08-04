@@ -509,25 +509,37 @@ mod tests {
     #[test]
     fn tunnel_error_display_ssh() {
         let err = TunnelError::Ssh(2, "connection refused".into());
-        assert_eq!(err.to_string(), "hop 2: SSH tunnel error: connection refused");
+        assert_eq!(
+            err.to_string(),
+            "hop 2: SSH tunnel error: connection refused"
+        );
     }
 
     #[test]
     fn tunnel_error_display_auth() {
         let err = TunnelError::Auth(0, "bad credentials".into());
-        assert_eq!(err.to_string(), "hop 0: SSH tunnel auth failed: bad credentials");
+        assert_eq!(
+            err.to_string(),
+            "hop 0: SSH tunnel auth failed: bad credentials"
+        );
     }
 
     #[test]
     fn tunnel_error_display_bind() {
         let err = TunnelError::Bind(1, "address in use".into());
-        assert_eq!(err.to_string(), "hop 1: SSH tunnel bind failed: address in use");
+        assert_eq!(
+            err.to_string(),
+            "hop 1: SSH tunnel bind failed: address in use"
+        );
     }
 
     #[test]
     fn tunnel_error_display_key() {
         let err = TunnelError::Key(0, "invalid format".into());
-        assert_eq!(err.to_string(), "hop 0: SSH tunnel key error: invalid format");
+        assert_eq!(
+            err.to_string(),
+            "hop 0: SSH tunnel key error: invalid format"
+        );
     }
 
     #[test]

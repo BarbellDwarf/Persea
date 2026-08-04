@@ -9,9 +9,9 @@ use persea::db;
 use persea::password;
 use persea::rbac;
 use persea::totp;
-use totp_rs::Algorithm;
 #[allow(unused_imports)]
 use std::sync::Arc;
+use totp_rs::Algorithm;
 
 // ── Helper ──────────────────────────────────────────────────────────────────
 

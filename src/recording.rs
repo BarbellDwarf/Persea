@@ -239,7 +239,10 @@ mod tests {
         };
         let json = serde_json::to_string(&meta).unwrap();
         let deserialized: RecordingMeta = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.address_book_entry.as_deref(), Some("shared/folder/server1"));
+        assert_eq!(
+            deserialized.address_book_entry.as_deref(),
+            Some("shared/folder/server1")
+        );
         assert_eq!(deserialized.created_at, "2025-01-15T10:30:00Z");
         assert_eq!(deserialized.user.as_deref(), Some("admin@example.com"));
         assert_eq!(deserialized.session_type.as_deref(), Some("rdp"));
@@ -495,7 +498,10 @@ mod tests {
     fn rotate_per_entry_ignores_other_entries() {
         let dir = temp_dir();
         // Create recordings for different entries
-        for (i, entry) in ["other/entry", "target/entry", "other/entry"].iter().enumerate() {
+        for (i, entry) in ["other/entry", "target/entry", "other/entry"]
+            .iter()
+            .enumerate()
+        {
             let guac_path = dir.join(format!("{}.guac", i));
             fs::write(&guac_path, "data").unwrap();
             let meta = RecordingMeta {

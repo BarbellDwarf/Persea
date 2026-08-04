@@ -114,10 +114,7 @@ where
             // Set csrf_token cookie on responses that don't have one yet
             if !resp.headers().contains_key(header::SET_COOKIE) {
                 let token = generate_token();
-                let cookie = format!(
-                    "{}={}; Path=/; SameSite=Lax; HttpOnly",
-                    CSRF_COOKIE, token
-                );
+                let cookie = format!("{}={}; Path=/; SameSite=Lax; HttpOnly", CSRF_COOKIE, token);
                 resp.headers_mut()
                     .insert(header::SET_COOKIE, cookie.parse().unwrap());
             }

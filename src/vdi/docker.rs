@@ -331,10 +331,7 @@ impl DockerDriver {
         // Use a quoted-heredoc to avoid shell variable expansion.
         // The username and password are interpolated by Rust's format!, not
         // by the shell, so no quoting or escaping is needed inside the body.
-        let script = format!(
-            "chpasswd <<'CPASSWD'\n{}:{}\nCPASSWD",
-            username, password
-        );
+        let script = format!("chpasswd <<'CPASSWD'\n{}:{}\nCPASSWD", username, password);
         let exec = self
             .client
             .create_exec(

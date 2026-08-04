@@ -315,19 +315,31 @@ mod tests {
 
     #[test]
     fn is_drive_enabled_override_false() {
-        let result = is_drive_enabled(&Some(DriveConfig { enabled: true, ..Default::default() }), Some(false));
+        let result = is_drive_enabled(
+            &Some(DriveConfig {
+                enabled: true,
+                ..Default::default()
+            }),
+            Some(false),
+        );
         assert!(!result);
     }
 
     #[test]
     fn is_drive_enabled_no_override_with_config_enabled() {
-        let config = DriveConfig { enabled: true, ..Default::default() };
+        let config = DriveConfig {
+            enabled: true,
+            ..Default::default()
+        };
         assert!(is_drive_enabled(&Some(config), None));
     }
 
     #[test]
     fn is_drive_enabled_no_override_with_config_disabled() {
-        let config = DriveConfig { enabled: false, ..Default::default() };
+        let config = DriveConfig {
+            enabled: false,
+            ..Default::default()
+        };
         assert!(!is_drive_enabled(&Some(config), None));
     }
 
