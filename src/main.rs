@@ -30,6 +30,8 @@ mod recording;
 mod role;
 mod session;
 mod templates;
+#[cfg(test)]
+mod testing;
 mod totp;
 mod tunnel;
 mod vault;
