@@ -21,75 +21,35 @@ pub enum SessionType {
     Proxmox,
 }
 
-/// Parameters for creating a new session.
-#[derive(Debug, Deserialize)]
-pub struct CreateSessionRequest {
-    #[serde(default)]
-    pub session_type: SessionType,
-    // SSH fields (optional for backwards compat)
-    pub hostname: Option<String>,
-    pub port: Option<u16>,
-    pub username: Option<String>,
-    pub password: Option<String>,
+/// SSH-specific session parameters.
+///
+/// Deserialized from the flat request JSON via `#[serde(flatten)]` on
+/// `CreateSessionRequest`: any JSON key declared only here lands in this
+/// struct regardless of `session_type`.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct SshParams {
     pub private_key: Option<String>,
     pub generate_keypair: Option<bool>,
-    // Web fields
-    pub url: Option<String>,
-    // RDP fields
+    /// Enable SSH typescript recording for this session (#159). Default
+    /// off; SSH only; requires `[recording].typescript_path` configured.
+    pub record_typescript: Option<bool>,
+}
+
+/// RDP-specific session parameters (NLA, RemoteApp, GFX pipeline, ...).
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct RdpParams {
     pub domain: Option<String>,
     pub security: Option<String>,
-    pub ignore_cert: Option<bool>,
     /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
     pub auth_pkg: Option<String>,
     /// Kerberos KDC URL (optional).
     pub kdc_url: Option<String>,
     /// Kerberos ticket cache path (optional).
     pub kerberos_cache: Option<String>,
-    // VNC fields
-    pub color_depth: Option<u8>,
-    // SSH tunnel / jump host fields (multi-hop)
-    pub jump_hosts: Option<Vec<tunnel::JumpHost>>,
-    // Legacy flat fields for backward compat (single jump host)
-    pub jump_host: Option<String>,
-    pub jump_port: Option<u16>,
-    pub jump_username: Option<String>,
-    pub jump_password: Option<String>,
-    pub jump_private_key: Option<String>,
-    // Common
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-    pub dpi: Option<u32>,
-    pub banner: Option<String>,
-    /// Override drive/file transfer setting for this session.
-    pub enable_drive: Option<bool>,
     // RDP RemoteApp (RAIL)
     pub remote_app: Option<String>,
     pub remote_app_dir: Option<String>,
     pub remote_app_args: Option<String>,
-    // Recording overrides
-    pub enable_recording: Option<bool>,
-    /// Enable SSH typescript recording for this session (#159). Default
-    /// off; SSH only; requires `[recording].typescript_path` configured.
-    pub record_typescript: Option<bool>,
-    /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
-    pub address_book_entry: Option<String>,
-    /// Address book folder name (for reporting).
-    pub address_book_folder: Option<String>,
-    /// Display name of the address book entry (for reporting).
-    pub entry_display_name: Option<String>,
-    /// Per-entry max recordings to keep.
-    pub max_recordings: Option<u32>,
-    /// Login script filename to run after browser spawns (web sessions only).
-    pub login_script: Option<String>,
-    /// Autofill credentials JSON for web sessions.
-    /// Array of {"url", "username", "password"} with $USERNAME/$PASSWORD placeholders.
-    pub autofill: Option<String>,
-    /// Allowed domains for web sessions. When set, Chromium can only reach these domains.
-    pub allowed_domains: Option<Vec<String>>,
-    /// Disable clipboard copy (server → client).
-    pub disable_copy: Option<bool>,
-    /// Disable clipboard paste (client → server).
-    pub disable_paste: Option<bool>,
     /// Enable RDP Graphics Pipeline Extension (GFX).
     pub enable_gfx: Option<bool>,
     /// Enable desktop composition (DWM) for RDP.
@@ -104,7 +64,34 @@ pub struct CreateSessionRequest {
     pub force_lossless: Option<bool>,
     /// Enable H.264 passthrough for RDP.
     pub enable_h264: Option<bool>,
-    // VDI fields
+}
+
+/// VNC-specific session parameters.
+///
+/// `color_depth` is also honoured by SPICE sessions (shared display option);
+/// this struct is its canonical flattened home — serde flatten claims a key
+/// once, in declaration order, so the key must not be duplicated elsewhere.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct VncParams {
+    pub color_depth: Option<u8>,
+}
+
+/// Web-browser session parameters (Xvnc + Chromium).
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct WebParams {
+    pub url: Option<String>,
+    /// Login script filename to run after browser spawns (web sessions only).
+    pub login_script: Option<String>,
+    /// Autofill credentials JSON for web sessions.
+    /// Array of {"url", "username", "password"} with $USERNAME/$PASSWORD placeholders.
+    pub autofill: Option<String>,
+    /// Allowed domains for web sessions. When set, Chromium can only reach these domains.
+    pub allowed_domains: Option<Vec<String>>,
+}
+
+/// VDI (Docker desktop container) session parameters.
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct VdiParams {
     /// Docker image for VDI sessions (e.g. "myregistry/desktop:latest").
     pub container_image: Option<String>,
     /// CPU limit override for VDI container (fractional cores).
@@ -122,19 +109,11 @@ pub struct CreateSessionRequest {
     /// Fixed VDI container password override matching `container_username`.
     /// Ephemerally generated when unset.
     pub container_password: Option<String>,
-    /// Allow the owner to generate a Share URL for this session.
-    /// Default false. For entry-derived sessions this is populated from
-    /// the entry's `allow_sharing` flag; ad-hoc sessions are never
-    /// shareable (per GitHub-less admin gating requirement).
-    pub allow_sharing: Option<bool>,
-    /// Open the client in fullscreen on connect (#154). Populated from
-    /// the source entry's `fullscreen_on_connect` flag; ad-hoc sessions
-    /// leave it None and the client behaves as if false.
-    pub fullscreen_on_connect: Option<bool>,
-    /// Auto-hide the clipboard/files side tabs when idle (they reappear
-    /// when the pointer nears the left edge). Populated from the source
-    /// entry; ad-hoc sessions leave it None (client behaves as if false).
-    pub autohide_side_tabs: Option<bool>,
+}
+
+/// SPICE-specific session parameters (TLS, CA verification, proxy).
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct SpiceParams {
     /// SPICE: connect using TLS.
     pub spice_tls: Option<bool>,
     /// SPICE: TLS port (if the encrypted port differs from `port`).
@@ -146,10 +125,14 @@ pub struct CreateSessionRequest {
     pub spice_cert_subject: Option<String>,
     /// SPICE: proxy URL, e.g. a Proxmox SPICE proxy "http://host:3128".
     pub spice_proxy: Option<String>,
-    /// Proxmox VE console (SessionType::Proxmox): PVE API base URL, a full URL
-    /// including scheme and port (e.g. "https://pve.example.com:8006"). persea
-    /// fetches a just-in-time SPICE ticket + config from the PVE spiceproxy API
-    /// at connect.
+}
+
+/// Proxmox VE console session parameters (SPICE brokered via PVE spiceproxy).
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct ProxmoxParams {
+    /// PVE API base URL, a full URL including scheme and port
+    /// (e.g. "https://pve.example.com:8006"). persea fetches a just-in-time
+    /// SPICE ticket + config from the PVE spiceproxy API at connect.
     pub proxmox_url: Option<String>,
     /// Proxmox node name hosting the VM (e.g. "pve").
     pub proxmox_node: Option<String>,
@@ -164,10 +147,97 @@ pub struct CreateSessionRequest {
     /// Verify the PVE API server's TLS certificate (default false; PVE ships a
     /// self-signed cluster cert). Also controls SPICE-proxy cert verification.
     pub proxmox_verify_tls: Option<bool>,
-    /// Total number of monitors to offer (SPICE/Proxmox multi-monitor). guacd
-    /// is told `secondary-monitors = max_monitors - 1`, which it advertises to
-    /// the client. Default 1 (single monitor).
+}
+
+/// Parameters for creating a new session.
+///
+/// Protocol-specific parameters live in the flattened sub-structs
+/// (`ssh`, `rdp`, `vnc`, `web`, `vdi`, `spice`, `proxmox`); fields shared by
+/// several protocols stay on this struct. The JSON wire format is flat —
+/// `#[serde(flatten)]` routes each key to the sub-struct that declares it.
+/// serde flatten claims each key exactly once (first declared struct wins),
+/// so no key is duplicated across sub-structs.
+#[derive(Debug, Default, Deserialize)]
+pub struct CreateSessionRequest {
+    #[serde(default)]
+    pub session_type: SessionType,
+    // Network/credential fields shared by SSH/RDP/VNC/SPICE (and used for
+    // $RUSTGUAC_USERNAME/$RUSTGUAC_PASSWORD substitution in web URLs).
+    pub hostname: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    /// Ignore TLS/certificate errors (RDP NLA and SPICE TLS).
+    pub ignore_cert: Option<bool>,
+    /// Total number of monitors to offer (RDP/SPICE/Proxmox/VDI
+    /// multi-monitor). guacd is told `secondary-monitors = max_monitors - 1`,
+    /// which it advertises to the client. Default 1 (single monitor).
     pub max_monitors: Option<u32>,
+    // SSH tunnel / jump host fields (multi-hop)
+    pub jump_hosts: Option<Vec<tunnel::JumpHost>>,
+    // Legacy flat fields for backward compat (single jump host)
+    pub jump_host: Option<String>,
+    pub jump_port: Option<u16>,
+    pub jump_username: Option<String>,
+    pub jump_password: Option<String>,
+    pub jump_private_key: Option<String>,
+    // Common display / session settings
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub dpi: Option<u32>,
+    pub banner: Option<String>,
+    /// Override drive/file transfer setting for this session.
+    pub enable_drive: Option<bool>,
+    /// Disable clipboard copy (server → client).
+    pub disable_copy: Option<bool>,
+    /// Disable clipboard paste (client → server).
+    pub disable_paste: Option<bool>,
+    // Recording / reporting metadata
+    pub enable_recording: Option<bool>,
+    /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
+    pub address_book_entry: Option<String>,
+    /// Address book folder name (for reporting).
+    pub address_book_folder: Option<String>,
+    /// Display name of the address book entry (for reporting).
+    pub entry_display_name: Option<String>,
+    /// Per-entry max recordings to keep.
+    pub max_recordings: Option<u32>,
+    // Sharing / client behaviour flags
+    /// Allow the owner to generate a Share URL for this session.
+    /// Default false. For entry-derived sessions this is populated from
+    /// the entry's `allow_sharing` flag; ad-hoc sessions are never
+    /// shareable (per GitHub-less admin gating requirement).
+    pub allow_sharing: Option<bool>,
+    /// Open the client in fullscreen on connect (#154). Populated from
+    /// the source entry's `fullscreen_on_connect` flag; ad-hoc sessions
+    /// leave it None and the client behaves as if false.
+    pub fullscreen_on_connect: Option<bool>,
+    /// Auto-hide the clipboard/files side tabs when idle (they reappear
+    /// when the pointer nears the left edge). Populated from the source
+    /// entry; ad-hoc sessions leave it None (client behaves as if false).
+    pub autohide_side_tabs: Option<bool>,
+    // Protocol-specific parameters (flat JSON keys route into these).
+    /// SSH-specific parameters (`private_key`, `generate_keypair`, ...).
+    #[serde(flatten)]
+    pub ssh: Option<SshParams>,
+    /// RDP-specific parameters (NLA, RemoteApp, GFX pipeline, ...).
+    #[serde(flatten)]
+    pub rdp: Option<RdpParams>,
+    /// VNC-specific parameters (`color_depth`; also honoured by SPICE).
+    #[serde(flatten)]
+    pub vnc: Option<VncParams>,
+    /// Web-browser session parameters (`url`, `login_script`, `autofill`, ...).
+    #[serde(flatten)]
+    pub web: Option<WebParams>,
+    /// VDI container parameters (`container_image`, resource limits, ...).
+    #[serde(flatten)]
+    pub vdi: Option<VdiParams>,
+    /// SPICE parameters (TLS, CA verification, proxy).
+    #[serde(flatten)]
+    pub spice: Option<SpiceParams>,
+    /// Proxmox VE console parameters (PVE API URL, node, VM id, API token).
+    #[serde(flatten)]
+    pub proxmox: Option<ProxmoxParams>,
 }
 
 /// Session status in the lifecycle.
@@ -385,5 +455,144 @@ impl Session {
             fullscreen_on_connect: self.fullscreen_on_connect,
             autohide_side_tabs: self.autohide_side_tabs,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The API accepts flat JSON (e.g. `{"session_type":"ssh","hostname":"x"}`).
+    /// With `#[serde(flatten)]`, each flat key must land in exactly the
+    /// sub-struct that declares it — serde flatten claims keys once, in
+    /// declaration order, so no key may be duplicated across sub-structs.
+    #[test]
+    fn flat_json_deserializes_into_substructs() {
+        // SSH: network fields on the parent, SSH-specific in SshParams.
+        let json = r#"{
+            "session_type":"ssh",
+            "hostname":"example.com","port":22,"username":"root","password":"secret",
+            "private_key":"KEY","generate_keypair":true,"record_typescript":true
+        }"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.hostname.as_deref(), Some("example.com"));
+        assert_eq!(req.port, Some(22));
+        assert_eq!(req.username.as_deref(), Some("root"));
+        assert_eq!(req.password.as_deref(), Some("secret"));
+        let ssh = req.ssh.as_ref().expect("ssh params");
+        assert_eq!(ssh.private_key.as_deref(), Some("KEY"));
+        assert_eq!(ssh.generate_keypair, Some(true));
+        assert_eq!(ssh.record_typescript, Some(true));
+        // No other sub-struct must claim these keys (flattened Option structs
+        // are always Some; absence is expressed by None fields).
+        assert!(req.rdp.as_ref().unwrap().domain.is_none());
+        assert!(req.vnc.as_ref().unwrap().color_depth.is_none());
+        assert!(req.web.as_ref().unwrap().url.is_none());
+
+        // RDP: RDP-specific keys land in RdpParams.
+        let json = r#"{
+            "session_type":"rdp","hostname":"winbox","port":3389,
+            "domain":"CORP","security":"any","auth_pkg":"ntlm",
+            "remote_app":"notepad","enable_gfx":true,"enable_h264":true
+        }"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        let rdp = req.rdp.as_ref().expect("rdp params");
+        assert_eq!(rdp.domain.as_deref(), Some("CORP"));
+        assert_eq!(rdp.security.as_deref(), Some("any"));
+        assert_eq!(rdp.auth_pkg.as_deref(), Some("ntlm"));
+        assert_eq!(rdp.remote_app.as_deref(), Some("notepad"));
+        assert_eq!(rdp.enable_gfx, Some(true));
+        assert_eq!(rdp.enable_h264, Some(true));
+        assert!(
+            req.ssh.as_ref().unwrap().private_key.is_none(),
+            "hostname must not leak into SshParams"
+        );
+
+        // VNC: color_depth is the only VNC-specific key.
+        let json = r#"{"session_type":"vnc","hostname":"kvm1","port":5900,"color_depth":24}"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.vnc.as_ref().and_then(|v| v.color_depth), Some(24));
+
+        // Web: URL/browser keys land in WebParams.
+        let json = r#"{
+            "session_type":"web","url":"https://app.example.com",
+            "login_script":"/opt/scripts/login.sh",
+            "autofill":"[{\"url\":\"https://app.example.com\",\"username\":\"u\",\"password\":\"p\"}]",
+            "allowed_domains":["app.example.com"]
+        }"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        let web = req.web.as_ref().expect("web params");
+        assert_eq!(web.url.as_deref(), Some("https://app.example.com"));
+        assert_eq!(web.login_script.as_deref(), Some("/opt/scripts/login.sh"));
+        assert!(web.autofill.as_deref().unwrap_or("").contains("app.example.com"));
+        assert_eq!(web.allowed_domains.as_deref(), Some(&["app.example.com".to_string()][..]));
+
+        // VDI: container keys land in VdiParams.
+        let json = r#"{
+            "session_type":"vdi",
+            "container_image":"registry.example.com/desktop:latest",
+            "container_cpu_limit":2.0,"container_memory_limit":4096,
+            "container_username":"vdi-user","container_idle_timeout_mins":60
+        }"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        let vdi = req.vdi.as_ref().expect("vdi params");
+        assert_eq!(vdi.container_image.as_deref(), Some("registry.example.com/desktop:latest"));
+        assert_eq!(vdi.container_cpu_limit, Some(2.0));
+        assert_eq!(vdi.container_memory_limit, Some(4096));
+        assert_eq!(vdi.container_username.as_deref(), Some("vdi-user"));
+
+        // SPICE: spice_* keys land in SpiceParams; color_depth still routes
+        // to VncParams (its canonical home, shared with SPICE).
+        let json = r#"{
+            "session_type":"spice","hostname":"qemu1","port":5900,
+            "spice_tls":true,"spice_tls_port":5910,
+            "spice_ca_cert":"CERT","spice_cert_subject":"subject","spice_proxy":"http://proxy:3128",
+            "color_depth":16
+        }"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        let spice = req.spice.as_ref().expect("spice params");
+        assert_eq!(spice.spice_tls, Some(true));
+        assert_eq!(spice.spice_tls_port, Some(5910));
+        assert_eq!(spice.spice_ca_cert.as_deref(), Some("CERT"));
+        assert_eq!(spice.spice_cert_subject.as_deref(), Some("subject"));
+        assert_eq!(spice.spice_proxy.as_deref(), Some("http://proxy:3128"));
+        assert_eq!(req.vnc.as_ref().and_then(|v| v.color_depth), Some(16));
+
+        // Proxmox: proxmox_* keys land in ProxmoxParams.
+        let json = r#"{
+            "session_type":"proxmox",
+            "proxmox_url":"https://pve.example.com:8006","proxmox_node":"pve1",
+            "proxmox_vmid":100,"proxmox_token_id":"root@pam!persea",
+            "proxmox_token_secret":"aaaa-bbbb","proxmox_verify_tls":true
+        }"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        let proxmox = req.proxmox.as_ref().expect("proxmox params");
+        assert_eq!(proxmox.proxmox_url.as_deref(), Some("https://pve.example.com:8006"));
+        assert_eq!(proxmox.proxmox_node.as_deref(), Some("pve1"));
+        assert_eq!(proxmox.proxmox_vmid, Some(100));
+        assert_eq!(proxmox.proxmox_token_id.as_deref(), Some("root@pam!persea"));
+        assert_eq!(proxmox.proxmox_token_secret.as_deref(), Some("aaaa-bbbb"));
+        assert_eq!(proxmox.proxmox_verify_tls, Some(true));
+    }
+
+    #[test]
+    fn empty_flat_json_defaults_to_ssh_with_all_none() {
+        let req: CreateSessionRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(req.session_type, SessionType::Ssh);
+        assert!(req.hostname.is_none());
+        // Flattened Option structs are always Some; absence is None fields.
+        assert!(req.ssh.as_ref().unwrap().private_key.is_none());
+        assert!(req.rdp.as_ref().unwrap().domain.is_none());
+        assert!(req.web.as_ref().unwrap().url.is_none());
+        assert!(req.proxmox.as_ref().unwrap().proxmox_url.is_none());
+    }
+
+    #[test]
+    fn unknown_flat_keys_are_silently_ignored() {
+        let json = r#"{"session_type":"ssh","hostname":"x","bogus_key":42}"#;
+        let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.hostname.as_deref(), Some("x"));
+        assert!(req.ssh.as_ref().unwrap().private_key.is_none());
+        assert!(req.rdp.as_ref().unwrap().domain.is_none());
     }
 }
