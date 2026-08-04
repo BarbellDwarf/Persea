@@ -52,12 +52,10 @@
             evt.detail.headers['Authorization'] = 'Bearer ' + key;
         }
     });
-    // Global API helper for inline fetch calls
-    function apiHeaders() {
-        var key = sessionStorage.getItem('persea_api_key');
-        return { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (key || '') };
-    }
     </script>
+
+    <!-- API auth helper (defines apiHeaders) -->
+    <script src="/js/auth.js"></script>
 
     <!-- Theme detection -->
     <script>

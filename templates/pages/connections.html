@@ -120,7 +120,6 @@
         proxmox:'proto-proxmox',vdi:'proto-vdi'
     };
     function protoClass(p){return protoClasses[(p||'').toLowerCase()]||''}
-    function escapeHtml(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
 
     window.selectConnection=function(scope,folder,entry,el){
         document.querySelectorAll('.entry-row').forEach(function(r){r.classList.remove('selected')});

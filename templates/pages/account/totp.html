@@ -114,12 +114,6 @@
     (function() {
         var totpEnabled = false;
 
-        function escapeHtml(s) {
-            var div = document.createElement('div');
-            div.textContent = s;
-            return div.innerHTML;
-        }
-
         function setStatus(enabled) {
             totpEnabled = enabled;
             var icon = document.getElementById('totp-icon');
@@ -185,7 +179,6 @@
 
             fetch('/api/me/totp/verify', {
                 method: 'POST',
-                headers: apiHeaders(),
                 headers: apiHeaders(),
                 body: JSON.stringify({ code: code })
             })
@@ -255,7 +248,6 @@
 
             fetch('/api/me/totp', {
                 method: 'DELETE',
-                headers: apiHeaders(),
                 headers: apiHeaders(),
                 body: JSON.stringify({ code: code })
             })

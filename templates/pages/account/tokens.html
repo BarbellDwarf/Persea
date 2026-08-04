@@ -123,12 +123,6 @@
             viewer: 'bg-gray-700/50 text-gray-400 border-gray-600'
         };
 
-        function escapeHtml(s) {
-            var div = document.createElement('div');
-            div.textContent = s;
-            return div.innerHTML;
-        }
-
         function formatDate(d) {
             if (!d) return '—';
             try { return new Date(d).toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
@@ -201,7 +195,6 @@
 
             fetch('/api/me/tokens', {
                 method: 'POST',
-                headers: apiHeaders(),
                 headers: apiHeaders(),
                 body: JSON.stringify({ name: name, max_role: maxRole, expires_at: expiry })
             })
