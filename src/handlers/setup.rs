@@ -4,8 +4,8 @@ use axum::Extension;
 use serde::Deserialize;
 
 use crate::api::SiteTitle;
-use crate::CspNonce;
 use crate::templates::SetupTemplate;
+use crate::CspNonce;
 
 #[derive(Debug, Deserialize)]
 pub struct SetupForm {
@@ -59,15 +59,18 @@ fn detect_guacd_path() -> String {
 
 /// Detect if running in Docker.
 fn detect_docker() -> bool {
-    std::path::Path::new("/.dockerenv").exists()
-        || std::env::var("DOCKER_CONTAINER").is_ok()
+    std::path::Path::new("/.dockerenv").exists() || std::env::var("DOCKER_CONTAINER").is_ok()
 }
 
 /// Check if setup is needed (no admin user in DB).
 pub fn needs_setup(db: &crate::db::Db) -> bool {
     let conn = db.lock().unwrap();
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM users WHERE role = 'admin'", [], |row| row.get(0))
+    let _count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin'",
+            [],
+            |row| row.get(0),
+        )
         .unwrap_or(0);
     // Also check if there are ANY users at all
     let user_count: i64 = conn
@@ -81,14 +84,17 @@ pub fn needs_setup(db: &crate::db::Db) -> bool {
 pub async fn setup_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(database): Extension<crate::db::Db>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     if !needs_setup(&database) {
         return Redirect::to("/").into_response();
     }
 
     let detected_ips = detect_ips();
-    let listen_addr = detected_ips.first().cloned().unwrap_or_else(|| "0.0.0.0:8089".to_string());
+    let listen_addr = detected_ips
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "0.0.0.0:8089".to_string());
     let guacd_path = detect_guacd_path();
     let docker = detect_docker();
 
@@ -97,7 +103,11 @@ pub async fn setup_page(
         error: None,
         listen_addr,
         db_path: "/opt/persea/data/persea.db".to_string(),
-        guacd_mode: if docker { "external".to_string() } else { "embedded".to_string() },
+        guacd_mode: if docker {
+            "external".to_string()
+        } else {
+            "embedded".to_string()
+        },
         guacd_addr: "127.0.0.1:4822".to_string(),
         guacd_path,
         admin_email: String::new(),
@@ -110,7 +120,7 @@ pub async fn setup_page(
 pub async fn setup_submit(
     Extension(site_title): Extension<SiteTitle>,
     Extension(database): Extension<crate::db::Db>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
     Form(form): Form<SetupForm>,
 ) -> Response {
     if !needs_setup(&database) {
@@ -121,7 +131,9 @@ pub async fn setup_submit(
     if form.admin_email.is_empty() || form.admin_password.len() < 8 {
         let tmpl = SetupTemplate {
             site_title: site_title.0.clone(),
-            error: Some("Email is required and password must be at least 8 characters.".to_string()),
+            error: Some(
+                "Email is required and password must be at least 8 characters.".to_string(),
+            ),
             listen_addr: form.listen_addr,
             db_path: form.db_path,
             guacd_mode: form.guacd_mode,
@@ -156,10 +168,7 @@ pub async fn setup_submit(
     let now = chrono::Utc::now().to_rfc3339();
     {
         let conn = database.lock().unwrap();
-        let _ = conn.execute(
-            "ALTER TABLE users ADD COLUMN password_hash TEXT",
-            [],
-        );
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
         let _ = conn.execute(
             "ALTER TABLE users ADD COLUMN auth_source TEXT DEFAULT 'database'",
             [],
@@ -217,8 +226,8 @@ session_history_retention_days = 90
     );
 
     // Write to config path (same as the --config arg, or default location)
-    let config_path = std::env::var("RUSTGUAC_CONFIG")
-        .unwrap_or_else(|_| "/opt/persea/config.toml".to_string());
+    let config_path =
+        std::env::var("RUSTGUAC_CONFIG").unwrap_or_else(|_| "/opt/persea/config.toml".to_string());
 
     if let Err(e) = std::fs::write(&config_path, &config) {
         tracing::warn!("Could not write config to {}: {}", config_path, e);

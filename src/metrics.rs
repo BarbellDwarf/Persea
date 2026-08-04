@@ -32,33 +32,23 @@ fn metrics() -> &'static Metrics {
 }
 
 pub fn session_active_inc() {
-    metrics()
-        .sessions_active
-        .fetch_add(1, Ordering::Relaxed);
+    metrics().sessions_active.fetch_add(1, Ordering::Relaxed);
 }
 
 pub fn session_active_dec() {
-    metrics()
-        .sessions_active
-        .fetch_sub(1, Ordering::Relaxed);
+    metrics().sessions_active.fetch_sub(1, Ordering::Relaxed);
 }
 
 pub fn session_total_inc() {
-    metrics()
-        .sessions_total
-        .fetch_add(1, Ordering::Relaxed);
+    metrics().sessions_total.fetch_add(1, Ordering::Relaxed);
 }
 
 pub fn request_inc() {
-    metrics()
-        .requests_total
-        .fetch_add(1, Ordering::Relaxed);
+    metrics().requests_total.fetch_add(1, Ordering::Relaxed);
 }
 
 pub fn error_inc() {
-    metrics()
-        .request_errors
-        .fetch_add(1, Ordering::Relaxed);
+    metrics().request_errors.fetch_add(1, Ordering::Relaxed);
 }
 
 pub fn uptime_seconds() -> u64 {

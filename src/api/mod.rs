@@ -301,9 +301,9 @@ mod integration_tests;
 
 #[cfg(test)]
 mod tests {
-    use super::tokens::partition_credential_writes;
     use super::address_book::html_escape;
     use super::reports::is_safe_recording_name;
+    use super::tokens::partition_credential_writes;
 
     fn hm(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
         pairs

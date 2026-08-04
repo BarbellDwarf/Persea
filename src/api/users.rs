@@ -3,11 +3,7 @@ use crate::audit;
 use crate::auth::AuthIdentity;
 use crate::db::{self, Db};
 use crate::error::AppError;
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    Extension, Json,
-};
+use axum::{extract::Path, http::StatusCode, Extension, Json};
 use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
@@ -84,8 +80,7 @@ pub async fn create_user(
         Ok::<_, AppError>(())
     })
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    ?;
+    .map_err(|e| AppError::Internal(e.to_string()))??;
 
     let role_for_response = role.clone();
 
@@ -108,7 +103,10 @@ pub async fn create_user(
     .await
     .ok();
 
-    Ok((StatusCode::CREATED, Json(json!({"email": body.email, "role": role_for_response}))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"email": body.email, "role": role_for_response})),
+    ))
 }
 
 pub async fn set_user_role(
@@ -145,9 +143,11 @@ pub async fn set_user_role(
     };
     let email_for_update = email.clone();
     let role_for_update = role.clone();
-    let found = tokio::task::spawn_blocking(move || db::set_user_role(&db_clone, &email_for_update, &role_for_update))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))??;
+    let found = tokio::task::spawn_blocking(move || {
+        db::set_user_role(&db_clone, &email_for_update, &role_for_update)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))??;
     if found {
         // Audit: role change
         {
@@ -255,10 +255,9 @@ pub async fn delete_user_sessions(
 
     let db_clone = database.clone();
     let user_id = user.id;
-    let count =
-        tokio::task::spawn_blocking(move || db::delete_user_sessions(&db_clone, user_id))
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))??;
+    let count = tokio::task::spawn_blocking(move || db::delete_user_sessions(&db_clone, user_id))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
     tracing::info!(email = %email, sessions_revoked = count, "Admin force-logout user");
     Ok(Json(json!({"ok": true, "sessions_revoked": count})))
 }
@@ -314,9 +313,10 @@ pub async fn disable_user(
 
     let db_clone = database.clone();
     let email_for_disable = email.clone();
-    let found = tokio::task::spawn_blocking(move || db::disable_user(&db_clone, &email_for_disable))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))??;
+    let found =
+        tokio::task::spawn_blocking(move || db::disable_user(&db_clone, &email_for_disable))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))??;
     if found {
         // Audit: user disable
         {

@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use rusqlite::params;
 
-use crate::auth_provider::{AuthRequest, AuthResult, AuthProvider, Capabilities};
+use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};
 use crate::db::Db;
 use crate::password::verify_password;
 
@@ -30,10 +30,8 @@ impl DatabaseProvider {
             .prepare("SELECT password_hash FROM users LIMIT 0")
             .is_ok();
         if !has_col {
-            conn.execute_batch(
-                "ALTER TABLE users ADD COLUMN password_hash TEXT",
-            )
-            .expect("failed to add password_hash column");
+            conn.execute_batch("ALTER TABLE users ADD COLUMN password_hash TEXT")
+                .expect("failed to add password_hash column");
         }
     }
 }
@@ -86,7 +84,10 @@ impl AuthProvider for DatabaseProvider {
             Ok(r) => r,
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 // Constant-time dummy hash to prevent user enumeration
-                let _ = verify_password("dummy", "$argon2id$v=19$m=47104,t=3,p=1$c2FsdHNhbHRzYWx0$hashhashhashhashhashhash");
+                let _ = verify_password(
+                    "dummy",
+                    "$argon2id$v=19$m=47104,t=3,p=1$c2FsdHNhbHRzYWx0$hashhashhashhashhashhash",
+                );
                 return AuthResult::Failure("invalid credentials".into());
             }
             Err(e) => return AuthResult::Unavailable(format!("database error: {e}")),
@@ -98,11 +99,7 @@ impl AuthProvider for DatabaseProvider {
 
         let hash = match password_hash {
             Some(h) if !h.is_empty() => h,
-            _ => {
-                return AuthResult::Failure(
-                    "no password set for this account".into(),
-                )
-            }
+            _ => return AuthResult::Failure("no password set for this account".into()),
         };
 
         match verify_password(&password, &hash) {

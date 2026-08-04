@@ -16,7 +16,7 @@ use ring::signature::{self, RsaKeyPair};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::auth_provider::{AuthRequest, AuthResult, AuthProvider, Capabilities};
+use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -93,8 +93,7 @@ pub fn parse_idp_metadata(xml: &str) -> Result<IdpMetadata, String> {
                     "EntityDescriptor" => {
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() == b"entityID" {
-                                entity_id =
-                                    Some(String::from_utf8_lossy(&attr.value).to_string());
+                                entity_id = Some(String::from_utf8_lossy(&attr.value).to_string());
                             }
                         }
                     }
@@ -102,10 +101,8 @@ pub fn parse_idp_metadata(xml: &str) -> Result<IdpMetadata, String> {
                         let mut binding = String::new();
                         let mut location = String::new();
                         for attr in e.attributes().flatten() {
-                            let key =
-                                String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                            let val =
-                                String::from_utf8_lossy(&attr.value).to_string();
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
                                 "Binding" => binding = val,
                                 "Location" => location = val,
@@ -124,16 +121,13 @@ pub fn parse_idp_metadata(xml: &str) -> Result<IdpMetadata, String> {
             }
             Ok(quick_xml::events::Event::Text(ref e)) => {
                 if in_cert {
-                        let raw = String::from_utf8_lossy(e.as_ref());
-                        let text = xml_unescape(&raw)
-                            .map_err(|e| e.to_string())?
-                            .to_string();
-                        cert_b64 = Some(text);
+                    let raw = String::from_utf8_lossy(e.as_ref());
+                    let text = xml_unescape(&raw).map_err(|e| e.to_string())?.to_string();
+                    cert_b64 = Some(text);
                 }
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
-                let tag =
-                    String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 if local_name(&tag) == "X509Certificate" {
                     in_cert = false;
                 }
@@ -146,11 +140,9 @@ pub fn parse_idp_metadata(xml: &str) -> Result<IdpMetadata, String> {
     }
 
     Ok(IdpMetadata {
-        sso_url: sso_url
-            .ok_or("No SingleSignOnService with HTTP-Redirect binding found")?,
+        sso_url: sso_url.ok_or("No SingleSignOnService with HTTP-Redirect binding found")?,
         entity_id: entity_id.ok_or("No entityID found in IdP metadata")?,
-        certificate: cert_b64
-            .ok_or("No X509Certificate found in IdP metadata")?,
+        certificate: cert_b64.ok_or("No X509Certificate found in IdP metadata")?,
     })
 }
 
@@ -169,7 +161,9 @@ fn xml_escape(s: &str) -> String {
 
 /// Strip namespace prefix from a tag name (e.g. "md:EntityDescriptor" → "EntityDescriptor").
 fn local_name(name: &str) -> &str {
-    name.rsplit_once(':').map(|(_, local)| local).unwrap_or(name)
+    name.rsplit_once(':')
+        .map(|(_, local)| local)
+        .unwrap_or(name)
 }
 
 /// Exclusive canonicalization (simplified for SAML AuthnRequests).
@@ -220,8 +214,7 @@ fn parse_rsa_private_key(pem: &str) -> Result<RsaKeyPair, String> {
         .lines()
         .filter(|l| !l.starts_with("-----"))
         .collect::<String>()
-        .replace('\n', "")
-        .replace('\r', "");
+        .replace(['\n', '\r'], "");
     let der = base64::engine::general_purpose::STANDARD
         .decode(&b64)
         .map_err(|e| format!("Base64 decode error: {e}"))?;
@@ -231,9 +224,14 @@ fn parse_rsa_private_key(pem: &str) -> Result<RsaKeyPair, String> {
 /// Sign data with RSA-SHA256.
 fn sign_rsa_sha256(key_pair: &RsaKeyPair, data: &[u8]) -> Result<Vec<u8>, String> {
     let rng = ring::rand::SystemRandom::new();
-    let mut signature = vec![0u8; key_pair.public_modulus_len()];
+    let mut signature = vec![0u8; key_pair.public().modulus_len()];
     key_pair
-        .sign(&ring::signature::RSA_PKCS1_SHA256, &rng, data, &mut signature)
+        .sign(
+            &ring::signature::RSA_PKCS1_SHA256,
+            &rng,
+            data,
+            &mut signature,
+        )
         .map_err(|e| format!("RSA signing failed: {e:?}"))?;
     Ok(signature)
 }
@@ -246,8 +244,7 @@ fn parse_certificate_der(cert_pem: &str) -> Result<Vec<u8>, String> {
             .lines()
             .filter(|l| !l.starts_with("-----"))
             .collect::<String>()
-            .replace('\n', "")
-            .replace('\r', "");
+            .replace(['\n', '\r'], "");
         base64::engine::general_purpose::STANDARD
             .decode(&b64)
             .map_err(|e| format!("Certificate base64 decode error: {e}"))
@@ -259,17 +256,13 @@ fn parse_certificate_der(cert_pem: &str) -> Result<Vec<u8>, String> {
 }
 
 /// Verify RSA-SHA256 signature using DER certificate.
-fn verify_rsa_sha256(cert_der: &[u8], data: &[u8], signature_b64: &str)
-    -> Result<(), String>
-{
+fn verify_rsa_sha256(cert_der: &[u8], data: &[u8], signature_b64: &str) -> Result<(), String> {
     let sig_bytes = base64::engine::general_purpose::STANDARD
         .decode(signature_b64)
         .map_err(|e| format!("Signature base64 decode error: {e}"))?;
     let public_key_der = extract_spki_from_cert(cert_der)?;
-    let public_key = signature::UnparsedPublicKey::new(
-        &signature::RSA_PKCS1_2048_8192_SHA256,
-        &public_key_der,
-    );
+    let public_key =
+        signature::UnparsedPublicKey::new(&signature::RSA_PKCS1_2048_8192_SHA256, &public_key_der);
     public_key
         .verify(data, &sig_bytes)
         .map_err(|_| "RSA signature verification failed".to_string())
@@ -277,9 +270,7 @@ fn verify_rsa_sha256(cert_der: &[u8], data: &[u8], signature_b64: &str)
 
 /// Extract SubjectPublicKeyInfo from X.509 DER.
 fn extract_spki_from_cert(cert_der: &[u8]) -> Result<Vec<u8>, String> {
-    let rsa_oid: &[u8] = &[
-        0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01,
-    ];
+    let rsa_oid: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
     let pos = cert_der
         .windows(rsa_oid.len())
         .position(|w| w == rsa_oid)
@@ -353,39 +344,32 @@ fn build_authn_request(
     // escape-sequence issues with newlines in regular strings.
     let mut parts: Vec<String> = Vec::new();
     parts.push(String::from("<samlp:AuthnRequest"));
-    parts.push(format!(
-        "    xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\""
+    parts.push(String::from(
+        "    xmlns:samlp=\"urn:oasis:names:tc:SAML:2.0:protocol\"",
     ));
-    parts.push(format!(
-        "    xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\""
+    parts.push(String::from(
+        "    xmlns:saml=\"urn:oasis:names:tc:SAML:2.0:assertion\"",
     ));
     parts.push(format!("    ID=\"{}\"", xml_escape(&request_id)));
     parts.push(String::from("    Version=\"2.0\""));
     parts.push(format!("    IssueInstant=\"{issue_instant}\""));
-    parts.push(format!(
-        "    Destination=\"{}\"",
-        xml_escape(idp_sso_url)
-    ));
+    parts.push(format!("    Destination=\"{}\"", xml_escape(idp_sso_url)));
     parts.push(format!(
         "    AssertionConsumerServiceURL=\"{}\"",
         xml_escape(&config.acs_url)
     ));
-    parts.push(format!(
-        "    ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\">"
+    parts.push(String::from(
+        "    ProtocolBinding=\"urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST\">",
     ));
     parts.push(format!(
         "  <saml:Issuer>{}</saml:Issuer>",
         xml_escape(&config.entity_id)
     ));
-    parts.push(String::from(
-        "  <samlp:NameIDPolicy",
-    ));
+    parts.push(String::from("  <samlp:NameIDPolicy"));
     parts.push(String::from(
         "      Format=\"urn:oasis:names:tc:SAML:2.0:nameid-format:emailAddress\"",
     ));
-    parts.push(String::from(
-        "      AllowCreate=\"true\"/>",
-    ));
+    parts.push(String::from("      AllowCreate=\"true\"/>"));
     parts.push(String::from("</samlp:AuthnRequest>"));
     let unsigned_request = parts.join(" ");
 
@@ -398,8 +382,7 @@ fn build_authn_request(
 
     // Build redirect URL with deflate + base64 encoding
     let deflated = deflate_encode(signed_request.as_bytes());
-    let encoded =
-        base64::engine::general_purpose::STANDARD.encode(&deflated);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&deflated);
     let redirect_url = format!(
         "{}?SAMLRequest={}",
         idp_sso_url,
@@ -414,14 +397,10 @@ fn extract_request_id(xml: &str) -> Option<String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     let mut buf = Vec::new();
-    if let Ok(quick_xml::events::Event::Start(ref e)) =
-        reader.read_event_into(&mut buf)
-    {
+    if let Ok(quick_xml::events::Event::Start(ref e)) = reader.read_event_into(&mut buf) {
         for attr in e.attributes().flatten() {
             if attr.key.as_ref() == b"ID" {
-                return Some(
-                    String::from_utf8_lossy(&attr.value).to_string(),
-                );
+                return Some(String::from_utf8_lossy(&attr.value).to_string());
             }
         }
     }
@@ -429,10 +408,7 @@ fn extract_request_id(xml: &str) -> Option<String> {
 }
 
 /// Sign an AuthnRequest XML with an RSA-SHA256 enveloped signature.
-fn sign_authn_request(
-    xml: &str,
-    private_key_pem: &str,
-) -> Result<String, String> {
+fn sign_authn_request(xml: &str, private_key_pem: &str) -> Result<String, String> {
     let key_pair = parse_rsa_private_key(private_key_pem)?;
 
     // Canonicalize the request (with a placeholder for the signature)
@@ -451,22 +427,15 @@ fn sign_authn_request(
     si_parts.push(String::from(
         "  <ds:SignatureMethod Algorithm=\"http://www.w3.org/2001/04/xmldsig-more#rsa-sha256\"/>",
     ));
-    si_parts.push(format!(
-        "  <ds:Reference URI=\"{}\">",
-        xml_escape(&id)
-    ));
-    si_parts.push(String::from(
-        "    <ds:Transforms>",
-    ));
+    si_parts.push(format!("  <ds:Reference URI=\"{}\">", xml_escape(&id)));
+    si_parts.push(String::from("    <ds:Transforms>"));
     si_parts.push(String::from(
         "      <ds:Transform Algorithm=\"http://www.w3.org/2000/09/xmldsig#enveloped-signature\"/>",
     ));
     si_parts.push(String::from(
         "      <ds:Transform Algorithm=\"http://www.w3.org/2001/10/xml-exc-c14n#\"/>",
     ));
-    si_parts.push(String::from(
-        "    </ds:Transforms>",
-    ));
+    si_parts.push(String::from("    </ds:Transforms>"));
     si_parts.push(String::from(
         "    <ds:DigestMethod Algorithm=\"http://www.w3.org/2001/04/xmlenc#sha256\"/>",
     ));
@@ -474,17 +443,13 @@ fn sign_authn_request(
         "    <ds:DigestValue>{}</ds:DigestValue>",
         digest_value
     ));
-    si_parts.push(String::from(
-        "  </ds:Reference>",
-    ));
+    si_parts.push(String::from("  </ds:Reference>"));
     si_parts.push(String::from("</ds:SignedInfo>"));
     let signed_info_xml = si_parts.join("\n      ");
 
     let signed_info_canonical = exclusive_canonicalize(&signed_info_xml);
-    let signature =
-        sign_rsa_sha256(&key_pair, signed_info_canonical.as_bytes())?;
-    let signature_b64 =
-        base64::engine::general_purpose::STANDARD.encode(&signature);
+    let signature = sign_rsa_sha256(&key_pair, signed_info_canonical.as_bytes())?;
+    let signature_b64 = base64::engine::general_purpose::STANDARD.encode(&signature);
 
     // Build the Signature element
     let mut sig_parts: Vec<String> = Vec::new();
@@ -505,9 +470,7 @@ fn sign_authn_request(
         // Find the start of this line
         let line_start = xml[..pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
         let indent = &xml[line_start..pos];
-        let mut result = String::with_capacity(
-            xml.len() + signature_element.len() + 64,
-        );
+        let mut result = String::with_capacity(xml.len() + signature_element.len() + 64);
         result.push_str(&xml[..line_start]);
         result.push_str(indent);
         result.push_str(&signature_element);
@@ -591,8 +554,7 @@ fn parse_assertion_xml(xml: &str) -> Result<SamlAttributes, String> {
         match reader.read_event_into(&mut buf) {
             Ok(quick_xml::events::Event::Start(ref e))
             | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag =
-                    String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 match local_name(&tag) {
                     "NameID" => {
                         in_name_id = true;
@@ -602,8 +564,7 @@ fn parse_assertion_xml(xml: &str) -> Result<SamlAttributes, String> {
                         for attr in e.attributes().flatten() {
                             if attr.key.as_ref() == b"Name" {
                                 current_attr_name =
-                                    String::from_utf8_lossy(&attr.value)
-                                        .to_string();
+                                    String::from_utf8_lossy(&attr.value).to_string();
                             }
                         }
                     }
@@ -626,24 +587,19 @@ fn parse_assertion_xml(xml: &str) -> Result<SamlAttributes, String> {
                         name_id = Some(text_str);
                     } else if in_session_index {
                         session_index = Some(text_str);
-                    } else if in_attribute_value
-                        && !current_attr_name.is_empty()
-                    {
+                    } else if in_attribute_value && !current_attr_name.is_empty() {
                         current_text.push_str(&text_str);
                     }
                 }
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
-                let tag =
-                    String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 match local_name(&tag) {
                     "NameID" => {
                         in_name_id = false;
                     }
                     "AttributeValue" => {
-                        if in_attribute_value
-                            && !current_attr_name.is_empty()
-                        {
+                        if in_attribute_value && !current_attr_name.is_empty() {
                             let val = current_text.trim().to_string();
                             if !val.is_empty() {
                                 attributes
@@ -662,16 +618,13 @@ fn parse_assertion_xml(xml: &str) -> Result<SamlAttributes, String> {
                 }
             }
             Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => {
-                return Err(format!("SAML XML parse error: {e}"))
-            }
+            Err(e) => return Err(format!("SAML XML parse error: {e}")),
             _ => {}
         }
         buf.clear();
     }
 
-    let name_id =
-        name_id.ok_or("No NameID found in SAML assertion")?;
+    let name_id = name_id.ok_or("No NameID found in SAML assertion")?;
     let session_index = session_index.or_else(|| {
         attributes
             .remove("SessionIndex")
@@ -686,10 +639,7 @@ fn parse_assertion_xml(xml: &str) -> Result<SamlAttributes, String> {
 }
 
 /// Validate the XML signature in a SAML response.
-fn validate_response_signature(
-    xml: &str,
-    idp_cert_pem: &str,
-) -> Result<(), String> {
+fn validate_response_signature(xml: &str, idp_cert_pem: &str) -> Result<(), String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     let mut in_signature_value = false;
@@ -702,8 +652,7 @@ fn validate_response_signature(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(quick_xml::events::Event::Start(ref e)) => {
-                let tag =
-                    String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 match local_name(&tag) {
                     "SignedInfo" => {
                         in_signed_info = true;
@@ -713,11 +662,9 @@ fn validate_response_signature(
                         signed_info_buf.extend_from_slice(e.name().as_ref());
                         for attr in e.attributes().flatten() {
                             signed_info_buf.push(b' ');
-                            signed_info_buf
-                                .extend_from_slice(attr.key.as_ref());
+                            signed_info_buf.extend_from_slice(attr.key.as_ref());
                             signed_info_buf.extend_from_slice(b"=\"");
-                            signed_info_buf
-                                .extend_from_slice(&attr.value);
+                            signed_info_buf.extend_from_slice(&attr.value);
                             signed_info_buf.push(b'"');
                         }
                         signed_info_buf.push(b'>');
@@ -730,15 +677,12 @@ fn validate_response_signature(
                         signed_info_depth += 1;
                         // Capture element start
                         signed_info_buf.extend_from_slice(b"<");
-                        signed_info_buf
-                            .extend_from_slice(e.name().as_ref());
+                        signed_info_buf.extend_from_slice(e.name().as_ref());
                         for attr in e.attributes().flatten() {
                             signed_info_buf.push(b' ');
-                            signed_info_buf
-                                .extend_from_slice(attr.key.as_ref());
+                            signed_info_buf.extend_from_slice(attr.key.as_ref());
                             signed_info_buf.extend_from_slice(b"=\"");
-                            signed_info_buf
-                                .extend_from_slice(&attr.value);
+                            signed_info_buf.extend_from_slice(&attr.value);
                             signed_info_buf.push(b'"');
                         }
                         signed_info_buf.push(b'>');
@@ -747,19 +691,15 @@ fn validate_response_signature(
                 }
             }
             Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag =
-                    String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 if in_signed_info {
                     signed_info_buf.extend_from_slice(b"<");
-                    signed_info_buf
-                        .extend_from_slice(e.name().as_ref());
+                    signed_info_buf.extend_from_slice(e.name().as_ref());
                     for attr in e.attributes().flatten() {
                         signed_info_buf.push(b' ');
-                        signed_info_buf
-                            .extend_from_slice(attr.key.as_ref());
+                        signed_info_buf.extend_from_slice(attr.key.as_ref());
                         signed_info_buf.extend_from_slice(b"=\"");
-                        signed_info_buf
-                            .extend_from_slice(&attr.value);
+                        signed_info_buf.extend_from_slice(&attr.value);
                         signed_info_buf.push(b'"');
                     }
                     signed_info_buf.extend_from_slice(b"/>");
@@ -775,17 +715,14 @@ fn validate_response_signature(
                     signature_value.push_str(&raw);
                 }
                 if in_signed_info {
-                    signed_info_buf
-                        .extend_from_slice(e.as_ref());
+                    signed_info_buf.extend_from_slice(e.as_ref());
                 }
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
-                let tag =
-                    String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 if in_signed_info {
                     signed_info_buf.extend_from_slice(b"</");
-                    signed_info_buf
-                        .extend_from_slice(e.name().as_ref());
+                    signed_info_buf.extend_from_slice(e.name().as_ref());
                     signed_info_buf.push(b'>');
                     signed_info_depth -= 1;
                     if signed_info_depth == 0 {
@@ -797,33 +734,25 @@ fn validate_response_signature(
                 }
             }
             Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => {
-                return Err(format!(
-                    "XML parse error finding signature: {e}"
-                ))
-            }
+            Err(e) => return Err(format!("XML parse error finding signature: {e}")),
             _ => {}
         }
         buf.clear();
     }
 
     if signature_value.is_empty() {
-        return Err(
-            "No SignatureValue found in SAML response".to_string()
-        );
+        return Err("No SignatureValue found in SAML response".to_string());
     }
 
     let cert_der = parse_certificate_der(idp_cert_pem)?;
     let signed_info_str =
-        String::from_utf8(signed_info_buf)
-            .map_err(|e| format!("SignedInfo UTF-8 error: {e}"))?;
-    let signed_info_canonical =
-        exclusive_canonicalize(&signed_info_str);
+        String::from_utf8(signed_info_buf).map_err(|e| format!("SignedInfo UTF-8 error: {e}"))?;
+    let signed_info_canonical = exclusive_canonicalize(&signed_info_str);
 
     verify_rsa_sha256(
         &cert_der,
         signed_info_canonical.as_bytes(),
-        &signature_value.trim(),
+        signature_value.trim(),
     )
 }
 
@@ -840,27 +769,18 @@ fn validate_time_conditions(xml: &str) -> Result<(), String> {
         match reader.read_event_into(&mut buf) {
             Ok(quick_xml::events::Event::Start(ref e))
             | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag =
-                    String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
                 match local_name(&tag) {
                     "Conditions" => {
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(
-                                attr.key.as_ref(),
-                            )
-                            .to_string();
-                            let val = String::from_utf8_lossy(
-                                &attr.value,
-                            )
-                            .to_string();
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
                             match key.as_str() {
                                 "NotBefore" => {
-                                    conditions_not_before =
-                                        parse_saml_datetime(&val).ok();
+                                    conditions_not_before = parse_saml_datetime(&val).ok();
                                 }
                                 "NotOnOrAfter" => {
-                                    conditions_not_on_or_after =
-                                        parse_saml_datetime(&val).ok();
+                                    conditions_not_on_or_after = parse_saml_datetime(&val).ok();
                                 }
                                 _ => {}
                             }
@@ -868,17 +788,10 @@ fn validate_time_conditions(xml: &str) -> Result<(), String> {
                     }
                     "SubjectConfirmationData" => {
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(
-                                attr.key.as_ref(),
-                            )
-                            .to_string();
-                            let val = String::from_utf8_lossy(
-                                &attr.value,
-                            )
-                            .to_string();
+                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let val = String::from_utf8_lossy(&attr.value).to_string();
                             if key == "NotOnOrAfter" {
-                                subject_not_on_or_after =
-                                    parse_saml_datetime(&val).ok();
+                                subject_not_on_or_after = parse_saml_datetime(&val).ok();
                             }
                         }
                     }
@@ -886,9 +799,7 @@ fn validate_time_conditions(xml: &str) -> Result<(), String> {
                 }
             }
             Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => {
-                return Err(format!("XML parse error: {e}"))
-            }
+            Err(e) => return Err(format!("XML parse error: {e}")),
             _ => {}
         }
         buf.clear();
@@ -898,16 +809,12 @@ fn validate_time_conditions(xml: &str) -> Result<(), String> {
 
     if let Some(t) = conditions_not_before {
         if now < t {
-            return Err(format!(
-                "SAML assertion not yet valid (NotBefore: {t})"
-            ));
+            return Err(format!("SAML assertion not yet valid (NotBefore: {t})"));
         }
     }
     if let Some(t) = conditions_not_on_or_after {
         if now >= t {
-            return Err(format!(
-                "SAML assertion expired (NotOnOrAfter: {t})"
-            ));
+            return Err(format!("SAML assertion expired (NotOnOrAfter: {t})"));
         }
     }
     if let Some(t) = subject_not_on_or_after {
@@ -926,27 +833,18 @@ fn parse_saml_datetime(s: &str) -> Result<DateTime<Utc>, String> {
     DateTime::parse_from_rfc3339(s)
         .map(|dt| dt.with_timezone(&Utc))
         .or_else(|_| {
-            DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.fZ")
-                .map(|dt| dt.with_timezone(&Utc))
+            DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.fZ").map(|dt| dt.with_timezone(&Utc))
         })
         .or_else(|_| {
-            DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ")
-                .map(|dt| dt.with_timezone(&Utc))
+            DateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%SZ").map(|dt| dt.with_timezone(&Utc))
         })
         .map_err(|e| format!("Invalid SAML datetime '{s}': {e}"))
 }
 
 /// Extract group memberships from parsed SAML attributes.
-pub fn extract_groups(
-    attrs: &SamlAttributes,
-    groups_attribute: Option<&str>,
-) -> Vec<String> {
+pub fn extract_groups(attrs: &SamlAttributes, groups_attribute: Option<&str>) -> Vec<String> {
     let attr_name = groups_attribute.unwrap_or("groups");
-    attrs
-        .attributes
-        .get(attr_name)
-        .cloned()
-        .unwrap_or_default()
+    attrs.attributes.get(attr_name).cloned().unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -1066,20 +964,12 @@ impl AuthProvider for SamlProvider {
         // Generate AuthnRequest and redirect to IdP
         let metadata = match self.load_idp_metadata().await {
             Ok(m) => m,
-            Err(e) => {
-                return AuthResult::Unavailable(format!(
-                    "SAML IdP metadata error: {e}"
-                ))
-            }
+            Err(e) => return AuthResult::Unavailable(format!("SAML IdP metadata error: {e}")),
         };
 
         match build_authn_request(&self.config, &metadata.sso_url) {
-            Ok((_id, _xml, redirect_url)) => {
-                AuthResult::Redirect(redirect_url)
-            }
-            Err(e) => AuthResult::Failure(format!(
-                "Failed to build SAML AuthnRequest: {e}"
-            )),
+            Ok((_id, _xml, redirect_url)) => AuthResult::Redirect(redirect_url),
+            Err(e) => AuthResult::Failure(format!("Failed to build SAML AuthnRequest: {e}")),
         }
     }
 
@@ -1090,29 +980,15 @@ impl AuthProvider for SamlProvider {
 
 impl SamlProvider {
     /// Handle the ACS callback with a SAMLResponse.
-    async fn handle_acs_callback(
-        &self,
-        saml_response_b64: &str,
-    ) -> AuthResult {
+    async fn handle_acs_callback(&self, saml_response_b64: &str) -> AuthResult {
         let metadata = match self.load_idp_metadata().await {
             Ok(m) => m,
-            Err(e) => {
-                return AuthResult::Unavailable(format!(
-                    "SAML IdP metadata error: {e}"
-                ))
-            }
+            Err(e) => return AuthResult::Unavailable(format!("SAML IdP metadata error: {e}")),
         };
 
-        match parse_saml_response(
-            saml_response_b64,
-            &self.config,
-            &metadata.certificate,
-        ) {
+        match parse_saml_response(saml_response_b64, &self.config, &metadata.certificate) {
             Ok(attrs) => {
-                let groups = extract_groups(
-                    &attrs,
-                    self.config.groups_attribute.as_deref(),
-                );
+                let groups = extract_groups(&attrs, self.config.groups_attribute.as_deref());
                 AuthResult::Success {
                     subject: attrs.name_id.clone(),
                     display_name: attrs.name_id,
@@ -1120,9 +996,7 @@ impl SamlProvider {
                     role: None,
                 }
             }
-            Err(e) => AuthResult::Failure(format!(
-                "SAML response validation failed: {e}"
-            )),
+            Err(e) => AuthResult::Failure(format!("SAML response validation failed: {e}")),
         }
     }
 }

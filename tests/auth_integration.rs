@@ -3,7 +3,7 @@
 
 use persea::audit;
 use persea::auth_chain::AuthChain;
-use persea::auth_provider::{AuthRequest, AuthResult, AuthProvider, Capabilities};
+use persea::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};
 use persea::crypto;
 use persea::db;
 use persea::password;
@@ -54,8 +54,8 @@ fn totp_enrollment_and_verify() {
     // Use totp-rs directly: generate a TOTP, generate a code, verify it
     use totp_rs::{Algorithm, TOTP};
     let secret_bytes = vec![
-        0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x21, 0xde, 0xad, 0xbe, 0xef,
-        0xca, 0xfe, 0xba, 0xbe, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+        0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x21, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x01,
+        0x23, 0x45, 0x67, 0x89, 0xab,
     ];
     let totp_gen = TOTP::new(
         Algorithm::SHA1,
@@ -140,7 +140,10 @@ fn audit_chain_detects_tampering() {
     let result = audit::verify_chain(&db, None, None).unwrap();
     assert_eq!(result.status, audit::ChainStatus::Broken);
     assert!(!result.errors.is_empty());
-    assert!(result.errors.iter().any(|e| e.event_id == id2 || e.event_id == id1));
+    assert!(result
+        .errors
+        .iter()
+        .any(|e| e.event_id == id2 || e.event_id == id1));
 }
 
 // ── 4. RBAC permissions ─────────────────────────────────────────────────────
@@ -309,10 +312,7 @@ impl AuthProvider for TestFailProvider {
 
 #[tokio::test]
 async fn auth_chain_first_success_wins() {
-    let chain = AuthChain::new(vec![
-        Box::new(TestFailProvider),
-        Box::new(TestOkProvider),
-    ]);
+    let chain = AuthChain::new(vec![Box::new(TestFailProvider), Box::new(TestOkProvider)]);
     let result = chain.authenticate(&AuthRequest::default()).await;
     match result {
         AuthResult::Success { subject, .. } => assert_eq!(subject, "ok-user@test.com"),
@@ -322,10 +322,7 @@ async fn auth_chain_first_success_wins() {
 
 #[tokio::test]
 async fn auth_chain_all_fail_returns_failure() {
-    let chain = AuthChain::new(vec![
-        Box::new(TestFailProvider),
-        Box::new(TestFailProvider),
-    ]);
+    let chain = AuthChain::new(vec![Box::new(TestFailProvider), Box::new(TestFailProvider)]);
     let result = chain.authenticate(&AuthRequest::default()).await;
     assert!(matches!(result, AuthResult::Failure(_)));
 }

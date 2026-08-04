@@ -27,7 +27,9 @@ pub async fn list_vms(
     Extension(client): Extension<VsphereState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let Some(client) = client else {
-        return Err(AppError::Vsphere("vSphere not configured or unavailable".into()));
+        return Err(AppError::Vsphere(
+            "vSphere not configured or unavailable".into(),
+        ));
     };
 
     let mut client = client.lock().await;
@@ -44,7 +46,9 @@ pub async fn power_action(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let Some(client) = client else {
-        return Err(AppError::Vsphere("vSphere not configured or unavailable".into()));
+        return Err(AppError::Vsphere(
+            "vSphere not configured or unavailable".into(),
+        ));
     };
 
     let action = body

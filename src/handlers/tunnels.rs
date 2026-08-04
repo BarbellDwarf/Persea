@@ -81,10 +81,7 @@ pub async fn create_jump_host(
         tracing::error!(error = %e, "failed to create jump host");
         AppError::Internal("failed to create jump host".into())
     })?;
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "id": id })),
-    ))
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
 }
 
 pub async fn update_jump_host(

@@ -545,7 +545,10 @@ mod tests {
 
     use proptest::prelude::*;
     fn valid_instruction_strategy() -> impl Strategy<Value = Instruction> {
-        ("[a-z]{1,12}", proptest::collection::vec("[a-zA-Z0-9._/: -]{0,64}", 0..6))
+        (
+            "[a-z]{1,12}",
+            proptest::collection::vec("[a-zA-Z0-9._/: -]{0,64}", 0..6),
+        )
             .prop_map(|(opcode, args)| Instruction::new(opcode, args))
     }
     proptest! {

@@ -12,17 +12,18 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
 
-use crate::auth_provider::{AuthRequest, AuthResult, AuthProvider, Capabilities};
+use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
 /// RADIUS authentication protocol.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthProtocol {
     /// Password Authentication Protocol (simplest, cleartext over RADIUS).
+    #[default]
     Pap,
     /// Challenge-Handshake Authentication Protocol.
     Chap,
@@ -30,26 +31,15 @@ pub enum AuthProtocol {
     MsChapV2,
 }
 
-impl Default for AuthProtocol {
-    fn default() -> Self {
-        Self::Pap
-    }
-}
-
 /// Provider mode — whether RADIUS is the primary authenticator or an MFA step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RadiusMode {
     /// RADIUS is the primary authentication method.
+    #[default]
     Primary,
     /// RADIUS is used as a second factor (MFA) after primary auth.
     Mfa,
-}
-
-impl Default for RadiusMode {
-    fn default() -> Self {
-        Self::Primary
-    }
 }
 
 /// Configuration for the RADIUS auth provider.
@@ -185,7 +175,7 @@ fn parse_attributes(data: &[u8]) -> Vec<RadiusAttribute> {
 /// The first block uses the Request Authenticator as the "previous block".
 fn pap_encrypt_password(password: &str, shared_secret: &[u8], request_auth: &[u8; 16]) -> Vec<u8> {
     let pw = password.as_bytes();
-    let padded_len = ((pw.len() + 15) / 16) * 16;
+    let padded_len = pw.len().div_ceil(16) * 16;
     let mut padded = vec![0u8; padded_len];
     padded[..pw.len()].copy_from_slice(pw);
 
@@ -327,7 +317,10 @@ fn parse_response(data: &[u8]) -> Option<(u8, Vec<RadiusAttribute>)> {
 
 /// Find the first attribute of a given type in a list.
 fn find_attribute(attrs: &[RadiusAttribute], r#type: u8) -> Option<&[u8]> {
-    attrs.iter().find(|a| a.r#type == r#type).map(|a| a.value.as_slice())
+    attrs
+        .iter()
+        .find(|a| a.r#type == r#type)
+        .map(|a| a.value.as_slice())
 }
 
 // ---------------------------------------------------------------------------
@@ -460,7 +453,8 @@ impl RadiusClient {
                 Ok((n, _addr)) => {
                     let response = &buf[..n];
                     // Verify Response Authenticator
-                    if !verify_response_authenticator(response, &request_auth, &self.shared_secret) {
+                    if !verify_response_authenticator(response, &request_auth, &self.shared_secret)
+                    {
                         tracing::warn!(
                             attempt,
                             "RADIUS response authenticator verification failed"
@@ -526,16 +520,18 @@ impl RadiusProvider {
     }
 
     /// Build the NAS identifier bytes for RADIUS attribute 32.
+    #[allow(dead_code)]
     fn nas_identifier_bytes(&self) -> Vec<u8> {
         self.config.nas_identifier.as_bytes().to_vec()
     }
 
     /// Build the NAS-IP-Address attribute (type 4) if configured.
+    #[allow(dead_code)]
     fn nas_ip_bytes(&self) -> Option<Vec<u8>> {
         self.config.nas_ip.as_ref().and_then(|ip| {
-            ip.parse::<std::net::Ipv4Addr>().ok().map(|addr| {
-                addr.octets().to_vec()
-            })
+            ip.parse::<std::net::Ipv4Addr>()
+                .ok()
+                .map(|addr| addr.octets().to_vec())
         })
     }
 
@@ -547,9 +543,7 @@ impl RadiusProvider {
 
     /// Extract a printable Reply-Message from attributes, if present.
     fn extract_reply_message(attrs: &[RadiusAttribute]) -> Option<String> {
-        find_attribute(attrs, ATTR_REPLY_MESSAGE).map(|v| {
-            String::from_utf8_lossy(v).to_string()
-        })
+        find_attribute(attrs, ATTR_REPLY_MESSAGE).map(|v| String::from_utf8_lossy(v).to_string())
     }
 }
 
@@ -572,7 +566,11 @@ impl AuthProvider for RadiusProvider {
             _ => return AuthResult::Failure("No username provided".into()),
         };
         let password = request.password.as_deref().unwrap_or("");
-        let nas_ip = self.config.nas_ip.as_ref().and_then(|ip| ip.parse::<Ipv4Addr>().ok());
+        let nas_ip = self
+            .config
+            .nas_ip
+            .as_ref()
+            .and_then(|ip| ip.parse::<Ipv4Addr>().ok());
 
         // Check if this is a continuation of an Access-Challenge (MFA response)
         if let Some(callback) = &request.callback_params {
@@ -616,8 +614,7 @@ impl AuthProvider for RadiusProvider {
                             let state = find_attribute(&attrs, ATTR_STATE)
                                 .unwrap_or_default()
                                 .to_vec();
-                            let msg = Self::extract_reply_message(&attrs)
-                                .unwrap_or_default();
+                            let msg = Self::extract_reply_message(&attrs).unwrap_or_default();
                             let ch = RadiusChallenge {
                                 state,
                                 username: challenge.username,
@@ -671,7 +668,14 @@ impl RadiusProvider {
 
         // Run the blocking UDP I/O in a blocking thread
         let result = tokio::task::spawn_blocking(move || {
-            client.send_access_request(id, &username_owned, &password_owned, &nas_id, nas_ip_owned.as_ref(), None)
+            client.send_access_request(
+                id,
+                &username_owned,
+                &password_owned,
+                &nas_id,
+                nas_ip_owned.as_ref(),
+                None,
+            )
         })
         .await;
 
@@ -699,8 +703,7 @@ impl RadiusProvider {
                     let state = find_attribute(&attrs, ATTR_STATE)
                         .unwrap_or_default()
                         .to_vec();
-                    let msg = Self::extract_reply_message(&attrs)
-                        .unwrap_or_default();
+                    let msg = Self::extract_reply_message(&attrs).unwrap_or_default();
                     let ch = RadiusChallenge {
                         state,
                         username: username_for_log.clone(),
@@ -927,15 +930,8 @@ mod tests {
         use rand::RngExt;
         rand::rng().fill(&mut request_auth);
 
-        let (packet, _ra) = build_access_request(
-            42,
-            "alice",
-            "password123",
-            secret,
-            "nas1",
-            None,
-            None,
-        );
+        let (packet, _ra) =
+            build_access_request(42, "alice", "password123", secret, "nas1", None, None);
 
         // Check header
         assert_eq!(packet[0], CODE_ACCESS_REQUEST); // code
@@ -988,6 +984,10 @@ mod tests {
         let resp_auth = hasher.finalize();
         response[4..20].copy_from_slice(&resp_auth);
 
-        assert!(verify_response_authenticator(&response, &request_auth, secret));
+        assert!(verify_response_authenticator(
+            &response,
+            &request_auth,
+            secret
+        ));
     }
 }

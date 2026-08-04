@@ -665,17 +665,40 @@ mod tests {
     use super::*;
     use std::pin::Pin;
     use std::task::{Context, Poll};
-    struct MockStream { written: Vec<u8> }
+    struct MockStream {
+        written: Vec<u8>,
+    }
     impl MockStream {
-        fn new() -> Self { Self { written: Vec::new() } }
-        fn output(&self) -> &str { std::str::from_utf8(&self.written).unwrap() }
+        fn new() -> Self {
+            Self {
+                written: Vec::new(),
+            }
+        }
+        fn output(&self) -> &str {
+            std::str::from_utf8(&self.written).unwrap()
+        }
     }
     impl AsyncWrite for MockStream {
-        fn poll_write(mut self: Pin<&mut Self>, _cx: &mut Context<'_>, buf: &[u8]) -> Poll<Result<usize, std::io::Error>> {
-            self.written.extend_from_slice(buf); Poll::Ready(Ok(buf.len()))
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<Result<usize, std::io::Error>> {
+            self.written.extend_from_slice(buf);
+            Poll::Ready(Ok(buf.len()))
         }
-        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> { Poll::Ready(Ok(())) }
-        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> { Poll::Ready(Ok(())) }
+        fn poll_flush(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Result<(), std::io::Error>> {
+            Poll::Ready(Ok(()))
+        }
     }
     #[tokio::test]
     async fn send_handshake_ssh_wiresize() {
@@ -698,7 +721,9 @@ mod tests {
     #[tokio::test]
     async fn send_handshake_spice() {
         let mut s = MockStream::new();
-        send_handshake(&mut s, 2560, 1440, 120, false).await.unwrap();
+        send_handshake(&mut s, 2560, 1440, 120, false)
+            .await
+            .unwrap();
         assert_eq!(s.output(), "4.size,4.2560,4.1440,3.120;5.audio,9.audio/L16,8.audio/L8;5.video;5.image,9.image/png,10.image/jpeg,10.image/webp;8.timezone,18.Australia/Brisbane;");
     }
     #[tokio::test]
@@ -712,31 +737,69 @@ mod tests {
     #[tokio::test]
     async fn select_for_ssh() {
         let mut s = MockStream::new();
-        s.write_all(Instruction::new("select", vec!["ssh".into()]).encode().as_bytes()).await.unwrap();
+        s.write_all(
+            Instruction::new("select", vec!["ssh".into()])
+                .encode()
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
         assert_eq!(s.output(), "6.select,3.ssh;");
     }
     #[tokio::test]
     async fn select_for_rdp() {
         let mut s = MockStream::new();
-        s.write_all(Instruction::new("select", vec!["rdp".into()]).encode().as_bytes()).await.unwrap();
+        s.write_all(
+            Instruction::new("select", vec!["rdp".into()])
+                .encode()
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
         assert_eq!(s.output(), "6.select,3.rdp;");
     }
     #[tokio::test]
     async fn select_for_vnc() {
         let mut s = MockStream::new();
-        s.write_all(Instruction::new("select", vec!["vnc".into()]).encode().as_bytes()).await.unwrap();
+        s.write_all(
+            Instruction::new("select", vec!["vnc".into()])
+                .encode()
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
         assert_eq!(s.output(), "6.select,3.vnc;");
     }
     #[tokio::test]
     async fn select_for_spice() {
         let mut s = MockStream::new();
-        s.write_all(Instruction::new("select", vec!["spice".into()]).encode().as_bytes()).await.unwrap();
+        s.write_all(
+            Instruction::new("select", vec!["spice".into()])
+                .encode()
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
         assert_eq!(s.output(), "6.select,5.spice;");
     }
     #[tokio::test]
     async fn connect_instruction_args() {
         let mut s = MockStream::new();
-        s.write_all(Instruction::new("connect", vec!["10.0.0.5".into(), "22".into(), "admin".into(), "secret".into()]).encode().as_bytes()).await.unwrap();
+        s.write_all(
+            Instruction::new(
+                "connect",
+                vec![
+                    "10.0.0.5".into(),
+                    "22".into(),
+                    "admin".into(),
+                    "secret".into(),
+                ],
+            )
+            .encode()
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
         let parsed = Instruction::parse(s.output()).unwrap();
         assert_eq!(parsed.args[0], "10.0.0.5");
         assert_eq!(parsed.args[3], "secret");
@@ -744,9 +807,33 @@ mod tests {
     #[tokio::test]
     async fn full_handshake_sequence_ssh() {
         let mut s = MockStream::new();
-        s.write_all(Instruction::new("select", vec!["ssh".into()]).encode().as_bytes()).await.unwrap();
+        s.write_all(
+            Instruction::new("select", vec!["ssh".into()])
+                .encode()
+                .as_bytes(),
+        )
+        .await
+        .unwrap();
         send_handshake(&mut s, 1920, 1080, 96, false).await.unwrap();
-        s.write_all(Instruction::new("connect", vec!["10.0.0.5".into(), "22".into(), "admin".into(), "password".into(), "".into(), "1920".into(), "1080".into(), "96".into()]).encode().as_bytes()).await.unwrap();
+        s.write_all(
+            Instruction::new(
+                "connect",
+                vec![
+                    "10.0.0.5".into(),
+                    "22".into(),
+                    "admin".into(),
+                    "password".into(),
+                    "".into(),
+                    "1920".into(),
+                    "1080".into(),
+                    "96".into(),
+                ],
+            )
+            .encode()
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
         assert_eq!(s.output().matches(';').count(), 7);
     }
     #[test]

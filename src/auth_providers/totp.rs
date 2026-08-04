@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::auth_provider::{AuthRequest, AuthResult, AuthProvider, Capabilities};
+use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};
 use crate::db::Db;
 use crate::totp;
 
@@ -67,12 +67,7 @@ impl AuthProvider for TotpProvider {
             Err(_) => return false,
         };
 
-        totp::verify_user_code(
-            &self.db,
-            user.id,
-            factor_data,
-            self.config.skew,
-        )
+        totp::verify_user_code(&self.db, user.id, factor_data, self.config.skew)
     }
 }
 

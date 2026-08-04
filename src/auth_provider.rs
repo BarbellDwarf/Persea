@@ -268,9 +268,7 @@ mod tests {
     async fn stub_provider_works() {
         let provider = StubProvider;
         assert_eq!(provider.id(), "stub");
-        assert!(provider
-            .capabilities()
-            .contains(Capabilities::AUTHENTICATE));
+        assert!(provider.capabilities().contains(Capabilities::AUTHENTICATE));
         assert!(!provider.has_inline_login_form());
 
         let result = provider.authenticate(&AuthRequest::default()).await;

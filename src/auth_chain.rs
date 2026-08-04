@@ -4,7 +4,7 @@
 //! primary provider in order; the first `Success` or `Redirect` wins.
 //! An optional MFA provider (TOTP) is applied after primary auth.
 
-use crate::auth_provider::{AuthRequest, AuthResult, AuthProvider};
+use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult};
 
 /// An ordered chain of auth providers.  First match wins.
 pub struct AuthChain {
@@ -44,7 +44,9 @@ impl AuthChain {
     /// Set the MFA (second-factor) provider.
     pub fn with_mfa(mut self, provider: Box<dyn AuthProvider>) -> Self {
         debug_assert!(
-            provider.capabilities().contains(crate::auth_provider::Capabilities::MFA),
+            provider
+                .capabilities()
+                .contains(crate::auth_provider::Capabilities::MFA),
             "MFA provider should have MFA capability"
         );
         self.mfa_provider = Some(provider);
@@ -76,7 +78,7 @@ impl AuthChain {
                 mfa = Some(
                     providers
                         .remove(method)
-                        .ok_or_else(|| format!("totp configured but provider not provided"))?,
+                        .ok_or_else(|| "totp configured but provider not provided".to_string())?,
                 );
                 continue;
             }
@@ -120,9 +122,7 @@ impl AuthChain {
 
     /// Whether any primary provider has inline login form capability.
     pub fn has_inline_login_form(&self) -> bool {
-        self.providers
-            .iter()
-            .any(|p| p.has_inline_login_form())
+        self.providers.iter().any(|p| p.has_inline_login_form())
     }
 
     /// Look up a user across all providers that support it.
@@ -158,7 +158,7 @@ impl AuthChain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth_provider::{AuthRequest, AuthResult, AuthProvider, Capabilities};
+    use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};
     use async_trait::async_trait;
     use std::collections::HashMap;
 
@@ -167,8 +167,12 @@ mod tests {
 
     #[async_trait]
     impl AuthProvider for OkProvider {
-        fn id(&self) -> &str { "ok" }
-        fn capabilities(&self) -> Capabilities { Capabilities::AUTHENTICATE }
+        fn id(&self) -> &str {
+            "ok"
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::AUTHENTICATE
+        }
         async fn authenticate(&self, _: &AuthRequest) -> AuthResult {
             AuthResult::Success {
                 subject: "ok-user".into(),
@@ -184,8 +188,12 @@ mod tests {
 
     #[async_trait]
     impl AuthProvider for FailProvider {
-        fn id(&self) -> &str { "fail" }
-        fn capabilities(&self) -> Capabilities { Capabilities::AUTHENTICATE }
+        fn id(&self) -> &str {
+            "fail"
+        }
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::AUTHENTICATE
+        }
         async fn authenticate(&self, _: &AuthRequest) -> AuthResult {
             AuthResult::Failure("nope".into())
         }
@@ -196,7 +204,9 @@ mod tests {
 
     #[async_trait]
     impl AuthProvider for RedirectProvider {
-        fn id(&self) -> &str { "redirect" }
+        fn id(&self) -> &str {
+            "redirect"
+        }
         fn capabilities(&self) -> Capabilities {
             Capabilities::AUTHENTICATE | Capabilities::REDIRECT
         }
@@ -207,10 +217,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_first_success_wins() {
-        let chain = AuthChain::new(vec![
-            Box::new(FailProvider),
-            Box::new(OkProvider),
-        ]);
+        let chain = AuthChain::new(vec![Box::new(FailProvider), Box::new(OkProvider)]);
         let result = chain.authenticate(&AuthRequest::default()).await;
         match result {
             AuthResult::Success { subject, .. } => assert_eq!(subject, "ok-user"),
@@ -220,10 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn chain_all_fail_returns_failure() {
-        let chain = AuthChain::new(vec![
-            Box::new(FailProvider),
-            Box::new(FailProvider),
-        ]);
+        let chain = AuthChain::new(vec![Box::new(FailProvider), Box::new(FailProvider)]);
         let result = chain.authenticate(&AuthRequest::default()).await;
         assert!(matches!(result, AuthResult::Failure(_)));
     }
@@ -248,10 +252,7 @@ mod tests {
 
     #[test]
     fn chain_provider_ids() {
-        let chain = AuthChain::new(vec![
-            Box::new(FailProvider),
-            Box::new(OkProvider),
-        ]);
+        let chain = AuthChain::new(vec![Box::new(FailProvider), Box::new(OkProvider)]);
         assert_eq!(chain.provider_ids(), vec!["fail", "ok"]);
         assert_eq!(chain.provider_count(), 2);
     }

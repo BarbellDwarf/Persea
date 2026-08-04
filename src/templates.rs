@@ -133,10 +133,7 @@ fn render_template(template_name: &str, context: &impl Serialize) -> Response {
 }
 
 /// Render a page template wrapped in the app layout.
-fn render_app_page(
-    page_template: &str,
-    context: &impl Serialize,
-) -> Response {
+fn render_app_page(page_template: &str, context: &impl Serialize) -> Response {
     // minijinja renders the page template, which extends layouts/app.html
     render_template(page_template, context)
 }

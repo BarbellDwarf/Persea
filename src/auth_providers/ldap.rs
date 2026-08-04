@@ -4,7 +4,7 @@ use serde::Deserialize;
 use std::time::Duration;
 use tracing::{debug, warn};
 
-use crate::auth_provider::{AuthRequest, AuthProvider, AuthResult, Capabilities, UserInfo};
+use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities, UserInfo};
 
 // ---------------------------------------------------------------------------
 // Config
@@ -63,9 +63,15 @@ pub struct LdapConfig {
     pub email_attr: String,
 }
 
-fn default_timeout_secs() -> u64 { 10 }
-fn default_display_name_attr() -> String { "cn".into() }
-fn default_email_attr() -> String { "mail".into() }
+fn default_timeout_secs() -> u64 {
+    10
+}
+fn default_display_name_attr() -> String {
+    "cn".into()
+}
+fn default_email_attr() -> String {
+    "mail".into()
+}
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -94,10 +100,14 @@ impl LdapProvider {
 
     /// Bind with the service account credentials.
     fn bind_service_account(&self, conn: &mut LdapConn) -> Result<(), String> {
-        let res = conn.simple_bind(&self.config.bind_dn, &self.config.bind_password)
+        let res = conn
+            .simple_bind(&self.config.bind_dn, &self.config.bind_password)
             .map_err(|e| format!("LDAP bind request failed: {e}"))?;
         if res.rc != 0 {
-            return Err(format!("LDAP service bind failed: rc={} {}", res.rc, res.text));
+            return Err(format!(
+                "LDAP service bind failed: rc={} {}",
+                res.rc, res.text
+            ));
         }
         debug!("LDAP service bind succeeded: {}", res.rc);
         Ok(())
@@ -119,10 +129,18 @@ impl LdapProvider {
         username: &str,
     ) -> Result<(String, SearchEntry), String> {
         let filter = self.config.user_search_filter.replace("{}", username);
-        debug!("LDAP user search: base={}, filter={}", self.config.user_search_base, filter);
+        debug!(
+            "LDAP user search: base={}, filter={}",
+            self.config.user_search_base, filter
+        );
 
         let search_result = conn
-            .search(&self.config.user_search_base, Scope::Subtree, &filter, vec!["dn"])
+            .search(
+                &self.config.user_search_base,
+                Scope::Subtree,
+                &filter,
+                vec!["dn"],
+            )
             .map_err(|e| format!("LDAP user search failed: {e}"))?;
         let (entries, rs) = search_result
             .success()
@@ -130,10 +148,8 @@ impl LdapProvider {
 
         Self::check_result(rs.rc, &rs.text, "LDAP user search")?;
 
-        let search_entries: Vec<SearchEntry> = entries
-            .into_iter()
-            .map(SearchEntry::construct)
-            .collect();
+        let search_entries: Vec<SearchEntry> =
+            entries.into_iter().map(SearchEntry::construct).collect();
 
         match search_entries.len() {
             0 => Err(format!("no LDAP user found for '{username}'")),
@@ -143,17 +159,24 @@ impl LdapProvider {
                 debug!("LDAP found user: dn={dn}");
                 Ok((dn, entry))
             }
-            _ => Err(format!("ambiguous: {} LDAP users matched '{username}'", search_entries.len())),
+            _ => Err(format!(
+                "ambiguous: {} LDAP users matched '{username}'",
+                search_entries.len()
+            )),
         }
     }
 
     /// Attempt to bind as the found user DN with their password.
     fn bind_as_user(&self, user_dn: &str, password: &str) -> Result<(), String> {
         let mut conn = self.connect()?;
-        let res = conn.simple_bind(user_dn, password)
+        let res = conn
+            .simple_bind(user_dn, password)
             .map_err(|e| format!("LDAP user bind request failed: {e}"))?;
         if res.rc != 0 {
-            return Err(format!("LDAP user bind rejected: rc={} {}", res.rc, res.text));
+            return Err(format!(
+                "LDAP user bind rejected: rc={} {}",
+                res.rc, res.text
+            ));
         }
         Ok(())
     }
@@ -207,7 +230,11 @@ impl LdapProvider {
 
     /// Extract a display attribute from the search entry.
     fn get_attr(entry: &SearchEntry, attr: &str) -> Option<String> {
-        entry.attrs.get(attr).and_then(|v: &Vec<String>| v.first()).cloned()
+        entry
+            .attrs
+            .get(attr)
+            .and_then(|v: &Vec<String>| v.first())
+            .cloned()
     }
 }
 
@@ -290,10 +317,12 @@ impl AuthProvider for LdapProvider {
 
         let filter = &self.config.user_search_filter.replace("{}", subject);
         let search_result = conn
-            .search(subject, Scope::Base, filter, vec![
-                &self.config.display_name_attr,
-                &self.config.email_attr,
-            ])
+            .search(
+                subject,
+                Scope::Base,
+                filter,
+                vec![&self.config.display_name_attr, &self.config.email_attr],
+            )
             .ok()?;
 
         let (entries, rs) = search_result.success().ok()?;
@@ -358,7 +387,10 @@ mod tests {
         "#;
         let config: LdapConfig = toml::from_str(toml_str).unwrap();
         assert!(config.tls_skip_verify);
-        assert_eq!(config.group_search_base.as_deref(), Some("ou=groups,dc=example,dc=com"));
+        assert_eq!(
+            config.group_search_base.as_deref(),
+            Some("ou=groups,dc=example,dc=com")
+        );
         assert_eq!(config.group_search_filter.as_deref(), Some("(member={})"));
     }
 
@@ -382,13 +414,17 @@ mod tests {
     #[test]
     fn capabilities_include_groups_when_configured() {
         let provider = make_provider(Some("ou=g"), Some("(member={})"));
-        assert!(provider.capabilities().contains(Capabilities::RESOLVE_GROUPS));
+        assert!(provider
+            .capabilities()
+            .contains(Capabilities::RESOLVE_GROUPS));
     }
 
     #[test]
     fn capabilities_exclude_groups_when_not_configured() {
         let provider = make_provider(None, None);
-        assert!(!provider.capabilities().contains(Capabilities::RESOLVE_GROUPS));
+        assert!(!provider
+            .capabilities()
+            .contains(Capabilities::RESOLVE_GROUPS));
     }
 
     #[test]

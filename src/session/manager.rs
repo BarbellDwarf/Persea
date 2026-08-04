@@ -6,8 +6,8 @@ use crate::guacd::GuacdStream;
 use chrono::{DateTime, Utc};
 use rand::RngExt;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tokio_rustls::TlsConnector;
 use tokio_util::sync::CancellationToken;
@@ -394,7 +394,7 @@ impl SessionManager {
             let sessions = self.sessions.read().await;
             let session = sessions.get(&id);
             if let Some(session) = session {
-                let mut session = session.lock().await;
+            let mut session = session.lock().await;
                 session.container_id.take()
             } else {
                 None
@@ -693,7 +693,7 @@ impl SessionManager {
         let sessions = self.sessions.read().await;
         let mut count = 0;
         for (id, session) in sessions.iter() {
-            let mut session = session.lock().await;
+            let session = session.lock().await;
             if matches!(
                 session.status,
                 SessionStatus::Active | SessionStatus::Pending

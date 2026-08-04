@@ -104,7 +104,12 @@ pub async fn health(
 
     // Check disk usage
     let rec_path = state.recording_path().to_path_buf();
-    let max_disk = state.config().recording.as_ref().map(|r| r.max_disk_percent).unwrap_or(80);
+    let max_disk = state
+        .config()
+        .recording
+        .as_ref()
+        .map(|r| r.max_disk_percent)
+        .unwrap_or(80);
     let disk_usage = tokio::task::spawn_blocking(move || {
         crate::recording::disk_usage_percent(&rec_path).unwrap_or(0.0)
     })
@@ -130,7 +135,10 @@ pub async fn health(
         .filter(|s| s.status == crate::session::SessionStatus::Active)
         .count();
 
-    let status = if checks.values().all(|c| c["status"] == "up" || c["status"] == "ok") {
+    let status = if checks
+        .values()
+        .all(|c| c["status"] == "up" || c["status"] == "ok")
+    {
         "healthy"
     } else {
         "degraded"

@@ -34,7 +34,7 @@ impl SystemPermission {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "administer" => Some(Self::Administer),
             "create_session" => Some(Self::CreateSession),
@@ -69,7 +69,7 @@ impl ObjectPermission {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "read" => Some(Self::Read),
             "connect" => Some(Self::Connect),
@@ -182,9 +182,8 @@ pub fn delete_group(db: &Db, group_id: &str) -> rusqlite::Result<bool> {
 /// List all connection groups.
 pub fn list_groups(db: &Db) -> rusqlite::Result<Vec<ConnectionGroup>> {
     let conn = db.lock().unwrap();
-    let mut stmt = conn.prepare(
-        "SELECT id, name, parent_id, description, scope FROM rbac_groups ORDER BY name",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, parent_id, description, scope FROM rbac_groups ORDER BY name")?;
     let rows = stmt.query_map([], |row| {
         Ok(ConnectionGroup {
             id: row.get(0)?,
@@ -365,8 +364,7 @@ pub fn list_connection_permissions(
                 "group" => EntityType::Group,
                 _ => EntityType::User,
             },
-            permission: ObjectPermission::from_str(&perm)
-                .unwrap_or(ObjectPermission::Read),
+            permission: ObjectPermission::parse(&perm).unwrap_or(ObjectPermission::Read),
         })
     })?;
     rows.collect()
@@ -399,7 +397,7 @@ mod tests {
             ObjectPermission::Delete,
             ObjectPermission::Administer,
         ] {
-            assert_eq!(ObjectPermission::from_str(perm.as_str()), Some(perm));
+            assert_eq!(ObjectPermission::parse(perm.as_str()), Some(perm));
         }
     }
 
@@ -413,7 +411,7 @@ mod tests {
             SystemPermission::CreateUserGroup,
             SystemPermission::Audit,
         ] {
-            assert_eq!(SystemPermission::from_str(perm.as_str()), Some(perm));
+            assert_eq!(SystemPermission::parse(perm.as_str()), Some(perm));
         }
     }
 

@@ -1,5 +1,5 @@
-use super::types::*;
 use super::manager::SessionManager;
+use super::types::*;
 use crate::drive;
 use crate::guacd;
 use crate::tunnel;
@@ -599,7 +599,8 @@ impl SessionManager {
                         .port()
                         .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
 
-                check_allowed_network(url_host, url_port, &self.config.web_allowed_networks).await?;
+                check_allowed_network(url_host, url_port, &self.config.web_allowed_networks)
+                    .await?;
 
                 tracing::info!(
                     session_id = %session_id,
@@ -1108,8 +1109,13 @@ impl SessionManager {
                     tracing::warn!(session_id = %session_id, "Session expired (no browser connected)");
                     session.status = SessionStatus::Expired;
                     session.guacd_stream = None;
-                    super::cleanup_browser(&browser_mgr, &mut session, cleanup_on_close, retention_secs)
-                        .await;
+                    super::cleanup_browser(
+                        &browser_mgr,
+                        &mut session,
+                        cleanup_on_close,
+                        retention_secs,
+                    )
+                    .await;
                 }
             }
         });
@@ -1242,7 +1248,11 @@ fn parse_host_port(input: &str, default_port: u16) -> Result<(String, u16), Sess
 }
 
 /// Check that a host resolves to an IP within the allowed CIDR networks.
-async fn check_allowed_network(host: &str, port: u16, allowed: &[String]) -> Result<(), SessionError> {
+async fn check_allowed_network(
+    host: &str,
+    port: u16,
+    allowed: &[String],
+) -> Result<(), SessionError> {
     let networks: Vec<IpNetwork> = allowed
         .iter()
         .filter_map(|s| s.parse::<IpNetwork>().ok())
@@ -1270,9 +1280,7 @@ async fn check_allowed_network(host: &str, port: u16, allowed: &[String]) -> Res
     let addrs: Vec<std::net::SocketAddr> =
         tokio::task::spawn_blocking(move || format!("{}:{}", host_owned, port).to_socket_addrs())
             .await
-            .map_err(|e| {
-                SessionError::ValidationError(format!("DNS task join error: {}", e))
-            })?
+            .map_err(|e| SessionError::ValidationError(format!("DNS task join error: {}", e)))?
             .map_err(|e| {
                 SessionError::ValidationError(format!("failed to resolve host '{}': {}", host, e))
             })?
@@ -1424,8 +1432,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_check_allowed_network_ipv4_match() {
-        assert!(check_allowed_network("127.0.0.1", 22, &["127.0.0.0/8".into()]).await.is_ok());
-        assert!(check_allowed_network("10.1.2.3", 80, &["10.0.0.0/8".into()]).await.is_ok());
+        assert!(
+            check_allowed_network("127.0.0.1", 22, &["127.0.0.0/8".into()])
+                .await
+                .is_ok()
+        );
+        assert!(
+            check_allowed_network("10.1.2.3", 80, &["10.0.0.0/8".into()])
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -1446,8 +1462,12 @@ mod tests {
     async fn test_check_allowed_network_multiple_cidrs() {
         let cidrs = vec!["10.0.0.0/8".into(), "192.168.0.0/16".into()];
         assert!(check_allowed_network("10.1.1.1", 22, &cidrs).await.is_ok());
-        assert!(check_allowed_network("192.168.1.1", 22, &cidrs).await.is_ok());
-        assert!(check_allowed_network("172.16.0.1", 22, &cidrs).await.is_err());
+        assert!(check_allowed_network("192.168.1.1", 22, &cidrs)
+            .await
+            .is_ok());
+        assert!(check_allowed_network("172.16.0.1", 22, &cidrs)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

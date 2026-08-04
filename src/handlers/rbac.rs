@@ -5,11 +5,7 @@ use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::error::AppError;
 use crate::rbac;
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    Extension, Json,
-};
+use axum::{extract::Path, http::StatusCode, Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -63,10 +59,11 @@ pub async fn create_rbac_group(
     let name = req.name.clone();
     let parent = req.parent_id.clone();
     let desc = req.description.clone();
-    let group_id =
-        tokio::task::spawn_blocking(move || rbac::create_group(&db_clone, &name, parent.as_deref(), desc.as_deref()))
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))??;
+    let group_id = tokio::task::spawn_blocking(move || {
+        rbac::create_group(&db_clone, &name, parent.as_deref(), desc.as_deref())
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))??;
 
     // Audit
     {
@@ -246,7 +243,7 @@ pub async fn grant_connection_permission(
 ) -> Result<StatusCode, AppError> {
     require_admin(&identity)?;
 
-    let permission = rbac::ObjectPermission::from_str(&req.permission)
+    let permission = rbac::ObjectPermission::parse(&req.permission)
         .ok_or_else(|| AppError::Internal(format!("invalid permission: {}", req.permission)))?;
 
     let db_clone = database.clone();
@@ -294,7 +291,7 @@ pub async fn revoke_connection_permission(
 ) -> Result<StatusCode, AppError> {
     require_admin(&identity)?;
 
-    let permission = rbac::ObjectPermission::from_str(&req.permission)
+    let permission = rbac::ObjectPermission::parse(&req.permission)
         .ok_or_else(|| AppError::Internal(format!("invalid permission: {}", req.permission)))?;
 
     let db_clone = database.clone();

@@ -156,11 +156,14 @@ pub async fn login(
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();
-        headers.get("x-forwarded-for").or_else(|| headers.get("x-real-ip"))
+        headers
+            .get("x-forwarded-for")
+            .or_else(|| headers.get("x-real-ip"))
             .and_then(|v| v.to_str().ok())
             .unwrap_or("unknown")
             .hash(&mut h);
-        headers.get(header::USER_AGENT)
+        headers
+            .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("unknown")
             .hash(&mut h);
@@ -249,11 +252,14 @@ pub async fn callback(
                     use std::collections::hash_map::DefaultHasher;
                     use std::hash::{Hash, Hasher};
                     let mut h = DefaultHasher::new();
-                    headers.get("x-forwarded-for").or_else(|| headers.get("x-real-ip"))
+                    headers
+                        .get("x-forwarded-for")
+                        .or_else(|| headers.get("x-real-ip"))
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or("unknown")
                         .hash(&mut h);
-                    headers.get(header::USER_AGENT)
+                    headers
+                        .get(header::USER_AGENT)
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or("unknown")
                         .hash(&mut h);
@@ -450,18 +456,14 @@ pub async fn callback(
         let role_for_check = effective_role.clone();
         let enforcement = totp_enforcement;
         // Check if user has TOTP enabled (synchronous DB call in spawn_blocking)
-        let has_totp = tokio::task::spawn_blocking(move || {
-            db::user_totp_enabled(&db_check, uid)
-        })
-        .await
-        .unwrap_or(Ok(false))
-        .unwrap_or(false);
+        let has_totp = tokio::task::spawn_blocking(move || db::user_totp_enabled(&db_check, uid))
+            .await
+            .unwrap_or(Ok(false))
+            .unwrap_or(false);
 
         match enforcement {
             TotpEnforcement::Off => false,
-            TotpEnforcement::AdminsOnly => {
-                has_totp && role_for_check == "admin"
-            }
+            TotpEnforcement::AdminsOnly => has_totp && role_for_check == "admin",
             TotpEnforcement::All => has_totp,
         }
     };

@@ -16,9 +16,7 @@ use rusqlite::params;
 use crate::config::Config;
 use crate::crypto::{encrypt_value, EncryptionKey};
 use crate::db::Db;
-use crate::vault::{
-    self, AddressBookEntry, FolderConfig, VaultClient, VaultError,
-};
+use crate::vault::{self, AddressBookEntry, FolderConfig, VaultClient, VaultError};
 
 /// Credential fields that contain plaintext secrets and must be encrypted
 /// before writing to the DB.
@@ -89,19 +87,13 @@ pub async fn cmd_db_migrate_from_vault(
     });
 
     let label = if dry_run { "[DRY RUN] " } else { "" };
-    println!(
-        "{}Migrating {} scope from Vault to DB...",
-        label, scope
-    );
+    println!("{}Migrating {} scope from Vault to DB...", label, scope);
 
     // BFS-collect every folder path in the scope subtree
     let top = match vault.list_folders_in_scope(scope).await {
         Ok(f) => f,
         Err(e) => {
-            eprintln!(
-                "Error listing folders in {} scope on Vault: {}",
-                scope, e
-            );
+            eprintln!("Error listing folders in {} scope on Vault: {}", scope, e);
             std::process::exit(1);
         }
     };
@@ -129,13 +121,8 @@ pub async fn cmd_db_migrate_from_vault(
         let folder_config = vault.get_folder_config(scope, folder_path).await;
 
         // Ensure parent group exists and get its ID
-        let parent_group_id = ensure_folder_group(
-            &database,
-            scope,
-            folder_path,
-            &folder_config,
-            dry_run,
-        );
+        let parent_group_id =
+            ensure_folder_group(&database, scope, folder_path, &folder_config, dry_run);
         groups_written += 1;
 
         // List entries in this folder
@@ -156,34 +143,23 @@ pub async fn cmd_db_migrate_from_vault(
             let entry = match vault.get_entry(scope, folder_path, entry_name).await {
                 Ok(e) => e,
                 Err(e) => {
-                    eprintln!(
-                        "  FAILED to read {}/{}: {}",
-                        folder_path, entry_name, e
-                    );
+                    eprintln!("  FAILED to read {}/{}: {}", folder_path, entry_name, e);
                     failures += 1;
                     continue;
                 }
             };
 
             // Check idempotency: skip if entry already exists
-            if !overwrite && !dry_run {
-                if entry_exists(&database, entry_name, parent_group_id.as_deref()) {
-                    println!(
-                        "  skip (exists): {}/{}",
-                        folder_path, entry_name
-                    );
-                    entries_skipped += 1;
-                    continue;
-                }
+            if !overwrite && !dry_run && entry_exists(&database, entry_name, parent_group_id.as_deref()) {
+                println!("  skip (exists): {}/{}", folder_path, entry_name);
+                entries_skipped += 1;
+                continue;
             }
 
             // Serialize entry to JSON params, encrypting credential fields
             let params_json = serialize_entry_params(&entry, &enc_key);
 
-            let display_name = entry
-                .display_name
-                .as_deref()
-                .unwrap_or(entry_name);
+            let display_name = entry.display_name.as_deref().unwrap_or(entry_name);
 
             if dry_run {
                 println!(
@@ -208,10 +184,7 @@ pub async fn cmd_db_migrate_from_vault(
                         entries_migrated += 1;
                     }
                     Err(e) => {
-                        eprintln!(
-                            "  FAILED:  {}/{} — {}",
-                            folder_path, entry_name, e
-                        );
+                        eprintln!("  FAILED:  {}/{} — {}", folder_path, entry_name, e);
                         failures += 1;
                     }
                 }
@@ -236,11 +209,7 @@ pub async fn cmd_db_migrate_from_vault(
                 match vault.get_user_credentials_by_key(key).await {
                     Ok(creds) => {
                         if dry_run {
-                            println!(
-                                "  [users]  {} ({} vars)",
-                                key,
-                                creds.len()
-                            );
+                            println!("  [users]  {} ({} vars)", key, creds.len());
                             users_migrated += 1;
                         } else {
                             match insert_user_credentials(&database, key, &creds, &enc_key) {
@@ -364,14 +333,11 @@ fn group_exists(db: &Db, name: &str, parent_id: Option<&str>) -> Option<String> 
     let mut stmt = conn
         .prepare("SELECT id FROM connection_groups WHERE name = ?1 AND parent_id IS ?2")
         .ok()?;
-    let mut rows = stmt
-        .query(params![name, parent_id])
-        .ok()?;
+    let mut rows = stmt.query(params![name, parent_id]).ok()?;
     rows.next()
         .ok()
         .flatten()
-        .map(|row| row.get::<_, String>(0).ok())
-        .flatten()
+        .and_then(|row| row.get::<_, String>(0).ok())
 }
 
 /// Check if an entry with the given name already exists under a group.
@@ -434,59 +400,52 @@ fn serialize_entry_params(entry: &AddressBookEntry, enc_key: &EncryptionKey) -> 
     }
 
     // Non-credential fields (plaintext)
-    let opt_str = |map: &mut serde_json::Map<String, serde_json::Value>,
-                   key: &str,
-                   val: &Option<String>| {
-        if let Some(v) = val {
-            map.insert(key.into(), serde_json::Value::String(v.clone()));
-        }
-    };
-    let opt_u16 = |map: &mut serde_json::Map<String, serde_json::Value>,
-                   key: &str,
-                   val: &Option<u16>| {
-        if let Some(v) = val {
-            map.insert(key.into(), serde_json::Value::Number((*v).into()));
-        }
-    };
-    let opt_bool = |map: &mut serde_json::Map<String, serde_json::Value>,
-                    key: &str,
-                    val: &Option<bool>| {
-        if let Some(v) = val {
-            map.insert(key.into(), serde_json::Value::Bool(*v));
-        }
-    };
-    let opt_u8 = |map: &mut serde_json::Map<String, serde_json::Value>,
-                   key: &str,
-                   val: &Option<u8>| {
-        if let Some(v) = val {
-            map.insert(key.into(), serde_json::Value::Number((*v).into()));
-        }
-    };
-    let opt_u32 = |map: &mut serde_json::Map<String, serde_json::Value>,
-                    key: &str,
-                    val: &Option<u32>| {
-        if let Some(v) = val {
-            map.insert(key.into(), serde_json::Value::Number((*v).into()));
-        }
-    };
-    let opt_u64 = |map: &mut serde_json::Map<String, serde_json::Value>,
-                    key: &str,
-                    val: &Option<u64>| {
-        if let Some(v) = val {
-            if let Some(n) = serde_json::Number::from_f64(*v as f64) {
-                map.insert(key.into(), serde_json::Value::Number(n));
+    let opt_str =
+        |map: &mut serde_json::Map<String, serde_json::Value>, key: &str, val: &Option<String>| {
+            if let Some(v) = val {
+                map.insert(key.into(), serde_json::Value::String(v.clone()));
             }
-        }
-    };
-    let opt_f64 = |map: &mut serde_json::Map<String, serde_json::Value>,
-                    key: &str,
-                    val: &Option<f64>| {
-        if let Some(v) = val {
-            if let Some(n) = serde_json::Number::from_f64(*v) {
-                map.insert(key.into(), serde_json::Value::Number(n));
+        };
+    let opt_u16 =
+        |map: &mut serde_json::Map<String, serde_json::Value>, key: &str, val: &Option<u16>| {
+            if let Some(v) = val {
+                map.insert(key.into(), serde_json::Value::Number((*v).into()));
             }
-        }
-    };
+        };
+    let opt_bool =
+        |map: &mut serde_json::Map<String, serde_json::Value>, key: &str, val: &Option<bool>| {
+            if let Some(v) = val {
+                map.insert(key.into(), serde_json::Value::Bool(*v));
+            }
+        };
+    let opt_u8 =
+        |map: &mut serde_json::Map<String, serde_json::Value>, key: &str, val: &Option<u8>| {
+            if let Some(v) = val {
+                map.insert(key.into(), serde_json::Value::Number((*v).into()));
+            }
+        };
+    let opt_u32 =
+        |map: &mut serde_json::Map<String, serde_json::Value>, key: &str, val: &Option<u32>| {
+            if let Some(v) = val {
+                map.insert(key.into(), serde_json::Value::Number((*v).into()));
+            }
+        };
+    let opt_u64 =
+        |map: &mut serde_json::Map<String, serde_json::Value>, key: &str, val: &Option<u64>| {
+            if let Some(v) = val {
+                if let Some(n) = serde_json::Number::from_f64(*v as f64) {
+                    map.insert(key.into(), serde_json::Value::Number(n));
+                }
+            }
+        };
+    let opt_f64 =
+        |map: &mut serde_json::Map<String, serde_json::Value>, key: &str, val: &Option<f64>| {
+            if let Some(v) = val {
+                if let Some(n) = serde_json::Number::from_f64(*v) {
+                    map.insert(key.into(), serde_json::Value::Number(n));
+                }
+            }
+        };
 
     opt_str(&mut map, "hostname", &entry.hostname);
     opt_u16(&mut map, "port", &entry.port);
@@ -577,7 +536,11 @@ fn serialize_entry_params(entry: &AddressBookEntry, enc_key: &EncryptionKey) -> 
         "auto_open_if_singleton",
         &entry.auto_open_if_singleton,
     );
-    opt_bool(&mut map, "fullscreen_on_connect", &entry.fullscreen_on_connect);
+    opt_bool(
+        &mut map,
+        "fullscreen_on_connect",
+        &entry.fullscreen_on_connect,
+    );
     opt_bool(&mut map, "autohide_side_tabs", &entry.autohide_side_tabs);
 
     // SPICE

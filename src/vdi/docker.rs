@@ -541,10 +541,7 @@ impl DockerDriver {
                     labels.insert("persea.entry".to_string(), entry_key.clone());
                 }
                 if let Some(timeout) = spec.idle_timeout_mins {
-                    labels.insert(
-                        "persea.idle_timeout_mins".to_string(),
-                        timeout.to_string(),
-                    );
+                    labels.insert("persea.idle_timeout_mins".to_string(), timeout.to_string());
                 }
                 labels.insert("persea.image".to_string(), spec.image.clone());
 
@@ -765,10 +762,7 @@ impl DockerDriver {
     #[allow(dead_code)]
     async fn do_list_managed_containers(&self) -> Result<Vec<String>, VdiError> {
         let mut filters = HashMap::new();
-        filters.insert(
-            "label".to_string(),
-            vec!["persea.managed=true".to_string()],
-        );
+        filters.insert("label".to_string(), vec!["persea.managed=true".to_string()]);
 
         let opts = ListContainersOptions {
             all: true,
@@ -789,10 +783,7 @@ impl DockerDriver {
         &self,
     ) -> Result<Vec<super::ManagedContainer>, VdiError> {
         let mut filters = HashMap::new();
-        filters.insert(
-            "label".to_string(),
-            vec!["persea.managed=true".to_string()],
-        );
+        filters.insert("label".to_string(), vec!["persea.managed=true".to_string()]);
 
         let opts = ListContainersOptions {
             all: false, // only running containers

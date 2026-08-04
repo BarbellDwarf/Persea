@@ -101,7 +101,10 @@ impl EventBuilder {
 /// The hash covers: event_type, timestamp, user_id, source_ip, outcome, details, session_id.
 pub fn compute_event_hash(event: &AuditEvent) -> String {
     let mut fields: BTreeMap<&str, serde_json::Value> = BTreeMap::new();
-    fields.insert("event_type", serde_json::Value::String(event.event_type.clone()));
+    fields.insert(
+        "event_type",
+        serde_json::Value::String(event.event_type.clone()),
+    );
     fields.insert(
         "timestamp",
         serde_json::Value::String(event.timestamp.to_rfc3339()),

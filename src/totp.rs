@@ -29,18 +29,13 @@ impl Default for TotpConfig {
 }
 
 /// TOTP enforcement policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum TotpEnforcement {
+    #[default]
     Off,
     AdminsOnly,
     All,
-}
-
-impl Default for TotpEnforcement {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 impl std::fmt::Display for TotpEnforcement {
@@ -66,10 +61,7 @@ pub struct TotpEnrollment {
 
 /// Generate a TOTP enrollment for a user: create a secret, build the
 /// otpauth:// URL, and render a QR code as PNG bytes.
-pub fn generate_enrollment(
-    user_email: &str,
-    issuer: &str,
-) -> Result<TotpEnrollment, TotpError> {
+pub fn generate_enrollment(user_email: &str, issuer: &str) -> Result<TotpEnrollment, TotpError> {
     let secret = Secret::generate_secret();
     let secret_b32 = secret.to_encoded().to_string();
 
@@ -78,7 +70,9 @@ pub fn generate_enrollment(
         6,
         1, // skew
         30,
-        secret.to_bytes().map_err(|e| TotpError::Generation(e.to_string()))?,
+        secret
+            .to_bytes()
+            .map_err(|e| TotpError::Generation(e.to_string()))?,
         Some(issuer.to_string()),
         user_email.to_string(),
     )
@@ -86,9 +80,7 @@ pub fn generate_enrollment(
 
     let otpauth_url = totp.get_url().to_string();
 
-    let qr_png = totp
-        .get_qr_png()
-        .map_err(|e| TotpError::QrCode(e))?;
+    let qr_png = totp.get_qr_png().map_err(TotpError::QrCode)?;
 
     Ok(TotpEnrollment {
         secret_b32,
@@ -106,9 +98,7 @@ pub fn verify_code(
     period: u16,
     skew: u8,
 ) -> bool {
-    let secret = match Secret::Encoded(secret_b32.to_string()) {
-        s => s,
-    };
+    let secret = Secret::Encoded(secret_b32.to_string());
 
     let totp = match TOTP::new(
         algorithm,
@@ -215,27 +205,22 @@ mod tests {
         // verify_code (creates a new instance) should also work with generous skew.
         assert!(verify_code(&secret_b32, &code, Algorithm::SHA1, 6, 30, 5));
         // Wrong code should fail
-        assert!(!verify_code(&secret_b32, "000000", Algorithm::SHA1, 6, 30, 1));
+        assert!(!verify_code(
+            &secret_b32,
+            "000000",
+            Algorithm::SHA1,
+            6,
+            30,
+            1
+        ));
     }
 
     #[test]
     fn algorithm_from_str_default() {
-        assert!(matches!(
-            algorithm_from_str("SHA1"),
-            Algorithm::SHA1
-        ));
-        assert!(matches!(
-            algorithm_from_str("SHA256"),
-            Algorithm::SHA256
-        ));
-        assert!(matches!(
-            algorithm_from_str("SHA512"),
-            Algorithm::SHA512
-        ));
-        assert!(matches!(
-            algorithm_from_str("unknown"),
-            Algorithm::SHA1
-        ));
+        assert!(matches!(algorithm_from_str("SHA1"), Algorithm::SHA1));
+        assert!(matches!(algorithm_from_str("SHA256"), Algorithm::SHA256));
+        assert!(matches!(algorithm_from_str("SHA512"), Algorithm::SHA512));
+        assert!(matches!(algorithm_from_str("unknown"), Algorithm::SHA1));
     }
 
     #[test]

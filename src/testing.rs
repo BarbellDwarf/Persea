@@ -134,14 +134,12 @@ impl MockVault {
             .entries
             .get(kv_path)
             .ok_or(crate::vault::VaultError::NotFound)?;
-        let json: serde_json::Value =
-            serde_json::from_str(raw).map_err(|e| crate::vault::VaultError::Parse(e.to_string()))?;
+        let json: serde_json::Value = serde_json::from_str(raw)
+            .map_err(|e| crate::vault::VaultError::Parse(e.to_string()))?;
         json.get(field)
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| {
-                crate::vault::VaultError::Parse(format!("field '{}' not found", field))
-            })
+            .ok_or_else(|| crate::vault::VaultError::Parse(format!("field '{}' not found", field)))
     }
 }
 
@@ -199,8 +197,14 @@ impl crate::vdi::VdiDriver for MockVdiDriver {
     fn start_or_reuse<'a>(
         &'a self,
         spec: &'a crate::vdi::ContainerSpec,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<crate::vdi::ContainerInfo, crate::vdi::VdiError>> + Send + 'a>>
-    {
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<crate::vdi::ContainerInfo, crate::vdi::VdiError>,
+                > + Send
+                + 'a,
+        >,
+    > {
         let mut docker = self.docker.lock().unwrap();
         let mut id_guard = self.next_id.lock().unwrap();
 
@@ -276,8 +280,11 @@ impl crate::vdi::VdiDriver for MockVdiDriver {
 
     fn list_managed_containers(
         &self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<String>, crate::vdi::VdiError>> + Send + '_>>
-    {
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<String>, crate::vdi::VdiError>> + Send + '_,
+        >,
+    > {
         let docker = self.docker.lock().unwrap();
         let ids: Vec<String> = docker.containers.keys().cloned().collect();
         Box::pin(async { Ok(ids) })
@@ -285,8 +292,14 @@ impl crate::vdi::VdiDriver for MockVdiDriver {
 
     fn list_managed_containers_detail(
         &self,
-    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<crate::vdi::ManagedContainer>, crate::vdi::VdiError>> + Send + '_>>
-    {
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<Vec<crate::vdi::ManagedContainer>, crate::vdi::VdiError>,
+                > + Send
+                + '_,
+        >,
+    > {
         let docker = self.docker.lock().unwrap();
         let list: Vec<crate::vdi::ManagedContainer> = docker
             .containers

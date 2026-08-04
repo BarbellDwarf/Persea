@@ -3,12 +3,12 @@ use axum::Extension;
 
 use crate::api::SiteTitle;
 use crate::auth::AuthIdentity;
-use crate::CspNonce;
 use crate::templates::{
     AdminAuditTemplate, AdminAuthTemplate, AdminReportsTemplate, AdminSettingsTemplate,
     AdminTunnelsTemplate, AdminUsersTemplate, ConnectionsPageTemplate, RecordingsPageTemplate,
     SessionsPageTemplate,
 };
+use crate::CspNonce;
 
 /// Determine if the current user has admin role.
 fn is_admin(identity: &Option<Extension<AuthIdentity>>) -> bool {
@@ -22,7 +22,7 @@ fn is_admin(identity: &Option<Extension<AuthIdentity>>) -> bool {
 pub async fn connections_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = ConnectionsPageTemplate {
         site_title: site_title.0.clone(),
@@ -37,7 +37,7 @@ pub async fn connections_page(
 pub async fn sessions_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = SessionsPageTemplate {
         site_title: site_title.0.clone(),
@@ -52,7 +52,7 @@ pub async fn sessions_page(
 pub async fn recordings_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = RecordingsPageTemplate {
         site_title: site_title.0.clone(),
@@ -69,7 +69,7 @@ pub async fn recordings_page(
 pub async fn admin_users_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminUsersTemplate {
         site_title: site_title.0.clone(),
@@ -84,7 +84,7 @@ pub async fn admin_users_page(
 pub async fn admin_auth_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminAuthTemplate {
         site_title: site_title.0.clone(),
@@ -99,7 +99,7 @@ pub async fn admin_auth_page(
 pub async fn admin_audit_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminAuditTemplate {
         site_title: site_title.0.clone(),
@@ -114,7 +114,7 @@ pub async fn admin_audit_page(
 pub async fn admin_settings_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminSettingsTemplate {
         site_title: site_title.0.clone(),
@@ -129,7 +129,7 @@ pub async fn admin_settings_page(
 pub async fn admin_reports_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminReportsTemplate {
         site_title: site_title.0.clone(),
@@ -144,7 +144,7 @@ pub async fn admin_reports_page(
 pub async fn admin_tunnels_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminTunnelsTemplate {
         site_title: site_title.0.clone(),

@@ -91,5 +91,6 @@ fn rewrite_doc_links(html: &str) -> String {
             Some(anchor) => format!("href=\"#{}\"", anchor.as_str()),
             None => format!("href=\"#{}\"", slug),
         }
-    }).into_owned()
+    })
+    .into_owned()
 }

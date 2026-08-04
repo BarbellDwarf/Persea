@@ -36,7 +36,10 @@ impl std::fmt::Display for VsphereError {
             VsphereError::Api(m) => write!(f, "vSphere API error: {m}"),
             VsphereError::Parse(m) => write!(f, "vSphere response parse error: {m}"),
             VsphereError::CrateUnavailable => {
-                write!(f, "vim_rs crate not yet installed — vSphere integration unavailable")
+                write!(
+                    f,
+                    "vim_rs crate not yet installed — vSphere integration unavailable"
+                )
             }
         }
     }
@@ -258,6 +261,7 @@ pub struct VsphereClient {
     username: String,
     password: String,
     /// Whether to skip TLS verification.
+    #[allow(dead_code)]
     insecure: bool,
     /// HTTP client (reused across requests).
     http: reqwest::Client,
@@ -293,10 +297,12 @@ impl VsphereClient {
 /// a client ready for VM inventory queries. The password is read from the
 /// environment variable specified in `VsphereConfig::password_env`.
 pub async fn connect(config: &VsphereConfig) -> Result<VsphereClient, VsphereError> {
-    let password = std::env::var(&config.password_env)
-        .map_err(|_| VsphereError::Api(format!(
-            "environment variable {} not set", config.password_env
-        )))?;
+    let password = std::env::var(&config.password_env).map_err(|_| {
+        VsphereError::Api(format!(
+            "environment variable {} not set",
+            config.password_env
+        ))
+    })?;
 
     let http = reqwest::Client::builder()
         .danger_accept_invalid_certs(config.insecure)
@@ -307,7 +313,11 @@ pub async fn connect(config: &VsphereConfig) -> Result<VsphereClient, VsphereErr
 
     // Build the REST API base URL from the SDK URL.
     // Input: `https://vcenter.example.com/sdk` → REST base: `https://vcenter.example.com`
-    let base_url = config.vcenter_addr.trim_end_matches('/').trim_end_matches("/sdk").to_string();
+    let base_url = config
+        .vcenter_addr
+        .trim_end_matches('/')
+        .trim_end_matches("/sdk")
+        .to_string();
     let rest_url = format!("{}/rest", base_url);
 
     // --- REST API: Create session ---
@@ -411,7 +421,10 @@ pub async fn power_action(
     let resp = client
         .http
         .post(&action_url)
-        .header("vmware-api-session-id", client.session_key.as_deref().unwrap_or(""))
+        .header(
+            "vmware-api-session-id",
+            client.session_key.as_deref().unwrap_or(""),
+        )
         .send()
         .await
         .map_err(|e| VsphereError::Transport(e.to_string()))?;
@@ -423,7 +436,10 @@ pub async fn power_action(
         let resp = client
             .http
             .post(&action_url)
-            .header("vmware-api-session-id", client.session_key.as_deref().unwrap_or(""))
+            .header(
+                "vmware-api-session-id",
+                client.session_key.as_deref().unwrap_or(""),
+            )
             .send()
             .await
             .map_err(|e| VsphereError::Transport(e.to_string()))?;
@@ -502,9 +518,7 @@ async fn login(client: &mut VsphereClient) -> Result<(), VsphereError> {
 ///
 /// Uses `GET /rest/vcenter/vm` to list all VMs with their properties.
 /// Handles 401 by re-authenticating and retrying once.
-async fn fetch_vm_inventory(
-    client: &VsphereClient,
-) -> Result<Vec<VmInfo>, VsphereError> {
+async fn fetch_vm_inventory(client: &VsphereClient) -> Result<Vec<VmInfo>, VsphereError> {
     let url = format!("{}/vcenter/vm", client.rest_url);
     let mut vms = do_fetch_vms(client, &url).await?;
 
@@ -517,12 +531,19 @@ async fn fetch_vm_inventory(
                 if let Ok(resp) = client
                     .http
                     .get(&host_url)
-                    .header("vmware-api-session-id", client.session_key.as_deref().unwrap_or(""))
+                    .header(
+                        "vmware-api-session-id",
+                        client.session_key.as_deref().unwrap_or(""),
+                    )
                     .send()
                     .await
                 {
                     if let Ok(json) = resp.json::<serde_json::Value>().await {
-                        if let Some(name) = json.get("value").and_then(|v| v.get("name")).and_then(|v| v.as_str()) {
+                        if let Some(name) = json
+                            .get("value")
+                            .and_then(|v| v.get("name"))
+                            .and_then(|v| v.as_str())
+                        {
                             vm.host = Some(name.to_string());
                         }
                     }
@@ -535,14 +556,14 @@ async fn fetch_vm_inventory(
 }
 
 /// Internal: fetch VM list, handling auth retry.
-async fn do_fetch_vms(
-    client: &VsphereClient,
-    url: &str,
-) -> Result<Vec<VmInfo>, VsphereError> {
+async fn do_fetch_vms(client: &VsphereClient, url: &str) -> Result<Vec<VmInfo>, VsphereError> {
     let resp = client
         .http
         .get(url)
-        .header("vmware-api-session-id", client.session_key.as_deref().unwrap_or(""))
+        .header(
+            "vmware-api-session-id",
+            client.session_key.as_deref().unwrap_or(""),
+        )
         .send()
         .await
         .map_err(|e| VsphereError::Transport(e.to_string()))?;
@@ -550,7 +571,9 @@ async fn do_fetch_vms(
     let status = resp.status();
     if status.as_u16() == 401 || status.as_u16() == 403 {
         // Re-auth is handled by the caller (ensure_session before fetch)
-        return Err(VsphereError::Api("session expired, re-auth required".into()));
+        return Err(VsphereError::Api(
+            "session expired, re-auth required".into(),
+        ));
     }
 
     if !status.is_success() {
@@ -567,9 +590,9 @@ async fn do_fetch_vms(
         .await
         .map_err(|e| VsphereError::Parse(e.to_string()))?;
 
-    let value = json.get("value").ok_or_else(|| {
-        VsphereError::Parse("VM list response missing 'value' field".into())
-    })?;
+    let value = json
+        .get("value")
+        .ok_or_else(|| VsphereError::Parse("VM list response missing 'value' field".into()))?;
 
     let vm_list = value
         .as_array()
@@ -740,10 +763,19 @@ mod tests {
 
     #[test]
     fn power_state_parse() {
-        assert_eq!(PowerState::from_vsphere("POWERED_ON"), PowerState::PoweredOn);
+        assert_eq!(
+            PowerState::from_vsphere("POWERED_ON"),
+            PowerState::PoweredOn
+        );
         assert_eq!(PowerState::from_vsphere("poweredOn"), PowerState::PoweredOn);
-        assert_eq!(PowerState::from_vsphere("POWERED_OFF"), PowerState::PoweredOff);
-        assert_eq!(PowerState::from_vsphere("poweredOff"), PowerState::PoweredOff);
+        assert_eq!(
+            PowerState::from_vsphere("POWERED_OFF"),
+            PowerState::PoweredOff
+        );
+        assert_eq!(
+            PowerState::from_vsphere("poweredOff"),
+            PowerState::PoweredOff
+        );
         assert_eq!(PowerState::from_vsphere("SUSPENDED"), PowerState::Suspended);
         assert_eq!(PowerState::from_vsphere("suspended"), PowerState::Suspended);
         assert_eq!(PowerState::from_vsphere("bogus"), PowerState::Unknown);
@@ -871,7 +903,7 @@ mod tests {
             insecure = true
             refresh_interval_secs = 60
 
-            [vsphere.vm_credentials]
+            [vm_credentials]
             "web-01" = { username = "root", password_env = "WEB01_PASS" }
         "#;
         let config: VsphereConfig = toml::from_str(toml_str).unwrap();

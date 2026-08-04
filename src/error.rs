@@ -89,25 +89,43 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
-            AppError::Session(msg) if msg.contains("not found") => (StatusCode::NOT_FOUND, self.to_string()),
-            AppError::Session(msg) if msg.contains("validation") => (StatusCode::BAD_REQUEST, self.to_string()),
-            AppError::Session(msg) if msg.contains("not active") => (StatusCode::CONFLICT, self.to_string()),
+            AppError::Session(msg) if msg.contains("not found") => {
+                (StatusCode::NOT_FOUND, self.to_string())
+            }
+            AppError::Session(msg) if msg.contains("validation") => {
+                (StatusCode::BAD_REQUEST, self.to_string())
+            }
+            AppError::Session(msg) if msg.contains("not active") => {
+                (StatusCode::CONFLICT, self.to_string())
+            }
             AppError::Session(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
 
             AppError::Guacd(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
 
-            AppError::Vault(msg) if msg.contains("not found") => (StatusCode::NOT_FOUND, self.to_string()),
-            AppError::Vault(msg) if msg.contains("forbidden") || msg.contains("access denied") => (StatusCode::FORBIDDEN, self.to_string()),
-            AppError::Vault(msg) if msg.contains("unavailable") => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
-            AppError::Vault(msg) if msg.contains("invalid name") => (StatusCode::BAD_REQUEST, self.to_string()),
+            AppError::Vault(msg) if msg.contains("not found") => {
+                (StatusCode::NOT_FOUND, self.to_string())
+            }
+            AppError::Vault(msg) if msg.contains("forbidden") || msg.contains("access denied") => {
+                (StatusCode::FORBIDDEN, self.to_string())
+            }
+            AppError::Vault(msg) if msg.contains("unavailable") => {
+                (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
+            }
+            AppError::Vault(msg) if msg.contains("invalid name") => {
+                (StatusCode::BAD_REQUEST, self.to_string())
+            }
             AppError::Vault(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
 
             AppError::Auth(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::Conflict(_) => (StatusCode::CONFLICT, self.to_string()),
             AppError::Browser(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Vdi(msg) if msg.contains("not enabled") => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
-            AppError::Vdi(msg) if msg.contains("timeout") => (StatusCode::GATEWAY_TIMEOUT, self.to_string()),
+            AppError::Vdi(msg) if msg.contains("not enabled") => {
+                (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
+            }
+            AppError::Vdi(msg) if msg.contains("timeout") => {
+                (StatusCode::GATEWAY_TIMEOUT, self.to_string())
+            }
             AppError::Vdi(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Tunnel(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Protocol(_) => (StatusCode::BAD_GATEWAY, self.to_string()),

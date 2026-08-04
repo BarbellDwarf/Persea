@@ -1,4 +1,5 @@
 //! persea — lightweight Guacamole proxy. CLI entry point and server setup.
+#![allow(dead_code)]
 
 mod api;
 mod audit;
@@ -16,8 +17,8 @@ mod drive;
 mod error;
 mod guacd;
 mod handlers;
-mod metrics;
 mod import;
+mod metrics;
 mod migrate;
 mod oidc;
 mod password;
@@ -58,8 +59,6 @@ use tower_governor::{
 };
 use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
-use base64::Engine as _;
-use base64::Engine as _;
 
 #[derive(Parser)]
 #[command(name = "persea", about = "Lightweight Guacamole SSH proxy")]
@@ -250,7 +249,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Load config
-    let mut config = Config::load(cli.config.as_deref());
+    let config = Config::load(cli.config.as_deref());
 
     // Validate config values (fatal errors exit, warnings are printed)
     match config.validate() {
@@ -270,7 +269,12 @@ async fn main() {
 
     match cli.command {
         None | Some(Command::Serve) => run_server(config, database).await,
-        Some(Command::CreateUser { email, name, password, role }) => {
+        Some(Command::CreateUser {
+            email,
+            name,
+            password,
+            role,
+        }) => {
             cmd_create_user(&database, &email, &name, &password, &role);
         }
         Some(Command::AddAdmin {
@@ -348,8 +352,14 @@ fn cmd_create_user(database: &Db, email: &str, name: &str, password: &str, role:
 
     // Ensure password_hash and auth_source columns exist (migrate old schema)
     let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN auth_source TEXT DEFAULT 'database'", []);
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN oidc_groups TEXT DEFAULT ''", []);
+    let _ = conn.execute(
+        "ALTER TABLE users ADD COLUMN auth_source TEXT DEFAULT 'database'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE users ADD COLUMN oidc_groups TEXT DEFAULT ''",
+        [],
+    );
 
     match conn.execute(
         "INSERT INTO users (email, name, auth_source, password_hash, role, disabled, created_at)
@@ -594,7 +604,7 @@ async fn security_headers(
         use rand::RngExt;
         let mut bytes = [0u8; 16];
         rand::rng().fill(&mut bytes);
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes)
     };
 
     // Insert nonce into request extensions so handlers can extract it for templates
@@ -716,9 +726,8 @@ async fn run_server(config: Config, database: Db) {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                EnvFilter::new("info,tower_http=info")
-            }),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
         )
         .init();
 
@@ -842,7 +851,7 @@ async fn run_server(config: Config, database: Db) {
 
     // Build auth chain from [auth] config.
     let auth_chain = match config.auth.as_ref() {
-        Some(ref auth_cfg) => {
+        Some(auth_cfg) => {
             let mut providers: std::collections::HashMap<String, Box<dyn AuthProvider>> =
                 std::collections::HashMap::new();
 
@@ -888,7 +897,10 @@ async fn run_server(config: Config, database: Db) {
                     chain
                 }
                 Err(e) => {
-                    tracing::error!("Failed to build auth chain: {} — falling back to database-only", e);
+                    tracing::error!(
+                        "Failed to build auth chain: {} — falling back to database-only",
+                        e
+                    );
                     AuthChain::new(vec![Box::new(
                         crate::auth_providers::database::DatabaseProvider::new(database.clone()),
                     )])
@@ -1010,7 +1022,12 @@ async fn run_server(config: Config, database: Db) {
     let db_pool = if let Some(ref url) = config.db_url {
         match DbPool::connect(url).await {
             Ok(pool) => {
-                tracing::info!("SQLx pool connected: {}", pool.kind().map(|k| k.to_string()).unwrap_or_else(|| "unknown".into()));
+                tracing::info!(
+                    "SQLx pool connected: {}",
+                    pool.kind()
+                        .map(|k| k.to_string())
+                        .unwrap_or_else(|| "unknown".into())
+                );
                 if let Err(e) = pool.run_migrations().await {
                     tracing::error!("SQLx migrations failed: {}", e);
                 }
@@ -1028,9 +1045,9 @@ async fn run_server(config: Config, database: Db) {
     // Extract SAML provider and TOTP enforcement before config is moved into SessionManager
     let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> =
         config.auth.as_ref().and_then(|a| {
-            a.saml.as_ref().map(|cfg| {
-                Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone()))
-            })
+            a.saml
+                .as_ref()
+                .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone())))
         });
     let totp_enforcement = config
         .auth
@@ -1275,7 +1292,10 @@ async fn run_server(config: Config, database: Db) {
         .route("/api/ws-ticket", post(api::create_ws_ticket))
         // vSphere routes
         .route("/api/vsphere/vms", get(api::vsphere::list_vms))
-        .route("/api/vsphere/vms/{vm_id}/power", post(api::vsphere::power_action))
+        .route(
+            "/api/vsphere/vms/{vm_id}/power",
+            post(api::vsphere::power_action),
+        )
         // Address book routes
         .route("/api/addressbook", get(api::ab_list_all))
         .route("/api/addressbook/search-index", get(api::ab_search_index))
@@ -1319,8 +1339,14 @@ async fn run_server(config: Config, database: Db) {
         )
         .route("/api/ssh/probe-host-key", post(api::ssh_probe_host_key))
         // Jump host / tunnel management
-        .route("/api/admin/jump-hosts", get(handlers::tunnels::list_jump_hosts))
-        .route("/api/admin/jump-hosts", post(handlers::tunnels::create_jump_host))
+        .route(
+            "/api/admin/jump-hosts",
+            get(handlers::tunnels::list_jump_hosts),
+        )
+        .route(
+            "/api/admin/jump-hosts",
+            post(handlers::tunnels::create_jump_host),
+        )
         .route(
             "/api/admin/jump-hosts/{id}",
             put(handlers::tunnels::update_jump_host),
@@ -1338,8 +1364,14 @@ async fn run_server(config: Config, database: Db) {
             get(handlers::tunnels::list_active_tunnels),
         )
         // RBAC management endpoints
-        .route("/api/admin/rbac/groups", get(handlers::rbac::list_rbac_groups))
-        .route("/api/admin/rbac/groups", post(handlers::rbac::create_rbac_group))
+        .route(
+            "/api/admin/rbac/groups",
+            get(handlers::rbac::list_rbac_groups),
+        )
+        .route(
+            "/api/admin/rbac/groups",
+            post(handlers::rbac::create_rbac_group),
+        )
         .route(
             "/api/admin/rbac/groups/{id}",
             delete(handlers::rbac::delete_rbac_group),
@@ -1416,8 +1448,7 @@ async fn run_server(config: Config, database: Db) {
         .layer(middleware::from_fn(auth::optional_auth));
 
     // Prometheus metrics endpoint
-    let metrics_route = Router::new()
-        .route("/metrics", get(api::metrics));
+    let metrics_route = Router::new().route("/metrics", get(api::metrics));
 
     // Unauthenticated stateful routes
     let unauth_routes = Router::new()
@@ -1451,14 +1482,8 @@ async fn run_server(config: Config, database: Db) {
         let sp_acs = sp.clone();
         let sp_meta = sp.clone();
         saml_routes = Router::new()
-            .route(
-                "/auth/saml/acs",
-                post(handlers::auth::saml_acs),
-            )
-            .route(
-                "/auth/saml/metadata",
-                get(handlers::auth::saml_metadata),
-            )
+            .route("/auth/saml/acs", post(handlers::auth::saml_acs))
+            .route("/auth/saml/metadata", get(handlers::auth::saml_metadata))
             .layer(Extension(sp_acs))
             .layer(Extension(sp_meta))
             .layer(Extension(database.clone()))
@@ -1483,7 +1508,10 @@ async fn run_server(config: Config, database: Db) {
         .route("/tokens.html", get(handlers::account::tokens_page))
         .route("/docs.html", get(handlers::account::docs_page))
         // Account pages (templates)
-        .route("/account/profile.html", get(handlers::account::profile_page))
+        .route(
+            "/account/profile.html",
+            get(handlers::account::profile_page),
+        )
         .route("/account/tokens.html", get(handlers::account::tokens_page))
         .route("/account/totp.html", get(handlers::account::totp_page))
         .route("/docs", get(handlers::account::docs_page))
@@ -1491,9 +1519,18 @@ async fn run_server(config: Config, database: Db) {
         .route("/admin/users.html", get(handlers::pages::admin_users_page))
         .route("/admin/auth.html", get(handlers::pages::admin_auth_page))
         .route("/admin/audit.html", get(handlers::pages::admin_audit_page))
-        .route("/admin/settings.html", get(handlers::pages::admin_settings_page))
-        .route("/admin/reports.html", get(handlers::pages::admin_reports_page))
-        .route("/admin/tunnels.html", get(handlers::pages::admin_tunnels_page))
+        .route(
+            "/admin/settings.html",
+            get(handlers::pages::admin_settings_page),
+        )
+        .route(
+            "/admin/reports.html",
+            get(handlers::pages::admin_reports_page),
+        )
+        .route(
+            "/admin/tunnels.html",
+            get(handlers::pages::admin_tunnels_page),
+        )
         .layer(middleware::from_fn(auth::optional_auth))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));
@@ -1613,8 +1650,8 @@ async fn run_server(config: Config, database: Db) {
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{signal, SignalKind};
-                let mut sigterm = signal(SignalKind::terminate())
-                    .expect("Failed to register SIGTERM handler");
+                let mut sigterm =
+                    signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
                 tokio::select! {
                     _ = ctrl_c => tracing::info!("SIGINT received, starting graceful shutdown"),
                     _ = sigterm.recv() => tracing::info!("SIGTERM received, starting graceful shutdown"),

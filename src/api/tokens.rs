@@ -196,9 +196,10 @@ pub async fn revoke_my_token(
 
     let db_clone = database.clone();
     let user_id = user.id;
-    let found = tokio::task::spawn_blocking(move || db::revoke_user_token(&db_clone, user_id, token_id))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))??;
+    let found =
+        tokio::task::spawn_blocking(move || db::revoke_user_token(&db_clone, user_id, token_id))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))??;
 
     if found {
         let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
@@ -405,9 +406,11 @@ pub async fn list_credential_variables(
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
-    let folders = vault.list_all_folders().await.map_err(|e| {
-        AppError::Vault(format!("Failed to list folders: {}", e))
-    })?.0;
+    let folders = vault
+        .list_all_folders()
+        .await
+        .map_err(|e| AppError::Vault(format!("Failed to list folders: {}", e)))?
+        .0;
 
     let mut all_vars: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
     let mut stack: Vec<(String, String)> = folders.into_iter().map(|f| (f.scope, f.name)).collect();
@@ -608,9 +611,10 @@ pub async fn admin_revoke_user_token(
     };
 
     let db_clone = database.clone();
-    let found = tokio::task::spawn_blocking(move || db::admin_revoke_user_token(&db_clone, token_id))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))??;
+    let found =
+        tokio::task::spawn_blocking(move || db::admin_revoke_user_token(&db_clone, token_id))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))??;
 
     if found {
         let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();

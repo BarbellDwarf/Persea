@@ -406,7 +406,7 @@ fn hash_key_salt(key: &str) -> String {
     let mut salt = [0u8; 16];
     rand::rng().fill(&mut salt);
     let mut hasher = Sha256::new();
-    hasher.update(&salt);
+    hasher.update(salt);
     hasher.update(key.as_bytes());
     format!("{}:{}", hex::encode(salt), hex::encode(hasher.finalize()))
 }
@@ -418,11 +418,9 @@ fn validate_stored_hash(key: &str, stored: &str) -> bool {
 
     if let Some((salt_hex, hash_hex)) = stored.split_once(':') {
         // Salted format: recompute with extracted salt.
-        if let (Ok(salt), Ok(expected)) =
-            (hex::decode(salt_hex), hex::decode(hash_hex))
-        {
+        if let (Ok(salt), Ok(expected)) = (hex::decode(salt_hex), hex::decode(hash_hex)) {
             let mut hasher = Sha256::new();
-            hasher.update(&salt);
+    hasher.update(salt);
             hasher.update(key.as_bytes());
             let computed = hasher.finalize();
             computed.as_slice().ct_eq(&expected).into()
@@ -1476,7 +1474,6 @@ pub fn query_session_history(
     Ok((rows, total))
 }
 
-
 /// Stream session history rows directly into a CSV writer, avoiding the
 /// intermediate Vec allocation of query_session_history.
 pub fn stream_session_history_csv(
@@ -1519,7 +1516,6 @@ pub fn stream_session_history_csv(
     if let Some(t) = to {
         conditions.push(format!("started_at <= ?{}", idx));
         params_vec.push(Box::new(t.to_string()));
-        idx += 1;
     }
 
     let where_clause = conditions.join(" AND ");
@@ -1554,21 +1550,42 @@ pub fn stream_session_history_csv(
 
     for row in rows {
         let (
-            session_id, session_type, hostname, _port, username, created_by,
-            entry, folder, started_at, ended_at, duration_secs, status, recording,
+            session_id,
+            session_type,
+            hostname,
+            _port,
+            username,
+            created_by,
+            entry,
+            folder,
+            started_at,
+            ended_at,
+            duration_secs,
+            status,
+            recording,
         ) = row?;
         let fields = [
-            &session_id, &session_type, &hostname, &username, &created_by,
-            &entry, &folder, &started_at,
+            &session_id,
+            &session_type,
+            &hostname,
+            &username,
+            &created_by,
+            &entry,
+            &folder,
+            &started_at,
         ];
         for (i, f) in fields.iter().enumerate() {
-            if i > 0 { write!(writer, ",")?; }
+            if i > 0 {
+                write!(writer, ",")?;
+            }
             csv_escape_field(writer, f)?;
         }
         write!(writer, ",")?;
         csv_escape_field(writer, ended_at.as_deref().unwrap_or(""))?;
         write!(writer, ",")?;
-        if let Some(d) = duration_secs { write!(writer, "{}", d)?; }
+        if let Some(d) = duration_secs {
+            write!(writer, "{}", d)?;
+        }
         write!(writer, ",")?;
         csv_escape_field(writer, &status)?;
         write!(writer, ",")?;
@@ -1583,8 +1600,11 @@ fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<
     if field.contains(',') || field.contains('"') || field.contains('\n') {
         write!(w, "\"")?;
         for ch in field.chars() {
-            if ch == '"' { write!(w, "\"\"")?; }
-            else { write!(w, "{}", ch)?; }
+            if ch == '"' {
+                write!(w, "\"\"")?;
+            } else {
+                write!(w, "{}", ch)?;
+            }
         }
         write!(w, "\"")?;
     } else {
@@ -1762,12 +1782,8 @@ pub fn delete_totp_secret(db: &Db, user_id: i64) -> rusqlite::Result<bool> {
 /// Check if a user has TOTP enabled.
 pub fn user_totp_enabled(db: &Db, user_id: i64) -> rusqlite::Result<bool> {
     let conn = db.lock().unwrap();
-    let mut stmt = conn.prepare(
-        "SELECT enabled FROM totp_secrets WHERE user_id = ?1",
-    )?;
-    let mut rows = stmt.query_map(params![user_id], |row| {
-        row.get::<_, i64>(0).map(|v| v != 0)
-    })?;
+    let mut stmt = conn.prepare("SELECT enabled FROM totp_secrets WHERE user_id = ?1")?;
+    let mut rows = stmt.query_map(params![user_id], |row| row.get::<_, i64>(0).map(|v| v != 0))?;
     rows.next().transpose().map(|opt| opt.unwrap_or(false))
 }
 
@@ -1909,7 +1925,15 @@ pub fn create_jump_host(
     conn.execute(
         "INSERT INTO jump_hosts (id, name, hostname, port, username, auth_method, key_path)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, name, hostname, port as i64, username, auth_method, key_path],
+        params![
+            id,
+            name,
+            hostname,
+            port as i64,
+            username,
+            auth_method,
+            key_path
+        ],
     )?;
     Ok(id)
 }
@@ -1961,6 +1985,7 @@ pub fn get_jump_host(db: &Db, id: &str) -> rusqlite::Result<Option<JumpHostRecor
 }
 
 /// Update a jump host by ID.
+#[allow(clippy::too_many_arguments)]
 pub fn update_jump_host(
     db: &Db,
     id: &str,
@@ -1975,7 +2000,15 @@ pub fn update_jump_host(
     let changed = conn.execute(
         "UPDATE jump_hosts SET name = ?1, hostname = ?2, port = ?3, username = ?4,
          auth_method = ?5, key_path = ?6, updated_at = datetime('now') WHERE id = ?7",
-        params![name, hostname, port as i64, username, auth_method, key_path, id],
+        params![
+            name,
+            hostname,
+            port as i64,
+            username,
+            auth_method,
+            key_path,
+            id
+        ],
     )?;
     Ok(changed > 0)
 }
@@ -2198,7 +2231,16 @@ pub fn update_ab_entry(
          username = ?6, protocol_config = ?7, allowed_groups = ?8,
          updated_at = datetime('now')
          WHERE id = ?1",
-        params![entry_id, display_name, protocol, hostname, port.map(|p| p as i64), username, protocol_config, allowed_groups],
+        params![
+            entry_id,
+            display_name,
+            protocol,
+            hostname,
+            port.map(|p| p as i64),
+            username,
+            protocol_config,
+            allowed_groups
+        ],
     )?;
     Ok(changed > 0)
 }
@@ -2286,7 +2328,11 @@ pub fn delete_ab_credential(
 }
 
 /// Check if a folder has entries that match allowed_groups.
-pub fn folder_has_allowed_groups(db: &Db, scope: &str, folder_name: &str) -> rusqlite::Result<bool> {
+pub fn folder_has_allowed_groups(
+    db: &Db,
+    scope: &str,
+    folder_name: &str,
+) -> rusqlite::Result<bool> {
     let conn = db.lock().unwrap();
     let folder_id: i64 = conn
         .query_row(

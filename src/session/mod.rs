@@ -71,7 +71,10 @@ pub(super) fn generate_share_token() -> String {
 /// RDP connection. Admins who actually run Kerberos-integrated hosts
 /// can set `default_auth_pkg = "kerberos"` or `"negotiate"` in
 /// `config.toml`.
-pub(super) fn resolve_rdp_auth_pkg(entry_value: Option<&str>, config: &crate::config::Config) -> Option<String> {
+pub(super) fn resolve_rdp_auth_pkg(
+    entry_value: Option<&str>,
+    config: &crate::config::Config,
+) -> Option<String> {
     if let Some(v) = entry_value {
         let trimmed = v.trim();
         if !trimmed.is_empty() {
@@ -152,19 +155,11 @@ pub(super) fn drive_cleanup_settings(drive: &Option<DriveConfig>) -> (bool, u64)
 /// 3. Persists session metadata to the DB audit trail for reaped sessions.
 ///
 /// The reaper runs every `max(min(idle_secs, max_secs) / 2, 30)` seconds.
-pub async fn spawn_reaper(
-    manager: Arc<SessionManager>,
-    idle_secs: i64,
-    max_secs: i64,
-) {
-    let check_secs = std::cmp::max(
-        std::cmp::min(idle_secs, max_secs) / 2,
-        30,
-    ) as u64;
+pub async fn spawn_reaper(manager: Arc<SessionManager>, idle_secs: i64, max_secs: i64) {
+    let check_secs = std::cmp::max(std::cmp::min(idle_secs, max_secs) / 2, 30) as u64;
 
     tokio::spawn(async move {
-        let mut interval =
-            tokio::time::interval(std::time::Duration::from_secs(check_secs));
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(check_secs));
         interval.tick().await; // skip immediate first tick
         loop {
             interval.tick().await;
@@ -395,10 +390,8 @@ mod tests {
         // Build a config pointing at a unique temp recording dir so the
         // real dir isn't touched and parallel tests don't collide.
         let mut config = crate::config::Config::default();
-        let tmp = std::env::temp_dir().join(format!(
-            "persea-sessmgr-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("persea-sessmgr-test-{}", uuid::Uuid::new_v4()));
         config.recording_path = tmp.clone();
         // xvnc/chromium paths are only stored, not exec'd — placeholders are fine.
         config.xvnc_path = "/bin/true".into();

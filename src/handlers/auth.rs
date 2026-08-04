@@ -9,11 +9,11 @@ use crate::api::OidcEnabled;
 use crate::audit;
 use crate::auth::{client_ip, extract_cookie, TrustedProxies};
 use crate::auth_chain::AuthChain;
-use crate::auth_provider::{AuthRequest, AuthProvider};
+use crate::auth_provider::AuthRequest;
 use crate::db::{self, Db};
-use crate::CspNonce;
 use crate::templates::LoginPageTemplate;
 use crate::totp::TotpEnforcement;
+use crate::CspNonce;
 
 /// Check if TOTP enforcement requires MFA for this user.
 /// Returns true if TOTP is mandatory and the user has it enrolled.
@@ -47,11 +47,7 @@ async fn check_totp_enforcement(
 
 /// Create a pending MFA record and redirect to the MFA page.
 /// Returns the response with the MFA pending cookie set.
-async fn redirect_to_mfa(
-    db: &Db,
-    user: &db::User,
-    ttl_secs: u64,
-) -> Response {
+async fn redirect_to_mfa(db: &Db, user: &db::User, ttl_secs: u64) -> Response {
     let db_clone = db.clone();
     let user_id = user.id;
     let email = user.email.clone();
@@ -97,7 +93,7 @@ pub async fn login_page(
     headers: HeaderMap,
     Extension(database): Extension<Db>,
     Extension(oidc_enabled): Extension<OidcEnabled>,
-    Extension(nonce): Extension<CspNonce>,
+    Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     // Redirect to setup wizard if no users exist (first run)
     if crate::handlers::setup::needs_setup(&database) {
@@ -110,8 +106,7 @@ pub async fn login_page(
         .and_then(|cookie_str| {
             cookie_str.split(';').find_map(|c| {
                 let c = c.trim();
-                c.strip_prefix("persea_session=")
-                    .map(|v| v.to_string())
+                c.strip_prefix("persea_session=").map(|v| v.to_string())
             })
         });
     if let Some(token) = session_token {
@@ -132,7 +127,11 @@ pub async fn login_page(
         .as_ref()
         .and_then(|t| t.logo_url.clone())
         .unwrap_or_default();
-    let saml_enabled = state.config().auth.as_ref().is_some_and(|a| a.saml.is_some());
+    let saml_enabled = state
+        .config()
+        .auth
+        .as_ref()
+        .is_some_and(|a| a.saml.is_some());
 
     let tmpl = LoginPageTemplate {
         site_title,
@@ -302,11 +301,21 @@ pub struct MfaQueryParams {
 /// GET /auth/mfa — TOTP verification page.
 pub async fn mfa_page(Query(params): Query<MfaQueryParams>) -> Response {
     let error_html = match params.error.as_deref() {
-        Some("expired") => r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">Session expired. Please log in again.</p>"#,
-        Some("no_session") => r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">No pending MFA session. Please log in first.</p>"#,
-        Some("invalid_code") => r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">Invalid verification code. Please try again.</p>"#,
-        Some(_) => r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">An error occurred. Please try again.</p>"#,
-        None => r#"<p style="text-align:center;color:#94a3b8;margin-bottom:1rem;font-size:0.875rem;">Enter the code from your authenticator app</p>"#,
+        Some("expired") => {
+            r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">Session expired. Please log in again.</p>"#
+        }
+        Some("no_session") => {
+            r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">No pending MFA session. Please log in first.</p>"#
+        }
+        Some("invalid_code") => {
+            r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">Invalid verification code. Please try again.</p>"#
+        }
+        Some(_) => {
+            r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">An error occurred. Please try again.</p>"#
+        }
+        None => {
+            r#"<p style="text-align:center;color:#94a3b8;margin-bottom:1rem;font-size:0.875rem;">Enter the code from your authenticator app</p>"#
+        }
     };
 
     let html = format!(
@@ -376,8 +385,10 @@ pub async fn mfa_submit(
     // Look up the pending MFA record
     let db_clone = database.clone();
     let pending_token_for_lookup = pending_token.clone();
-    let pending = match tokio::task::spawn_blocking(move || db::get_pending_mfa(&db_clone, &pending_token_for_lookup))
-        .await
+    let pending = match tokio::task::spawn_blocking(move || {
+        db::get_pending_mfa(&db_clone, &pending_token_for_lookup)
+    })
+    .await
     {
         Ok(Ok(Some(p))) => p,
         Ok(Ok(None)) => {
@@ -400,14 +411,11 @@ pub async fn mfa_submit(
         .map(|t| t.skew)
         .unwrap_or(1);
 
-    let valid = match tokio::task::spawn_blocking(move || {
+    let valid = tokio::task::spawn_blocking(move || {
         crate::totp::verify_user_code(&db_clone, user_id, &code, skew)
     })
     .await
-    {
-        Ok(v) => v,
-        Err(_) => false,
-    };
+    .unwrap_or_default();
 
     if !valid {
         return Redirect::to("/auth/mfa?error=invalid_code").into_response();
@@ -415,10 +423,8 @@ pub async fn mfa_submit(
 
     // Delete the pending MFA record
     let db_clone = database.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        db::delete_pending_mfa(&db_clone, &pending_token)
-    })
-    .await;
+    let _ = tokio::task::spawn_blocking(move || db::delete_pending_mfa(&db_clone, &pending_token))
+        .await;
 
     // Create final auth session
     let ttl_secs = 86400; // 24 hours
@@ -499,6 +505,7 @@ pub async fn saml_acs() -> Response {
 }
 
 #[derive(serde::Deserialize)]
+#[allow(non_snake_case)]
 pub struct SamlAcsForm {
     pub SAMLResponse: String,
     #[serde(default)]

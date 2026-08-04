@@ -355,10 +355,18 @@ pub struct AuthTotpConfig {
     pub enforcement: crate::totp::TotpEnforcement,
 }
 
-fn default_totp_issuer() -> String { "persea".into() }
-fn default_totp_digits() -> u8 { 6 }
-fn default_totp_period() -> u16 { 30 }
-fn default_totp_skew() -> u8 { 1 }
+fn default_totp_issuer() -> String {
+    "persea".into()
+}
+fn default_totp_digits() -> u8 {
+    6
+}
+fn default_totp_period() -> u16 {
+    30
+}
+fn default_totp_skew() -> u8 {
+    1
+}
 
 impl Default for AuthTotpConfig {
     fn default() -> Self {
@@ -1492,7 +1500,11 @@ impl Config {
             }
         });
 
-        if self.recording.as_ref().is_some_and(|r| r.max_disk_percent > 100) {
+        if self
+            .recording
+            .as_ref()
+            .is_some_and(|r| r.max_disk_percent > 100)
+        {
             eprintln!(
                 "WARNING: recording.max_disk_percent ({}) > 100, capping at 100",
                 self.recording.as_ref().unwrap().max_disk_percent
@@ -1551,12 +1563,18 @@ impl Config {
     /// Get the encryption key for DB-stored credentials.
     /// Also checks the `PERSEA_STORAGE_KEY` environment variable.
     pub fn storage_encryption_key(&self) -> Option<String> {
-        if let Some(ref key) = self.storage.as_ref().and_then(|s| s.encryption_key.as_ref()) {
+        if let Some(ref key) = self
+            .storage
+            .as_ref()
+            .and_then(|s| s.encryption_key.as_ref())
+        {
             if !key.is_empty() {
                 return Some(key.to_string());
             }
         }
-        std::env::var("PERSEA_STORAGE_KEY").ok().filter(|k| !k.is_empty())
+        std::env::var("PERSEA_STORAGE_KEY")
+            .ok()
+            .filter(|k| !k.is_empty())
     }
 }
 
@@ -1853,8 +1871,7 @@ mod tests {
     fn load_themes_skips_malformed_toml() {
         // A garbage .toml in the themes dir is skipped with a warning, not
         // fatal. The rest of the directory continues to load.
-        let tmp =
-            std::env::temp_dir().join(format!("persea-test-{}-bad-toml", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("persea-test-{}-bad-toml", std::process::id()));
         let themes_dir = tmp.join("themes");
         std::fs::create_dir_all(&themes_dir).unwrap();
         std::fs::write(themes_dir.join("bad.toml"), "this is = not\nvalid toml [[[").unwrap();
@@ -1989,7 +2006,10 @@ mod tests {
             "".into(),
         ];
         config.sanitize();
-        assert_eq!(config.ssh_allowed_networks, vec!["10.0.0.0/8", "192.168.0.0/16"]);
+        assert_eq!(
+            config.ssh_allowed_networks,
+            vec!["10.0.0.0/8", "192.168.0.0/16"]
+        );
     }
 
     #[test]
@@ -2048,10 +2068,7 @@ mod tests {
             "192.168.0.0/16".into(),
         ];
         config.sanitize();
-        assert_eq!(
-            config.trusted_proxies,
-            vec!["10.0.0.0/8", "192.168.0.0/16"]
-        );
+        assert_eq!(config.trusted_proxies, vec!["10.0.0.0/8", "192.168.0.0/16"]);
     }
 
     // ── validate() method tests ──
@@ -2101,7 +2118,11 @@ mod tests {
         let mut config = Config::default();
         config.session_pending_timeout_secs = 0;
         let err = config.validate().unwrap_err();
-        assert!(err.contains("session_pending_timeout_secs"), "error: {}", err);
+        assert!(
+            err.contains("session_pending_timeout_secs"),
+            "error: {}",
+            err
+        );
     }
 
     #[test]

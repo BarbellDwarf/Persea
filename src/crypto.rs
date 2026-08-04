@@ -21,7 +21,8 @@ impl EncryptionKey {
     /// Create from a 32-byte raw key.
     pub fn from_bytes(bytes: &[u8; 32]) -> Self {
         Self {
-            key: *Key::<Aes256Gcm>::from_slice(bytes),
+            key: Key::<Aes256Gcm>::try_from(bytes.as_slice())
+                .expect("key length mismatch"),
         }
     }
 
@@ -60,10 +61,11 @@ pub fn encrypt_value(key: &EncryptionKey, plaintext: &str) -> Result<String, Cry
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     rand::fill(&mut nonce_bytes[..]);
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes.as_slice())
+        .expect("nonce length mismatch");
 
     let ciphertext = cipher
-        .encrypt(nonce, plaintext.as_bytes())
+        .encrypt(&nonce, plaintext.as_bytes())
         .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
 
     // ciphertext already includes the 16-byte auth tag from aes-gcm
@@ -94,11 +96,12 @@ pub fn decrypt_value(key: &EncryptionKey, encrypted: &str) -> Result<String, Cry
     }
 
     let (nonce_bytes, ciphertext) = raw.split_at(NONCE_LEN);
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = Nonce::try_from(nonce_bytes)
+        .map_err(|_| CryptoError::InvalidCiphertext("nonce length mismatch".into()))?;
 
     let cipher = Aes256Gcm::new(&key.key);
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))?;
 
     String::from_utf8(plaintext)

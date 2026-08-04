@@ -21,7 +21,12 @@ fn is_db_storage_available(db: &Db) -> bool {
 }
 
 /// Check if a folder's allowed_groups grant access to the given user groups.
-fn folder_allowed_for_user(db: &Db, scope: &str, folder_name: &str, user_groups: &[String]) -> bool {
+fn folder_allowed_for_user(
+    db: &Db,
+    scope: &str,
+    folder_name: &str,
+    user_groups: &[String],
+) -> bool {
     if user_groups.is_empty() {
         return false;
     }
@@ -141,6 +146,7 @@ pub(crate) fn audit_client_ip(
     client_ip(headers, addr.ip(), proxies).to_string()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn log_ab_event(
     database: &Db,
     email: &str,
@@ -194,9 +200,7 @@ pub(crate) async fn check_folder_access(
     {
         Ok(true) => Ok(()),
         Ok(false) => Err(AppError::Forbidden("no access to this folder".into())),
-        Err(VaultError::NotFound) => {
-            Err(AppError::Vault("folder not found".into()))
-        }
+        Err(VaultError::NotFound) => Err(AppError::Vault("folder not found".into())),
         Err(e) => Err(AppError::Vault(e.to_string())),
     }
 }
@@ -239,9 +243,11 @@ pub async fn ab_list_folders(
 
     // Try Vault first if connected, otherwise use DB backend
     if vault.any_connected().await {
-        let folders = vault.list_all_folders().await.map_err(|e| {
-            AppError::Vault(e.to_string())
-        })?.0;
+        let folders = vault
+            .list_all_folders()
+            .await
+            .map_err(|e| AppError::Vault(e.to_string()))?
+            .0;
 
         let user_groups = id.groups();
         let mut visible = Vec::new();
@@ -261,8 +267,8 @@ pub async fn ab_list_folders(
 
     // DB backend fallback
     if is_db_storage_available(&database) {
-        let db_folders = db::list_ab_folders(&database, None)
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let db_folders =
+            db::list_ab_folders(&database, None).map_err(|e| AppError::Internal(e.to_string()))?;
         let user_groups = id.groups();
         let mut visible = Vec::new();
         for folder in db_folders {
@@ -281,7 +287,9 @@ pub async fn ab_list_folders(
         return Ok(Json(json!(visible)));
     }
 
-    Err(AppError::Vault("address book unavailable: no storage backend configured".into()))
+    Err(AppError::Vault(
+        "address book unavailable: no storage backend configured".into(),
+    ))
 }
 
 pub async fn ab_list_subfolders(
@@ -325,9 +333,10 @@ pub async fn ab_list_all(
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
-    let (folders, unavailable_scopes) = vault.list_all_folders().await.map_err(|e| {
-        AppError::Vault(e.to_string())
-    })?;
+    let (folders, unavailable_scopes) = vault
+        .list_all_folders()
+        .await
+        .map_err(|e| AppError::Vault(e.to_string()))?;
 
     let mut result = Vec::new();
     let user_groups = id.groups();
@@ -368,7 +377,9 @@ pub async fn ab_list_all(
         }));
     }
 
-    Ok(Json(json!({"folders": result, "unavailable_scopes": unavailable_scopes})))
+    Ok(Json(
+        json!({"folders": result, "unavailable_scopes": unavailable_scopes}),
+    ))
 }
 
 pub async fn ab_search_index(
@@ -383,9 +394,11 @@ pub async fn ab_search_index(
     let user_groups = id.groups();
     let is_admin = id.has_role("admin");
 
-    let top = vault.list_all_folders().await.map_err(|e| {
-        AppError::Vault(e.to_string())
-    })?.0;
+    let top = vault
+        .list_all_folders()
+        .await
+        .map_err(|e| AppError::Vault(e.to_string()))?
+        .0;
 
     let mut queue: Vec<(String, String)> = top
         .into_iter()
@@ -470,19 +483,30 @@ pub async fn ab_list_entries(
         let mut entries = Vec::new();
         for entry in &db_entries {
             // Reconstruct an AddressBookEntry from DB fields for EntryInfo conversion
-            let protocol_config: serde_json::Value = serde_json::from_str(&entry.protocol_config)
+            let _protocol_config: serde_json::Value = serde_json::from_str(&entry.protocol_config)
                 .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
             let ab_entry = AddressBookEntry {
                 session_type: entry.protocol.clone(),
                 hostname: Some(entry.hostname.clone()),
                 port: entry.port,
-                username: if entry.username.is_empty() { None } else { Some(entry.username.clone()) },
-                display_name: if entry.display_name.is_empty() { None } else { Some(entry.display_name.clone()) },
+                username: if entry.username.is_empty() {
+                    None
+                } else {
+                    Some(entry.username.clone())
+                },
+                display_name: if entry.display_name.is_empty() {
+                    None
+                } else {
+                    Some(entry.display_name.clone())
+                },
                 ..Default::default()
             };
 
-            entries.push(crate::vault::EntryInfo::from((entry.name.as_str(), &ab_entry)));
+            entries.push(crate::vault::EntryInfo::from((
+                entry.name.as_str(),
+                &ab_entry,
+            )));
         }
 
         return Ok(Json(json!(entries)));
@@ -573,9 +597,7 @@ pub async fn ab_connect_entry(
     let ab_entry = if vault.any_connected().await {
         match vault.get_entry(&scope, &folder, &entry).await {
             Ok(e) => e,
-            Err(VaultError::NotFound) => {
-                return Err(AppError::Vault("entry not found".into()))
-            }
+            Err(VaultError::NotFound) => return Err(AppError::Vault("entry not found".into())),
             Err(e) => return Err(AppError::Vault(e.to_string())),
         }
     } else if is_db_storage_available(&database) {
@@ -587,8 +609,7 @@ pub async fn ab_connect_entry(
 
         // Read credentials from DB
         let encryption_key = std::env::var("PERSEA_STORAGE_KEY").unwrap_or_default();
-        let creds = db::list_ab_credentials(&database, entry_rec.id)
-            .unwrap_or_default();
+        let creds = db::list_ab_credentials(&database, entry_rec.id).unwrap_or_default();
 
         let mut password = None;
         let mut private_key = None;
@@ -624,61 +645,186 @@ pub async fn ab_connect_entry(
             session_type: entry_rec.protocol,
             hostname: Some(entry_rec.hostname),
             port: entry_rec.port,
-            username: if entry_rec.username.is_empty() { None } else { Some(entry_rec.username) },
+            username: if entry_rec.username.is_empty() {
+                None
+            } else {
+                Some(entry_rec.username)
+            },
             password,
             private_key,
-            display_name: if entry_rec.display_name.is_empty() { None } else { Some(entry_rec.display_name) },
-            domain: protocol_config.get("domain").and_then(|v| v.as_str()).map(String::from),
-            security: protocol_config.get("security").and_then(|v| v.as_str()).map(String::from),
+            display_name: if entry_rec.display_name.is_empty() {
+                None
+            } else {
+                Some(entry_rec.display_name)
+            },
+            domain: protocol_config
+                .get("domain")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            security: protocol_config
+                .get("security")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             ignore_cert: protocol_config.get("ignore_cert").and_then(|v| v.as_bool()),
-            url: protocol_config.get("url").and_then(|v| v.as_str()).map(String::from),
-            enable_drive: protocol_config.get("enable_drive").and_then(|v| v.as_bool()),
-            auth_pkg: protocol_config.get("auth_pkg").and_then(|v| v.as_str()).map(String::from),
-            kdc_url: protocol_config.get("kdc_url").and_then(|v| v.as_str()).map(String::from),
-            color_depth: protocol_config.get("color_depth").and_then(|v| v.as_u64()).map(|v| v as u8),
-            enable_recording: protocol_config.get("enable_recording").and_then(|v| v.as_bool()),
-            record_typescript: protocol_config.get("record_typescript").and_then(|v| v.as_bool()),
-            remote_app: protocol_config.get("remote_app").and_then(|v| v.as_str()).map(String::from),
-            remote_app_dir: protocol_config.get("remote_app_dir").and_then(|v| v.as_str()).map(String::from),
-            remote_app_args: protocol_config.get("remote_app_args").and_then(|v| v.as_str()).map(String::from),
+            url: protocol_config
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            enable_drive: protocol_config
+                .get("enable_drive")
+                .and_then(|v| v.as_bool()),
+            auth_pkg: protocol_config
+                .get("auth_pkg")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            kdc_url: protocol_config
+                .get("kdc_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            color_depth: protocol_config
+                .get("color_depth")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u8),
+            enable_recording: protocol_config
+                .get("enable_recording")
+                .and_then(|v| v.as_bool()),
+            record_typescript: protocol_config
+                .get("record_typescript")
+                .and_then(|v| v.as_bool()),
+            remote_app: protocol_config
+                .get("remote_app")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            remote_app_dir: protocol_config
+                .get("remote_app_dir")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            remote_app_args: protocol_config
+                .get("remote_app_args")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             enable_gfx: protocol_config.get("enable_gfx").and_then(|v| v.as_bool()),
-            enable_desktop_composition: protocol_config.get("enable_desktop_composition").and_then(|v| v.as_bool()),
-            enable_wallpaper: protocol_config.get("enable_wallpaper").and_then(|v| v.as_bool()),
-            enable_theming: protocol_config.get("enable_theming").and_then(|v| v.as_bool()),
-            enable_full_window_drag: protocol_config.get("enable_full_window_drag").and_then(|v| v.as_bool()),
-            force_lossless: protocol_config.get("force_lossless").and_then(|v| v.as_bool()),
+            enable_desktop_composition: protocol_config
+                .get("enable_desktop_composition")
+                .and_then(|v| v.as_bool()),
+            enable_wallpaper: protocol_config
+                .get("enable_wallpaper")
+                .and_then(|v| v.as_bool()),
+            enable_theming: protocol_config
+                .get("enable_theming")
+                .and_then(|v| v.as_bool()),
+            enable_full_window_drag: protocol_config
+                .get("enable_full_window_drag")
+                .and_then(|v| v.as_bool()),
+            force_lossless: protocol_config
+                .get("force_lossless")
+                .and_then(|v| v.as_bool()),
             enable_h264: protocol_config.get("enable_h264").and_then(|v| v.as_bool()),
-            banner: protocol_config.get("banner").and_then(|v| v.as_str()).map(String::from),
-            prompt_credentials: protocol_config.get("prompt_credentials").and_then(|v| v.as_bool()),
-            allow_sharing: protocol_config.get("allow_sharing").and_then(|v| v.as_bool()),
-            auto_open_if_singleton: protocol_config.get("auto_open_if_singleton").and_then(|v| v.as_bool()),
-            fullscreen_on_connect: protocol_config.get("fullscreen_on_connect").and_then(|v| v.as_bool()),
-            autohide_side_tabs: protocol_config.get("autohide_side_tabs").and_then(|v| v.as_bool()),
+            banner: protocol_config
+                .get("banner")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            prompt_credentials: protocol_config
+                .get("prompt_credentials")
+                .and_then(|v| v.as_bool()),
+            allow_sharing: protocol_config
+                .get("allow_sharing")
+                .and_then(|v| v.as_bool()),
+            auto_open_if_singleton: protocol_config
+                .get("auto_open_if_singleton")
+                .and_then(|v| v.as_bool()),
+            fullscreen_on_connect: protocol_config
+                .get("fullscreen_on_connect")
+                .and_then(|v| v.as_bool()),
+            autohide_side_tabs: protocol_config
+                .get("autohide_side_tabs")
+                .and_then(|v| v.as_bool()),
             spice_tls: protocol_config.get("spice_tls").and_then(|v| v.as_bool()),
-            spice_tls_port: protocol_config.get("spice_tls_port").and_then(|v| v.as_u64()).map(|v| v as u16),
-            spice_ca_cert: protocol_config.get("spice_ca_cert").and_then(|v| v.as_str()).map(String::from),
-            spice_cert_subject: protocol_config.get("spice_cert_subject").and_then(|v| v.as_str()).map(String::from),
-            spice_proxy: protocol_config.get("spice_proxy").and_then(|v| v.as_str()).map(String::from),
-            proxmox_url: protocol_config.get("proxmox_url").and_then(|v| v.as_str()).map(String::from),
-            proxmox_node: protocol_config.get("proxmox_node").and_then(|v| v.as_str()).map(String::from),
-            proxmox_vmid: protocol_config.get("proxmox_vmid").and_then(|v| v.as_u64()).map(|v| v as u32),
-            proxmox_token_id: protocol_config.get("proxmox_token_id").and_then(|v| v.as_str()).map(String::from),
+            spice_tls_port: protocol_config
+                .get("spice_tls_port")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u16),
+            spice_ca_cert: protocol_config
+                .get("spice_ca_cert")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            spice_cert_subject: protocol_config
+                .get("spice_cert_subject")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            spice_proxy: protocol_config
+                .get("spice_proxy")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            proxmox_url: protocol_config
+                .get("proxmox_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            proxmox_node: protocol_config
+                .get("proxmox_node")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            proxmox_vmid: protocol_config
+                .get("proxmox_vmid")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
+            proxmox_token_id: protocol_config
+                .get("proxmox_token_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             proxmox_token_secret,
-            proxmox_verify_tls: protocol_config.get("proxmox_verify_tls").and_then(|v| v.as_bool()),
-            container_image: protocol_config.get("container_image").and_then(|v| v.as_str()).map(String::from),
-            container_cpu_limit: protocol_config.get("container_cpu_limit").and_then(|v| v.as_f64()),
-            container_memory_limit: protocol_config.get("container_memory_limit").and_then(|v| v.as_u64()),
+            proxmox_verify_tls: protocol_config
+                .get("proxmox_verify_tls")
+                .and_then(|v| v.as_bool()),
+            container_image: protocol_config
+                .get("container_image")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            container_cpu_limit: protocol_config
+                .get("container_cpu_limit")
+                .and_then(|v| v.as_f64()),
+            container_memory_limit: protocol_config
+                .get("container_memory_limit")
+                .and_then(|v| v.as_u64()),
             container_env: None,
-            container_idle_timeout_mins: protocol_config.get("container_idle_timeout_mins").and_then(|v| v.as_u64()),
-            container_username: protocol_config.get("container_username").and_then(|v| v.as_str()).map(String::from),
+            container_idle_timeout_mins: protocol_config
+                .get("container_idle_timeout_mins")
+                .and_then(|v| v.as_u64()),
+            container_username: protocol_config
+                .get("container_username")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             container_password,
-            max_monitors: protocol_config.get("max_monitors").and_then(|v| v.as_u64()).map(|v| v as u32),
-            max_recordings: protocol_config.get("max_recordings").and_then(|v| v.as_u64()).map(|v| v as u32),
-            login_script: protocol_config.get("login_script").and_then(|v| v.as_str()).map(String::from),
-            autofill: protocol_config.get("autofill").and_then(|v| v.as_str()).map(String::from),
-            allowed_domains: protocol_config.get("allowed_domains").and_then(|v| v.as_array()).map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
-            disable_copy: protocol_config.get("disable_copy").and_then(|v| v.as_bool()),
-            disable_paste: protocol_config.get("disable_paste").and_then(|v| v.as_bool()),
+            max_monitors: protocol_config
+                .get("max_monitors")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
+            max_recordings: protocol_config
+                .get("max_recordings")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32),
+            login_script: protocol_config
+                .get("login_script")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            autofill: protocol_config
+                .get("autofill")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            allowed_domains: protocol_config
+                .get("allowed_domains")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                }),
+            disable_copy: protocol_config
+                .get("disable_copy")
+                .and_then(|v| v.as_bool()),
+            disable_paste: protocol_config
+                .get("disable_paste")
+                .and_then(|v| v.as_bool()),
             ..Default::default()
         }
     } else {
@@ -1092,54 +1238,150 @@ pub async fn ab_create_entry(
 
     // Build protocol_config JSON from entry fields
     let mut config = serde_json::Map::new();
-    if let Some(ref v) = req.entry.domain { config.insert("domain".into(), json!(v)); }
-    if let Some(ref v) = req.entry.security { config.insert("security".into(), json!(v)); }
-    if let Some(v) = req.entry.ignore_cert { config.insert("ignore_cert".into(), json!(v)); }
-    if let Some(ref v) = req.entry.url { config.insert("url".into(), json!(v)); }
-    if let Some(v) = req.entry.enable_drive { config.insert("enable_drive".into(), json!(v)); }
-    if let Some(ref v) = req.entry.auth_pkg { config.insert("auth_pkg".into(), json!(v)); }
-    if let Some(ref v) = req.entry.kdc_url { config.insert("kdc_url".into(), json!(v)); }
-    if let Some(v) = req.entry.color_depth { config.insert("color_depth".into(), json!(v)); }
-    if let Some(v) = req.entry.enable_recording { config.insert("enable_recording".into(), json!(v)); }
-    if let Some(v) = req.entry.record_typescript { config.insert("record_typescript".into(), json!(v)); }
-    if let Some(ref v) = req.entry.remote_app { config.insert("remote_app".into(), json!(v)); }
-    if let Some(ref v) = req.entry.remote_app_dir { config.insert("remote_app_dir".into(), json!(v)); }
-    if let Some(ref v) = req.entry.remote_app_args { config.insert("remote_app_args".into(), json!(v)); }
-    if let Some(v) = req.entry.enable_gfx { config.insert("enable_gfx".into(), json!(v)); }
-    if let Some(v) = req.entry.enable_desktop_composition { config.insert("enable_desktop_composition".into(), json!(v)); }
-    if let Some(v) = req.entry.enable_wallpaper { config.insert("enable_wallpaper".into(), json!(v)); }
-    if let Some(v) = req.entry.enable_theming { config.insert("enable_theming".into(), json!(v)); }
-    if let Some(v) = req.entry.enable_full_window_drag { config.insert("enable_full_window_drag".into(), json!(v)); }
-    if let Some(v) = req.entry.force_lossless { config.insert("force_lossless".into(), json!(v)); }
-    if let Some(v) = req.entry.enable_h264 { config.insert("enable_h264".into(), json!(v)); }
-    if let Some(ref v) = req.entry.banner { config.insert("banner".into(), json!(v)); }
-    if let Some(v) = req.entry.prompt_credentials { config.insert("prompt_credentials".into(), json!(v)); }
-    if let Some(v) = req.entry.allow_sharing { config.insert("allow_sharing".into(), json!(v)); }
-    if let Some(v) = req.entry.auto_open_if_singleton { config.insert("auto_open_if_singleton".into(), json!(v)); }
-    if let Some(v) = req.entry.fullscreen_on_connect { config.insert("fullscreen_on_connect".into(), json!(v)); }
-    if let Some(v) = req.entry.autohide_side_tabs { config.insert("autohide_side_tabs".into(), json!(v)); }
-    if let Some(v) = req.entry.spice_tls { config.insert("spice_tls".into(), json!(v)); }
-    if let Some(v) = req.entry.spice_tls_port { config.insert("spice_tls_port".into(), json!(v)); }
-    if let Some(ref v) = req.entry.spice_ca_cert { config.insert("spice_ca_cert".into(), json!(v)); }
-    if let Some(ref v) = req.entry.spice_cert_subject { config.insert("spice_cert_subject".into(), json!(v)); }
-    if let Some(ref v) = req.entry.spice_proxy { config.insert("spice_proxy".into(), json!(v)); }
-    if let Some(ref v) = req.entry.proxmox_url { config.insert("proxmox_url".into(), json!(v)); }
-    if let Some(ref v) = req.entry.proxmox_node { config.insert("proxmox_node".into(), json!(v)); }
-    if let Some(v) = req.entry.proxmox_vmid { config.insert("proxmox_vmid".into(), json!(v)); }
-    if let Some(ref v) = req.entry.proxmox_token_id { config.insert("proxmox_token_id".into(), json!(v)); }
-    if let Some(v) = req.entry.proxmox_verify_tls { config.insert("proxmox_verify_tls".into(), json!(v)); }
-    if let Some(ref v) = req.entry.container_image { config.insert("container_image".into(), json!(v)); }
-    if let Some(v) = req.entry.container_cpu_limit { config.insert("container_cpu_limit".into(), json!(v)); }
-    if let Some(v) = req.entry.container_memory_limit { config.insert("container_memory_limit".into(), json!(v)); }
-    if let Some(v) = req.entry.container_idle_timeout_mins { config.insert("container_idle_timeout_mins".into(), json!(v)); }
-    if let Some(ref v) = req.entry.container_username { config.insert("container_username".into(), json!(v)); }
-    if let Some(v) = req.entry.max_monitors { config.insert("max_monitors".into(), json!(v)); }
-    if let Some(v) = req.entry.max_recordings { config.insert("max_recordings".into(), json!(v)); }
-    if let Some(ref v) = req.entry.login_script { config.insert("login_script".into(), json!(v)); }
-    if let Some(ref v) = req.entry.autofill { config.insert("autofill".into(), json!(v)); }
-    if let Some(ref v) = req.entry.allowed_domains { config.insert("allowed_domains".into(), json!(v)); }
-    if let Some(v) = req.entry.disable_copy { config.insert("disable_copy".into(), json!(v)); }
-    if let Some(v) = req.entry.disable_paste { config.insert("disable_paste".into(), json!(v)); }
+    if let Some(ref v) = req.entry.domain {
+        config.insert("domain".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.security {
+        config.insert("security".into(), json!(v));
+    }
+    if let Some(v) = req.entry.ignore_cert {
+        config.insert("ignore_cert".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.url {
+        config.insert("url".into(), json!(v));
+    }
+    if let Some(v) = req.entry.enable_drive {
+        config.insert("enable_drive".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.auth_pkg {
+        config.insert("auth_pkg".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.kdc_url {
+        config.insert("kdc_url".into(), json!(v));
+    }
+    if let Some(v) = req.entry.color_depth {
+        config.insert("color_depth".into(), json!(v));
+    }
+    if let Some(v) = req.entry.enable_recording {
+        config.insert("enable_recording".into(), json!(v));
+    }
+    if let Some(v) = req.entry.record_typescript {
+        config.insert("record_typescript".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.remote_app {
+        config.insert("remote_app".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.remote_app_dir {
+        config.insert("remote_app_dir".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.remote_app_args {
+        config.insert("remote_app_args".into(), json!(v));
+    }
+    if let Some(v) = req.entry.enable_gfx {
+        config.insert("enable_gfx".into(), json!(v));
+    }
+    if let Some(v) = req.entry.enable_desktop_composition {
+        config.insert("enable_desktop_composition".into(), json!(v));
+    }
+    if let Some(v) = req.entry.enable_wallpaper {
+        config.insert("enable_wallpaper".into(), json!(v));
+    }
+    if let Some(v) = req.entry.enable_theming {
+        config.insert("enable_theming".into(), json!(v));
+    }
+    if let Some(v) = req.entry.enable_full_window_drag {
+        config.insert("enable_full_window_drag".into(), json!(v));
+    }
+    if let Some(v) = req.entry.force_lossless {
+        config.insert("force_lossless".into(), json!(v));
+    }
+    if let Some(v) = req.entry.enable_h264 {
+        config.insert("enable_h264".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.banner {
+        config.insert("banner".into(), json!(v));
+    }
+    if let Some(v) = req.entry.prompt_credentials {
+        config.insert("prompt_credentials".into(), json!(v));
+    }
+    if let Some(v) = req.entry.allow_sharing {
+        config.insert("allow_sharing".into(), json!(v));
+    }
+    if let Some(v) = req.entry.auto_open_if_singleton {
+        config.insert("auto_open_if_singleton".into(), json!(v));
+    }
+    if let Some(v) = req.entry.fullscreen_on_connect {
+        config.insert("fullscreen_on_connect".into(), json!(v));
+    }
+    if let Some(v) = req.entry.autohide_side_tabs {
+        config.insert("autohide_side_tabs".into(), json!(v));
+    }
+    if let Some(v) = req.entry.spice_tls {
+        config.insert("spice_tls".into(), json!(v));
+    }
+    if let Some(v) = req.entry.spice_tls_port {
+        config.insert("spice_tls_port".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.spice_ca_cert {
+        config.insert("spice_ca_cert".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.spice_cert_subject {
+        config.insert("spice_cert_subject".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.spice_proxy {
+        config.insert("spice_proxy".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.proxmox_url {
+        config.insert("proxmox_url".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.proxmox_node {
+        config.insert("proxmox_node".into(), json!(v));
+    }
+    if let Some(v) = req.entry.proxmox_vmid {
+        config.insert("proxmox_vmid".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.proxmox_token_id {
+        config.insert("proxmox_token_id".into(), json!(v));
+    }
+    if let Some(v) = req.entry.proxmox_verify_tls {
+        config.insert("proxmox_verify_tls".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.container_image {
+        config.insert("container_image".into(), json!(v));
+    }
+    if let Some(v) = req.entry.container_cpu_limit {
+        config.insert("container_cpu_limit".into(), json!(v));
+    }
+    if let Some(v) = req.entry.container_memory_limit {
+        config.insert("container_memory_limit".into(), json!(v));
+    }
+    if let Some(v) = req.entry.container_idle_timeout_mins {
+        config.insert("container_idle_timeout_mins".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.container_username {
+        config.insert("container_username".into(), json!(v));
+    }
+    if let Some(v) = req.entry.max_monitors {
+        config.insert("max_monitors".into(), json!(v));
+    }
+    if let Some(v) = req.entry.max_recordings {
+        config.insert("max_recordings".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.login_script {
+        config.insert("login_script".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.autofill {
+        config.insert("autofill".into(), json!(v));
+    }
+    if let Some(ref v) = req.entry.allowed_domains {
+        config.insert("allowed_domains".into(), json!(v));
+    }
+    if let Some(v) = req.entry.disable_copy {
+        config.insert("disable_copy".into(), json!(v));
+    }
+    if let Some(v) = req.entry.disable_paste {
+        config.insert("disable_paste".into(), json!(v));
+    }
 
     let entry_id = db::create_ab_entry(
         &database,
@@ -1162,7 +1404,8 @@ pub async fn ab_create_entry(
                 &crate::crypto::EncryptionKey::from_hex(&encryption_key)
                     .map_err(|e| AppError::Internal(e.to_string()))?,
                 password,
-            ).map_err(|e| AppError::Internal(e.to_string()))?;
+            )
+            .map_err(|e| AppError::Internal(e.to_string()))?;
             db::store_ab_credential(&database, entry_id, "password", &encrypted)?;
         }
         if let Some(ref private_key) = req.entry.private_key {
@@ -1170,7 +1413,8 @@ pub async fn ab_create_entry(
                 &crate::crypto::EncryptionKey::from_hex(&encryption_key)
                     .map_err(|e| AppError::Internal(e.to_string()))?,
                 private_key,
-            ).map_err(|e| AppError::Internal(e.to_string()))?;
+            )
+            .map_err(|e| AppError::Internal(e.to_string()))?;
             db::store_ab_credential(&database, entry_id, "private_key", &encrypted)?;
         }
         if let Some(ref secret) = req.entry.proxmox_token_secret {
@@ -1178,7 +1422,8 @@ pub async fn ab_create_entry(
                 &crate::crypto::EncryptionKey::from_hex(&encryption_key)
                     .map_err(|e| AppError::Internal(e.to_string()))?,
                 secret,
-            ).map_err(|e| AppError::Internal(e.to_string()))?;
+            )
+            .map_err(|e| AppError::Internal(e.to_string()))?;
             db::store_ab_credential(&database, entry_id, "proxmox_token_secret", &encrypted)?;
         }
         if let Some(ref pw) = req.entry.container_password {
@@ -1186,7 +1431,8 @@ pub async fn ab_create_entry(
                 &crate::crypto::EncryptionKey::from_hex(&encryption_key)
                     .map_err(|e| AppError::Internal(e.to_string()))?,
                 pw,
-            ).map_err(|e| AppError::Internal(e.to_string()))?;
+            )
+            .map_err(|e| AppError::Internal(e.to_string()))?;
             db::store_ab_credential(&database, entry_id, "container_password", &encrypted)?;
         }
     }

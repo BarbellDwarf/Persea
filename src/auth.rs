@@ -13,8 +13,8 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use std::time::Instant;
+use tokio::sync::Mutex;
 
 /// Single-use WebSocket ticket. Created via POST /api/ws-ticket, consumed on
 /// WebSocket connect. Prevents API keys from appearing in WebSocket URLs.
@@ -29,9 +29,15 @@ pub struct WsTicketStore(Arc<Mutex<HashMap<String, WsTicket>>>);
 
 const WS_TICKET_TTL_SECS: u64 = 30;
 
+impl Default for WsTicketStore {
+    fn default() -> Self {
+        Self(Arc::new(Mutex::new(HashMap::new())))
+    }
+}
+
 impl WsTicketStore {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::new())))
+        Self::default()
     }
 
     /// Create a ticket for the given identity. Returns the ticket string.
@@ -114,7 +120,7 @@ impl AuthIdentity {
 }
 
 // Re-export role utilities from the shared module.
-pub use crate::role::{is_valid_role, role_level, Role, VALID_ROLES};
+pub use crate::role::{is_valid_role, role_level};
 
 /// Compute the effective role for a user API token.
 /// Returns the lower of the user's current role and the token's max_role cap.

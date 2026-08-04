@@ -14,6 +14,7 @@ use serde_json::json;
 use tokio_util::io::ReaderStream;
 
 /// Maximum number of rows returned by CSV export queries.
+#[allow(dead_code)]
 const MAX_CSV_EXPORT_ROWS: u32 = 100_000;
 
 #[derive(Deserialize)]
@@ -204,7 +205,9 @@ pub async fn report_sessions(
         limit,
         offset,
     )?;
-    Ok(Json(json!({"sessions": rows, "total": total, "limit": limit, "offset": offset})))
+    Ok(Json(
+        json!({"sessions": rows, "total": total, "limit": limit, "offset": offset}),
+    ))
 }
 
 pub async fn report_sessions_csv(
