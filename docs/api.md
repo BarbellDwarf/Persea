@@ -36,7 +36,7 @@ Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Cr
 | `height` | integer | Display height in pixels |
 | `dpi` | integer | Display DPI |
 
-When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the connections (credentials from Vault). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode — if the target requires authentication, the user will see guacd's login prompt.
+When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the connections (credentials from Vault). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode. If the target requires authentication, the user will see guacd's login prompt.
 
 If the connections entry has `prompt_credentials: true` or has no stored password/key, the endpoint returns an inline credential form instead of creating the session immediately. The user enters credentials, which are POSTed to the connect endpoint and used for that session only (never stored).
 
@@ -302,7 +302,7 @@ Get session banner text. Authenticates via share token (not credentials). Used f
 
 ## Connecting to a session
 
-Creating a session (`POST /api/sessions`) only opens the connection to the target; it does **not** display anything. A browser then attaches over a WebSocket to stream the session. Understanding the two connection roles avoids the most common integration mistake.
+Creating a session (`POST /api/sessions`) only opens the connection to the target; it does **not** display anything. A browser then attaches over a WebSocket to stream the session. The two connection roles (owner and join) are the most common source of integration confusion.
 
 ### Owner vs. join
 
@@ -573,7 +573,7 @@ Create a personal API token. Requires **poweruser** role or higher. Only availab
 }
 ```
 
-The `token` field is the plaintext token — it is only returned once at creation and cannot be retrieved again.
+The `token` field is the plaintext token. It is only returned once at creation and cannot be retrieved again.
 
 ### `GET /api/me/tokens`
 
