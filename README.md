@@ -1,4 +1,4 @@
-# persea
+# Persea
 
 [![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
