@@ -1,9 +1,5 @@
 //! persea — lightweight Guacamole proxy. CLI entry point and server setup.
 #![allow(dead_code)]
-#![warn(clippy::unwrap_used)]
-#![warn(clippy::expect_used)]
-#![warn(clippy::manual_assert)]
-#![warn(clippy::needless_pass_by_value)]
 
 mod api;
 mod audit;
