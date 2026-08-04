@@ -143,7 +143,10 @@ impl SessionManager {
                     "Creating new SSH session"
                 );
 
-                let (private_key, ssh_banner) = if ssh.and_then(|s| s.generate_keypair).unwrap_or(false) {
+                let (private_key, ssh_banner) = if ssh
+                    .and_then(|s| s.generate_keypair)
+                    .unwrap_or(false)
+                {
                     let keypair = ssh_key::PrivateKey::random(
                         &mut ssh_key::rand_core::OsRng,
                         ssh_key::Algorithm::Ed25519,
@@ -433,20 +436,16 @@ impl SessionManager {
                 // Proxmox VE console: SPICE brokered through the PVE spiceproxy
                 // API. Tickets are one-time and short-lived, so fetch a
                 // just-in-time SPICE config at connect rather than storing it.
-                let pve_url = proxmox
-                    .and_then(|s| s.proxmox_url.clone())
-                    .ok_or_else(|| {
-                        SessionError::ValidationError("Proxmox sessions require proxmox_url".into())
-                    })?;
+                let pve_url = proxmox.and_then(|s| s.proxmox_url.clone()).ok_or_else(|| {
+                    SessionError::ValidationError("Proxmox sessions require proxmox_url".into())
+                })?;
                 let vmid = proxmox.and_then(|s| s.proxmox_vmid).unwrap_or(0);
                 if vmid == 0 {
                     return Err(SessionError::ValidationError(
                         "Proxmox sessions require proxmox_vmid".into(),
                     ));
                 }
-                let verify_tls = proxmox
-                    .and_then(|s| s.proxmox_verify_tls)
-                    .unwrap_or(false);
+                let verify_tls = proxmox.and_then(|s| s.proxmox_verify_tls).unwrap_or(false);
 
                 // Join the token id and secret into PVE's "id=secret" form. If
                 // the secret is empty, treat the id as already-joined (lenient:
@@ -685,11 +684,13 @@ impl SessionManager {
                     .as_ref()
                     .ok_or_else(|| SessionError::VdiError("VDI driver not initialized".into()))?;
 
-                let image = vdi_params.and_then(|s| s.container_image.clone()).ok_or_else(|| {
-                    SessionError::ValidationError(
-                        "container_image is required for VDI sessions".into(),
-                    )
-                })?;
+                let image = vdi_params
+                    .and_then(|s| s.container_image.clone())
+                    .ok_or_else(|| {
+                        SessionError::ValidationError(
+                            "container_image is required for VDI sessions".into(),
+                        )
+                    })?;
 
                 // Check allowed images whitelist
                 if !vdi_cfg.allowed_images.is_empty() && !vdi_cfg.allowed_images.contains(&image) {
@@ -1023,39 +1024,40 @@ impl SessionManager {
             .unwrap_or(self.config.recording_enabled());
 
         // Spawn login script if configured (web sessions with CDP port)
-        let login_script_handle = if let (Some(script), Some(bs)) =
-            (web.and_then(|s| s.login_script.as_ref()), browser_session.as_ref())
-        {
+        let login_script_handle = if let (Some(script), Some(bs)) = (
+            web.and_then(|s| s.login_script.as_ref()),
+            browser_session.as_ref(),
+        ) {
             if let Some(cdp_port) = bs.cdp_port {
-                    match self.browser_manager.run_login_script(
-                        script,
-                        bs.display,
-                        cdp_port,
-                        url.as_deref().unwrap_or(""),
-                        req.username.as_deref(),
-                        req.password.as_deref(),
-                        &session_id.to_string(),
-                    ) {
-                        Ok(handle) => Some(handle),
-                        Err(e) => {
-                            tracing::warn!(
-                                session_id = %session_id,
-                                error = %e,
-                                "Login script failed to start (session continues)"
-                            );
-                            None
-                        }
+                match self.browser_manager.run_login_script(
+                    script,
+                    bs.display,
+                    cdp_port,
+                    url.as_deref().unwrap_or(""),
+                    req.username.as_deref(),
+                    req.password.as_deref(),
+                    &session_id.to_string(),
+                ) {
+                    Ok(handle) => Some(handle),
+                    Err(e) => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            error = %e,
+                            "Login script failed to start (session continues)"
+                        );
+                        None
                     }
-                } else {
-                    tracing::warn!(
-                        session_id = %session_id,
-                        "Login script configured but no CDP port allocated"
-                    );
-                    None
                 }
             } else {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "Login script configured but no CDP port allocated"
+                );
                 None
-            };
+            }
+        } else {
+            None
+        };
 
         // Gate:
         //  - If the request explicitly sets allow_sharing, honour it.

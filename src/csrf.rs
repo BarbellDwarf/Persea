@@ -130,10 +130,7 @@ where
             if !resp.headers().contains_key(header::SET_COOKIE) {
                 let token = generate_token();
                 let secure = if is_https { "; Secure" } else { "" };
-                let cookie = format!(
-                    "{}={}; Path=/; SameSite=Lax;{}",
-                    CSRF_COOKIE, token, secure
-                );
+                let cookie = format!("{}={}; Path=/; SameSite=Lax;{}", CSRF_COOKIE, token, secure);
                 resp.headers_mut()
                     .insert(header::SET_COOKIE, cookie.parse().unwrap());
             }
@@ -185,17 +182,18 @@ mod tests {
             "cookie must be readable by JS (double-submit pattern): {set_cookie}"
         );
         assert!(set_cookie.contains("SameSite=Lax"), "got {set_cookie}");
-        assert!(!set_cookie.contains("Secure"), "no Secure over plain HTTP: {set_cookie}");
+        assert!(
+            !set_cookie.contains("Secure"),
+            "no Secure over plain HTTP: {set_cookie}"
+        );
     }
 
     #[tokio::test]
     async fn secure_flag_set_over_https_scheme() {
-        let resp = run(
-            Request::builder()
-                .uri("https://persea.test/")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        let resp = run(Request::builder()
+            .uri("https://persea.test/")
+            .body(Body::empty())
+            .unwrap())
         .await;
         let set_cookie = resp
             .headers()
@@ -214,12 +212,10 @@ mod tests {
 
     #[tokio::test]
     async fn post_without_cookie_but_header_is_rejected() {
-        let resp = run(
-            Request::post("/")
-                .header("x-csrf-token", "attacker-guess")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        let resp = run(Request::post("/")
+            .header("x-csrf-token", "attacker-guess")
+            .body(Body::empty())
+            .unwrap())
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
@@ -233,13 +229,11 @@ mod tests {
             .to_string();
         assert!(!token.is_empty());
 
-        let resp = run(
-            Request::post("/")
-                .header(header::COOKIE, format!("{CSRF_COOKIE}={token}"))
-                .header("x-csrf-token", token)
-                .body(Body::empty())
-                .unwrap(),
-        )
+        let resp = run(Request::post("/")
+            .header(header::COOKIE, format!("{CSRF_COOKIE}={token}"))
+            .header("x-csrf-token", token)
+            .body(Body::empty())
+            .unwrap())
         .await;
         assert_eq!(resp.status(), StatusCode::OK, "matching token must pass");
     }

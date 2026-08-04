@@ -166,12 +166,7 @@ pub async fn connect_vm(
         .vm_credentials
         .get(&vm.name)
         .or_else(|| client.config.vm_credentials.get(&vm.vm_id))
-        .map(|c| {
-            (
-                c.username.clone(),
-                std::env::var(&c.password_env).ok(),
-            )
-        })
+        .map(|c| (c.username.clone(), std::env::var(&c.password_env).ok()))
         .unwrap_or_else(|| {
             (
                 client.config.username.clone(),

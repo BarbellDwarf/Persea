@@ -524,8 +524,15 @@ mod tests {
         let web = req.web.as_ref().expect("web params");
         assert_eq!(web.url.as_deref(), Some("https://app.example.com"));
         assert_eq!(web.login_script.as_deref(), Some("/opt/scripts/login.sh"));
-        assert!(web.autofill.as_deref().unwrap_or("").contains("app.example.com"));
-        assert_eq!(web.allowed_domains.as_deref(), Some(&["app.example.com".to_string()][..]));
+        assert!(web
+            .autofill
+            .as_deref()
+            .unwrap_or("")
+            .contains("app.example.com"));
+        assert_eq!(
+            web.allowed_domains.as_deref(),
+            Some(&["app.example.com".to_string()][..])
+        );
 
         // VDI: container keys land in VdiParams.
         let json = r#"{
@@ -536,7 +543,10 @@ mod tests {
         }"#;
         let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
         let vdi = req.vdi.as_ref().expect("vdi params");
-        assert_eq!(vdi.container_image.as_deref(), Some("registry.example.com/desktop:latest"));
+        assert_eq!(
+            vdi.container_image.as_deref(),
+            Some("registry.example.com/desktop:latest")
+        );
         assert_eq!(vdi.container_cpu_limit, Some(2.0));
         assert_eq!(vdi.container_memory_limit, Some(4096));
         assert_eq!(vdi.container_username.as_deref(), Some("vdi-user"));
@@ -567,7 +577,10 @@ mod tests {
         }"#;
         let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
         let proxmox = req.proxmox.as_ref().expect("proxmox params");
-        assert_eq!(proxmox.proxmox_url.as_deref(), Some("https://pve.example.com:8006"));
+        assert_eq!(
+            proxmox.proxmox_url.as_deref(),
+            Some("https://pve.example.com:8006")
+        );
         assert_eq!(proxmox.proxmox_node.as_deref(), Some("pve1"));
         assert_eq!(proxmox.proxmox_vmid, Some(100));
         assert_eq!(proxmox.proxmox_token_id.as_deref(), Some("root@pam!persea"));
