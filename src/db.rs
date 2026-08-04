@@ -348,6 +348,48 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
     // Migration: RBAC tables (connection groups, user-group membership, permissions)
     crate::rbac::migrate(&db)?;
 
+    // Migration: address book tables (ticket #022)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS address_book_folders (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope       TEXT NOT NULL DEFAULT 'shared',
+            name        TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(scope, name)
+        );
+
+        CREATE TABLE IF NOT EXISTS address_book_entries (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            folder_id       INTEGER NOT NULL REFERENCES address_book_folders(id) ON DELETE CASCADE,
+            name            TEXT NOT NULL,
+            display_name    TEXT DEFAULT '',
+            protocol        TEXT NOT NULL,
+            hostname        TEXT NOT NULL,
+            port            INTEGER,
+            username        TEXT DEFAULT '',
+            protocol_config TEXT DEFAULT '{}',
+            allowed_groups  TEXT DEFAULT '',
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(folder_id, name)
+        );
+
+        CREATE TABLE IF NOT EXISTS address_book_credentials (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            entry_id        INTEGER NOT NULL REFERENCES address_book_entries(id) ON DELETE CASCADE,
+            credential_type TEXT NOT NULL,
+            credential_data TEXT NOT NULL,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(entry_id, credential_type)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ab_entries_folder ON address_book_entries(folder_id);
+        CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);",
+    )?;
+
     Ok(db)
 }
 
@@ -1943,6 +1985,323 @@ pub fn delete_jump_host(db: &Db, id: &str) -> rusqlite::Result<bool> {
     let conn = db.lock().unwrap();
     let changed = conn.execute("DELETE FROM jump_hosts WHERE id = ?1", params![id])?;
     Ok(changed > 0)
+}
+
+// ── Address book (DB-backed storage) ──
+
+/// DB record for an address book folder.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AbFolder {
+    pub id: i64,
+    pub scope: String,
+    pub name: String,
+    pub description: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// DB record for an address book entry (metadata only, no credentials).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AbEntry {
+    pub id: i64,
+    pub folder_id: i64,
+    pub name: String,
+    pub display_name: String,
+    pub protocol: String,
+    pub hostname: String,
+    pub port: Option<u16>,
+    pub username: String,
+    pub protocol_config: String,
+    pub allowed_groups: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// DB record for an encrypted credential.
+#[derive(Debug, Clone)]
+pub struct AbCredential {
+    pub id: i64,
+    pub entry_id: i64,
+    pub credential_type: String,
+    pub credential_data: String,
+}
+
+/// Create a new address book folder. Returns the folder ID.
+pub fn create_ab_folder(
+    db: &Db,
+    scope: &str,
+    name: &str,
+    description: &str,
+) -> rusqlite::Result<i64> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO address_book_folders (scope, name, description) VALUES (?1, ?2, ?3)",
+        params![scope, name, description],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// List all address book folders, optionally filtered by scope.
+pub fn list_ab_folders(db: &Db, scope: Option<&str>) -> rusqlite::Result<Vec<AbFolder>> {
+    let conn = db.lock().unwrap();
+    let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match scope {
+        Some(s) => (
+            "SELECT id, scope, name, description, created_at, updated_at
+             FROM address_book_folders WHERE scope = ?1 ORDER BY name",
+            vec![Box::new(s.to_string())],
+        ),
+        None => (
+            "SELECT id, scope, name, description, created_at, updated_at
+             FROM address_book_folders ORDER BY scope, name",
+            vec![],
+        ),
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
+        Ok(AbFolder {
+            id: row.get(0)?,
+            scope: row.get(1)?,
+            name: row.get(2)?,
+            description: row.get(3)?,
+            created_at: row.get(4)?,
+            updated_at: row.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Get a folder by scope and name.
+pub fn get_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<AbFolder> {
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT id, scope, name, description, created_at, updated_at
+         FROM address_book_folders WHERE scope = ?1 AND name = ?2",
+        params![scope, name],
+        |row| {
+            Ok(AbFolder {
+                id: row.get(0)?,
+                scope: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        },
+    )
+}
+
+/// Delete a folder and cascade-delete its entries/credentials.
+pub fn delete_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "DELETE FROM address_book_folders WHERE scope = ?1 AND name = ?2",
+        params![scope, name],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Create an address book entry. Returns the entry ID.
+#[allow(clippy::too_many_arguments)]
+pub fn create_ab_entry(
+    db: &Db,
+    folder_id: i64,
+    name: &str,
+    display_name: &str,
+    protocol: &str,
+    hostname: &str,
+    port: Option<u16>,
+    username: &str,
+    protocol_config: &str,
+    allowed_groups: &str,
+) -> rusqlite::Result<i64> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO address_book_entries
+         (folder_id, name, display_name, protocol, hostname, port, username, protocol_config, allowed_groups)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![folder_id, name, display_name, protocol, hostname, port.map(|p| p as i64), username, protocol_config, allowed_groups],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// List entries in a folder.
+pub fn list_ab_entries(db: &Db, folder_id: i64) -> rusqlite::Result<Vec<AbEntry>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, folder_id, name, display_name, protocol, hostname, port,
+                username, protocol_config, allowed_groups, created_at, updated_at
+         FROM address_book_entries WHERE folder_id = ?1 ORDER BY name",
+    )?;
+    let rows = stmt.query_map(params![folder_id], |row| {
+        Ok(AbEntry {
+            id: row.get(0)?,
+            folder_id: row.get(1)?,
+            name: row.get(2)?,
+            display_name: row.get(3)?,
+            protocol: row.get(4)?,
+            hostname: row.get(5)?,
+            port: row.get::<_, Option<i64>>(6)?.map(|p| p as u16),
+            username: row.get(7)?,
+            protocol_config: row.get(8)?,
+            allowed_groups: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Get a single entry by folder_id and name.
+pub fn get_ab_entry(db: &Db, folder_id: i64, name: &str) -> rusqlite::Result<AbEntry> {
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT id, folder_id, name, display_name, protocol, hostname, port,
+                username, protocol_config, allowed_groups, created_at, updated_at
+         FROM address_book_entries WHERE folder_id = ?1 AND name = ?2",
+        params![folder_id, name],
+        |row| {
+            Ok(AbEntry {
+                id: row.get(0)?,
+                folder_id: row.get(1)?,
+                name: row.get(2)?,
+                display_name: row.get(3)?,
+                protocol: row.get(4)?,
+                hostname: row.get(5)?,
+                port: row.get::<_, Option<i64>>(6)?.map(|p| p as u16),
+                username: row.get(7)?,
+                protocol_config: row.get(8)?,
+                allowed_groups: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
+            })
+        },
+    )
+}
+
+/// Update an address book entry.
+#[allow(clippy::too_many_arguments)]
+pub fn update_ab_entry(
+    db: &Db,
+    entry_id: i64,
+    display_name: &str,
+    protocol: &str,
+    hostname: &str,
+    port: Option<u16>,
+    username: &str,
+    protocol_config: &str,
+    allowed_groups: &str,
+) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE address_book_entries SET
+         display_name = ?2, protocol = ?3, hostname = ?4, port = ?5,
+         username = ?6, protocol_config = ?7, allowed_groups = ?8,
+         updated_at = datetime('now')
+         WHERE id = ?1",
+        params![entry_id, display_name, protocol, hostname, port.map(|p| p as i64), username, protocol_config, allowed_groups],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Delete an entry and cascade-delete its credentials.
+pub fn delete_ab_entry(db: &Db, entry_id: i64) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "DELETE FROM address_book_entries WHERE id = ?1",
+        params![entry_id],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Store (upsert) an encrypted credential for an entry.
+pub fn store_ab_credential(
+    db: &Db,
+    entry_id: i64,
+    credential_type: &str,
+    credential_data: &str,
+) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO address_book_credentials (entry_id, credential_type, credential_data)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(entry_id, credential_type) DO UPDATE SET
+         credential_data = excluded.credential_data, updated_at = datetime('now')",
+        params![entry_id, credential_type, credential_data],
+    )?;
+    Ok(())
+}
+
+/// Get a credential by entry ID and type.
+pub fn get_ab_credential(
+    db: &Db,
+    entry_id: i64,
+    credential_type: &str,
+) -> rusqlite::Result<AbCredential> {
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT id, entry_id, credential_type, credential_data
+         FROM address_book_credentials WHERE entry_id = ?1 AND credential_type = ?2",
+        params![entry_id, credential_type],
+        |row| {
+            Ok(AbCredential {
+                id: row.get(0)?,
+                entry_id: row.get(1)?,
+                credential_type: row.get(2)?,
+                credential_data: row.get(3)?,
+            })
+        },
+    )
+}
+
+/// List all credential types for an entry.
+pub fn list_ab_credentials(db: &Db, entry_id: i64) -> rusqlite::Result<Vec<AbCredential>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, entry_id, credential_type, credential_data
+         FROM address_book_credentials WHERE entry_id = ?1 ORDER BY credential_type",
+    )?;
+    let rows = stmt.query_map(params![entry_id], |row| {
+        Ok(AbCredential {
+            id: row.get(0)?,
+            entry_id: row.get(1)?,
+            credential_type: row.get(2)?,
+            credential_data: row.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Delete a credential by entry ID and type.
+pub fn delete_ab_credential(
+    db: &Db,
+    entry_id: i64,
+    credential_type: &str,
+) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "DELETE FROM address_book_credentials WHERE entry_id = ?1 AND credential_type = ?2",
+        params![entry_id, credential_type],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Check if a folder has entries that match allowed_groups.
+pub fn folder_has_allowed_groups(db: &Db, scope: &str, folder_name: &str) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let folder_id: i64 = conn
+        .query_row(
+            "SELECT id FROM address_book_folders WHERE scope = ?1 AND name = ?2",
+            params![scope, folder_name],
+            |row| row.get(0),
+        )
+        .map_err(|_| rusqlite::Error::QueryReturnedNoRows)?;
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM address_book_entries
+         WHERE folder_id = ?1 AND allowed_groups != ''",
+        params![folder_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 #[cfg(test)]
