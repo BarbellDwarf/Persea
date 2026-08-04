@@ -16,7 +16,6 @@ use crate::config::Config;
 use crate::vault::{VaultClient, VaultError};
 
 /// Run the `vault-migrate` subcommand.
-#[allow(clippy::too_many_arguments)]
 pub async fn cmd_vault_migrate(
     config: &Config,
     scope: &str,

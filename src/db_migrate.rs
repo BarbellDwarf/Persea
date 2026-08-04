@@ -31,7 +31,6 @@ const CREDENTIAL_FIELDS: &[&str] = &[
 ];
 
 /// Run the `db-migrate-from-vault` subcommand.
-#[allow(clippy::too_many_arguments)]
 pub async fn cmd_db_migrate_from_vault(
     config: &Config,
     scope: &str,

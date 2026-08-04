@@ -980,7 +980,6 @@ pub async fn ab_connect_entry(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn ab_create_folder(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,

@@ -1,4 +1,8 @@
-#![allow(missing_docs)]
+#![warn(missing_docs)]
+#![warn(clippy::unwrap_used)]
+#![warn(clippy::expect_used)]
+#![warn(clippy::manual_assert)]
+#![warn(clippy::needless_pass_by_value)]
 
 pub mod api;
 pub mod audit;
