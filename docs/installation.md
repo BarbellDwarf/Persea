@@ -1,21 +1,20 @@
 # Installation
 
 > **Target platform**: persea is built and tested against **Debian 13
-> (Trixie)**. The pre-built `.deb` package and the `install.sh` script
-> both assume FreeRDP 3.15+ (Debian 13's `freerdp3-dev`). On other Linux
-> distributions, the recommended path is the Docker image (Option C),
-> which avoids the FreeRDP ABI issue entirely. See
-> [Other Linux distributions](#other-linux-distributions) below.
+> (Trixie)**. The pre-built `.deb` package and `install.sh` script
+> assume FreeRDP 3.15+ (Debian 13's `freerdp3-dev`). Other Linux
+> distributions should use the Docker image (Option C) to avoid the
+> FreeRDP ABI issue. See [Other Linux distributions](#other-linux-distributions).
 
 ## Option A: Debian package (recommended)
 
-Pre-built `.deb` packages are available from the [releases page](https://github.com/sol1/persea/releases) for Debian 13 (Trixie) and compatible distributions.
+Pre-built `.deb` packages are available from the [releases page](https://github.com/BarbellDwarf/rustguac/releases) for Debian 13 (Trixie) and compatible distributions.
 
 ```bash
 sudo apt install ./persea_*.deb
 ```
 
-Using `apt install` (not `dpkg -i`) ensures all runtime dependencies are resolved automatically.
+Using `apt install` (not `dpkg -i`) resolves all runtime dependencies.
 
 The package installs to `/opt/persea` and creates systemd services for both guacd and persea.
 
@@ -27,9 +26,9 @@ The package installs to `/opt/persea` and creates systemd services for both guac
 /opt/persea/bin/persea --config /opt/persea/config.toml add-admin --name admin
 ```
 
-Save the printed API key — it is only shown once.
+Save the printed API key, it is only shown once.
 
-2. **Configure** — edit `/opt/persea/config.toml` as needed (see [Configuration](configuration.md)).
+2. **Configure**, edit `/opt/persea/config.toml` as needed (see [Configuration](configuration.md)).
 
 3. **Start the services:**
 
@@ -41,7 +40,7 @@ This starts both `persea-guacd` (the protocol daemon) and `persea` (the web prox
 
 4. **(Required for connections) Set up Vault or OpenBao:**
 
-The connections page is persea's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2 — credentials never reach the browser. **Without one of these, the Connections UI is unavailable** and users can only run ad-hoc sessions via the Sessions page or the API.
+The connections page is persea's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2, and credentials never reach the browser. Vault or OpenBao is required for the Connections UI. Without it, users can only run ad-hoc sessions via the Sessions page or the API.
 
 For a single-host install the fastest path is the bundled quickstart helper, which auto-detects vault or bao and provisions everything:
 
@@ -78,7 +77,7 @@ sudo usermod -aG docker persea
 sudo systemctl restart persea
 ```
 
-Then add a `[vdi]` section to your config — see [VDI Desktop Containers](vdi.md) for full setup.
+Then add a `[vdi]` section to your config, see [VDI Desktop Containers](vdi.md) for full setup.
 
 ## Verification
 
@@ -108,7 +107,7 @@ After installation, verify everything works:
 
 5. **Open the web interface** at `https://your-server:8089` and log in with the admin API key.
 
-6. **Test an SSH session** — create an ad-hoc SSH session to `localhost` or another machine on your network.
+6. **Test an SSH session**, create an ad-hoc SSH session to `localhost` or another machine on your network.
 
 ## Option B: Bare-metal install script
 
@@ -122,7 +121,7 @@ This performs the following steps:
 
 1. Installs system packages (build tools, Xvnc, Chromium, cryptsetup, etc.)
 2. Installs the Rust toolchain (if not present)
-3. Clones and builds guacd from [guacamole-server](https://github.com/apache/guacamole-server) source, applying patches automatically
+3. Clones and builds guacd from [guacamole-server](https://github.com/apache/guacamole-server) source, applying patches
 4. Builds persea with `cargo build --release`
 5. Creates the `persea` system user (home: `/home/persea`)
 6. Generates a self-signed TLS certificate
@@ -167,11 +166,11 @@ The `persea` service loads environment variables from `/opt/persea/env` via syst
 
 ## Option C: Docker
 
-Pre-built images are available on [Docker Hub](https://hub.docker.com/r/sol1/persea):
+Pre-built images are available on [Docker Hub](https://hub.docker.com/r/persea/persea):
 
 ```bash
-docker pull sol1/persea:latest
-docker run -d -p 8089:8089 sol1/persea:latest
+docker pull persea/persea:latest
+docker run -d -p 8089:8089 persea/persea:latest
 ```
 
 To build from source instead:
@@ -190,13 +189,13 @@ The Docker image:
 
 ### API key setup
 
-On first run (when no database exists), the container automatically generates an admin API key and prints it to the logs:
+On first run (when no database exists), the container generates an admin API key and prints it to the logs:
 
 ```bash
 docker logs persea
 ```
 
-Save the printed key — it is only shown once. To generate additional keys later:
+Save the printed key, it is only shown once. To generate additional keys later:
 
 ```bash
 docker exec persea /opt/persea/bin/persea \
@@ -210,7 +209,7 @@ To persist config changes across container restarts, bind-mount a local `config.
 1. **Copy the default config** from the image:
 
 ```bash
-docker run --rm --entrypoint cat sol1/persea:latest /opt/persea/config.toml.default > config.toml
+docker run --rm --entrypoint cat persea/persea:latest /opt/persea/config.toml.default > config.toml
 ```
 
 2. **Edit** `config.toml` as needed (see [Configuration](configuration.md)):
@@ -229,7 +228,7 @@ If no config file is mounted, the container uses a built-in default on first sta
 ```yaml
 services:
   persea:
-    image: sol1/persea:latest
+    image: persea/persea:latest
     ports:
       - "8089:8089"
     volumes:
@@ -256,7 +255,7 @@ services:
     # ... your existing guacd config ...
 
   persea:
-    image: sol1/persea:latest
+    image: persea/persea:latest
     entrypoint: ["/opt/persea/bin/persea"]
     command: ["--config", "/opt/persea/config.toml", "serve"]
     ports:
@@ -298,7 +297,7 @@ bash build-rpm.sh
 sudo rpm -i persea-*.rpm
 ```
 
-RPM builds are untested — contributions and feedback are welcome.
+RPM builds are untested. Contributions and feedback are welcome.
 
 ## Option E: Development
 
@@ -351,14 +350,14 @@ daemon. This is the supported path for Ubuntu, RHEL/Rocky/Alma, Arch,
 and any other non-Debian-13 distribution.
 
 ```bash
-docker pull sol1/persea:latest
+docker pull persea/persea:latest
 ```
 
 See [Option C: Docker](#option-c-docker) above for the full setup.
 
 ### Untested: building from source on Ubuntu 24.04 LTS
 
-If you really need a bare-metal install on Ubuntu 24.04, you can build
+If you need a bare-metal install on Ubuntu 24.04, you can build
 locally, but be aware that **Ubuntu 24.04 ships FreeRDP 3.5.1**, which
 is older than what our `patches/` directory targets (FreeRDP 3.15+ as
 shipped by Debian 13). The patches will fail to apply or apply against
@@ -383,7 +382,7 @@ sudo apt-get install -y \
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # Build guacd against system FreeRDP 3.5 (skip our 3.15+ patches)
-git clone https://github.com/sol1/persea.git
+git clone https://github.com/BarbellDwarf/rustguac.git
 git clone https://github.com/apache/guacamole-server.git
 cd guacamole-server
 git checkout 6719b20d   # same pin persea uses
@@ -407,12 +406,12 @@ build is fine for that vintage of FreeRDP.
 PPA or build from source) and then run `install.sh` normally. Out of
 scope for this guide.
 
-Both paths are **untested by us**: we don't run CI against Ubuntu 24.04
-and we don't ship `.deb`s for it. Issues experienced on Ubuntu will be
-triaged as best-effort and will generally close with a pointer back to
-the Docker image. If you do run persea on Ubuntu successfully (or
-unsuccessfully), reports via GitHub issues are welcome and help inform
-whether we eventually add a CI target.
+Both paths are **untested**: we do not run CI against Ubuntu 24.04
+and we do not ship `.deb`s for it. Ubuntu issues will be
+triaged as best-effort and generally closed with a pointer to
+the Docker image. If you run persea on Ubuntu (successfully or
+otherwise), reports via GitHub issues help inform whether we
+add a CI target.
 
 ### Other distributions
 
@@ -425,19 +424,19 @@ For bare-metal installs, persea requires:
 
 - **Rust toolchain** (1.80+)
 - **guacd** (built from guacamole-server source)
-- **Xvnc** (tigervnc-standalone-server) — for web browser sessions
-- **Chromium** — for web browser sessions
-- **cryptsetup** — for LUKS encrypted drive storage
+- **Xvnc** (tigervnc-standalone-server) for web browser sessions
+- **Chromium** for web browser sessions
+- **cryptsetup** for LUKS encrypted drive storage
 - **Build libraries** for guacd: libcairo2, libjpeg, libpng, libwebp, libssh2, libssl, libvncserver, libpango, libpulse, ffmpeg, freerdp3
 
 See `install.sh` for the full package list.
 
 ## guacamole-server patches
 
-guacd requires patches to build and run correctly with FreeRDP 3.15+ as shipped in Debian 13. These patches are in the `patches/` directory and are applied automatically by all build scripts.
+guacd requires patches to build and run correctly with FreeRDP 3.15+ as shipped in Debian 13. These patches are in the `patches/` directory and are applied by all build scripts.
 
 The patches fix:
-1. **Autoconf `-Werror` vs deprecated FreeRDP headers** — FreeRDP 3.15 deprecates `codecs_free()`, breaking compile tests
-2. **Deprecated function pointer API** — replaces `->input->MouseEvent()` etc. with safe FreeRDP 3.x functions
-3. **NULL pointer dereference** — FreeRDP 3.x fires PubSub events before `guac_rdp_disp` is allocated
-4. **Struct layout mismatch** — channel source files missing `config.h` see wrong field offsets when SSH support is enabled
+1. **Autoconf `-Werror` vs deprecated FreeRDP headers**, FreeRDP 3.15 deprecates `codecs_free()`, breaking compile tests
+2. **Deprecated function pointer API**, replaces `->input->MouseEvent()` etc. with safe FreeRDP 3.x functions
+3. **NULL pointer dereference**, FreeRDP 3.x fires PubSub events before `guac_rdp_disp` is allocated
+4. **Struct layout mismatch**, channel source files missing `config.h` see wrong field offsets when SSH support is enabled
