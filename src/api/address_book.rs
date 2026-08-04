@@ -527,6 +527,7 @@ pub async fn ab_connect_entry(
     headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
     trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
     Json(req): Json<ConnectRequest>,
@@ -850,6 +851,9 @@ pub async fn ab_create_folder(
 
     let allowed_count = req.allowed_groups.len();
     let inherit = req.inherit_from_parent;
+    let folder_name = req.name.clone();
+    let folder_scope = req.scope.clone();
+    let folder_desc = req.description.clone();
 
     // Try Vault first if connected
     if vault.any_connected().await {
@@ -860,7 +864,7 @@ pub async fn ab_create_folder(
         };
 
         match vault
-            .put_folder_config(&req.scope, &req.name, &config)
+            .put_folder_config(&folder_scope, &folder_name, &config)
             .await
         {
             Ok(()) => {
@@ -874,8 +878,8 @@ pub async fn ab_create_folder(
                     &database,
                     &admin_email,
                     "create_folder",
-                    &req.scope,
-                    &req.name,
+                    &folder_scope,
+                    &folder_name,
                     None,
                     &ip,
                     Some(&details),
@@ -884,14 +888,14 @@ pub async fn ab_create_folder(
                 return Ok(StatusCode::CREATED);
             }
             Err(e) => {
-                tracing::error!(error = %e, scope = %req.scope, folder = %req.name, "Failed to create folder in Vault");
+                tracing::error!(error = %e, scope = %folder_scope, folder = %folder_name, "Failed to create folder in Vault");
                 // Fall through to DB
             }
         }
     }
 
     // DB backend
-    match db::create_ab_folder(&database, &req.scope, &req.name, &req.description) {
+    match db::create_ab_folder(&database, &folder_scope, &folder_name, &folder_desc) {
         Ok(_id) => {
             let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
             let details = json!({
@@ -904,8 +908,8 @@ pub async fn ab_create_folder(
                 &database,
                 &admin_email,
                 "create_folder",
-                &req.scope,
-                &req.name,
+                &folder_scope,
+                &folder_name,
                 None,
                 &ip,
                 Some(&details),
@@ -917,7 +921,7 @@ pub async fn ab_create_folder(
             if e.to_string().contains("UNIQUE constraint") {
                 Err(AppError::Conflict("folder already exists".into()))
             } else {
-                tracing::error!(error = %e, scope = %req.scope, folder = %req.name, "Failed to create folder in DB");
+                tracing::error!(error = %e, scope = %folder_scope, folder = %folder_name, "Failed to create folder in DB");
                 Err(AppError::Internal(e.to_string()))
             }
         }

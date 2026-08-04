@@ -343,11 +343,6 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );",
     )?;
 
-    let db = Arc::new(Mutex::new(conn));
-
-    // Migration: RBAC tables (connection groups, user-group membership, permissions)
-    crate::rbac::migrate(&db)?;
-
     // Migration: address book tables (ticket #022)
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS address_book_folders (
@@ -389,6 +384,11 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         CREATE INDEX IF NOT EXISTS idx_ab_entries_folder ON address_book_entries(folder_id);
         CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);",
     )?;
+
+    let db = Arc::new(Mutex::new(conn));
+
+    // Migration: RBAC tables (connection groups, user-group membership, permissions)
+    crate::rbac::migrate(&db)?;
 
     Ok(db)
 }

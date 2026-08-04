@@ -1553,7 +1553,7 @@ impl Config {
     pub fn storage_encryption_key(&self) -> Option<String> {
         if let Some(ref key) = self.storage.as_ref().and_then(|s| s.encryption_key.as_ref()) {
             if !key.is_empty() {
-                return Some(key.clone());
+                return Some(key.to_string());
             }
         }
         std::env::var("PERSEA_STORAGE_KEY").ok().filter(|k| !k.is_empty())
