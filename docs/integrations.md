@@ -130,14 +130,9 @@ Create groups in Authentik (e.g., `persea-admins`, `persea-operators`) and assig
 
 ### Microsoft Entra ID (Azure AD) setup guide
 
-Entra ID works with persea via OIDC, but the way it exposes group
-memberships is different from Authentik / Keycloak / JumpCloud and trips
-people up.
+Entra ID works with persea via OIDC, but the way it exposes group memberships is different from Authentik / Keycloak / JumpCloud and trips people up.
 
-**Key difference:** Entra ID does **not** have a `groups` OAuth scope.
-Groups come back as a **claim** in the ID token, configured per app
-registration. If you copy `extra_scopes = ["groups"]` from the Authentik
-config above into an Entra setup it will fail at login with:
+**Key difference:** Entra ID does **not** have a `groups` OAuth scope. Groups come back as a **claim** in the ID token, configured per app registration. If you copy `extra_scopes = ["groups"]` from the Authentik config above into an Entra setup it will fail at login with:
 
 ```
 AADSTS650053: The application asked for scope 'groups' that doesn't exist on the resource '00000003-0000-0000-c000-000000000000'
@@ -147,15 +142,13 @@ AADSTS650053: The application asked for scope 'groups' that doesn't exist on the
 
 - Go to **Microsoft Entra ID > App registrations > New registration**
 - Name: `persea` (or whatever you prefer)
-- Supported account types: **Single tenant** (or whichever fits your
-  deployment)
+- Supported account types: **Single tenant** (or whichever fits your deployment)
 - Redirect URI: type **Web**, value `https://your-persea-host/auth/callback`
 - Note the **Application (client) ID** and **Directory (tenant) ID**
 
 **2. Create a client secret:**
 
-- In your new app registration, go to **Certificates & secrets > Client
-  secrets > New client secret**
+- In your new app registration, go to **Certificates & secrets > Client secrets > New client secret**
 - Note the **Value** (it's only shown once)
 
 **3. Add a groups claim to the ID token:**
@@ -166,13 +159,8 @@ This is the step that replaces Authentik's `groups` scope.
 - Tick **ID token**
 - Pick the group set to emit:
   - **Security groups** for security groups only (most common)
-  - **All groups (includes distribution lists and directory roles)** if
-    you need DLs too
-- Under the **Group ID** subsection: keep the default to emit group
-  **object IDs** (recommended; stable across rename), or expand the
-  optional settings and pick **sAMAccountName** if you'd prefer group
-  names. If you pick names, the group-to-role mappings you configure in
-  the persea Admin page must reference those names.
+  - **All groups (includes distribution lists and directory roles)** if you need DLs too
+- Under the **Group ID** subsection: keep the default to emit group **object IDs** (recommended; stable across rename), or expand the optional settings and pick **sAMAccountName** if you'd prefer group names. If you pick names, the group-to-role mappings you configure in the persea Admin page must reference those names.
 - Save
 
 **4. Configure persea:**
@@ -195,32 +183,18 @@ chmod 600 /opt/persea/env
 sudo systemctl restart persea
 ```
 
-Replace `{tenant-id}` with your Directory (tenant) ID from step 1. The
-`{tenant-id}/v2.0` issuer URL is required (the v1 endpoint won't return
-the claims persea expects).
+Replace `{tenant-id}` with your Directory (tenant) ID from step 1. The `{tenant-id}/v2.0` issuer URL is required (the v1 endpoint won't return the claims persea expects).
 
 **5. (Optional) Group-to-role mappings:**
 
-After your first successful login, the groups you belong to appear in the
-**seen groups** list on the persea Admin page. From there you can map
-group object IDs (or names, if you chose sAMAccountName in step 3) to
-persea roles. See [Roles and Access Control](roles-and-access-control.md).
+After your first successful login, the groups you belong to appear in the **seen groups** list on the persea Admin page. From there you can map group object IDs (or names, if you chose sAMAccountName in step 3) to persea roles. See [Roles and Access Control](roles-and-access-control.md).
 
 ### Troubleshooting
 
-- **`AADSTS650053: scope 'groups' doesn't exist`**: you have
-  `extra_scopes = ["groups"]` in your config. Remove it. Entra's groups
-  arrive via the claim configured in step 3 above, not a scope.
-- **No groups in the token after login**: confirm step 3 was saved
-  against the correct app registration, and that you're using the
-  `v2.0` issuer URL.
-- **Groups appear as object IDs, not names**: that's the default. Either
-  use the object IDs in your group-to-role mappings (stable, recommended)
-  or switch the claim to emit `sAMAccountName` in step 3 and use names.
-- **Login succeeds but `default_role` doesn't get applied**: `default_role`
-  only fires when no group-to-role mapping matches. Configure mappings on
-  the Admin page (or, for a single-user test, set `default_role = "admin"`
-  temporarily to bootstrap).
+- **`AADSTS650053: scope 'groups' doesn't exist`**: you have `extra_scopes = ["groups"]` in your config. Remove it. Entra's groups arrive via the claim configured in step 3 above, not a scope.
+- **No groups in the token after login**: confirm step 3 was saved against the correct app registration, and that you're using the `v2.0` issuer URL.
+- **Groups appear as object IDs, not names**: that's the default. Either use the object IDs in your group-to-role mappings (stable, recommended) or switch the claim to emit `sAMAccountName` in step 3 and use names.
+- **Login succeeds but `default_role` doesn't get applied**: `default_role` only fires when no group-to-role mapping matches. Configure mappings on the Admin page (or, for a single-user test, set `default_role = "admin"` temporarily to bootstrap).
 
 ### Outbound HTTP proxy (egress)
 
@@ -279,7 +253,7 @@ sudo ./contrib/vault-quickstart.sh --local
 sudo ./contrib/vault-quickstart.sh --cli bao --local
 ```
 
-The script does **not** install the Vault or OpenBao binary itself — install one from your distribution or the upstream packages first. After it runs, the script prints the `[vault]` block to drop into `config.toml` and the `VAULT_SECRET_ID` line for the systemd env file.
+The script does **not** install the Vault or OpenBao binary itself. Install one from your distribution or the upstream packages first. After it runs, the script prints the `[vault]` block to drop into `config.toml` and the `VAULT_SECRET_ID` line for the systemd env file.
 
 > **`--local` security caveat:** the unseal key is stored on disk at `/etc/vault.d/unseal-key` (or `/etc/openbao/unseal-key`) mode 0400 root:root, and a `SECURITY.txt` file is written next to it. Anyone with root or read access to that file owns the secret store. This trade is fine for single-host persea boxes (where root compromise already means total compromise) but unacceptable for higher-stakes deployments. For real production use cloud-KMS auto-unseal: [Vault](https://developer.hashicorp.com/vault/docs/configuration/seal) | [OpenBao](https://openbao.org/docs/configuration/seal/).
 
@@ -308,7 +282,7 @@ For single-server deployments (dev/test):
 vault operator init -key-shares=1 -key-threshold=1
 ```
 
-Save the output — it contains:
+Save the output, which contains:
 - Unseal Key (needed to unseal after restart)
 - Root Token (initial admin access)
 
@@ -440,7 +414,7 @@ path "secret/metadata/persea/*" {
 EOF
 ```
 
-> **Note:** Both policy paths are required. A common mistake is omitting `delete` from the metadata path — this causes "vault access denied" errors when deleting entries or folders. See the [Vault KV v2 API docs](https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2) for details on the `data/` vs `metadata/` path split.
+> **Note:** Both policy paths are required. A common mistake is omitting `delete` from the metadata path, which causes "vault access denied" errors when deleting entries or folders. See the [Vault KV v2 API docs](https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2) for details on the `data/` vs `metadata/` path split.
 
 **3. Enable AppRole auth** and create a role:
 
@@ -586,7 +560,7 @@ The credential prompt appears automatically when:
 1. The entry has **Prompt for credentials** enabled, OR
 2. The entry has no stored password or private key
 
-Prompted credentials are **never stored** — they're used for the current session only and discarded.
+Prompted credentials are **never stored**. They're used for the current session only and discarded.
 
 For web sessions, prompted credentials are used for autofill substitution (`$USERNAME`/`$PASSWORD` placeholders) and login script credential passing. See [Web Browser Sessions](web-sessions.md) for details.
 
@@ -594,7 +568,7 @@ For web sessions, prompted credentials are used for autofill substitution (`$USE
 
 ## SSH Tunnel / Multi-Hop Jump Hosts
 
-persea supports routing all session types (SSH, RDP, VNC, and web browser) through one or more SSH bastion hosts. This is useful when the target machine is not directly reachable from the persea server — for example, accessing an RDP server on an isolated network segment via a bastion host chain.
+persea supports routing all session types (SSH, RDP, VNC, and web browser) through one or more SSH bastion hosts. This is useful when the target machine is not directly reachable from the persea server, for example, accessing an RDP server on an isolated network segment via a bastion host chain.
 
 ### How it works
 
@@ -620,7 +594,7 @@ Jump host credentials are stored in Vault alongside the entry's other credential
 
 #### Ad-hoc sessions
 
-Powerusers can add jump hosts when creating sessions from the Sessions page. The same multi-hop card UI is available — click "Add Jump Host" in the SSH Tunnel section.
+Powerusers can add jump hosts when creating sessions from the Sessions page. The same multi-hop card UI is available. Click "Add Jump Host" in the SSH Tunnel section.
 
 ### Per-hop credentials
 
@@ -679,7 +653,7 @@ FreeRDP does not implement its own Kerberos stack. The chain is:
 guacd -> libfreerdp3 -> libwinpr3 (SSPI/Negotiate) -> libgssapi_krb5 -> libkrb5 (MIT Kerberos)
 ```
 
-FreeRDP's WinPR layer implements Windows SSPI on top of the system's MIT Kerberos libraries. This means it reads `/etc/krb5.conf`, uses the system credential cache, and respects `KRB5_CONFIG` and `KRB5_TRACE` environment variables. Username and password are still required — Kerberos replaces the wire authentication protocol (NTLM -> Kerberos), not the credential input.
+FreeRDP's WinPR layer implements Windows SSPI on top of the system's MIT Kerberos libraries. This means it reads `/etc/krb5.conf`, uses the system credential cache, and respects `KRB5_CONFIG` and `KRB5_TRACE` environment variables. Username and password are still required. Kerberos replaces the wire authentication protocol (NTLM -> Kerberos), not the credential input.
 
 ### Per-entry configuration
 
@@ -733,7 +707,7 @@ For automatic KDC discovery (without `kdc-url` or `krb5.conf`), the domain needs
 _kerberos._tcp.EXAMPLE.COM.  SRV  0 0 88  dc1.example.com.
 ```
 
-The guacd server itself does not need to be domain-joined — it only needs network access to the KDC.
+The guacd server itself does not need to be domain-joined. It only needs network access to the KDC.
 
 ### KDC discovery: three options
 
@@ -775,9 +749,9 @@ If DNS SRV records are not available and you're not using a KDC proxy, create `/
 
 Important notes for krb5.conf:
 
-- **Define realms in both uppercase AND lowercase** — GSSAPI on Linux is case-sensitive (unlike Windows)
+- **Define realms in both uppercase AND lowercase**. GSSAPI on Linux is case-sensitive (unlike Windows)
 - **Use `tcp/` prefix** for KDC entries to force TCP transport (avoids UDP response size issues)
-- **A broken krb5.conf is worse than none** — if krb5.conf points to unreachable KDCs, FreeRDP 3 can **hang indefinitely** during authentication (deadlock in the SSPI/Negotiate layer). Delete or fix any stale krb5.conf.
+- **A broken krb5.conf is worse than none**. If krb5.conf points to unreachable KDCs, FreeRDP 3 can hang indefinitely during authentication (deadlock in the SSPI/Negotiate layer). Delete or fix any stale krb5.conf.
 
 ### Username format
 
@@ -879,7 +853,7 @@ retention_secs = 0
 | Setting | Default | What it does |
 |---------|---------|-------------|
 | `cleanup_on_close` | `true` | Whether to remove the per-session drive directory when the session ends. Set to `false` to leave files on disk (still scoped to the per-session UUID subdirectory under `drive_path`). |
-| `retention_secs` | `0` | When `cleanup_on_close = true`, how long to wait after session end before removing the directory. `0` removes immediately. **Has no effect when `cleanup_on_close = false`** — without cleanup the retention timer never starts. |
+| `retention_secs` | `0` | When `cleanup_on_close = true`, how long to wait after session end before removing the directory. `0` removes immediately. **Has no effect when `cleanup_on_close = false`**. Without cleanup the retention timer never starts. |
 
 Each session gets its own subdirectory under `drive_path` named with the session UUID, so files do not persist *across* sessions even with `cleanup_on_close = false`. Cross-session persistence (a "personal drive" model) is not currently supported; the flag only controls whether the on-disk artefacts of a finished session linger.
 
@@ -912,7 +886,7 @@ On shutdown:
 1. Unmount the volume
 2. Close the LUKS container via `sudo cryptsetup close`
 
-The key is passed to cryptsetup via stdin — never on the command line or written to disk.
+The key is passed to cryptsetup via stdin, never on the command line or written to disk.
 
 #### Setup
 
@@ -942,7 +916,7 @@ persea ALL=(root) NOPASSWD: /bin/chown *:* <mount_point>
 
 An example HAProxy configuration is provided in `haproxy.example.cfg`. This is the recommended production deployment pattern.
 
-For nginx, Caddy, Apache, and Traefik setups, see [reverse-proxies.md](reverse-proxies.md) — and note the `%2F` gotcha documented there if you run into 404s on nested subfolders.
+For nginx, Caddy, Apache, and Traefik setups, see [reverse-proxies.md](reverse-proxies.md) and note the `%2F` gotcha documented there if you run into 404s on nested subfolders.
 
 ### Features
 
