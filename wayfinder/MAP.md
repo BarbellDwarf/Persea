@@ -131,6 +131,7 @@ A production-hardened, well-tested, accessible, documented codebase ready for co
 ## Not yet specified
 
 - VMware vSphere integration: route wiring, connections page entries, OS detection, config, tests, docs (ticket 021)
+- Vault-optional address book with DB backend: make Vault optional, DB stores connections by default, Vault stores credentials if desired (ticket 022)
 
 ## Out of scope
 
