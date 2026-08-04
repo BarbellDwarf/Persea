@@ -846,4 +846,43 @@ mod tests {
         assert_eq!(determine_guest_family("dos_64Guest"), "other");
         assert_eq!(determine_guest_family("unknown"), "other");
     }
+
+    #[test]
+    fn vsphere_config_parse_minimal() {
+        let toml_str = r#"
+            vcenter_addr = "https://vcenter.example.com/sdk"
+            username = "admin@vsphere.local"
+        "#;
+        let config: VsphereConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.vcenter_addr, "https://vcenter.example.com/sdk");
+        assert_eq!(config.username, "admin@vsphere.local");
+        assert_eq!(config.password_env, "VSPHERE_PASSWORD");
+        assert!(!config.insecure);
+        assert_eq!(config.refresh_interval_secs, 300);
+        assert!(config.vm_credentials.is_empty());
+    }
+
+    #[test]
+    fn vsphere_config_parse_full() {
+        let toml_str = r#"
+            vcenter_addr = "https://vcenter.lab:8443/sdk"
+            username = "user@lab.local"
+            password_env = "MY_VSPHERE_PASS"
+            insecure = true
+            refresh_interval_secs = 60
+
+            [vsphere.vm_credentials]
+            "web-01" = { username = "root", password_env = "WEB01_PASS" }
+        "#;
+        let config: VsphereConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.vcenter_addr, "https://vcenter.lab:8443/sdk");
+        assert_eq!(config.username, "user@lab.local");
+        assert_eq!(config.password_env, "MY_VSPHERE_PASS");
+        assert!(config.insecure);
+        assert_eq!(config.refresh_interval_secs, 60);
+        assert_eq!(config.vm_credentials.len(), 1);
+        let cred = config.vm_credentials.get("web-01").unwrap();
+        assert_eq!(cred.username, "root");
+        assert_eq!(cred.password_env, "WEB01_PASS");
+    }
 }
