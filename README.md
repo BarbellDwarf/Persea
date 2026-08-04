@@ -1,16 +1,16 @@
 # persea
 
-[![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
-[![License](https://img.shields.io/github/license/BarbellDwarf/persea)](LICENSE)
+[![CI](https://github.com/BarbellDwarf/rustguac/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/rustguac/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/BarbellDwarf/rustguac)](https://github.com/BarbellDwarf/rustguac/releases/latest)
+[![License](https://img.shields.io/github/license/BarbellDwarf/rustguac)](LICENSE)
 
 A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
 
-No Java. No Tomcat. Single binary + guacd.
+Single binary plus guacd. No Java, no Tomcat.
 
 ## Why this exists
 
-Guacamole is great software. Apache maintains it well and the protocol handling under the hood is solid. The frontend looks like it was designed in 2005 though, and that kept me from recommending it at work or for clients. I ran it in my homelab and that was about it.
+Guacamole is great software. Apache maintains it well, and the protocol handling under the hood is solid. The frontend looks like it was designed in 2005, which kept me from recommending it at work or for clients. I ran it in my homelab and that was about it.
 
 Sol1 put out [RustGuac](https://github.com/sol1/rustguac) and it scratched the itch. A Rust frontend for Guacamole, open source, community-driven. It lacked broader SSO support beyond OIDC, had rough edges in the UI, and gaps in the docs.
 
@@ -18,7 +18,7 @@ I do not write code. Ten years in IT taught me how the pieces connect. AI coding
 
 This is a side project alongside a day job. Progress comes in bursts.
 
-If you get use out of this, star Sol1's repo too — they built the base layer.
+If you get use out of this, star Sol1's repo too. They built the base layer.
 
 Found something broken? Open an issue with logs and screenshots.
 
@@ -120,7 +120,7 @@ guacd (C, from guacamole-server)
 
 ### Debian 13 (.deb)
 
-Pre-built packages for amd64 and arm64 are available from [Releases](https://github.com/BarbellDwarf/persea/releases):
+Pre-built packages for amd64 and arm64 are available from [Releases](https://github.com/BarbellDwarf/rustguac/releases):
 
 ```bash
 sudo apt install ./persea_*.deb
