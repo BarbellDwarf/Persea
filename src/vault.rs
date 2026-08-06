@@ -1665,7 +1665,7 @@ pub fn validate_path(path: &str) -> Result<(), VaultError> {
 
 /// Sanitize an email address for use as a Vault path component.
 /// Replaces `@` with `_at_` and strips any characters not in `[a-zA-Z0-9._-]`.
-fn sanitize_email_key(email: &str) -> String {
+pub(crate) fn sanitize_email_key(email: &str) -> String {
     email
         .replace('@', "_at_")
         .chars()

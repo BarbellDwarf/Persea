@@ -49,6 +49,12 @@ pub struct DriveConfigured(pub bool);
 #[derive(Clone)]
 pub struct CredentialDefaultScope(pub String);
 
+/// Encryption key for DB-stored credentials, resolved from
+/// `[storage].encryption_key` (config) or `PERSEA_STORAGE_KEY` (env) at
+/// startup. `None` when no key is configured (credentials stored unencrypted).
+#[derive(Clone)]
+pub struct StorageKey(pub Option<String>);
+
 /// One Vault backend connection cell — `None` until connected / while down.
 /// Holds a trait object so tests can inject an in-memory backend
 /// ([`crate::testing::MockVault`]) in place of the real client.

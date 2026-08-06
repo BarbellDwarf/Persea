@@ -3,6 +3,20 @@
 #![warn(clippy::expect_used)]
 #![warn(clippy::manual_assert)]
 #![warn(clippy::needless_pass_by_value)]
+// The lints above are deliberate developer visibility aids: they surface
+// undocumented public API and unwrap sites during `cargo check`/`cargo test`.
+// Release builds (Docker image, `cargo build --release`) do not need ~800
+// warnings re-printed on every build, so they are silenced there.
+#![cfg_attr(
+    not(debug_assertions),
+    allow(
+        missing_docs,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::manual_assert,
+        clippy::needless_pass_by_value
+    )
+)]
 
 pub mod api;
 pub mod audit;

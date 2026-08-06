@@ -29,13 +29,14 @@ pub async fn connect_vsphere(config: &VsphereConfig) -> VsphereState {
 /// GET /api/vsphere/vms
 ///
 /// List VMs from vCenter. Returns the cached inventory or fetches fresh data.
+/// When vSphere is not configured this returns HTTP 200 with
+/// `{"configured": false, "vms": []}` so the connections page can hide the
+/// section without triggering error-level logs on every load.
 pub async fn list_vms(
     Extension(client): Extension<VsphereState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let Some(client) = client else {
-        return Err(AppError::Vsphere(
-            "vSphere not configured or unavailable".into(),
-        ));
+        return Ok(Json(json!({"configured": false, "vms": []})));
     };
 
     let mut client = client.lock().await;
@@ -54,7 +55,7 @@ pub async fn list_vms(
         })
         .collect();
 
-    Ok(Json(json!(enriched)))
+    Ok(Json(json!({"configured": true, "vms": enriched})))
 }
 
 /// POST /api/vsphere/vms/{vm_id}/power

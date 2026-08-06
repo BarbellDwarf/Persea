@@ -47,8 +47,8 @@ mod vsphere;
 mod websocket;
 
 use crate::api::{
-    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, ThemeData,
-    VaultBackends, VaultCell, VaultConfigured, VaultState,
+    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, StorageKey,
+    ThemeData, VaultBackends, VaultCell, VaultConfigured, VaultState,
 };
 use crate::auth_chain::AuthChain;
 use crate::auth_provider::AuthProvider;
@@ -958,6 +958,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     let vault_configured = VaultConfigured(config.vault.is_some());
     let credential_default_scope =
         CredentialDefaultScope(config.user_credentials_default_scope.clone());
+    let storage_key = StorageKey(config.storage_encryption_key());
     let drive_configured = DriveConfigured(config.drive.is_some());
     let site_title = SiteTitle(config.site_title.clone());
     let theme_data = {
@@ -1456,6 +1457,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(credential_default_scope.clone()))
+        .layer(Extension(storage_key.clone()))
         .layer(Extension(vsphere_client))
         .layer(Extension(database.clone()));
 

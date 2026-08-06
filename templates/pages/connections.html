@@ -404,12 +404,12 @@
     // ── vSphere virtual machines ────────────────────────────────────────────
     function loadVSphere(){
         var section=document.getElementById('vsphere-section');
-        fetch('/api/vsphere/vms',{credentials:'same-origin'})
+        fetch('/api/vsphere/vms',{headers:apiHeaders(),credentials:'same-origin'})
             .then(function(r){return r.ok?r.json():null})
-            .then(function(vms){
-                if(vms===null){ section.classList.add('hidden'); return; }
+            .then(function(res){
+                if(res===null || res.configured===false){ section.classList.add('hidden'); return; }
                 section.classList.remove('hidden');
-                renderVSphere(vms);
+                renderVSphere(res.vms||[]);
             })
             .catch(function(){ section.classList.add('hidden'); });
     }

@@ -1,4 +1,4 @@
-use super::{AppState, VaultBackends, VaultState};
+use super::{AppState, StorageKey, VaultBackends, VaultState};
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
@@ -21,6 +21,21 @@ use std::net::SocketAddr;
 /// Check if the DB storage backend is available (address book tables exist).
 fn is_db_storage_available(db: &Db) -> bool {
     db::list_ab_folders(db, None).is_ok()
+}
+
+/// Resolve the credential encryption key: the startup-resolved `StorageKey`
+/// extension (config `[storage].encryption_key`, falling back to the
+/// `PERSEA_STORAGE_KEY` env var) takes precedence; the env var is re-checked
+/// for callers that run without the extension (e.g. handler tests).
+fn resolve_encryption_key(storage_key: Option<&StorageKey>) -> String {
+    storage_key
+        .and_then(|k| k.0.clone())
+        .or_else(|| {
+            std::env::var("PERSEA_STORAGE_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
+        })
+        .unwrap_or_default()
 }
 
 /// Check if a folder's allowed_groups grant access to the given user groups.
@@ -556,6 +571,7 @@ pub async fn ab_connect_entry(
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
+    storage_key: Option<Extension<StorageKey>>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
     Json(req): Json<ConnectRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -611,7 +627,7 @@ pub async fn ab_connect_entry(
             .map_err(|e| AppError::Internal(format!("entry not found: {}", e)))?;
 
         // Read credentials from DB
-        let encryption_key = std::env::var("PERSEA_STORAGE_KEY").unwrap_or_default();
+        let encryption_key = resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
         let creds = db::list_ab_credentials(&database, entry_rec.id).unwrap_or_default();
 
         let mut password = None;
@@ -1210,6 +1226,7 @@ pub async fn ab_create_entry(
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
+    storage_key: Option<Extension<StorageKey>>,
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<CreateEntryRequest>,
 ) -> Result<StatusCode, AppError> {
@@ -1413,7 +1430,7 @@ pub async fn ab_create_entry(
     )?;
 
     // Store credentials if present
-    let encryption_key = std::env::var("PERSEA_STORAGE_KEY").unwrap_or_default();
+    let encryption_key = resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
     if !encryption_key.is_empty() {
         if let Some(ref password) = req.entry.password {
             let encrypted = crate::crypto::encrypt_value(

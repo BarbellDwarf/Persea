@@ -1676,7 +1676,7 @@ pub fn session_summary(db: &Db) -> rusqlite::Result<serde_json::Value> {
         "SELECT COUNT(*) AS total_sessions,
                 COALESCE(SUM(duration_secs), 0) AS total_secs,
                 COUNT(DISTINCT created_by) AS unique_users,
-                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_now
+                COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS active_now
          FROM session_history",
     )?;
     stmt.query_row([], |row| {

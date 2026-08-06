@@ -14,6 +14,12 @@ use std::sync::{Arc, Mutex};
 ///
 /// Tests populate `entries` before the SUT runs (via `with_entry` or by
 /// writing the map directly), then inspect them after to verify writes.
+///
+/// Key format mirrors real Vault KV v2 paths (`shared/folder/entry`,
+/// `shared/folder/.config`, `users/<sanitized-email>`). One known divergence:
+/// the `instance` scope is keyed as the literal `instance/` prefix, whereas
+/// `VaultClient` resolves `instance/{instance_name}` from config — instance
+/// scope tests must seed keys with the plain `instance/` prefix.
 #[derive(Debug, Clone, Default)]
 pub struct MockVault {
     /// `path → JSON string`. Keys mirror real Vault KV v2 paths
@@ -37,6 +43,8 @@ impl MockVault {
     }
 
     /// Simulate `get_entry` — deserialize stored JSON into `AddressBookEntry`.
+    /// Mirrors `VaultClient::get_entry`, including legacy `jump_host` →
+    /// `jump_hosts` normalization.
     pub fn get_entry(
         &self,
         scope: &str,
@@ -51,7 +59,10 @@ impl MockVault {
             .get(&key)
             .ok_or(crate::vault::VaultError::NotFound)?
             .clone();
-        serde_json::from_str(&raw).map_err(|e| crate::vault::VaultError::Parse(e.to_string()))
+        let mut parsed: crate::vault::AddressBookEntry = serde_json::from_str(&raw)
+            .map_err(|e| crate::vault::VaultError::Parse(e.to_string()))?;
+        parsed.normalize_jump_hosts();
+        Ok(parsed)
     }
 
     /// Simulate `put_entry`.
@@ -141,7 +152,8 @@ impl MockVault {
     }
 
     /// Simulate `list_children` — immediate children at a folder path.
-    /// Subfolder names end with `/`.
+    /// Subfolder names end with `/`. Mirrors KV v2 listing: `NotFound` when
+    /// the folder path has no keys at all.
     pub fn list_children(
         &self,
         scope: &str,
@@ -149,6 +161,9 @@ impl MockVault {
     ) -> Result<Vec<String>, crate::vault::VaultError> {
         let prefix = format!("{}/{}/", scope, folder);
         let entries = self.entries.lock().unwrap();
+        if !entries.keys().any(|k| k.starts_with(&prefix)) {
+            return Err(crate::vault::VaultError::NotFound);
+        }
         let mut names: Vec<String> = entries
             .keys()
             .filter_map(|k| {
@@ -189,6 +204,10 @@ impl MockVault {
 }
 
 #[async_trait]
+// Note: trait methods delegate to the same-named inherent helpers below
+// (`self.list_entries(...)` resolves to the inherent method). Renaming one
+// side without the other would silently call the wrong implementation —
+// keep the inherent helpers and trait impls in lockstep.
 impl crate::vault::VaultBackend for MockVault {
     async fn list_folders_in_scope(
         &self,
@@ -312,6 +331,22 @@ impl crate::vault::VaultBackend for MockVault {
         scope: &str,
         folder: &str,
     ) -> Result<(usize, usize), crate::vault::VaultError> {
+        // Mirror VaultClient::delete_folder: BFS over the subtree, counting
+        // subfolders (excluding the root) and every entry at every level.
+        let mut queue: Vec<String> = vec![folder.to_string()];
+        let mut i = 0;
+        while i < queue.len() {
+            let current = queue[i].clone();
+            if let Ok(children) = self.list_children(scope, &current) {
+                for child in children {
+                    if let Some(name) = child.strip_suffix('/') {
+                        queue.push(format!("{}/{}", current, name));
+                    }
+                }
+            }
+            i += 1;
+        }
+
         let prefix = format!("{}/{}/", scope, folder);
         let mut entries = self.entries.lock().unwrap();
         let doomed: Vec<String> = entries
@@ -320,20 +355,14 @@ impl crate::vault::VaultBackend for MockVault {
             .cloned()
             .collect();
         let mut entry_count = 0usize;
-        let mut subfolders: Vec<String> = Vec::new();
         for key in &doomed {
             let rest = key.strip_prefix(&prefix).unwrap_or("");
-            if rest.contains('/') {
-                let sub = rest.split('/').next().unwrap_or("").to_string();
-                if !sub.is_empty() && !subfolders.contains(&sub) {
-                    subfolders.push(sub);
-                }
-            } else if rest != ".config" {
+            if !rest.contains('/') && rest != ".config" {
                 entry_count += 1;
             }
             entries.remove(key);
         }
-        Ok((subfolders.len(), entry_count))
+        Ok((queue.len().saturating_sub(1), entry_count))
     }
 
     async fn resolve_folder_access(
@@ -371,7 +400,7 @@ impl crate::vault::VaultBackend for MockVault {
         &self,
         email: &str,
     ) -> Result<HashMap<String, String>, crate::vault::VaultError> {
-        let key = format!("users/{}", email);
+        let key = format!("users/{}", crate::vault::sanitize_email_key(email));
         match self.entries.lock().unwrap().get(&key).cloned() {
             Some(raw) => serde_json::from_str(&raw)
                 .map_err(|e| crate::vault::VaultError::Parse(e.to_string())),
@@ -384,7 +413,7 @@ impl crate::vault::VaultBackend for MockVault {
         email: &str,
         creds: &HashMap<String, String>,
     ) -> Result<(), crate::vault::VaultError> {
-        let key = format!("users/{}", email);
+        let key = format!("users/{}", crate::vault::sanitize_email_key(email));
         let json = serde_json::to_string(creds)
             .map_err(|e| crate::vault::VaultError::Parse(e.to_string()))?;
         self.entries.lock().unwrap().insert(key, json);

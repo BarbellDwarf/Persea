@@ -1482,7 +1482,12 @@ impl Config {
         }
 
         // ── Non-fatal warnings ────────────────────────────────────────
-        if self.recording_path.is_some() {
+        if self
+            .recording_path
+            .as_ref()
+            .filter(|p| !p.as_os_str().is_empty())
+            .is_some()
+        {
             if self.recording.is_some() {
                 warnings.push(
                     "top-level 'recording_path' is deprecated in favour of [recording].path — \
@@ -1530,12 +1535,18 @@ impl Config {
         }
     }
 
-    /// Effective recording path: `[recording].path` overrides top-level `recording_path`.
+    /// Effective recording path: `[recording].path` overrides top-level
+    /// `recording_path`. An explicitly set but empty `recording_path` is
+    /// treated as unset.
     pub fn effective_recording_path(&self) -> std::borrow::Cow<'_, std::path::Path> {
         if let Some(ref rec) = self.recording {
             std::borrow::Cow::Borrowed(&rec.path)
         } else if let Some(ref path) = self.recording_path {
-            std::borrow::Cow::Borrowed(path)
+            if path.as_os_str().is_empty() {
+                std::borrow::Cow::Owned(default_recording_path())
+            } else {
+                std::borrow::Cow::Borrowed(path)
+            }
         } else {
             std::borrow::Cow::Owned(default_recording_path())
         }
@@ -1567,6 +1578,7 @@ impl Config {
                 path: self
                     .recording_path
                     .clone()
+                    .filter(|p| !p.as_os_str().is_empty())
                     .unwrap_or_else(default_recording_path),
                 ..RecordingConfig::default()
             },
@@ -2178,6 +2190,20 @@ mod tests {
             warnings.iter().any(|w| w.contains("recording_path")),
             "expected deprecation warning, got: {:?}",
             warnings
+        );
+
+        // An empty string is treated as unset: no warning, default path used.
+        let mut config = Config::default();
+        config.recording_path = Some(std::path::PathBuf::new());
+        let warnings = config.validate().unwrap();
+        assert!(
+            !warnings.iter().any(|w| w.contains("recording_path")),
+            "expected no deprecation warning for empty path, got: {:?}",
+            warnings
+        );
+        assert_eq!(
+            config.effective_recording_path(),
+            std::path::Path::new(&default_recording_path())
         );
     }
 }
