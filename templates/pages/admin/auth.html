@@ -28,10 +28,7 @@
                     <th class="text-right">Actions</th>
                 </tr>
             </thead>
-            <tbody id="provider-table-body" class="divide-y divide-gray-800"
-                  hx-get="/api/auth/providers"
-                  hx-trigger="load"
-                  hx-swap="innerHTML">
+            <tbody id="provider-table-body" class="divide-y divide-gray-800">
                 <tr><td colspan="6" class="px-4 py-8 text-center text-gray-500 text-sm">Loading providers...</td></tr>
             </tbody>
         </table>
@@ -42,10 +39,7 @@
 <div id="add-provider-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="add-provider-title">
     <div class="card w-full max-w-md">
         <h2 id="add-provider-title" class="text-lg font-bold text-gray-100 mb-4">Add Auth Provider</h2>
-        <form hx-post="/api/auth/providers"
-              hx-target="#provider-table-body"
-              hx-swap="innerHTML"
-              hx-on::after-request="document.getElementById('add-provider-modal').classList.add('hidden')">
+        <form id="add-provider-form">
             <div class="space-y-4">
                 <div>
                     <label class="form-label">Provider Name</label>
@@ -60,6 +54,7 @@
                         <option value="radius">RADIUS</option>
                         <option value="database">Database</option>
                         <option value="totp">TOTP (MFA)</option>
+                        <option value="oidc">OIDC / OpenID Connect (Authentik, Keycloak, Google)</option>
                     </select>
                 </div>
 
@@ -136,6 +131,20 @@
                         </select>
                     </div>
                 </div>
+
+                <!-- OIDC Fields -->
+                <div id="oidc-fields" class="hidden space-y-4">
+                    <div><label class="form-label">Issuer URL</label>
+                        <input type="url" name="oidc_issuer_url" placeholder="https://auth.example.com/application/o/persea/" class="form-input"></div>
+                    <div><label class="form-label">Client ID</label>
+                        <input type="text" name="oidc_client_id" placeholder="persea" class="form-input"></div>
+                    <div><label class="form-label">Client Secret</label>
+                        <input type="password" name="oidc_client_secret" class="form-input"></div>
+                    <div><label class="form-label">Redirect URI</label>
+                        <input type="url" name="oidc_redirect_uri" placeholder="https://persea.example.com/auth/callback" class="form-input"></div>
+                    <div><label class="form-label">Groups Claim</label>
+                        <input type="text" name="oidc_groups_claim" placeholder="groups" class="form-input"></div>
+                </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
                 <button type="button" onclick="document.getElementById('add-provider-modal').classList.add('hidden')"
@@ -164,7 +173,7 @@
 
 <script>
 function showProviderFields(type) {
-    ['ldap', 'saml', 'radius', 'database', 'totp'].forEach(function(t) {
+    ['ldap', 'saml', 'radius', 'database', 'totp', 'oidc'].forEach(function(t) {
         var el = document.getElementById(t + '-fields');
         if (el) el.classList.toggle('hidden', t !== type);
     });
@@ -192,10 +201,10 @@ function renderProviderRow(provider) {
         '<td class="px-4 py-3 text-sm text-gray-200">' + provider.name + '</td>' +
         '<td class="px-4 py-3">' + providerTypeBadge(provider.type) + '</td>' +
         '<td class="px-4 py-3 text-sm">' + statusToggle + '</td>' +
-        '<td class="px-4 py-3 text-sm text-gray-500">' + provider.priority + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-500">' + provider.position + '</td>' +
         '<td class="px-4 py-3 text-right text-sm">' +
-            '<button onclick="moveProvider(\'' + provider.id + '\', -1)" class="text-gray-400 hover:text-gray-200 mr-2" title="Move up">↑</button>' +
-            '<button onclick="moveProvider(\'' + provider.id + '\', 1)" class="text-gray-400 hover:text-gray-200 mr-2" title="Move down">↓</button>' +
+            '<button onclick="moveProvider(\'' + provider.id + '\', \'up\')" class="text-gray-400 hover:text-gray-200 mr-2" title="Move up">↑</button>' +
+            '<button onclick="moveProvider(\'' + provider.id + '\', \'down\')" class="text-gray-400 hover:text-gray-200 mr-2" title="Move down">↓</button>' +
             '<button onclick="configureProvider(\'' + provider.id + '\')" class="text-gray-400 hover:text-emerald-400 mr-2">Configure</button>' +
             '<button onclick="testProviderConnection(\'' + provider.id + '\')" class="text-gray-400 hover:text-blue-400 mr-2">Test</button>' +
             '<button onclick="deleteProvider(\'' + provider.id + '\')" class="text-gray-400 hover:text-red-400">Delete</button>' +
@@ -203,8 +212,10 @@ function renderProviderRow(provider) {
 }
 
 function toggleProvider(id, enable) {
-    fetch('/api/auth/providers/' + id + (enable ? '/enable' : '/disable'), { method: 'POST' })
-        .then(function() { htmx.trigger('#provider-table-body', 'load'); });
+    fetch('/api/auth/providers/' + id + (enable ? '/enable' : '/disable'), {
+        method: 'POST',
+        headers: apiHeaders()
+    }).then(function() { loadProviders(); });
 }
 
 function moveProvider(id, direction) {
@@ -212,13 +223,13 @@ function moveProvider(id, direction) {
         method: 'POST',
         headers: apiHeaders(),
         body: JSON.stringify({ direction: direction })
-    }).then(function() { htmx.trigger('#provider-table-body', 'load'); });
+    }).then(function() { loadProviders(); });
 }
 
 function configureProvider(id) {
     document.getElementById('provider-config-body').innerHTML = '<p class="text-sm text-gray-500">Loading configuration...</p>';
     document.getElementById('provider-config-modal').classList.remove('hidden');
-    fetch('/api/auth/providers/' + id + '/config')
+    fetch('/api/auth/providers/' + id + '/config', { headers: apiHeaders() })
         .then(function(r) { return r.json(); })
         .then(function(cfg) {
             document.getElementById('provider-config-body').innerHTML = buildConfigForm(cfg);
@@ -253,17 +264,105 @@ function saveProviderConfig() {
 }
 
 function testProviderConnection(id) {
-    fetch('/api/auth/providers/' + id + '/test', { method: 'POST' })
+    fetch('/api/auth/providers/' + id + '/test', { method: 'POST', headers: apiHeaders() })
         .then(function(r) { return r.json(); })
         .then(function(r) {
-            alert(r.ok ? 'Connection successful' : 'Connection failed: ' + (r.error || 'unknown error'));
+            alert(r.ok ? 'Connection successful' : 'Connection failed: ' + (r.detail || 'unknown error'));
         });
 }
 
 function deleteProvider(id) {
     if (!confirm('Delete this auth provider?')) return;
-    fetch('/api/auth/providers/' + id, { method: 'DELETE' })
-        .then(function() { htmx.trigger('#provider-table-body', 'load'); });
+    fetch('/api/auth/providers/' + id, { method: 'DELETE', headers: apiHeaders() })
+        .then(function() { loadProviders(); });
 }
+
+function loadProviders() {
+    fetch('/api/auth/providers', { headers: apiHeaders() })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var tbody = document.getElementById('provider-table-body');
+            if (!data.providers || !data.providers.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500 text-sm">No providers configured. Add one above.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = data.providers.map(renderProviderRow).join('');
+        })
+        .catch(function() {
+            document.getElementById('provider-table-body').innerHTML =
+                '<tr><td colspan="6" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load providers</td></tr>';
+        });
+}
+
+// Map form field names to config JSON keys per provider type.
+function providerConfigForType(type, form) {
+    var fieldMap = {
+        ldap: {
+            ldap_host: 'url', ldap_port: 'port', ldap_bind_dn: 'bind_dn',
+            ldap_bind_password: 'bind_password', ldap_search_base: 'search_base',
+            ldap_search_filter: 'search_filter', ldap_start_tls: 'start_tls',
+            ldap_tls_skip_verify: 'tls_skip_verify'
+        },
+        saml: {
+            saml_metadata_url: 'idp_metadata_url', saml_entity_id: 'entity_id',
+            saml_acs_url: 'acs_url', saml_slo_url: 'slo_url'
+        },
+        radius: {
+            radius_host: 'hostname', radius_port: 'auth_port',
+            radius_secret: 'secret', radius_timeout: 'timeout'
+        },
+        totp: {
+            totp_issuer: 'issuer', totp_digits: 'digits',
+            totp_period: 'period', totp_enforcement: 'enforcement'
+        },
+        oidc: {
+            oidc_issuer_url: 'issuer_url', oidc_client_id: 'client_id',
+            oidc_client_secret: 'client_secret', oidc_redirect_uri: 'redirect_uri',
+            oidc_groups_claim: 'groups_claim'
+        }
+    };
+    var map = fieldMap[type] || {};
+    var config = {};
+    for (var name in map) {
+        var el = form.querySelector('[name="' + name + '"]');
+        if (!el) continue;
+        var val = el.value;
+        if (el.type === 'checkbox') val = el.checked;
+        else if (el.type === 'number') val = el.value === '' ? null : Number(el.value);
+        if (val === '' || val === null || val === undefined) continue;
+        config[map[name]] = val;
+    }
+    return config;
+}
+
+(function() {
+    var form = document.getElementById('add-provider-form');
+    if (form) {
+        form.addEventListener('submit', function(evt) {
+            evt.preventDefault();
+            var type = document.getElementById('new-provider-type').value;
+            var payload = {
+                name: form.querySelector('[name="name"]').value,
+                type: type,
+                config: providerConfigForType(type, form)
+            };
+            fetch('/api/auth/providers', {
+                method: 'POST',
+                headers: apiHeaders(),
+                body: JSON.stringify(payload)
+            }).then(function(r) {
+                if (!r.ok) {
+                    return r.json().then(function(b) { throw new Error(b.error || 'create failed'); });
+                }
+                document.getElementById('add-provider-modal').classList.add('hidden');
+                form.reset();
+                loadProviders();
+            }).catch(function(e) {
+                alert('Failed to create provider: ' + e.message);
+            });
+        });
+    }
+    loadProviders();
+})();
 </script>
 {% endblock %}

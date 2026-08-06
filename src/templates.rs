@@ -236,6 +236,21 @@ impl IntoResponse for AdminAuthTemplate {
     }
 }
 
+/// Admin groups page template context.
+#[derive(Serialize)]
+pub struct AdminGroupsTemplate {
+    pub site_title: String,
+    pub logo_url: String,
+    pub is_admin: bool,
+    pub active_page: String,
+}
+
+impl IntoResponse for AdminGroupsTemplate {
+    fn into_response(self) -> Response {
+        render_template("pages/admin/groups.html", &self)
+    }
+}
+
 /// Admin audit log page template context.
 #[derive(Serialize)]
 pub struct AdminAuditTemplate {

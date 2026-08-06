@@ -385,6 +385,29 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);",
     )?;
 
+    // Migration: local groups + provider-group mappings (ticket #029).
+    // Local groups are admin-defined named groups that folders/connections
+    // can grant access to. `group_mappings` links an auth-provider group name
+    // (from OIDC/LDAP claims, see list_known_groups) to a local group; one
+    // provider group maps to at most one local group (UNIQUE). The FK cascade
+    // is declared for postgres/mysql parity — SQLite runs without
+    // `PRAGMA foreign_keys`, so delete_local_group removes mappings explicitly.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_groups (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS group_mappings (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id       INTEGER NOT NULL REFERENCES local_groups(id) ON DELETE CASCADE,
+            provider_group TEXT NOT NULL UNIQUE,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    )?;
+
     let db = Arc::new(Mutex::new(conn));
 
     // Migration: RBAC tables (connection groups, user-group membership, permissions)
@@ -2801,4 +2824,234 @@ mod tests {
         let k = add_admin(&db, "none", None, None).unwrap();
         assert!(validate_api_key(&db, &k, None).is_ok());
     }
+}
+
+// ── Local groups + provider-group mappings (ticket #029) ────────────────────
+// This block was appended at the end of the file because parallel workstreams
+// may be editing db.rs.
+//
+// Local groups are admin-defined named groups that folders/connections can
+// grant access to. Auth-provider groups (OIDC/LDAP claim groups, see
+// `list_known_groups`) are mapped onto them via `group_mappings`; one
+// provider group maps to at most one local group.
+//
+// NOTE: group names remain free-form strings — folder `allowed_groups`
+// reference a local group by its *name*, not its id. Renaming a local group
+// does not rewrite folder references, and deleting one leaves folder
+// `allowed_groups` untouched (anyone whose claims carry that name keeps
+// access).
+
+/// A local group with usage counts.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocalGroup {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub created_at: String,
+    /// Number of auth-provider groups mapped to this local group.
+    pub provider_group_count: i64,
+    /// Number of address-book folders whose entries list this group name in
+    /// `allowed_groups` (vault-side folder configs are not scanned).
+    pub folder_count: i64,
+}
+
+/// A mapping from an auth-provider group name to a local group.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProviderGroupMapping {
+    pub id: i64,
+    pub group_id: i64,
+    pub provider_group: String,
+    pub created_at: String,
+}
+
+fn local_group_row(row: &rusqlite::Row) -> rusqlite::Result<LocalGroup> {
+    Ok(LocalGroup {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        created_at: row.get(3)?,
+        provider_group_count: row.get(4)?,
+        folder_count: row.get(5)?,
+    })
+}
+
+/// COUNTs computed for every local group listing. `folder_count` counts
+/// address-book folders whose entries carry the group name in their
+/// comma-separated `allowed_groups` (INSTR is case-sensitive, matching the
+/// exact-match semantics of `resolve_folder_access`).
+const LOCAL_GROUP_COLUMNS: &str = "lg.id, lg.name, lg.description, lg.created_at, \
+     (SELECT COUNT(*) FROM group_mappings gm WHERE gm.group_id = lg.id), \
+     (SELECT COUNT(DISTINCT e.folder_id) FROM address_book_entries e \
+       WHERE INSTR(',' || e.allowed_groups || ',', ',' || lg.name || ',') > 0)";
+
+/// List all local groups with usage counts, ordered by name.
+pub fn list_local_groups(db: &Db) -> rusqlite::Result<Vec<LocalGroup>> {
+    let conn = db.lock().unwrap();
+    let sql = format!(
+        "SELECT {} FROM local_groups lg ORDER BY lg.name COLLATE NOCASE",
+        LOCAL_GROUP_COLUMNS
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], local_group_row)?;
+    rows.collect()
+}
+
+/// Fetch a single local group by id (with usage counts), or `None`.
+pub fn get_local_group(db: &Db, id: i64) -> rusqlite::Result<Option<LocalGroup>> {
+    let conn = db.lock().unwrap();
+    let sql = format!(
+        "SELECT {} FROM local_groups lg WHERE lg.id = ?1",
+        LOCAL_GROUP_COLUMNS
+    );
+    match conn.query_row(&sql, params![id], local_group_row) {
+        Ok(g) => Ok(Some(g)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Create a local group. Returns the new group (with usage counts).
+/// The UNIQUE name constraint is enforced by the schema; callers surface
+/// UNIQUE violations as 409 conflicts.
+pub fn create_local_group(db: &Db, name: &str, description: &str) -> rusqlite::Result<LocalGroup> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO local_groups (name, description) VALUES (?1, ?2)",
+        params![name, description],
+    )?;
+    let id = conn.last_insert_rowid();
+    let sql = format!(
+        "SELECT {} FROM local_groups lg WHERE lg.id = ?1",
+        LOCAL_GROUP_COLUMNS
+    );
+    conn.query_row(&sql, params![id], local_group_row)
+}
+
+/// Update a local group (rename / re-describe). `None` fields keep their
+/// current value. Returns the updated group (with usage counts), or `None`
+/// if the id is unknown.
+pub fn update_local_group(
+    db: &Db,
+    id: i64,
+    name: Option<&str>,
+    description: Option<&str>,
+) -> rusqlite::Result<Option<LocalGroup>> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE local_groups
+         SET name = COALESCE(?2, name), description = COALESCE(?3, description)
+         WHERE id = ?1",
+        params![id, name, description],
+    )?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    let sql = format!(
+        "SELECT {} FROM local_groups lg WHERE lg.id = ?1",
+        LOCAL_GROUP_COLUMNS
+    );
+    conn.query_row(&sql, params![id], local_group_row).map(Some)
+}
+
+/// Delete a local group and all of its provider-group mappings. Returns
+/// `Some(mappings_removed)` on success, `None` if the group is unknown.
+/// Folder `allowed_groups` referencing the group name are NOT touched (group
+/// names are free-form strings; see the module note above).
+pub fn delete_local_group(db: &Db, id: i64) -> rusqlite::Result<Option<usize>> {
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    let mappings: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM group_mappings WHERE group_id = ?1",
+        params![id],
+        |row| row.get(0),
+    )?;
+    let changed = tx.execute("DELETE FROM local_groups WHERE id = ?1", params![id])?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    // SQLite runs without `PRAGMA foreign_keys`, so the ON DELETE CASCADE
+    // declared on group_mappings.group_id never fires — delete explicitly.
+    tx.execute(
+        "DELETE FROM group_mappings WHERE group_id = ?1",
+        params![id],
+    )?;
+    tx.commit()?;
+    Ok(Some(mappings as usize))
+}
+
+/// List provider-group mappings, optionally filtered to one local group.
+pub fn list_provider_group_mappings(
+    db: &Db,
+    group_id: Option<i64>,
+) -> rusqlite::Result<Vec<ProviderGroupMapping>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = match group_id {
+        Some(_) => conn.prepare(
+            "SELECT id, group_id, provider_group, created_at FROM group_mappings
+             WHERE group_id = ?1 ORDER BY provider_group COLLATE NOCASE",
+        )?,
+        None => conn.prepare(
+            "SELECT id, group_id, provider_group, created_at FROM group_mappings
+             ORDER BY group_id, provider_group COLLATE NOCASE",
+        )?,
+    };
+    let mapper = |row: &rusqlite::Row| {
+        Ok(ProviderGroupMapping {
+            id: row.get(0)?,
+            group_id: row.get(1)?,
+            provider_group: row.get(2)?,
+            created_at: row.get(3)?,
+        })
+    };
+    let rows = match group_id {
+        Some(gid) => stmt.query_map(params![gid], mapper)?,
+        None => stmt.query_map([], mapper)?,
+    };
+    rows.collect()
+}
+
+/// Map an auth-provider group to a local group. Any existing mapping for the
+/// same provider group is replaced — one provider group maps to one local
+/// group. The caller must verify the local group exists first
+/// (`get_local_group`); SQLite does not enforce the FK.
+pub fn create_provider_group_mapping(
+    db: &Db,
+    group_id: i64,
+    provider_group: &str,
+) -> rusqlite::Result<ProviderGroupMapping> {
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "DELETE FROM group_mappings WHERE provider_group = ?1",
+        params![provider_group],
+    )?;
+    tx.execute(
+        "INSERT INTO group_mappings (group_id, provider_group) VALUES (?1, ?2)",
+        params![group_id, provider_group],
+    )?;
+    let id = tx.last_insert_rowid();
+    let mapping = tx.query_row(
+        "SELECT id, group_id, provider_group, created_at FROM group_mappings WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(ProviderGroupMapping {
+                id: row.get(0)?,
+                group_id: row.get(1)?,
+                provider_group: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        },
+    )?;
+    tx.commit()?;
+    Ok(mapping)
+}
+
+/// Remove a provider-group mapping by id.
+pub fn delete_provider_group_mapping(db: &Db, mapping_id: i64) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "DELETE FROM group_mappings WHERE id = ?1",
+        params![mapping_id],
+    )?;
+    Ok(changed > 0)
 }

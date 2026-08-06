@@ -18,6 +18,7 @@ mod browser;
 mod config;
 mod crypto;
 mod csrf;
+mod csv_import;
 mod db;
 mod db_migrate;
 mod db_pool;
@@ -31,6 +32,7 @@ mod migrate;
 mod oidc;
 mod password;
 mod protocol;
+mod providers_db;
 mod pve;
 mod rbac;
 mod recording;
@@ -292,6 +294,9 @@ async fn main() {
 
     // Open database
     let database = db::init_db(&config.db_path).expect("Failed to open database");
+    // DB-configured auth providers (wayfinder ticket 025) — schema + rows
+    // live in the app database; config-file providers still work alongside.
+    crate::providers_db::migrate(&database).expect("Failed to migrate auth_providers table");
 
     // Resolve log format: CLI flag wins, then RUST_LOG_FORMAT=json env var.
     let log_format = match cli.log_format {
@@ -773,8 +778,19 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     let static_path = config.static_path.clone();
     let tls_config = config.tls.clone();
 
-    // Initialize OIDC if configured
-    let oidc_state = if let Some(ref oidc_config) = config.oidc {
+    // Initialize OIDC if configured. A DB-configured OIDC provider (added via
+    // the admin auth page) takes precedence over the [oidc] config section.
+    let db_oidc_config = crate::providers_db::load_providers(&database)
+        .ok()
+        .and_then(|providers| {
+            providers
+                .iter()
+                .find(|p| p.enabled && p.provider_type == "oidc")
+                .and_then(|p| {
+                    serde_json::from_value::<crate::config::OidcConfig>(p.config.clone()).ok()
+                })
+        });
+    let oidc_state = if let Some(ref oidc_config) = db_oidc_config.or(config.oidc.clone()) {
         match oidc::init_oidc(oidc_config, config.auth_session_ttl_secs).await {
             Ok(state) => {
                 tracing::info!("OIDC configured with issuer: {}", oidc_config.issuer_url);
@@ -926,10 +942,60 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
                 );
             }
 
-            match AuthChain::from_config(&auth_cfg.methods, providers) {
+            // Merge DB-configured providers (wayfinder ticket 025): entries
+            // added through the admin auth page extend the config chain,
+            // appended after config methods in position order. OIDC and TOTP
+            // entries are handled by their own flows, not the chain.
+            let mut db_methods: Vec<String> = Vec::new();
+            if let Ok(db_providers) = crate::providers_db::load_providers(&database) {
+                for p in db_providers.iter().filter(|p| p.enabled) {
+                    let key = format!("db-provider-{}", p.name);
+                    let provider: Option<Box<dyn AuthProvider>> = match p.provider_type.as_str()
+                    {
+                        "ldap" => serde_json::from_value::<
+                            crate::auth_providers::ldap::LdapConfig,
+                        >(p.config.clone())
+                        .ok()
+                        .map(|c| {
+                            Box::new(crate::auth_providers::ldap::LdapProvider::new(c))
+                                as Box<dyn AuthProvider>
+                        }),
+                        "radius" => serde_json::from_value::<
+                            crate::auth_providers::radius::RadiusConfig,
+                        >(p.config.clone())
+                        .ok()
+                        .map(|c| {
+                            Box::new(crate::auth_providers::radius::RadiusProvider::new(c))
+                                as Box<dyn AuthProvider>
+                        }),
+                        "saml" => serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
+                            p.config.clone(),
+                        )
+                        .ok()
+                        .map(|c| {
+                            Box::new(crate::auth_providers::saml::SamlProvider::new(c))
+                                as Box<dyn AuthProvider>
+                        }),
+                        "database" => Some(Box::new(
+                            crate::auth_providers::database::DatabaseProvider::new(
+                                database.clone(),
+                            ),
+                        ) as Box<dyn AuthProvider>),
+                        _ => None,
+                    };
+                    if let Some(prov) = provider {
+                        providers.insert(key.clone(), prov);
+                        db_methods.push(key);
+                    }
+                }
+            }
+            let mut methods = auth_cfg.methods.clone();
+            methods.extend(db_methods);
+
+            match AuthChain::from_config(&methods, providers) {
                 Ok(chain) => {
                     tracing::info!(
-                        methods = ?auth_cfg.methods,
+                        methods = ?methods,
                         "Auth chain initialized"
                     );
                     chain
@@ -1282,6 +1348,58 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .route("/api/reports/top-users", get(api::report_top_users))
         .route("/api/reports/summary", get(api::report_summary))
         .route("/api/system/status", get(api::system_status))
+        .route(
+            "/api/system/settings",
+            get(api::settings::get_settings).put(api::settings::put_settings),
+        )
+        .route("/api/auth/providers", get(api::providers::list_providers))
+        .route("/api/auth/providers", post(api::providers::create_provider))
+        .route("/api/auth/providers/{id}", get(api::providers::get_provider))
+        .route(
+            "/api/auth/providers/{id}",
+            delete(api::providers::delete_provider),
+        )
+        .route(
+            "/api/auth/providers/{id}/enable",
+            post(api::providers::enable_provider),
+        )
+        .route(
+            "/api/auth/providers/{id}/disable",
+            post(api::providers::disable_provider),
+        )
+        .route(
+            "/api/auth/providers/{id}/move",
+            post(api::providers::move_provider),
+        )
+        .route(
+            "/api/auth/providers/{id}/config",
+            get(api::providers::get_provider_config),
+        )
+        .route(
+            "/api/auth/providers/{id}/test",
+            post(api::providers::test_provider),
+        )
+        .route("/api/admin/groups", get(api::groups::list_groups))
+        .route("/api/admin/groups", post(api::groups::create_group))
+        .route(
+            "/api/admin/groups/{id}",
+            get(api::groups::get_group)
+                .put(api::groups::update_group)
+                .delete(api::groups::delete_group),
+        )
+        .route(
+            "/api/admin/groups/{id}/mappings",
+            post(api::groups::add_group_mapping),
+        )
+        .route(
+            "/api/admin/groups/{id}/mappings/{mapping_id}",
+            delete(api::groups::remove_group_mapping),
+        )
+        .route("/api/addressbook/import", post(api::imports::import_csv))
+        .route(
+            "/api/addressbook/import-template",
+            get(api::imports::import_template),
+        )
         .route("/api/users", get(api::list_users).post(api::create_user))
         .route("/api/users/{email}/role", put(api::set_user_role))
         .route(
@@ -1566,6 +1684,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         // Admin sub-pages (templates)
         .route("/admin/users.html", get(handlers::pages::admin_users_page))
         .route("/admin/auth.html", get(handlers::pages::admin_auth_page))
+        .route("/admin/groups.html", get(handlers::pages::admin_groups_page))
         .route("/admin/audit.html", get(handlers::pages::admin_audit_page))
         .route(
             "/admin/settings.html",

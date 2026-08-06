@@ -2,8 +2,12 @@
 
 pub mod address_book;
 pub mod admin;
+pub mod groups;
+pub mod imports;
+pub mod providers;
 pub mod reports;
 pub mod sessions;
+pub mod settings;
 pub mod tokens;
 pub mod users;
 pub mod vsphere;

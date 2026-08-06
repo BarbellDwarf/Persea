@@ -5,12 +5,12 @@
 <div style="max-width:1200px;margin:0 auto">
 
     <!-- Top bar -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
         <div>
             <h1 style="font-size:22px;font-weight:600;color:white;margin:0">Connections</h1>
             <p style="font-size:13px;color:var(--text-muted);margin-top:4px">Manage your server address book</p>
         </div>
-        <div style="display:flex;align-items:center;gap:12px">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
             <select id="scope-filter" class="form-input" style="width:150px">
                 <option value="">All Scopes</option>
                 <option value="shared">Shared</option>
@@ -18,13 +18,14 @@
             </select>
             <input type="search" id="connections-search" placeholder="Search connections..."
                    class="form-input" style="width:260px" autocomplete="off">
-            <button id="btn-new-folder" class="btn btn-primary admin-only hidden">+ New Folder</button>
+            <button id="btn-import" class="btn btn-secondary btn-sm admin-only" style="width:auto">Import CSV</button>
+            <button id="btn-new-folder" class="btn btn-primary btn-sm admin-only" style="width:auto">+ New Folder</button>
         </div>
     </div>
 
     <!-- Vault unavailable warning (hidden by default) -->
     <div id="vault-unavailable" class="hidden" role="alert" aria-live="polite" style="padding:12px 16px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;color:#fbbf24;font-size:13px;margin-bottom:20px">
-        <strong>Connections temporarily unavailable.</strong> Cannot reach the Vault server or database.
+        <strong>Connections temporarily unavailable.</strong> Cannot reach the Vault server or database. Retrying automatically.
     </div>
 
     <!-- Empty state (hidden by default) -->
@@ -34,7 +35,7 @@
         </svg>
         <h3 style="font-size:16px;font-weight:500;color:var(--text-secondary);margin-top:16px">No connections configured</h3>
         <p style="font-size:13px;color:var(--text-muted);margin-top:8px">Create a folder to start organizing connection entries.</p>
-        <button id="btn-empty-create-folder" class="btn btn-primary" style="margin-top:16px">Create First Folder</button>
+        <button id="btn-empty-create-folder" class="btn btn-primary" style="margin-top:16px;width:auto">Create First Folder</button>
     </div>
 
     <!-- Main content (hidden by default) -->
@@ -55,14 +56,16 @@
                 <div id="folder-tree"></div>
 
                 <div id="entries-header" class="hidden" style="margin-top:24px;margin-bottom:16px">
-                    <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+                    <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
                         <h2 id="entries-title" style="font-size:16px;font-weight:600;color:white;margin:0"></h2>
                         <span id="entries-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
                         <span id="entries-desc" style="font-size:13px;color:var(--text-muted);font-style:italic"></span>
                         <div style="flex:1"></div>
-                        <button id="btn-new-entry" class="btn btn-primary btn-sm admin-only hidden">+ Add Entry</button>
-                        <button id="btn-edit-folder" class="btn btn-secondary btn-sm admin-only hidden">Edit</button>
-                        <button id="btn-delete-folder" class="btn btn-danger btn-sm admin-only hidden">Delete</button>
+                        <button id="btn-new-entry" class="btn btn-primary btn-sm admin-only" style="width:auto">+ Add Entry</button>
+                        <button id="btn-edit-entry" class="btn btn-secondary btn-sm admin-only" style="width:auto" disabled>Edit Entry</button>
+                        <button id="btn-delete-entry" class="btn btn-danger btn-sm admin-only" style="width:auto" disabled>Delete Entry</button>
+                        <button id="btn-edit-folder" class="btn btn-secondary btn-sm admin-only" style="width:auto">Edit</button>
+                        <button id="btn-delete-folder" class="btn btn-danger btn-sm admin-only" style="width:auto">Delete</button>
                     </div>
                 </div>
                 <div id="entries-content">
@@ -108,6 +111,156 @@
     </div>
 </div>
 
+<!-- Folder create/edit modal -->
+<div id="folder-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
+    <div class="card w-full max-w-md" style="max-height:90vh;overflow-y:auto">
+        <h2 id="folder-modal-title" class="text-lg font-bold text-gray-100 mb-4">New Folder</h2>
+        <div class="space-y-4">
+            <div>
+                <label class="form-label" for="fm-name">Name</label>
+                <input type="text" id="fm-name" class="form-input" placeholder="e.g. infra-servers" pattern="[a-zA-Z0-9_.-]+" maxlength="64" autocomplete="off">
+                <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores, dots only.</p>
+            </div>
+            <div>
+                <label class="form-label" for="fm-desc">Description</label>
+                <input type="text" id="fm-desc" class="form-input" placeholder="e.g. Infrastructure servers" autocomplete="off">
+            </div>
+            <div>
+                <label class="form-label" for="fm-scope">Scope</label>
+                <select id="fm-scope" class="form-input">
+                    <option value="shared">shared (all instances)</option>
+                    <option value="instance">instance (this server only)</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label">Allowed groups</label>
+                <div class="chip-picker">
+                    <div class="chip-list" id="fm-groups-chips"></div>
+                    <div class="chip-input-wrap">
+                        <div class="combo" id="fm-groups-combo">
+                            <input type="text" id="fm-groups-input" placeholder="Type or pick a group..." autocomplete="off" spellcheck="false">
+                            <div class="combo-menu" id="fm-groups-menu" role="listbox"></div>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="fm-groups-add" style="width:auto">Add</button>
+                    </div>
+                </div>
+                <p class="text-xs text-gray-500 mt-1">OIDC groups that can see this folder. Leave empty for admin-only access.</p>
+            </div>
+            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer" style="cursor:pointer">
+                <input type="checkbox" id="fm-inherit" class="rounded bg-gray-800 border-gray-700 text-emerald-500">
+                Inherit permissions from parent folder
+            </label>
+            <p class="text-xs text-gray-500">When ticked, access falls back to the parent folder's groups when this folder's own list doesn't grant access.</p>
+            <div id="fm-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+        </div>
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" id="fm-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
+            <button type="button" id="fm-save" class="btn btn-primary btn-sm" style="width:auto">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Entry create/edit modal -->
+<div id="entry-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title">
+    <div class="card w-full max-w-md" style="max-height:90vh;overflow-y:auto">
+        <h2 id="entry-modal-title" class="text-lg font-bold text-gray-100 mb-4">New Entry</h2>
+        <div class="space-y-4">
+            <div>
+                <label class="form-label" for="em-name">Name</label>
+                <input type="text" id="em-name" class="form-input" placeholder="e.g. web-server-01" pattern="[a-zA-Z0-9_.-]+" maxlength="64" autocomplete="off">
+                <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores, dots. Used as the Vault key.</p>
+            </div>
+            <div>
+                <label class="form-label" for="em-display-name">Display name</label>
+                <input type="text" id="em-display-name" class="form-input" placeholder="e.g. Web Server 01" autocomplete="off">
+            </div>
+            <div>
+                <label class="form-label" for="em-type">Type</label>
+                <select id="em-type" class="form-input">
+                    <option value="ssh">SSH</option>
+                    <option value="rdp">RDP</option>
+                    <option value="vnc">VNC</option>
+                    <option value="spice">SPICE</option>
+                    <option value="web">Web</option>
+                    <option value="vdi">VDI (Docker)</option>
+                    <option value="proxmox">Proxmox VE console</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label" for="em-hostname">Hostname</label>
+                <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
+                <p class="text-xs text-gray-500 mt-1">Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
+            </div>
+            <div>
+                <label class="form-label" for="em-port">Port</label>
+                <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
+            </div>
+            <div>
+                <label class="form-label" for="em-username">Username</label>
+                <input type="text" id="em-username" class="form-input" autocomplete="off">
+            </div>
+            <div>
+                <label class="form-label" for="em-password">Password</label>
+                <input type="password" id="em-password" class="form-input" autocomplete="new-password">
+            </div>
+            <div>
+                <label class="form-label" for="em-private-key">Private key (PEM)</label>
+                <textarea id="em-private-key" class="form-input" rows="3" style="resize:vertical;font-family:var(--font-mono);font-size:13px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+            </div>
+            <div id="em-proxmox-secret-field" style="display:none">
+                <label class="form-label" for="em-proxmox-token-secret">Proxmox token secret</label>
+                <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
+            </div>
+            <div id="em-container-password-field" style="display:none">
+                <label class="form-label" for="em-container-password">Container password</label>
+                <input type="password" id="em-container-password" class="form-input" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
+                <p class="text-xs text-gray-500 mt-1">Only for VDI images with a baked-in account. Leave blank to keep the stored value when editing.</p>
+            </div>
+            <div>
+                <label class="form-label">Allowed groups</label>
+                <div class="chip-picker">
+                    <div class="chip-list" id="em-groups-chips"></div>
+                    <div class="chip-input-wrap">
+                        <div class="combo" id="em-groups-combo">
+                            <input type="text" id="em-groups-input" placeholder="Type or pick a group..." autocomplete="off" spellcheck="false">
+                            <div class="combo-menu" id="em-groups-menu" role="listbox"></div>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="em-groups-add" style="width:auto">Add</button>
+                    </div>
+                </div>
+            </div>
+            <div id="em-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+        </div>
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" id="em-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
+            <button type="button" id="em-save" class="btn btn-primary btn-sm" style="width:auto">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Import CSV modal -->
+<div id="import-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
+    <div class="card w-full max-w-md">
+        <h2 id="import-modal-title" class="text-lg font-bold text-gray-100 mb-4">Import Connections (CSV)</h2>
+        <div class="space-y-4">
+            <div>
+                <label class="form-label" for="import-file">CSV file</label>
+                <input type="file" id="import-file" accept=".csv,text/csv" class="form-input">
+                <p class="text-xs text-gray-500 mt-1">Columns: name, protocol, hostname, port, username, password, folder, display_name, allowed_groups. Quoted fields with commas are supported.</p>
+            </div>
+            <div>
+                <a href="/api/addressbook/import-template" class="text-sm text-emerald-400 hover:text-emerald-300">Download CSV template</a>
+            </div>
+            <div id="import-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <div id="import-results" class="hidden" style="font-size:13px;color:var(--text-secondary)"></div>
+        </div>
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" id="import-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
+            <button type="button" id="import-submit" class="btn btn-primary btn-sm" style="width:auto">Import</button>
+        </div>
+    </div>
+</div>
+
 <style>
     .proto-ssh { background: rgba(34,197,94,0.15); color: #4ade80; border-color: rgba(34,197,94,0.3); }
     .proto-rdp { background: rgba(59,130,246,0.15); color: #60a5fa; border-color: rgba(59,130,246,0.3); }
@@ -127,6 +280,40 @@
     .vm-off { background:#6b7280 }
     .vm-susp { background:#fbbf24 }
     .vm-unknown { background:#9ca3af }
+    .admin-only { display: none; }
+    .admin-only.admin-visible { display: inline-flex; }
+    .chip-picker {
+        margin-top:8px; border:1px solid var(--border); border-radius:var(--radius);
+        background:var(--bg-input); padding:8px; display:flex; flex-direction:column; gap:8px;
+    }
+    .chip-list { display:flex; flex-wrap:wrap; gap:4px; min-height:0; }
+    .chip {
+        display:inline-flex; align-items:center; gap:4px; padding:2px 8px;
+        background:var(--bg-card); border:1px solid var(--accent); border-radius:var(--radius);
+        color:var(--accent); font-size:12px; letter-spacing:0.04em;
+    }
+    .chip-remove {
+        background:none; border:none; padding:0 0 0 4px; color:var(--text-muted); cursor:pointer;
+        font-family:var(--font-mono); font-size:14px; line-height:1;
+    }
+    .chip-remove:hover { color:var(--accent); }
+    .chip-input-wrap { display:flex; gap:8px; align-items:center; }
+    .chip-input-wrap .combo { flex:1; position:relative; }
+    .chip-input-wrap .combo input {
+        width:100%; background:var(--bg-primary); border:1px solid var(--border);
+        border-radius:6px; padding:8px 10px; color:var(--text-primary); font-size:13px;
+    }
+    .chip-input-wrap .combo input:focus { outline:none; border-color:var(--border-focus); }
+    .combo-menu {
+        display:none; position:absolute; left:0; right:0; top:calc(100% + 2px);
+        background:var(--bg-card); border:1px solid var(--border); border-radius:var(--radius);
+        max-height:200px; overflow-y:auto; z-index:120; box-shadow:0 8px 24px rgba(0,0,0,0.4);
+    }
+    .combo.open .combo-menu { display:block; }
+    .combo-item { padding:8px 12px; font-size:13px; color:var(--text-primary); cursor:pointer; line-height:1.3; }
+    .combo-item:hover, .combo-item.active { background:var(--bg-input); color:var(--accent); }
+    .combo-item.empty { color:var(--text-muted); cursor:default; font-style:italic; }
+    .combo-item.empty:hover { background:transparent; color:var(--text-muted); }
 </style>
 
 <script>
@@ -138,17 +325,30 @@
     };
     function protoClass(p){return protoClasses[(p||'').toLowerCase()]||''}
 
-    // ── Address book: folders + entries ────────────────────────────────
+    // ── State ────────────────────────────────────────────────────────
     var folders = [];
-    var folderMap = {};
-    var entriesByFolder = {};
+    var folderMap = new Map();
+    var entriesByFolder = new Map();
     var isAdmin = false;
     var selectedFolder = null;
+    var selectedEntry = null;
     var selectedEntryKey = null;
     var searchQuery = '';
+    var retryTimer = null;
+    var entriesReqId = 0;
+    var knownGroupsCache = null;
+    var fmGroups = [];
+    var emGroups = [];
+    var fmComboActive = -1;
+    var emComboActive = -1;
+    var folderEditMode = null;
+    var entryEditMode = null;
 
     function folderKey(scope, path) {
-        return scope + '/' + path;
+        return scope + '\u0000' + path;
+    }
+    function entryKey(scope, path, name) {
+        return scope + '\u0000' + path + '\u0000' + name;
     }
     function entryHost(e) {
         if (e.session_type === 'web') return e.url || '';
@@ -158,28 +358,55 @@
         }
         return e.hostname || '';
     }
+    function findByName(list, name) {
+        for (var i = 0; i < list.length; i++) {
+            if (list[i].name === name) return list[i];
+        }
+        return null;
+    }
+
+    // ── Unavailable / access states ──────────────────────────────────
     function showUnavailable() {
         document.getElementById('vault-unavailable').classList.remove('hidden');
         document.getElementById('empty-state').classList.add('hidden');
         document.getElementById('main-content').classList.add('hidden');
         document.getElementById('folder-tree').innerHTML =
             '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">Retrying\u2026</p>';
-        setTimeout(function() {
+        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        retryTimer = setTimeout(function() {
+            retryTimer = null;
             document.getElementById('vault-unavailable').classList.add('hidden');
             loadFolders();
         }, 15000);
     }
+    function clearUnavailable() {
+        if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+        document.getElementById('vault-unavailable').classList.add('hidden');
+    }
+    function showNoAccess() {
+        clearUnavailable();
+        document.getElementById('empty-state').classList.add('hidden');
+        document.getElementById('main-content').classList.remove('hidden');
+        document.getElementById('folder-tree').innerHTML =
+            '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">You do not have access to the address book.</p>';
+    }
+    function showInlineError(html) {
+        document.getElementById('entries-content').innerHTML = html;
+    }
+
+    // ── Address book: folders + entries ─────────────────────────────
     function loadFolders() {
-        fetch('/api/addressbook/folders', { credentials: 'same-origin' })
+        fetch('/api/addressbook/folders', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
-                if (res.status === 503) { showUnavailable(); return null; }
-                if (res.status === 401 || res.status === 403) { window.location.href = '/'; return null; }
+                if (res.status === 502 || res.status === 503) { showUnavailable(); return null; }
+                if (res.status === 401) { window.location.href = '/'; return null; }
+                if (res.status === 403) { showNoAccess(); return null; }
                 if (!res.ok) throw new Error('Failed to load folders (HTTP ' + res.status + ')');
                 return res.json();
             })
             .then(function(data) {
                 if (!data) return;
-                document.getElementById('vault-unavailable').classList.add('hidden');
+                clearUnavailable();
                 folders = (data || []).map(function(f) {
                     return {
                         name: f.name,
@@ -189,8 +416,8 @@
                         has_children: !!f.has_children
                     };
                 });
-                folderMap = {};
-                folders.forEach(function(f) { folderMap[folderKey(f.scope, f.path)] = f; });
+                folderMap = new Map();
+                folders.forEach(function(f) { folderMap.set(folderKey(f.scope, f.path), f); });
                 if (folders.length === 0) {
                     if (isAdmin) {
                         document.getElementById('main-content').classList.add('hidden');
@@ -214,19 +441,38 @@
             });
     }
     function loadAllEntries() {
-        entriesByFolder = {};
+        var reqId = ++entriesReqId;
+        var buffer = new Map();
+        var unavailable = false;
         Promise.all(folders.map(function(f) {
             var key = folderKey(f.scope, f.path);
-            return fetch('/api/addressbook/folders/' + encodeURIComponent(f.scope) + '/' + encodeURIComponent(f.path) + '/entries', { credentials: 'same-origin' })
-                .then(function(r) { return r.ok ? r.json() : []; })
-                .then(function(list) { entriesByFolder[key] = (list || []); })
-                .catch(function() { entriesByFolder[key] = []; });
+            return fetch('/api/addressbook/folders/' + encodeURIComponent(f.scope) + '/' + encodeURIComponent(f.path) + '/entries', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) {
+                    if (r.status === 502 || r.status === 503) { unavailable = true; return null; }
+                    return r.ok ? r.json() : [];
+                })
+                .then(function(list) { if (list !== null) buffer.set(key, list || []); })
+                .catch(function() {});
         })).then(function() {
+            if (reqId !== entriesReqId) return;
+            if (unavailable) { showUnavailable(); return; }
+            entriesByFolder = buffer;
             renderFolders();
             if (searchQuery) runSearch();
-            else if (selectedFolder) selectFolder(selectedFolder);
-            else if (folders.length) selectFolder(folders[0]);
+            else if (selectedFolder && folderMap.get(folderKey(selectedFolder.scope, selectedFolder.path))) {
+                selectFolder(selectedFolder);
+            } else if (folders.length) {
+                var first = firstFolderInScope();
+                if (first) selectFolder(first);
+            }
         });
+    }
+    function firstFolderInScope() {
+        var sf = document.getElementById('scope-filter').value;
+        for (var i = 0; i < folders.length; i++) {
+            if (!sf || folders[i].scope === sf) return folders[i];
+        }
+        return null;
     }
     function renderFolders() {
         var tree = document.getElementById('folder-tree');
@@ -237,7 +483,7 @@
             return;
         }
         tree.innerHTML = visible.map(function(f) {
-            var count = (entriesByFolder[folderKey(f.scope, f.path)] || []).length;
+            var count = (entriesByFolder.get(folderKey(f.scope, f.path)) || []).length;
             var active = selectedFolder && selectedFolder.scope === f.scope && selectedFolder.path === f.path ? ' active' : '';
             return '<div class="folder-item' + active + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '">'
                 + '<span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg-input);color:var(--text-muted);margin-right:8px">' + escapeHtml(f.scope) + '</span>'
@@ -247,7 +493,7 @@
         }).join('');
         tree.querySelectorAll('.folder-item').forEach(function(el) {
             el.addEventListener('click', function() {
-                var f = folderMap[folderKey(el.getAttribute('data-scope'), el.getAttribute('data-path'))];
+                var f = folderMap.get(folderKey(el.getAttribute('data-scope'), el.getAttribute('data-path')));
                 if (f) selectFolder(f);
             });
         });
@@ -256,14 +502,22 @@
         searchQuery = '';
         document.getElementById('connections-search').value = '';
         selectedFolder = f;
-        selectedEntryKey = null;
+        clearEntrySelection();
         renderFolders();
         document.getElementById('entries-header').classList.remove('hidden');
         document.getElementById('entries-title').textContent = f.name;
         document.getElementById('entries-count').textContent =
-            String((entriesByFolder[folderKey(f.scope, f.path)] || []).length);
+            String((entriesByFolder.get(folderKey(f.scope, f.path)) || []).length);
         document.getElementById('entries-desc').textContent = f.description || '';
         renderEntries();
+    }
+    function clearEntrySelection() {
+        selectedEntry = null;
+        selectedEntryKey = null;
+        document.getElementById('detail-panel').classList.add('hidden');
+        var rows = document.querySelectorAll('.entry-row.selected');
+        for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
+        updateEntryActionButtons();
     }
     function wireEntryRows(container) {
         container.querySelectorAll('.entry-row').forEach(function(row) {
@@ -282,7 +536,7 @@
     }
     function entryRowHtml(scope, path, folderName, e) {
         var proto = (e.session_type || '').toLowerCase();
-        var key = scope + '/' + path + '/' + e.name;
+        var key = entryKey(scope, path, e.name);
         var selected = key === selectedEntryKey ? ' selected' : '';
         return '<div class="entry-row' + selected + '" data-scope="' + escapeAttr(scope) + '" data-path="' + escapeAttr(path) + '" data-name="' + escapeAttr(e.name) + '" style="display:flex;align-items:center;gap:12px">'
             + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
@@ -290,13 +544,13 @@
             + '<div style="font-size:13px;color:white;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(e.display_name || e.name) + '</div>'
             + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(entryHost(e) || '\u2014') + (folderName ? ' <span style="color:var(--text-muted)">\u00B7 ' + escapeHtml(folderName) + '</span>' : '') + '</div>'
             + '</div>'
-            + '<button class="btn btn-primary btn-sm entry-connect">Connect</button>'
+            + '<button class="btn btn-primary btn-sm entry-connect" style="width:auto">Connect</button>'
             + '</div>';
     }
     function renderEntries() {
         var container = document.getElementById('entries-content');
         if (!selectedFolder) return;
-        var list = entriesByFolder[folderKey(selectedFolder.scope, selectedFolder.path)] || [];
+        var list = entriesByFolder.get(folderKey(selectedFolder.scope, selectedFolder.path)) || [];
         if (list.length === 0) {
             container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">No entries in this folder.</p>';
             return;
@@ -316,9 +570,11 @@
             if (selectedFolder) selectFolder(selectedFolder);
             return;
         }
+        var scopeFilter = document.getElementById('scope-filter').value;
         var results = [];
         folders.forEach(function(f) {
-            (entriesByFolder[folderKey(f.scope, f.path)] || []).forEach(function(e) {
+            if (scopeFilter && f.scope !== scopeFilter) return;
+            (entriesByFolder.get(folderKey(f.scope, f.path)) || []).forEach(function(e) {
                 var host = entryHost(e);
                 var hay = [e.name, e.display_name || '', host, e.username || '', e.url || '', e.domain || '', e.session_type, f.name, f.scope].join(' ').toLowerCase();
                 if (hay.indexOf(q) !== -1) results.push({ scope: f.scope, path: f.path, folderName: f.name, entry: e });
@@ -337,6 +593,16 @@
         }).join('');
         wireEntryRows(container);
     }
+    function reloadSelectedEntries() {
+        if (!selectedFolder) return;
+        fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(list) {
+                entriesByFolder.set(folderKey(selectedFolder.scope, selectedFolder.path), list || []);
+                if (searchQuery) runSearch();
+                else if (selectedFolder) selectFolder(selectedFolder);
+            });
+    }
     function connectEntry(scope, folder, entry) {
         var btn = document.getElementById('detail-connect');
         var err = document.getElementById('detail-error');
@@ -344,7 +610,7 @@
         if (err) err.classList.add('hidden');
         fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(entry) + '/connect', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: apiHeaders(),
             credentials: 'same-origin',
             body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
         })
@@ -353,7 +619,15 @@
             })
             .then(function(res) {
                 if (btn) { btn.disabled = false; btn.textContent = 'Connect'; }
-                if (res.ok && res.data.session_id) { window.location.href = '/client/' + res.data.session_id; return; }
+                if (res.ok && res.data.session_id) {
+                    var url = '/client/' + encodeURIComponent(res.data.session_id);
+                    var list = entriesByFolder.get(folderKey(scope, folder)) || [];
+                    var e = findByName(list, entry);
+                    var displayName = e ? (e.display_name || '') : '';
+                    if (displayName) url += '?name=' + encodeURIComponent(displayName);
+                    window.location.href = url;
+                    return;
+                }
                 if (err) {
                     err.textContent = res.data.error || 'Failed to connect.';
                     err.classList.remove('hidden');
@@ -364,104 +638,778 @@
                 if (err) { err.textContent = e.message || 'Connection failed.'; err.classList.remove('hidden'); }
             });
     }
+    function selectConnection(scope, folder, entry, el) {
+        var rows = document.querySelectorAll('.entry-row.selected');
+        for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
+        if (el) el.classList.add('selected');
+        selectedEntryKey = entryKey(scope, folder, entry);
+        var list = entriesByFolder.get(folderKey(scope, folder)) || [];
+        var render = function(e) {
+            if (!e) return;
+            selectedEntry = e;
+            updateEntryActionButtons();
+            var panel = document.getElementById('detail-panel');
+            panel.classList.remove('hidden');
+            document.getElementById('detail-name').textContent = e.display_name || e.name;
+            var proto = (e.session_type || '').toLowerCase();
+            var badge = document.getElementById('detail-protocol');
+            badge.textContent = proto.toUpperCase();
+            badge.className = 'px-2 py-0.5 text-xs font-medium rounded border ' + protoClass(proto);
+            document.getElementById('detail-host').textContent = entryHost(e) || '\u2014';
+            document.getElementById('detail-connect').onclick = function() { connectEntry(scope, folder, entry); };
+            var params = document.getElementById('detail-params');
+            var fields = [['Port', e.port], ['Username', e.username], ['Domain', e.domain], ['Security', e.security], ['Recording', e.enable_recording ? 'On' : null]];
+            params.innerHTML = fields.filter(function(f) { return f[1]; }).map(function(f) {
+                return '<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:var(--text-muted)">' + escapeHtml(f[0]) + '</span><span style="color:var(--text-secondary)">' + escapeHtml(String(f[1])) + '</span></div>';
+            }).join('');
+        };
+        var e = findByName(list, entry);
+        if (e) { render(e); return; }
+        fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(entries) {
+                entriesByFolder.set(folderKey(scope, folder), entries);
+                render(findByName(entries, entry));
+            });
+    }
+    function updateEntryActionButtons() {
+        var editBtn = document.getElementById('btn-edit-entry');
+        var delBtn = document.getElementById('btn-delete-entry');
+        var enabled = !!selectedEntry;
+        if (editBtn) editBtn.disabled = !enabled;
+        if (delBtn) delBtn.disabled = !enabled;
+    }
+
+    // ── Group chip picker (folder + entry modals) ────────────────────
+    function groupListFor(prefix) {
+        return prefix === 'fm' ? fmGroups : emGroups;
+    }
+    function comboActiveFor(prefix) {
+        return prefix === 'fm' ? fmComboActive : emComboActive;
+    }
+    function setComboActive(prefix, v) {
+        if (prefix === 'fm') fmComboActive = v; else emComboActive = v;
+    }
+    function loadKnownGroups(cb) {
+        if (knownGroupsCache !== null) { if (cb) cb(); return; }
+        fetch('/api/auth/known-groups', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : { groups: [] }; })
+            .then(function(data) {
+                knownGroupsCache = (data && data.groups) ? data.groups : [];
+                if (cb) cb();
+            })
+            .catch(function() { knownGroupsCache = []; if (cb) cb(); });
+    }
+    function renderGroupChips(listId, groups) {
+        var list = document.getElementById(listId);
+        list.innerHTML = '';
+        groups.forEach(function(g) {
+            var chip = document.createElement('span');
+            chip.className = 'chip';
+            chip.textContent = g;
+            var rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'chip-remove';
+            rm.textContent = '\u00D7';
+            rm.title = 'Remove';
+            rm.setAttribute('aria-label', 'Remove group ' + g);
+            rm.addEventListener('click', function() {
+                var idx = groups.indexOf(g);
+                if (idx !== -1) groups.splice(idx, 1);
+                renderGroupChips(listId, groups);
+                var prefix = listId.indexOf('fm-') === 0 ? 'fm' : 'em';
+                populateGroupOptions(prefix);
+            });
+            chip.appendChild(rm);
+            list.appendChild(chip);
+        });
+    }
+    function groupOptionsFiltered(prefix) {
+        var q = (document.getElementById(prefix + '-groups-input').value || '').trim().toLowerCase();
+        var groups = groupListFor(prefix);
+        return (knownGroupsCache || []).filter(function(g) {
+            if (groups.indexOf(g) !== -1) return false;
+            if (!q) return true;
+            return g.toLowerCase().indexOf(q) !== -1;
+        });
+    }
+    function populateGroupOptions(prefix) {
+        var menu = document.getElementById(prefix + '-groups-menu');
+        var groups = groupListFor(prefix);
+        menu.innerHTML = '';
+        var opts = groupOptionsFiltered(prefix);
+        var q = (document.getElementById(prefix + '-groups-input').value || '').trim();
+        setComboActive(prefix, opts.length > 0 ? 0 : -1);
+        var active = comboActiveFor(prefix);
+        if (opts.length === 0 && !q) {
+            var empty = document.createElement('div');
+            empty.className = 'combo-item empty';
+            empty.textContent = (knownGroupsCache && knownGroupsCache.length === 0)
+                ? 'No known groups yet \u2014 type a group name.'
+                : 'All known groups already selected.';
+            menu.appendChild(empty);
+            return;
+        }
+        opts.forEach(function(g, i) {
+            var item = document.createElement('div');
+            item.className = 'combo-item' + (i === active ? ' active' : '');
+            item.setAttribute('role', 'option');
+            item.textContent = g;
+            item.addEventListener('mousedown', function(ev) {
+                ev.preventDefault();
+                pickGroup(prefix, g);
+            });
+            item.addEventListener('mouseenter', function() {
+                setComboActive(prefix, i);
+                updateComboActive(prefix);
+            });
+            menu.appendChild(item);
+        });
+        if (q && opts.indexOf(q) === -1 && groups.indexOf(q) === -1) {
+            var custom = document.createElement('div');
+            custom.className = 'combo-item';
+            custom.innerHTML = '+ Add "<strong>' + escapeHtml(q) + '</strong>"';
+            custom.addEventListener('mousedown', function(ev) {
+                ev.preventDefault();
+                pickGroup(prefix, q);
+            });
+            menu.appendChild(custom);
+        }
+    }
+    function updateComboActive(prefix) {
+        var items = document.querySelectorAll('#' + prefix + '-groups-menu .combo-item');
+        var active = comboActiveFor(prefix);
+        for (var i = 0; i < items.length; i++) items[i].classList.toggle('active', i === active);
+    }
+    function openCombo(prefix) {
+        document.getElementById(prefix + '-groups-combo').classList.add('open');
+        populateGroupOptions(prefix);
+    }
+    function closeCombo(prefix) {
+        document.getElementById(prefix + '-groups-combo').classList.remove('open');
+    }
+    function pickGroup(prefix, g) {
+        var groups = groupListFor(prefix);
+        g = (g || '').trim();
+        if (!g) return;
+        if (groups.indexOf(g) === -1) groups.push(g);
+        var inp = document.getElementById(prefix + '-groups-input');
+        inp.value = '';
+        renderGroupChips(prefix + '-groups-chips', groups);
+        populateGroupOptions(prefix);
+        inp.focus();
+    }
+    function addGroupFromInput(prefix) {
+        var inp = document.getElementById(prefix + '-groups-input');
+        var groups = groupListFor(prefix);
+        var raw = (inp.value || '').trim();
+        if (!raw) return;
+        raw.split(',').forEach(function(part) {
+            var g = part.trim();
+            if (g && groups.indexOf(g) === -1) groups.push(g);
+        });
+        inp.value = '';
+        renderGroupChips(prefix + '-groups-chips', groups);
+        populateGroupOptions(prefix);
+    }
+    function wireGroupCombo(prefix) {
+        var inp = document.getElementById(prefix + '-groups-input');
+        inp.addEventListener('focus', function() { openCombo(prefix); });
+        inp.addEventListener('input', function() { populateGroupOptions(prefix); });
+        inp.addEventListener('keydown', function(ev) {
+            var opts = groupOptionsFiltered(prefix);
+            var active = comboActiveFor(prefix);
+            if (ev.key === 'ArrowDown') {
+                ev.preventDefault();
+                openCombo(prefix);
+                if (active < opts.length - 1) setComboActive(prefix, active + 1);
+                updateComboActive(prefix);
+            } else if (ev.key === 'ArrowUp') {
+                ev.preventDefault();
+                if (active > 0) setComboActive(prefix, active - 1);
+                updateComboActive(prefix);
+            } else if (ev.key === 'Enter') {
+                ev.preventDefault();
+                if (inp.value.trim()) addGroupFromInput(prefix);
+                else if (active >= 0 && active < opts.length) pickGroup(prefix, opts[active]);
+            } else if (ev.key === 'Escape') {
+                closeCombo(prefix);
+                inp.blur();
+            }
+        });
+    }
+
+    // ── Folder modal ─────────────────────────────────────────────────
+    function openNewFolder() {
+        folderEditMode = null;
+        document.getElementById('folder-modal-title').textContent = 'New Folder';
+        document.getElementById('fm-name').value = '';
+        document.getElementById('fm-name').disabled = false;
+        document.getElementById('fm-desc').value = '';
+        var scopeFilter = document.getElementById('scope-filter').value;
+        document.getElementById('fm-scope').value = scopeFilter === 'instance' ? 'instance' : 'shared';
+        document.getElementById('fm-scope').disabled = false;
+        document.getElementById('fm-inherit').checked = true;
+        document.getElementById('fm-error').textContent = '';
+        document.getElementById('fm-error').classList.add('hidden');
+        document.getElementById('fm-groups-input').value = '';
+        fmGroups = [];
+        renderGroupChips('fm-groups-chips', fmGroups);
+        loadKnownGroups(function() { populateGroupOptions('fm'); });
+        openModal('folder-modal');
+    }
+    function openEditFolder() {
+        if (!selectedFolder) return;
+        folderEditMode = { scope: selectedFolder.scope, path: selectedFolder.path, name: selectedFolder.name };
+        document.getElementById('folder-modal-title').textContent = 'Edit Folder: ' + selectedFolder.path;
+        document.getElementById('fm-name').value = selectedFolder.name;
+        document.getElementById('fm-name').disabled = true;
+        document.getElementById('fm-desc').value = selectedFolder.description || '';
+        document.getElementById('fm-scope').value = selectedFolder.scope;
+        document.getElementById('fm-scope').disabled = true;
+        document.getElementById('fm-inherit').checked = false;
+        document.getElementById('fm-error').textContent = '';
+        document.getElementById('fm-error').classList.add('hidden');
+        document.getElementById('fm-groups-input').value = '';
+        fmGroups = [];
+        renderGroupChips('fm-groups-chips', fmGroups);
+        loadKnownGroups(function() { populateGroupOptions('fm'); });
+        fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/config', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) { return res.ok ? res.json() : null; })
+            .then(function(data) {
+                if (!data) return;
+                if (data.description) document.getElementById('fm-desc').value = data.description;
+                if (Array.isArray(data.allowed_groups)) {
+                    fmGroups = data.allowed_groups.slice();
+                    renderGroupChips('fm-groups-chips', fmGroups);
+                    populateGroupOptions('fm');
+                }
+                document.getElementById('fm-inherit').checked = !!data.inherit_from_parent;
+            })
+            .catch(function() {});
+        openModal('folder-modal');
+    }
+    function saveFolder() {
+        var name = document.getElementById('fm-name').value.trim();
+        var desc = document.getElementById('fm-desc').value.trim();
+        addGroupFromInput('fm');
+        var groups = fmGroups.slice();
+        var scope = document.getElementById('fm-scope').value;
+        var errEl = document.getElementById('fm-error');
+        if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name)) {
+            errEl.textContent = 'Name must be alphanumeric, hyphens, underscores, dots only.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        errEl.textContent = '';
+        errEl.classList.add('hidden');
+        var saveBtn = document.getElementById('fm-save');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving\u2026';
+        var inherit = document.getElementById('fm-inherit').checked;
+        var req;
+        if (folderEditMode) {
+            req = fetch('/api/addressbook/folders/' + encodeURIComponent(folderEditMode.scope) + '/' + encodeURIComponent(folderEditMode.path), {
+                method: 'PUT',
+                headers: apiHeaders(),
+                credentials: 'same-origin',
+                body: JSON.stringify({ allowed_groups: groups, description: desc, inherit_from_parent: inherit })
+            });
+        } else {
+            req = fetch('/api/addressbook/folders', {
+                method: 'POST',
+                headers: apiHeaders(),
+                credentials: 'same-origin',
+                body: JSON.stringify({ name: name, allowed_groups: groups, description: desc, scope: scope, inherit_from_parent: inherit })
+            });
+        }
+        req.then(function(res) {
+            if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
+            if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
+            if (!folderEditMode) {
+                var sf = document.getElementById('scope-filter').value;
+                if (!sf || sf === scope) {
+                    selectedFolder = { name: name, scope: scope, description: desc, path: name, has_children: false };
+                    clearEntrySelection();
+                }
+            } else if (selectedFolder) {
+                selectedFolder.description = desc;
+            }
+            closeModal('folder-modal');
+            loadFolders();
+        }).catch(function(err) {
+            if (err && err.message === 'redirect') return;
+            errEl.textContent = err.message || 'Save failed.';
+            errEl.classList.remove('hidden');
+        }).then(function() {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save';
+        });
+    }
+    function deleteFolder() {
+        if (!selectedFolder) return;
+        var selPath = selectedFolder.path;
+        var warning = selectedFolder.has_children
+            ? 'Delete folder "' + selPath + '" AND all its subfolders and entries?\n\nThis recursively removes the entire subtree and cannot be undone.'
+            : 'Delete folder "' + selPath + '" and all its entries?\n\nThis cannot be undone.';
+        if (!confirm(warning)) return;
+        fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selPath), {
+            method: 'DELETE',
+            headers: apiHeaders(),
+            credentials: 'same-origin'
+        }).then(function(res) {
+            if (res.status === 401) { window.location.href = '/'; return; }
+            if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
+            selectedFolder = null;
+            clearEntrySelection();
+            document.getElementById('entries-header').classList.add('hidden');
+            document.getElementById('entries-content').innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">Select a folder to view entries.</p>';
+            loadFolders();
+        }).catch(function(err) {
+            if (err && err.message === 'redirect') return;
+            showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
+        });
+    }
+
+    // ── Entry modal ──────────────────────────────────────────────────
+    var entryTypeDefaults = { ssh: '22', rdp: '3389', vnc: '5900', spice: '5900' };
+    function updateEntryTypeFields() {
+        var type = document.getElementById('em-type').value;
+        document.getElementById('em-proxmox-secret-field').style.display = type === 'proxmox' ? '' : 'none';
+        document.getElementById('em-container-password-field').style.display = type === 'vdi' ? '' : 'none';
+        var portEl = document.getElementById('em-port');
+        if (!portEl.value && entryTypeDefaults[type]) portEl.value = entryTypeDefaults[type];
+    }
+    function clearEntryFields() {
+        var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password'];
+        for (var i = 0; i < ids.length; i++) document.getElementById(ids[i]).value = '';
+        document.getElementById('em-password').placeholder = '';
+        document.getElementById('em-private-key').placeholder = '-----BEGIN OPENSSH PRIVATE KEY-----';
+        document.getElementById('em-proxmox-token-secret').placeholder = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
+        document.getElementById('em-container-password').placeholder = 'Leave blank to generate per-connect';
+        updateEntryTypeFields();
+    }
+    function openNewEntry() {
+        if (!selectedFolder) return;
+        entryEditMode = null;
+        document.getElementById('entry-modal-title').textContent = 'New Entry in ' + selectedFolder.path;
+        document.getElementById('em-name').value = '';
+        document.getElementById('em-name').disabled = false;
+        document.getElementById('em-type').value = 'ssh';
+        document.getElementById('em-type').disabled = false;
+        clearEntryFields();
+        document.getElementById('em-error').textContent = '';
+        document.getElementById('em-error').classList.add('hidden');
+        document.getElementById('em-groups-input').value = '';
+        emGroups = [];
+        renderGroupChips('em-groups-chips', emGroups);
+        loadKnownGroups(function() { populateGroupOptions('em'); });
+        openModal('entry-modal');
+    }
+    function openEditEntry() {
+        if (!selectedFolder || !selectedEntry) return;
+        entryEditMode = { scope: selectedFolder.scope, folder: selectedFolder.path, name: selectedEntry.name };
+        document.getElementById('entry-modal-title').textContent = 'Edit: ' + selectedEntry.name;
+        document.getElementById('em-name').value = selectedEntry.name;
+        document.getElementById('em-name').disabled = true;
+        document.getElementById('em-type').value = selectedEntry.session_type || 'ssh';
+        document.getElementById('em-type').disabled = true;
+        clearEntryFields();
+        document.getElementById('em-display-name').value = selectedEntry.display_name || '';
+        document.getElementById('em-hostname').value = selectedEntry.hostname || '';
+        if (selectedEntry.port) document.getElementById('em-port').value = String(selectedEntry.port);
+        document.getElementById('em-username').value = selectedEntry.username || '';
+        if (selectedEntry.has_credentials) {
+            document.getElementById('em-password').placeholder = '(stored password unchanged unless you type a new one)';
+            document.getElementById('em-private-key').placeholder = '(stored key unchanged unless you type a new one)';
+        }
+        if (selectedEntry.has_proxmox_token_secret) {
+            document.getElementById('em-proxmox-token-secret').placeholder = '(leave blank to keep existing)';
+        }
+        if (selectedEntry.has_container_password) {
+            document.getElementById('em-container-password').placeholder = '(stored password unchanged unless you type a new one)';
+        }
+        document.getElementById('em-error').textContent = '';
+        document.getElementById('em-error').classList.add('hidden');
+        document.getElementById('em-groups-input').value = '';
+        emGroups = [];
+        renderGroupChips('em-groups-chips', emGroups);
+        loadKnownGroups(function() { populateGroupOptions('em'); });
+        openModal('entry-modal');
+    }
+    function saveEntry() {
+        var name = document.getElementById('em-name').value.trim();
+        var displayName = document.getElementById('em-display-name').value.trim();
+        var type = document.getElementById('em-type').value;
+        var errEl = document.getElementById('em-error');
+        if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name)) {
+            errEl.textContent = 'Name must be alphanumeric, hyphens, underscores, dots only.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        var hostname = document.getElementById('em-hostname').value.trim();
+        var port = null;
+        var portRaw = document.getElementById('em-port').value.trim();
+        if (portRaw !== '') {
+            port = parseInt(portRaw, 10);
+            if (isNaN(port) || port < 1 || port > 65535) {
+                errEl.textContent = 'Port must be a number between 1 and 65535.';
+                errEl.classList.remove('hidden');
+                return;
+            }
+        }
+        if (type !== 'web' && type !== 'vdi' && type !== 'proxmox' && !hostname) {
+            errEl.textContent = 'Hostname is required for ' + type.toUpperCase() + ' entries.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        var entry = { type: type };
+        if (displayName) entry.display_name = displayName;
+        if (hostname) entry.hostname = hostname;
+        if (port) entry.port = port;
+        var username = document.getElementById('em-username').value.trim();
+        if (username) entry.username = username;
+        var password = document.getElementById('em-password').value;
+        if (password) entry.password = password;
+        var privateKey = document.getElementById('em-private-key').value.trim();
+        if (privateKey) entry.private_key = privateKey;
+        var ts = document.getElementById('em-proxmox-token-secret').value.trim();
+        if (ts) entry.proxmox_token_secret = ts;
+        var cp = document.getElementById('em-container-password').value;
+        if (cp) entry.container_password = cp;
+        addGroupFromInput('em');
+        if (emGroups.length > 0) entry.allowed_groups = emGroups.slice();
+
+        errEl.textContent = '';
+        errEl.classList.add('hidden');
+        var saveBtn = document.getElementById('em-save');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving\u2026';
+        var req;
+        if (entryEditMode) {
+            req = fetch('/api/addressbook/folders/' + encodeURIComponent(entryEditMode.scope) + '/' + encodeURIComponent(entryEditMode.folder) + '/entries/' + encodeURIComponent(entryEditMode.name), {
+                method: 'PUT',
+                headers: apiHeaders(),
+                credentials: 'same-origin',
+                body: JSON.stringify(entry)
+            });
+        } else {
+            var payload = { name: name };
+            for (var k in entry) payload[k] = entry[k];
+            req = fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries', {
+                method: 'POST',
+                headers: apiHeaders(),
+                credentials: 'same-origin',
+                body: JSON.stringify(payload)
+            });
+        }
+        req.then(function(res) {
+            if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
+            if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
+            closeModal('entry-modal');
+            reloadSelectedEntries();
+        }).catch(function(err) {
+            if (err && err.message === 'redirect') return;
+            errEl.textContent = err.message || 'Save failed.';
+            errEl.classList.remove('hidden');
+        }).then(function() {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save';
+        });
+    }
+    function deleteEntry() {
+        if (!selectedFolder || !selectedEntry) return;
+        var name = selectedEntry.name;
+        if (!confirm('Delete entry "' + name + '"?')) return;
+        fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries/' + encodeURIComponent(name), {
+            method: 'DELETE',
+            headers: apiHeaders(),
+            credentials: 'same-origin'
+        }).then(function(res) {
+            if (res.status === 401) { window.location.href = '/'; return; }
+            if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
+            clearEntrySelection();
+            reloadSelectedEntries();
+        }).catch(function(err) {
+            if (err && err.message === 'redirect') return;
+            showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
+        });
+    }
+
+    // ── Import CSV modal ─────────────────────────────────────────────
+    var importCsvHeaders = ['name', 'protocol', 'hostname', 'port', 'username', 'password', 'folder', 'display_name', 'allowed_groups'];
+    function openImportModal() {
+        document.getElementById('import-file').value = '';
+        document.getElementById('import-error').textContent = '';
+        document.getElementById('import-error').classList.add('hidden');
+        document.getElementById('import-results').innerHTML = '';
+        document.getElementById('import-results').classList.add('hidden');
+        var btn = document.getElementById('import-submit');
+        btn.disabled = false;
+        btn.textContent = 'Import';
+        openModal('import-modal');
+    }
+    function parseCsv(text) {
+        var rows = [];
+        var row = [];
+        var field = '';
+        var inQuotes = false;
+        var chars = String(text || '').split('');
+        for (var i = 0; i < chars.length; i++) {
+            var c = chars[i];
+            if (inQuotes) {
+                if (c === '"') {
+                    if (chars[i + 1] === '"') { field += '"'; i++; }
+                    else inQuotes = false;
+                } else field += c;
+            } else if (c === '"') {
+                inQuotes = true;
+            } else if (c === ',') {
+                row.push(field); field = '';
+            } else if (c === '\n' || c === '\r') {
+                if (c === '\r' && chars[i + 1] === '\n') i++;
+                row.push(field); field = '';
+                rows.push(row); row = [];
+            } else field += c;
+        }
+        if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+        return rows;
+    }
+    function runImport() {
+        var fileInput = document.getElementById('import-file');
+        var errEl = document.getElementById('import-error');
+        var resultsEl = document.getElementById('import-results');
+        var file = fileInput.files && fileInput.files[0];
+        if (!file) {
+            errEl.textContent = 'Choose a CSV file first.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        errEl.textContent = '';
+        errEl.classList.add('hidden');
+        var reader = new FileReader();
+        reader.onload = function() {
+            var rows = parseCsv(reader.result);
+            if (!rows.length) {
+                errEl.textContent = 'The file is empty.';
+                errEl.classList.remove('hidden');
+                return;
+            }
+            var header = rows[0].map(function(h) { return String(h).replace(/^\uFEFF/, '').trim().toLowerCase(); });
+            for (var h = 0; h < importCsvHeaders.length; h++) {
+                if (header[h] !== importCsvHeaders[h]) {
+                    errEl.textContent = 'Invalid header: expected ' + importCsvHeaders.join(',');
+                    errEl.classList.remove('hidden');
+                    return;
+                }
+            }
+            var payload = [];
+            for (var r = 1; r < rows.length; r++) {
+                var cols = rows[r];
+                if (cols.length === 1 && !cols[0]) continue;
+                var rowObj = {
+                    name: (cols[0] || '').trim(),
+                    protocol: (cols[1] || '').trim().toLowerCase(),
+                    hostname: (cols[2] || '').trim(),
+                    username: (cols[4] || '').trim(),
+                    password: cols[5] || '',
+                    folder: (cols[6] || '').trim(),
+                    display_name: (cols[7] || '').trim()
+                };
+                var portRaw = (cols[3] || '').trim();
+                if (portRaw !== '') {
+                    var p = parseInt(portRaw, 10);
+                    if (!isNaN(p) && p >= 1 && p <= 65535) rowObj.port = p;
+                }
+                var groups = (cols[8] || '').split(',').map(function(g) { return g.trim(); }).filter(function(g) { return g !== ''; });
+                if (groups.length) rowObj.allowed_groups = groups;
+                payload.push(rowObj);
+            }
+            if (!payload.length) {
+                errEl.textContent = 'No data rows found in the file.';
+                errEl.classList.remove('hidden');
+                return;
+            }
+            var scope = document.getElementById('scope-filter').value || 'shared';
+            var btn = document.getElementById('import-submit');
+            btn.disabled = true;
+            btn.textContent = 'Importing\u2026';
+            fetch('/api/addressbook/import', {
+                method: 'POST',
+                headers: apiHeaders(),
+                credentials: 'same-origin',
+                body: JSON.stringify({ scope: scope, rows: payload })
+            }).then(function(res) {
+                if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
+                return res.json().catch(function() { return {}; }).then(function(d) { return { ok: res.ok, data: d, status: res.status }; });
+            }).then(function(res) {
+                if (!res.ok) throw new Error(res.data.error || 'Import failed (HTTP ' + res.status + ')');
+                var d = res.data;
+                var html = '<p style="margin:0">Imported <strong style="color:#34d399">' + escapeHtml(String(d.imported)) + '</strong>, skipped <strong>' + escapeHtml(String(d.skipped)) + '</strong>' + ((d.errors && d.errors.length) ? ', errors <strong style="color:#f87171">' + escapeHtml(String(d.errors.length)) + '</strong>' : '') + '.</p>';
+                if (d.errors && d.errors.length) {
+                    html += '<ul style="margin:8px 0 0;padding-left:18px;font-size:12px;color:#f87171">';
+                    for (var i = 0; i < d.errors.length; i++) {
+                        html += '<li>Row ' + escapeHtml(String(d.errors[i].row)) + ': ' + escapeHtml(d.errors[i].error || '') + '</li>';
+                    }
+                    html += '</ul>';
+                }
+                resultsEl.innerHTML = html;
+                resultsEl.classList.remove('hidden');
+                loadFolders();
+            }).catch(function(err) {
+                if (err && err.message === 'redirect') return;
+                errEl.textContent = err.message || 'Import failed.';
+                errEl.classList.remove('hidden');
+            }).then(function() {
+                btn.disabled = false;
+                btn.textContent = 'Import';
+            });
+        };
+        reader.onerror = function() {
+            errEl.textContent = 'Could not read the file.';
+            errEl.classList.remove('hidden');
+        };
+        reader.readAsText(file);
+    }
+
+    // ── Modal helpers ────────────────────────────────────────────────
+    function openModal(id) {
+        var el = document.getElementById(id);
+        el.classList.remove('hidden');
+        var focusTarget = el.querySelector('input:not([type="hidden"]), select, textarea, button');
+        if (focusTarget) focusTarget.focus();
+    }
+    function closeModal(id) {
+        document.getElementById(id).classList.add('hidden');
+    }
+
+    // ── vSphere virtual machines ─────────────────────────────────────
+    function loadVSphere() {
+        var section = document.getElementById('vsphere-section');
+        fetch('/api/vsphere/vms', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(res) {
+                if (res === null || res.configured === false) { section.classList.add('hidden'); return; }
+                section.classList.remove('hidden');
+                renderVSphere(res.vms || []);
+            })
+            .catch(function() { section.classList.add('hidden'); });
+    }
+    function vmStateClass(state) {
+        var map = { powered_on: 'vm-on', powered_off: 'vm-off', suspended: 'vm-susp' };
+        return map[state] || 'vm-unknown';
+    }
+    function renderVSphere(vms) {
+        var list = document.getElementById('vsphere-list');
+        var empty = document.getElementById('vsphere-empty');
+        var count = document.getElementById('vsphere-count');
+        var err = document.getElementById('vsphere-error');
+        err.classList.add('hidden');
+        count.textContent = vms.length + ' VM' + (vms.length === 1 ? '' : 's');
+        empty.classList.toggle('hidden', vms.length > 0);
+        list.innerHTML = vms.map(function(vm) {
+            var proto = escapeHtml(((vm.protocol || 'vnc') + '').toUpperCase());
+            var powered = vm.power_state === 'powered_on';
+            var canConnect = powered && vm.ip_address;
+            var btn = canConnect
+                ? '<a href="/api/vsphere/vms/' + encodeURIComponent(vm.vm_id) + '/connect" class="btn btn-primary btn-sm" style="width:auto">Connect</a>'
+                : '<span style="font-size:12px;color:var(--text-muted)">' + (powered ? 'No guest IP' : 'Powered off') + '</span>';
+            return '<div class="card" style="padding:14px 16px">'
+                + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+                + '<span class="vm-state ' + vmStateClass(vm.power_state) + '"></span>'
+                + '<strong style="font-size:14px;color:white;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(vm.name) + '</strong>'
+                + '<span class="proto-vmware" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + proto + '</span>'
+                + '</div>'
+                + '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px"><span style="color:var(--text-muted)">Guest OS</span><span style="color:var(--text-secondary);max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(vm.guest_os || 'Unknown') + '</span></div>'
+                + '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px"><span style="color:var(--text-muted)">IP Address</span><span style="color:var(--text-secondary)">' + escapeHtml(vm.ip_address || '\u2014') + '</span></div>'
+                + '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;margin-bottom:10px"><span style="color:var(--text-muted)">Host</span><span style="color:var(--text-secondary);max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(vm.host || '\u2014') + '</span></div>'
+                + '<div style="display:flex;justify-content:flex-end;border-top:1px solid var(--border);padding-top:12px">' + btn + '</div>'
+                + '</div>';
+        }).join('');
+    }
+
+    // ── Admin UI visibility ──────────────────────────────────────────
+    function applyAdminVisibility() {
+        var els = document.querySelectorAll('.admin-only');
+        for (var i = 0; i < els.length; i++) {
+            if (isAdmin) els[i].classList.add('admin-visible');
+            else els[i].classList.remove('admin-visible');
+        }
+        updateEntryActionButtons();
+    }
+    function onScopeChange() {
+        var sf = document.getElementById('scope-filter').value;
+        if (selectedFolder && sf && selectedFolder.scope !== sf) {
+            selectedFolder = null;
+            clearEntrySelection();
+            document.getElementById('entries-header').classList.add('hidden');
+            document.getElementById('entries-content').innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">Select a folder to view entries.</p>';
+        }
+        if (searchQuery) runSearch();
+        else renderFolders();
+    }
     function debounce(fn, ms) {
         var t;
         return function() { clearTimeout(t); t = setTimeout(fn, ms); };
     }
 
-    window.selectConnection=function(scope,folder,entry,el){
-        document.querySelectorAll('.entry-row').forEach(function(r){r.classList.remove('selected')});
-        if(el)el.classList.add('selected');
-        selectedEntryKey = scope+'/'+folder+'/'+entry;
-        var list=entriesByFolder[folderKey(scope,folder)]||[];
-        var render=function(e){
-            if(!e)return;
-            var panel=document.getElementById('detail-panel');
-            panel.classList.remove('hidden');
-            document.getElementById('detail-name').textContent=e.display_name||e.name;
-            var proto=(e.session_type||'').toLowerCase();
-            var badge=document.getElementById('detail-protocol');
-            badge.textContent=proto.toUpperCase();
-            badge.className='px-2 py-0.5 text-xs font-medium rounded border '+protoClass(proto);
-            document.getElementById('detail-host').textContent=entryHost(e)||'—';
-            document.getElementById('detail-connect').onclick=function(){connectEntry(scope,folder,entry)};
-            var params=document.getElementById('detail-params');
-            var fields=[['Port',e.port],['Username',e.username],['Domain',e.domain],['Security',e.security],['Recording',e.enable_recording?'On':null]];
-            params.innerHTML=fields.filter(function(f){return f[1]}).map(function(f){
-                return '<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:var(--text-muted)">'+escapeHtml(f[0])+'</span><span style="color:var(--text-secondary)">'+escapeHtml(String(f[1]))+'</span></div>';
-            }).join('');
-        };
-        var e=list.find(function(x){return x.name===entry});
-        if(e){render(e);return;}
-        fetch('/api/addressbook/folders/'+encodeURIComponent(scope)+'/'+encodeURIComponent(folder)+'/entries',{credentials:'same-origin'})
-            .then(function(r){return r.ok?r.json():[]})
-            .then(function(entries){
-                entriesByFolder[folderKey(scope,folder)]=entries;
-                render(entries.find(function(x){return x.name===entry}));
+    window.selectConnection = selectConnection;
+
+    // ── Wire up ──────────────────────────────────────────────────────
+    document.getElementById('btn-new-folder').addEventListener('click', openNewFolder);
+    document.getElementById('btn-empty-create-folder').addEventListener('click', openNewFolder);
+    document.getElementById('btn-edit-folder').addEventListener('click', openEditFolder);
+    document.getElementById('btn-delete-folder').addEventListener('click', deleteFolder);
+    document.getElementById('btn-new-entry').addEventListener('click', openNewEntry);
+    document.getElementById('btn-edit-entry').addEventListener('click', openEditEntry);
+    document.getElementById('btn-delete-entry').addEventListener('click', deleteEntry);
+    document.getElementById('btn-import').addEventListener('click', openImportModal);
+
+    document.getElementById('fm-cancel').addEventListener('click', function() { closeModal('folder-modal'); });
+    document.getElementById('fm-save').addEventListener('click', saveFolder);
+    document.getElementById('fm-groups-add').addEventListener('click', function() { addGroupFromInput('fm'); });
+    wireGroupCombo('fm');
+
+    document.getElementById('em-cancel').addEventListener('click', function() { closeModal('entry-modal'); });
+    document.getElementById('em-save').addEventListener('click', saveEntry);
+    document.getElementById('em-groups-add').addEventListener('click', function() { addGroupFromInput('em'); });
+    wireGroupCombo('em');
+    document.getElementById('em-type').addEventListener('change', updateEntryTypeFields);
+
+    document.getElementById('import-cancel').addEventListener('click', function() { closeModal('import-modal'); });
+    document.getElementById('import-submit').addEventListener('click', runImport);
+
+    document.querySelectorAll('.modal-overlay').forEach(function(el) {
+        el.addEventListener('click', function(e) { if (e.target === el) el.classList.add('hidden'); });
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            ['folder-modal', 'entry-modal', 'import-modal'].forEach(function(id) {
+                document.getElementById(id).classList.add('hidden');
             });
-    };
+        }
+    });
+    document.addEventListener('mousedown', function(ev) {
+        ['fm', 'em'].forEach(function(prefix) {
+            var combo = document.getElementById(prefix + '-groups-combo');
+            if (combo && !combo.contains(ev.target)) closeCombo(prefix);
+        });
+    });
 
-    // ── vSphere virtual machines ────────────────────────────────────────────
-    function loadVSphere(){
-        var section=document.getElementById('vsphere-section');
-        fetch('/api/vsphere/vms',{headers:apiHeaders(),credentials:'same-origin'})
-            .then(function(r){return r.ok?r.json():null})
-            .then(function(res){
-                if(res===null || res.configured===false){ section.classList.add('hidden'); return; }
-                section.classList.remove('hidden');
-                renderVSphere(res.vms||[]);
-            })
-            .catch(function(){ section.classList.add('hidden'); });
-    }
-    function vmStateClass(state){
-        var map={powered_on:'vm-on',powered_off:'vm-off',suspended:'vm-susp'};
-        return map[state]||'vm-unknown';
-    }
-    function renderVSphere(vms){
-        var list=document.getElementById('vsphere-list');
-        var empty=document.getElementById('vsphere-empty');
-        var count=document.getElementById('vsphere-count');
-        var err=document.getElementById('vsphere-error');
-        err.classList.add('hidden');
-        count.textContent=vms.length+' VM'+(vms.length===1?'':'s');
-        empty.classList.toggle('hidden',vms.length>0);
-        list.innerHTML=vms.map(function(vm){
-            var proto=((vm.protocol||'vnc')+'').toUpperCase();
-            var powered=vm.power_state==='powered_on';
-            var canConnect=powered&&vm.ip_address;
-            var btn=canConnect
-                ? '<a href="/api/vsphere/vms/'+encodeURIComponent(vm.vm_id)+'/connect" class="btn btn-primary btn-sm">Connect</a>'
-                : '<span style="font-size:12px;color:var(--text-muted)">'+(powered?'No guest IP':'Powered off')+'</span>';
-            return '<div class="card" style="padding:14px 16px">'
-                +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
-                +'<span class="vm-state '+vmStateClass(vm.power_state)+'"></span>'
-                +'<strong style="font-size:14px;color:white;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(vm.name)+'</strong>'
-                +'<span class="proto-vmware" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">'+proto+'</span>'
-                +'</div>'
-                +'<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px"><span style="color:var(--text-muted)">Guest OS</span><span style="color:var(--text-secondary);max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(vm.guest_os||'Unknown')+'</span></div>'
-                +'<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px"><span style="color:var(--text-muted)">IP Address</span><span style="color:var(--text-secondary)">'+escapeHtml(vm.ip_address||'\u2014')+'</span></div>'
-                +'<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;margin-bottom:10px"><span style="color:var(--text-muted)">Host</span><span style="color:var(--text-secondary);max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(vm.host||'\u2014')+'</span></div>'
-                +'<div style="display:flex;justify-content:flex-end;border-top:1px solid var(--border);padding-top:12px">'+btn+'</div>'
-                +'</div>';
-        }).join('');
-    }
-
-    document.getElementById('btn-vsphere-refresh').addEventListener('click',loadVSphere);
+    document.getElementById('connections-search').addEventListener('input', debounce(runSearch, 250));
+    document.getElementById('scope-filter').addEventListener('change', onScopeChange);
+    document.getElementById('btn-vsphere-refresh').addEventListener('click', loadVSphere);
     loadVSphere();
 
-    // ── Address book init ───────────────────────────────────────────────
-    document.getElementById('connections-search').addEventListener('input',debounce(runSearch,250));
-    document.getElementById('scope-filter').addEventListener('change',renderFolders);
-    document.addEventListener('htmx:afterSwap',function(){
-        if (document.getElementById('main-content')) loadFolders();
-    });
-    fetch('/api/me',{credentials:'same-origin'})
-        .then(function(res){return res.ok?res.json():null})
-        .then(function(me){
-            if(me) isAdmin = me.role === 'admin';
+    // ── Address book init ────────────────────────────────────────────
+    fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
+        .then(function(res) { return res.ok ? res.json() : null; })
+        .then(function(me) {
+            if (me) isAdmin = me.role === 'admin';
+            applyAdminVisibility();
             loadFolders();
         })
-        .catch(function(){ loadFolders(); });
+        .catch(function() { loadFolders(); });
 })();
 </script>
 {% endblock %}

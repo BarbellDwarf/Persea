@@ -4,9 +4,9 @@ use axum::Extension;
 use crate::api::SiteTitle;
 use crate::auth::AuthIdentity;
 use crate::templates::{
-    AdminAuditTemplate, AdminAuthTemplate, AdminReportsTemplate, AdminSettingsTemplate,
-    AdminTunnelsTemplate, AdminUsersTemplate, ConnectionsPageTemplate, RecordingsPageTemplate,
-    SessionsPageTemplate,
+    AdminAuditTemplate, AdminAuthTemplate, AdminGroupsTemplate, AdminReportsTemplate,
+    AdminSettingsTemplate, AdminTunnelsTemplate, AdminUsersTemplate, ConnectionsPageTemplate,
+    RecordingsPageTemplate, SessionsPageTemplate,
 };
 use crate::CspNonce;
 
@@ -91,6 +91,21 @@ pub async fn admin_auth_page(
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "auth".to_string(),
+    };
+    tmpl.into_response()
+}
+
+/// GET /admin/groups.html — admin groups page.
+pub async fn admin_groups_page(
+    Extension(site_title): Extension<SiteTitle>,
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(_nonce): Extension<CspNonce>,
+) -> Response {
+    let tmpl = AdminGroupsTemplate {
+        site_title: site_title.0.clone(),
+        logo_url: String::new(),
+        is_admin: is_admin(&identity),
+        active_page: "groups".to_string(),
     };
     tmpl.into_response()
 }

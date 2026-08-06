@@ -1,0 +1,254 @@
+//! Admin system settings API (ticket #024).
+//!
+//! Settings are persisted as strings in the `system_settings` key/value
+//! table and returned as typed JSON. Config-file values are not available
+//! to handlers, so `GET /api/system/settings` returns whatever is stored in
+//! the DB, falling back to sensible defaults that mirror the hardcoded
+//! values in `templates/pages/admin/settings.html` and the documented
+//! defaults in `src/config.rs`.
+
+use crate::auth::AuthIdentity;
+use crate::db::Db;
+use crate::error::AppError;
+use axum::{Extension, Json};
+use rusqlite::params;
+use serde_json::{json, Value};
+use std::net::SocketAddr;
+
+/// The full ordered set of keys this API manages. Order matters: it
+/// determines the JSON key order in GET/PUT responses.
+const SETTING_KEYS: &[&str] = &[
+    "listen_addr",
+    "guacd_addr",
+    "tls_cert_path",
+    "tls_key_path",
+    "session_max_duration_secs",
+    "session_idle_timeout_secs",
+    "max_concurrent_sessions",
+    "session_history_retention_days",
+    "enable_browser_sessions",
+    "enable_proxmox",
+    "enable_vdi",
+    "enable_vmware",
+    "vault_enabled",
+    "db_only_mode",
+];
+
+const STRING_KEYS: &[&str] = &["listen_addr", "guacd_addr", "tls_cert_path", "tls_key_path"];
+const ADDR_KEYS: &[&str] = &["listen_addr", "guacd_addr"];
+const DURATION_KEYS: &[&str] = &[
+    "session_max_duration_secs",
+    "session_idle_timeout_secs",
+    "max_concurrent_sessions",
+    "session_history_retention_days",
+];
+const BOOL_KEYS: &[&str] = &[
+    "enable_browser_sessions",
+    "enable_proxmox",
+    "enable_vdi",
+    "enable_vmware",
+    "vault_enabled",
+    "db_only_mode",
+];
+
+/// Idempotent — the table is created by migration `003-system-settings.sql`
+/// on the sqlx backends; the rusqlite backend creates it lazily here.
+const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS system_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL DEFAULT '',
+    updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+)";
+
+/// Defaults when a key has not been stored yet. The first four mirror the
+/// hardcoded values in `templates/pages/admin/settings.html`; the rest
+/// mirror the documented defaults in `src/config.rs` (max_sessions: 500,
+/// session_history_retention_days: 90, all feature toggles default off).
+fn default_value(key: &str) -> Value {
+    match key {
+        "listen_addr" => json!("0.0.0.0:8089"),
+        "guacd_addr" => json!("127.0.0.1:4822"),
+        "tls_cert_path" => json!(""),
+        "tls_key_path" => json!(""),
+        "session_max_duration_secs" => json!(28800u64),
+        "session_idle_timeout_secs" => json!(1800u64),
+        "max_concurrent_sessions" => json!(500u64),
+        "session_history_retention_days" => json!(90u64),
+        "enable_browser_sessions" => json!(false),
+        "enable_proxmox" => json!(false),
+        "enable_vdi" => json!(false),
+        "enable_vmware" => json!(false),
+        "vault_enabled" => json!(false),
+        "db_only_mode" => json!(false),
+        _ => json!(null),
+    }
+}
+
+/// Parse a stored string back into its typed JSON form. Stored values are
+/// written by `put_settings` and therefore always well-formed; anything
+/// unexpected falls back to the default rather than erroring.
+fn stored_to_value(key: &str, stored: &str) -> Value {
+    if STRING_KEYS.contains(&key) {
+        json!(stored)
+    } else if DURATION_KEYS.contains(&key) {
+        stored
+            .parse::<u64>()
+            .map(|n| json!(n))
+            .unwrap_or_else(|_| default_value(key))
+    } else if BOOL_KEYS.contains(&key) {
+        match stored {
+            "true" => json!(true),
+            "false" => json!(false),
+            _ => default_value(key),
+        }
+    } else {
+        default_value(key)
+    }
+}
+
+/// Merge stored rows with defaults into the full effective settings object.
+fn effective_settings(stored: &std::collections::HashMap<String, String>) -> Value {
+    let mut out = serde_json::Map::new();
+    for key in SETTING_KEYS {
+        let v = stored
+            .get(*key)
+            .map(|s| stored_to_value(key, s))
+            .unwrap_or_else(|| default_value(key));
+        out.insert((*key).to_string(), v);
+    }
+    Value::Object(out)
+}
+
+fn read_all_settings(database: &Db) -> Result<std::collections::HashMap<String, String>, AppError> {
+    let conn = database.lock().unwrap();
+    conn.execute_batch(CREATE_TABLE_SQL)?;
+    let mut stmt = conn.prepare("SELECT key, value FROM system_settings")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut stored = std::collections::HashMap::new();
+    for row in rows {
+        let (key, value) = row?;
+        stored.insert(key, value);
+    }
+    Ok(stored)
+}
+
+fn is_admin(identity: &Option<Extension<AuthIdentity>>) -> bool {
+    identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+}
+
+/// GET /api/system/settings — return effective settings (DB values with
+/// defaults for unset keys). Admin-only.
+pub async fn get_settings(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> Result<Json<Value>, AppError> {
+    if !is_admin(&identity) {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+    let db_clone = database.clone();
+    let stored = tokio::task::spawn_blocking(move || read_all_settings(&db_clone))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    Ok(Json(effective_settings(&stored)))
+}
+
+fn parse_u64(value: &Value, key: &str) -> Result<u64, AppError> {
+    let parsed = match value {
+        Value::Number(n) => n.as_u64(),
+        Value::String(s) => s.parse::<u64>().ok(),
+        _ => None,
+    };
+    parsed.ok_or_else(|| AppError::Validation(format!("{key} must be a non-negative integer")))
+}
+
+fn parse_bool(value: &Value, key: &str) -> Result<bool, AppError> {
+    match value {
+        Value::Bool(b) => Ok(*b),
+        Value::String(s) if s == "true" => Ok(true),
+        Value::String(s) if s == "false" => Ok(false),
+        _ => Err(AppError::Validation(format!("{key} must be a boolean"))),
+    }
+}
+
+/// Validate one submitted value and reduce it to its canonical string form.
+fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
+    if ADDR_KEYS.contains(&key) {
+        let addr = value
+            .as_str()
+            .ok_or_else(|| AppError::Validation(format!("{key} must be a string")))?;
+        addr.parse::<SocketAddr>().map_err(|_| {
+            AppError::Validation(format!("{key} must be a valid host:port address"))
+        })?;
+        Ok(addr.to_string())
+    } else if STRING_KEYS.contains(&key) {
+        Ok(value
+            .as_str()
+            .ok_or_else(|| AppError::Validation(format!("{key} must be a string")))?
+            .to_string())
+    } else if DURATION_KEYS.contains(&key) {
+        let n = parse_u64(value, key)?;
+        if n == 0 && (key == "session_max_duration_secs" || key == "session_idle_timeout_secs") {
+            return Err(AppError::Validation(format!("{key} must be positive")));
+        }
+        Ok(n.to_string())
+    } else if BOOL_KEYS.contains(&key) {
+        Ok(parse_bool(value, key)?.to_string())
+    } else {
+        // Unknown keys are ignored so partial form submissions (e.g. from
+        // older templates) never break the save.
+        Ok(String::new())
+    }
+}
+
+/// PUT /api/system/settings — validate and persist settings. Admin-only.
+/// Accepts a JSON object; unknown keys are ignored. Returns the full
+/// effective settings (same shape as GET).
+pub async fn put_settings(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    if !is_admin(&identity) {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+    let obj = body
+        .as_object()
+        .ok_or_else(|| AppError::Validation("request body must be a JSON object".into()))?;
+
+    // Validate everything up front so a bad value persists nothing.
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for (key, value) in obj {
+        if !SETTING_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        let canonical = canonicalize(key, value)?;
+        entries.push((key.clone(), canonical));
+    }
+
+    let db_clone = database.clone();
+    tokio::task::spawn_blocking(move || {
+        let conn = db_clone.lock().unwrap();
+        conn.execute_batch(CREATE_TABLE_SQL)?;
+        for (key, value) in &entries {
+            conn.execute(
+                "INSERT INTO system_settings (key, value, updated_at)
+                 VALUES (?1, ?2, CURRENT_TIMESTAMP)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                params![key, value],
+            )?;
+        }
+        Ok::<_, rusqlite::Error>(())
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))??;
+
+    let db_clone = database.clone();
+    let stored = tokio::task::spawn_blocking(move || read_all_settings(&db_clone))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    Ok(Json(effective_settings(&stored)))
+}
