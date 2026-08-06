@@ -40,8 +40,13 @@ WORKDIR /build
 # Pin to main HEAD (de97609, 2026-07-28) — the base the patch set is built
 # against. The 1.6.0 tag predates the display-layer refactor the H.264 patch
 # needs; staging/1.6.1 lacks the clipboard-recording API the SPICE patch uses.
-RUN git clone --depth 1 --branch main https://github.com/apache/guacamole-server.git \
-    && cd guacamole-server && git checkout de97609007c088b5e6afd827eff5e9076013a247
+# Fetch the exact commit rather than cloning main: a shallow clone of main
+# cannot check out a pin once upstream moves past it.
+RUN git init guacamole-server \
+    && cd guacamole-server \
+    && git remote add origin https://github.com/apache/guacamole-server.git \
+    && git fetch --depth 1 origin de97609007c088b5e6afd827eff5e9076013a247 \
+    && git checkout FETCH_HEAD
 
 # Apply patches for FreeRDP 3.x / Debian 13 compatibility
 COPY patches/ /build/patches/

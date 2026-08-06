@@ -67,6 +67,11 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     )
     .expect("Failed to register pages/admin/auth.html");
     env.add_template(
+        "pages/admin/groups.html",
+        include_str!("../templates/pages/admin/groups.html"),
+    )
+    .expect("Failed to register pages/admin/groups.html");
+    env.add_template(
         "pages/admin/audit.html",
         include_str!("../templates/pages/admin/audit.html"),
     )
