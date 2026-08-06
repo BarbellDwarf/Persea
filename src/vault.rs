@@ -1683,7 +1683,7 @@ pub fn is_credential_variable(s: &str) -> bool {
 }
 
 /// Extract the variable name from a `$variable` reference.
-fn variable_name(s: &str) -> Option<&str> {
+pub(crate) fn variable_name(s: &str) -> Option<&str> {
     if is_credential_variable(s) {
         Some(&s[1..])
     } else {

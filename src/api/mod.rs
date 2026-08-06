@@ -59,6 +59,15 @@ pub struct CredentialDefaultScope(pub String);
 #[derive(Clone)]
 pub struct StorageKey(pub Option<String>);
 
+/// Storage backend for address book credentials, resolved from
+/// `[storage].backend` ("db" default | "vault") at startup. Folders and entry
+/// metadata always live in the DB; this marker decides where the credential
+/// fields (password, private_key, proxmox_token_secret, container_password)
+/// are stored. `"vault"` only takes effect when the scope's Vault backend is
+/// connected.
+#[derive(Clone)]
+pub struct StorageBackend(pub String);
+
 /// One Vault backend connection cell — `None` until connected / while down.
 /// Holds a trait object so tests can inject an in-memory backend
 /// ([`crate::testing::MockVault`]) in place of the real client.

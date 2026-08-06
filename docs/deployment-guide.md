@@ -38,8 +38,9 @@ Internet
 
 ```bash
 # Download the latest .deb from GitHub releases
-wget https://github.com/BarbellDwarf/persea/releases/latest/download/persea_amd64.deb
-sudo apt install ./persea_amd64.deb
+# Asset name includes the version: persea_<version>+g<hash>_amd64.deb
+wget https://github.com/BarbellDwarf/persea/releases/latest
+sudo apt install ./persea_*.deb
 ```
 
 This installs persea + guacd to `/opt/persea` with systemd services.

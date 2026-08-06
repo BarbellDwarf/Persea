@@ -76,7 +76,7 @@ RUN /build/guacamole-server/configure \
 # ---------------------------------------------------------------------------
 # Stage 2: Build persea
 # ---------------------------------------------------------------------------
-FROM rust:1.96.1-bookworm AS rust-builder
+FROM rust:1.97.1-bookworm AS rust-builder
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./

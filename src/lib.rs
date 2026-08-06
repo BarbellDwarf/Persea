@@ -46,6 +46,7 @@ pub mod rbac;
 pub mod recording;
 pub mod role;
 pub mod session;
+pub mod settings_merge;
 pub mod templates;
 #[cfg(test)]
 pub mod testing;

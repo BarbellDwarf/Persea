@@ -211,7 +211,7 @@ persea maintains a SHA-256 hash chain for audit events, providing tamper evidenc
 
 - Events include: event type, timestamp, user ID, source IP, outcome, details, and session ID
 - Each event hash is computed from canonical JSON (sorted keys, no whitespace) of all fields plus the previous hash
-- Chain verification can be run via the CLI (`persea verify-audit-chain`) or the Admin UI
+- The hash chain is written on every audit event; verification tooling is not yet wired into a CLI command or UI
 - A broken chain indicates tampering. The event at the break point and all subsequent events are flagged
 
 **Verification result:**

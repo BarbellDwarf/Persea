@@ -1,4 +1,4 @@
-use super::{CredentialDefaultScope, VaultState};
+use super::{CredentialDefaultScope, StorageBackend, StorageKey, VaultState};
 use crate::auth::{client_ip, role_level, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
@@ -399,44 +399,89 @@ pub async fn put_my_credentials(
 
 pub async fn list_credential_variables(
     identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
+    storage_key: Option<Extension<StorageKey>>,
+    backend: Option<Extension<StorageBackend>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id.clone(),
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
-    let folders = vault
-        .list_all_folders()
-        .await
-        .map_err(|e| AppError::Vault(format!("Failed to list folders: {}", e)))?
-        .0;
+    // DB-first storage (ticket 026): folders/entries metadata lives in the
+    // DB; credentials live in the DB unless [storage].backend = "vault".
+    let vault_creds =
+        super::address_book::vault_credentials_enabled(backend.as_ref().map(|b| &b.0), &vault)
+            .await;
+    let enc_key = super::address_book::resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
 
+    let folders = db::list_ab_folders(&database, None).unwrap_or_default();
     let mut all_vars: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
-    let mut stack: Vec<(String, String)> = folders.into_iter().map(|f| (f.scope, f.name)).collect();
+    let mut stack: Vec<(String, String)> = folders
+        .iter()
+        .map(|f| (f.scope.clone(), f.name.clone()))
+        .collect();
 
     while let Some((scope, path)) = stack.pop() {
-        if super::address_book::check_folder_access(&vault, &scope, &path, &id)
-            .await
-            .is_err()
-        {
+        // Skip folders the user cannot access (same rule as the address book:
+        // empty description = unrestricted, otherwise entries' allowed_groups).
+        if !super::address_book::folder_allowed_for_user(&database, &scope, &path, id.groups()) {
             continue;
         }
 
-        let entries = vault.list_entries(&scope, &path).await.unwrap_or_default();
-        for entry_name in &entries {
-            if let Ok(entry) = vault.get_entry(&scope, &path, entry_name).await {
-                for var in crate::vault::entry_credential_variables(&entry) {
-                    *all_vars.entry(var).or_insert(0) += 1;
+        if let Ok(folder) = db::get_ab_folder(&database, &scope, &path) {
+            for entry in db::list_ab_entries(&database, folder.id).unwrap_or_default() {
+                let mut fields: Vec<Option<String>> = vec![if entry.username.is_empty() {
+                    None
+                } else {
+                    Some(entry.username.clone())
+                }];
+                if let Ok(cfg) = serde_json::from_str::<serde_json::Value>(&entry.protocol_config) {
+                    if let Some(d) = cfg.get("domain").and_then(|v| v.as_str()) {
+                        if !d.is_empty() {
+                            fields.push(Some(d.to_string()));
+                        }
+                    }
+                }
+                if vault_creds {
+                    if let Ok(ve) = vault.get_entry(&scope, &path, &entry.name).await {
+                        fields.push(ve.password);
+                        fields.push(ve.private_key);
+                        fields.push(ve.container_password);
+                    }
+                } else if !enc_key.is_empty() {
+                    for cred in db::list_ab_credentials(&database, entry.id).unwrap_or_default() {
+                        let decrypted = crate::crypto::decrypt_value(
+                            &crate::crypto::EncryptionKey::from_hex(&enc_key)
+                                .unwrap_or_else(|_| panic!("invalid encryption key")),
+                            &cred.credential_data,
+                        )
+                        .unwrap_or(cred.credential_data.clone());
+                        match cred.credential_type.as_str() {
+                            "password" => fields.push(Some(decrypted)),
+                            "private_key" => fields.push(Some(decrypted)),
+                            "container_password" => fields.push(Some(decrypted)),
+                            _ => {}
+                        }
+                    }
+                }
+                for var in fields
+                    .iter()
+                    .filter_map(|f| f.as_deref())
+                    .filter_map(crate::vault::variable_name)
+                {
+                    *all_vars.entry(var.to_string()).or_insert(0) += 1;
                 }
             }
         }
 
-        if let Ok(subs) = vault.list_subfolders(&scope, &path).await {
-            for sub in subs {
-                let sub_path = sub.path.unwrap_or_else(|| format!("{}/{}", path, sub.name));
-                stack.push((scope.clone(), sub_path));
-            }
+        // BFS: folders are flat rows whose names carry slash hierarchy.
+        for sub in folders
+            .iter()
+            .filter(|f| f.scope == scope && f.name.starts_with(&format!("{}/", path)))
+        {
+            stack.push((scope.clone(), sub.name.clone()));
         }
     }
 

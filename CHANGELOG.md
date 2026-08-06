@@ -10,7 +10,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - CSRF double-submit protection with `X-CSRF-Token` header on all requests.
-- Salted hashing for API keys at rest.
 - WebSocket Origin validation and connection rate limiting.
 - DB-backed address book with AES-256-GCM encryption of stored credentials
   (`[storage] backend = "db"`, default), making Vault optional for connections.
@@ -19,13 +18,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deep health check with latency, Vault/disk checks, and uptime metrics.
 - Prometheus metrics endpoint (`/metrics`).
 - Graceful shutdown with session drain.
-- WebSocket auto-reconnect.
-- Accessibility and responsive UI overhaul (ARIA attributes, focus indicators,
-  mobile navigation).
 - Startup config validation.
 - JSON logging via `RUST_LOG_FORMAT=json`.
 - Optional `[vault_shared]` and `[vault_local]` backends for dedicated
   fleet-wide and per-host Vaults (`VAULT_SHARED_SECRET_ID` / `VAULT_LOCAL_SECRET_ID`).
+- Admin settings API (`GET`/`PUT /api/system/settings`) with persistence and
+  form feedback.
+- Auth provider management API with OIDC/LDAP/SAML/RADIUS/database types,
+  addable through the admin auth page; DB-configured providers join the auth
+  chain at startup.
+- Local group management (`/admin/groups.html`) with auth-provider group
+  mapping and folder permission counts.
+- CSV connection import (`POST /api/addressbook/import`) with downloadable
+  template (`GET /api/addressbook/import-template`).
+- Connections page: create/edit/delete folders and entries, folder
+  permissions, scope-aware search, and import modal.
+- `storage.encryption_key` config value honored (env `PERSEA_STORAGE_KEY`
+  remains the fallback).
 
 ### Changed
 
@@ -36,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`SshParams`, `RdpParams`, `VncParams`, `WebParams`, `VdiParams`, `SpiceParams`,
   `ProxmoxParams`) while preserving the flat JSON wire format.
 - Updated dependencies.
+- Version bumped to 1.0.2.
+- Dev lints (missing_docs, clippy::unwrap_used) silenced in release builds.
 
 ### Fixed
 
@@ -43,8 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `X-CSRF-Token` (double-submit pattern).
 - Docker image build and container health check (guacd pin, embedded templates,
   `guacd.conf`, TLS-aware healthcheck).
-- Deprecation warning firing on the default `recording_path`.
+- Deprecation warning firing on the default `recording_path`; empty
+  `recording_path` treated as unset.
 - CI lint jobs and deb packaging paths (stale `rustguac` paths).
+- 500 on session summary with an empty session history table
+  (`COALESCE` on the `active_now` aggregate).
+- 502 error-log spam on every page load when vSphere is unconfigured
+  (`/api/vsphere/vms` now returns 200 with `configured: false`).
 
 ## [1.0.1] - 2026-08-04
 

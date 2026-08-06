@@ -38,6 +38,7 @@ mod rbac;
 mod recording;
 mod role;
 mod session;
+mod settings_merge;
 mod templates;
 #[cfg(test)]
 mod testing;
@@ -49,8 +50,8 @@ mod vsphere;
 mod websocket;
 
 use crate::api::{
-    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, StorageKey,
-    ThemeData, VaultBackends, VaultCell, VaultConfigured, VaultState,
+    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, StorageBackend,
+    StorageKey, ThemeData, VaultBackends, VaultCell, VaultConfigured, VaultState,
 };
 use crate::auth_chain::AuthChain;
 use crate::auth_provider::AuthProvider;
@@ -277,7 +278,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Load config
-    let config = Config::load(cli.config.as_deref());
+    let mut config = Config::load(cli.config.as_deref());
 
     // Validate config values (fatal errors exit, warnings are printed)
     match config.validate() {
@@ -308,7 +309,16 @@ async fn main() {
     };
 
     match cli.command {
-        None | Some(Command::Serve) => run_server(config, database, log_format).await,
+        None | Some(Command::Serve) => {
+            // Overlay DB-persisted settings (admin settings page) onto the
+            // config-file values before the server starts. The settings API
+            // (wayfinder ticket 024) stores these in `system_settings`; the
+            // merge maps the fields that have config equivalents.
+            if let Ok(overrides) = crate::settings_merge::load_db_settings(&database) {
+                crate::settings_merge::apply_db_settings(&mut config, &overrides);
+            }
+            run_server(config, database, log_format).await
+        }
         Some(Command::CreateUser {
             email,
             name,
@@ -347,8 +357,16 @@ async fn main() {
             allowed_groups,
             dry_run,
         }) => {
-            import::cmd_import_guacamole(&config, &file, &folder, &scope, &allowed_groups, dry_run)
-                .await;
+            import::cmd_import_guacamole(
+                &config,
+                &database,
+                &file,
+                &folder,
+                &scope,
+                &allowed_groups,
+                dry_run,
+            )
+            .await;
         }
         Some(Command::DbMigrateFromVault {
             scope,
@@ -950,39 +968,40 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
             if let Ok(db_providers) = crate::providers_db::load_providers(&database) {
                 for p in db_providers.iter().filter(|p| p.enabled) {
                     let key = format!("db-provider-{}", p.name);
-                    let provider: Option<Box<dyn AuthProvider>> = match p.provider_type.as_str()
-                    {
-                        "ldap" => serde_json::from_value::<
-                            crate::auth_providers::ldap::LdapConfig,
-                        >(p.config.clone())
-                        .ok()
-                        .map(|c| {
-                            Box::new(crate::auth_providers::ldap::LdapProvider::new(c))
-                                as Box<dyn AuthProvider>
-                        }),
-                        "radius" => serde_json::from_value::<
-                            crate::auth_providers::radius::RadiusConfig,
-                        >(p.config.clone())
-                        .ok()
-                        .map(|c| {
-                            Box::new(crate::auth_providers::radius::RadiusProvider::new(c))
-                                as Box<dyn AuthProvider>
-                        }),
-                        "saml" => serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
-                            p.config.clone(),
-                        )
-                        .ok()
-                        .map(|c| {
-                            Box::new(crate::auth_providers::saml::SamlProvider::new(c))
-                                as Box<dyn AuthProvider>
-                        }),
-                        "database" => Some(Box::new(
-                            crate::auth_providers::database::DatabaseProvider::new(
-                                database.clone(),
-                            ),
-                        ) as Box<dyn AuthProvider>),
-                        _ => None,
-                    };
+                    let provider: Option<Box<dyn AuthProvider>> =
+                        match p.provider_type.as_str() {
+                            "ldap" => serde_json::from_value::<
+                                crate::auth_providers::ldap::LdapConfig,
+                            >(p.config.clone())
+                            .ok()
+                            .map(|c| {
+                                Box::new(crate::auth_providers::ldap::LdapProvider::new(c))
+                                    as Box<dyn AuthProvider>
+                            }),
+                            "radius" => serde_json::from_value::<
+                                crate::auth_providers::radius::RadiusConfig,
+                            >(p.config.clone())
+                            .ok()
+                            .map(|c| {
+                                Box::new(crate::auth_providers::radius::RadiusProvider::new(c))
+                                    as Box<dyn AuthProvider>
+                            }),
+                            "saml" => serde_json::from_value::<
+                                crate::auth_providers::saml::SamlConfig,
+                            >(p.config.clone())
+                            .ok()
+                            .map(|c| {
+                                Box::new(crate::auth_providers::saml::SamlProvider::new(c))
+                                    as Box<dyn AuthProvider>
+                            }),
+                            "database" => Some(Box::new(
+                                crate::auth_providers::database::DatabaseProvider::new(
+                                    database.clone(),
+                                ),
+                            )
+                                as Box<dyn AuthProvider>),
+                            _ => None,
+                        };
                     if let Some(prov) = provider {
                         providers.insert(key.clone(), prov);
                         db_methods.push(key);
@@ -1025,6 +1044,13 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     let credential_default_scope =
         CredentialDefaultScope(config.user_credentials_default_scope.clone());
     let storage_key = StorageKey(config.storage_encryption_key());
+    let storage_backend = StorageBackend(
+        config
+            .storage
+            .as_ref()
+            .map(|s| s.backend.clone())
+            .unwrap_or_else(|| "db".into()),
+    );
     let drive_configured = DriveConfigured(config.drive.is_some());
     let site_title = SiteTitle(config.site_title.clone());
     let theme_data = {
@@ -1354,7 +1380,10 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         )
         .route("/api/auth/providers", get(api::providers::list_providers))
         .route("/api/auth/providers", post(api::providers::create_provider))
-        .route("/api/auth/providers/{id}", get(api::providers::get_provider))
+        .route(
+            "/api/auth/providers/{id}",
+            get(api::providers::get_provider),
+        )
         .route(
             "/api/auth/providers/{id}",
             delete(api::providers::delete_provider),
@@ -1576,6 +1605,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(credential_default_scope.clone()))
         .layer(Extension(storage_key.clone()))
+        .layer(Extension(storage_backend.clone()))
         .layer(Extension(vsphere_client))
         .layer(Extension(database.clone()));
 
@@ -1602,6 +1632,8 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .layer(middleware::from_fn(auth::optional_auth))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(oidc_enabled.clone()))
+        .layer(Extension(storage_key.clone()))
+        .layer(Extension(storage_backend.clone()))
         .layer(Extension(database.clone()));
 
     // Health check with optional auth (deep check when authenticated)
@@ -1684,7 +1716,10 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         // Admin sub-pages (templates)
         .route("/admin/users.html", get(handlers::pages::admin_users_page))
         .route("/admin/auth.html", get(handlers::pages::admin_auth_page))
-        .route("/admin/groups.html", get(handlers::pages::admin_groups_page))
+        .route(
+            "/admin/groups.html",
+            get(handlers::pages::admin_groups_page),
+        )
         .route("/admin/audit.html", get(handlers::pages::admin_audit_page))
         .route(
             "/admin/settings.html",
