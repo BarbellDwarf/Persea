@@ -217,6 +217,9 @@ enum Command {
     /// Migrate address-book entries from Vault into the SQLite DB
     /// (connection_groups + connections tables). Credential fields are
     /// encrypted with AES-256-GCM. Run with --dry-run first.
+    ///
+    /// Requires the encryption key (64-char hex) in the PERSEA_STORAGE_KEY
+    /// env var; ENCRYPTION_KEY is accepted as a legacy fallback.
     DbMigrateFromVault {
         /// Scope to migrate: "shared" or "instance"
         #[arg(long)]
@@ -729,7 +732,7 @@ async fn connect_vault_backend(
                             // Mount LUKS now that the default backend is available.
                             if let Some(ref dc) = luks_drive {
                                 if dc.enabled && drive::luks_configured(dc) {
-                                    match drive::mount_luks(dc, &client).await {
+                                    match drive::mount_luks(dc, client.as_ref()).await {
                                         Ok(_) => {
                                             tracing::info!("LUKS drive volume mounted (deferred)")
                                         }
@@ -852,7 +855,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
             if drive::luks_configured(drive_config) {
                 let vc = default_cell.read().await;
                 if let Some(ref client) = *vc {
-                    match drive::mount_luks(drive_config, client).await {
+                    match drive::mount_luks(drive_config, client.as_ref()).await {
                         Ok(_) => tracing::info!("LUKS drive volume mounted"),
                         Err(e) => {
                             tracing::error!("Failed to mount LUKS drive volume: {}", e);

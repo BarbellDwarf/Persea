@@ -46,7 +46,10 @@ impl SessionManager {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&recording_dir, std::fs::Permissions::from_mode(0o750));
+                let _ = std::fs::set_permissions(
+                    &recording_dir,
+                    std::fs::Permissions::from_mode(0o750),
+                );
             }
         }
 
@@ -504,7 +507,7 @@ impl SessionManager {
 
     /// Path to the thumbnails directory (under recording_path).
     pub fn thumbnails_dir(&self) -> std::path::PathBuf {
-        self.config.effective_recording_path().join("thumbnails")
+        self.recording_dir.join("thumbnails")
     }
 
     /// Path to a specific session's thumbnail file.

@@ -1,5 +1,8 @@
 # Reports
 
+> **Audience:** admins and powerusers analysing session history, leaderboards, and CSV exports.
+> **Next:** [API Reference](api.md) for the REST API, or the endpoint table below for the exact report routes.
+
 The reports page provides usage analytics and session history for your persea deployment. It is available to users with the **poweruser** role or higher.
 
 ## Summary cards
@@ -13,7 +16,7 @@ The top of the reports page shows four summary metrics:
 
 ## Session history
 
-A searchable, sortable table of all past and current sessions. Each row includes the user who created the session, the connections entry and folder (if applicable), session type (SSH, RDP, VNC, Web), hostname, start time, duration, status, and a link to the recording if one exists.
+A searchable, sortable table of all past and current sessions. Each row includes the user who created the session, the connections entry and folder (if applicable), session type (SSH, RDP, VNC, SPICE, Proxmox, Web, VDI), hostname, start time, duration, status, and a link to the recording if one exists.
 
 The table supports:
 

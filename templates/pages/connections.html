@@ -17,10 +17,7 @@
                 <option value="instance">Instance</option>
             </select>
             <input type="search" id="connections-search" placeholder="Search connections..."
-                   class="form-input" style="width:260px"
-                   hx-get="/api/addressbook/search-index"
-                   hx-trigger="input changed delay:300ms"
-                   hx-target="#search-results">
+                   class="form-input" style="width:260px" autocomplete="off">
             <button id="btn-new-folder" class="btn btn-primary admin-only hidden">+ New Folder</button>
         </div>
     </div>
@@ -82,6 +79,7 @@
                     </div>
                     <div id="detail-host" style="font-size:13px;color:var(--text-secondary);margin-bottom:16px"></div>
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
+                    <div id="detail-error" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:16px"></div>
                     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
                         <p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Parameters</p>
                         <div id="detail-params" style="font-size:13px"></div>
@@ -117,6 +115,7 @@
     .proto-spice { background: rgba(168,85,247,0.15); color: #c084fc; border-color: rgba(168,85,247,0.3); }
     .proto-vmware, .proto-web { background: rgba(20,184,166,0.15); color: #2dd4bf; border-color: rgba(20,184,166,0.3); }
     .proto-proxmox { background: rgba(99,102,241,0.15); color: #818cf8; border-color: rgba(99,102,241,0.3); }
+    .proto-vdi { background: rgba(236,72,153,0.15); color: #f472b6; border-color: rgba(236,72,153,0.3); }
     .folder-item { display:flex;align-items:center;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--text-secondary);cursor:pointer;transition:all 0.15s }
     .folder-item:hover { background:var(--bg-hover);color:white }
     .folder-item.active { background:rgba(16,185,129,0.1);color:#34d399 }
@@ -139,30 +138,266 @@
     };
     function protoClass(p){return protoClasses[(p||'').toLowerCase()]||''}
 
+    // ── Address book: folders + entries ────────────────────────────────
+    var folders = [];
+    var folderMap = {};
+    var entriesByFolder = {};
+    var isAdmin = false;
+    var selectedFolder = null;
+    var selectedEntryKey = null;
+    var searchQuery = '';
+
+    function folderKey(scope, path) {
+        return scope + '/' + path;
+    }
+    function entryHost(e) {
+        if (e.session_type === 'web') return e.url || '';
+        if (e.session_type === 'vdi') return e.container_image || '';
+        if (e.session_type === 'proxmox') {
+            return (e.proxmox_url || '') + (e.proxmox_vmid ? ' \u00B7 VM ' + e.proxmox_vmid : '');
+        }
+        return e.hostname || '';
+    }
+    function showUnavailable() {
+        document.getElementById('vault-unavailable').classList.remove('hidden');
+        document.getElementById('empty-state').classList.add('hidden');
+        document.getElementById('main-content').classList.add('hidden');
+        document.getElementById('folder-tree').innerHTML =
+            '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">Retrying\u2026</p>';
+        setTimeout(function() {
+            document.getElementById('vault-unavailable').classList.add('hidden');
+            loadFolders();
+        }, 15000);
+    }
+    function loadFolders() {
+        fetch('/api/addressbook/folders', { credentials: 'same-origin' })
+            .then(function(res) {
+                if (res.status === 503) { showUnavailable(); return null; }
+                if (res.status === 401 || res.status === 403) { window.location.href = '/'; return null; }
+                if (!res.ok) throw new Error('Failed to load folders (HTTP ' + res.status + ')');
+                return res.json();
+            })
+            .then(function(data) {
+                if (!data) return;
+                document.getElementById('vault-unavailable').classList.add('hidden');
+                folders = (data || []).map(function(f) {
+                    return {
+                        name: f.name,
+                        scope: f.scope,
+                        path: f.path || f.name,
+                        description: f.description || '',
+                        has_children: !!f.has_children
+                    };
+                });
+                folderMap = {};
+                folders.forEach(function(f) { folderMap[folderKey(f.scope, f.path)] = f; });
+                if (folders.length === 0) {
+                    if (isAdmin) {
+                        document.getElementById('main-content').classList.add('hidden');
+                        document.getElementById('empty-state').classList.remove('hidden');
+                    } else {
+                        document.getElementById('empty-state').classList.add('hidden');
+                        document.getElementById('main-content').classList.remove('hidden');
+                        document.getElementById('folder-tree').innerHTML =
+                            '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders available.</p>';
+                    }
+                    return;
+                }
+                document.getElementById('empty-state').classList.add('hidden');
+                document.getElementById('main-content').classList.remove('hidden');
+                renderFolders();
+                loadAllEntries();
+            })
+            .catch(function(err) {
+                document.getElementById('folder-tree').innerHTML =
+                    '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">Failed to load connections: ' + escapeHtml(err.message) + '</p>';
+            });
+    }
+    function loadAllEntries() {
+        entriesByFolder = {};
+        Promise.all(folders.map(function(f) {
+            var key = folderKey(f.scope, f.path);
+            return fetch('/api/addressbook/folders/' + encodeURIComponent(f.scope) + '/' + encodeURIComponent(f.path) + '/entries', { credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(list) { entriesByFolder[key] = (list || []); })
+                .catch(function() { entriesByFolder[key] = []; });
+        })).then(function() {
+            renderFolders();
+            if (searchQuery) runSearch();
+            else if (selectedFolder) selectFolder(selectedFolder);
+            else if (folders.length) selectFolder(folders[0]);
+        });
+    }
+    function renderFolders() {
+        var tree = document.getElementById('folder-tree');
+        var scopeFilter = document.getElementById('scope-filter').value;
+        var visible = folders.filter(function(f) { return !scopeFilter || f.scope === scopeFilter; });
+        if (visible.length === 0) {
+            tree.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders in this scope.</p>';
+            return;
+        }
+        tree.innerHTML = visible.map(function(f) {
+            var count = (entriesByFolder[folderKey(f.scope, f.path)] || []).length;
+            var active = selectedFolder && selectedFolder.scope === f.scope && selectedFolder.path === f.path ? ' active' : '';
+            return '<div class="folder-item' + active + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '">'
+                + '<span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg-input);color:var(--text-muted);margin-right:8px">' + escapeHtml(f.scope) + '</span>'
+                + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(f.name) + '</span>'
+                + '<span style="font-size:11px;color:var(--text-muted);margin-left:8px">' + count + '</span>'
+                + '</div>';
+        }).join('');
+        tree.querySelectorAll('.folder-item').forEach(function(el) {
+            el.addEventListener('click', function() {
+                var f = folderMap[folderKey(el.getAttribute('data-scope'), el.getAttribute('data-path'))];
+                if (f) selectFolder(f);
+            });
+        });
+    }
+    function selectFolder(f) {
+        searchQuery = '';
+        document.getElementById('connections-search').value = '';
+        selectedFolder = f;
+        selectedEntryKey = null;
+        renderFolders();
+        document.getElementById('entries-header').classList.remove('hidden');
+        document.getElementById('entries-title').textContent = f.name;
+        document.getElementById('entries-count').textContent =
+            String((entriesByFolder[folderKey(f.scope, f.path)] || []).length);
+        document.getElementById('entries-desc').textContent = f.description || '';
+        renderEntries();
+    }
+    function wireEntryRows(container) {
+        container.querySelectorAll('.entry-row').forEach(function(row) {
+            var scope = row.getAttribute('data-scope');
+            var path = row.getAttribute('data-path');
+            var name = row.getAttribute('data-name');
+            row.addEventListener('click', function(ev) {
+                if (ev.target.closest('.entry-connect')) return;
+                selectConnection(scope, path, name, row);
+            });
+            row.querySelector('.entry-connect').addEventListener('click', function() {
+                selectConnection(scope, path, name, row);
+                connectEntry(scope, path, name);
+            });
+        });
+    }
+    function entryRowHtml(scope, path, folderName, e) {
+        var proto = (e.session_type || '').toLowerCase();
+        var key = scope + '/' + path + '/' + e.name;
+        var selected = key === selectedEntryKey ? ' selected' : '';
+        return '<div class="entry-row' + selected + '" data-scope="' + escapeAttr(scope) + '" data-path="' + escapeAttr(path) + '" data-name="' + escapeAttr(e.name) + '" style="display:flex;align-items:center;gap:12px">'
+            + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
+            + '<div style="flex:1;min-width:0">'
+            + '<div style="font-size:13px;color:white;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(e.display_name || e.name) + '</div>'
+            + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(entryHost(e) || '\u2014') + (folderName ? ' <span style="color:var(--text-muted)">\u00B7 ' + escapeHtml(folderName) + '</span>' : '') + '</div>'
+            + '</div>'
+            + '<button class="btn btn-primary btn-sm entry-connect">Connect</button>'
+            + '</div>';
+    }
+    function renderEntries() {
+        var container = document.getElementById('entries-content');
+        if (!selectedFolder) return;
+        var list = entriesByFolder[folderKey(selectedFolder.scope, selectedFolder.path)] || [];
+        if (list.length === 0) {
+            container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">No entries in this folder.</p>';
+            return;
+        }
+        container.innerHTML = list.map(function(e) {
+            return entryRowHtml(selectedFolder.scope, selectedFolder.path, '', e);
+        }).join('');
+        wireEntryRows(container);
+    }
+    function runSearch() {
+        var input = document.getElementById('connections-search');
+        var q = (input.value || '').trim().toLowerCase();
+        searchQuery = q;
+        var header = document.getElementById('entries-header');
+        var container = document.getElementById('entries-content');
+        if (!q) {
+            if (selectedFolder) selectFolder(selectedFolder);
+            return;
+        }
+        var results = [];
+        folders.forEach(function(f) {
+            (entriesByFolder[folderKey(f.scope, f.path)] || []).forEach(function(e) {
+                var host = entryHost(e);
+                var hay = [e.name, e.display_name || '', host, e.username || '', e.url || '', e.domain || '', e.session_type, f.name, f.scope].join(' ').toLowerCase();
+                if (hay.indexOf(q) !== -1) results.push({ scope: f.scope, path: f.path, folderName: f.name, entry: e });
+            });
+        });
+        header.classList.remove('hidden');
+        document.getElementById('entries-title').textContent = 'Search results';
+        document.getElementById('entries-count').textContent = String(results.length);
+        document.getElementById('entries-desc').textContent = 'matching "' + q + '"';
+        if (results.length === 0) {
+            container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">No connections match your search.</p>';
+            return;
+        }
+        container.innerHTML = results.map(function(r) {
+            return entryRowHtml(r.scope, r.path, r.folderName, r.entry);
+        }).join('');
+        wireEntryRows(container);
+    }
+    function connectEntry(scope, folder, entry) {
+        var btn = document.getElementById('detail-connect');
+        var err = document.getElementById('detail-error');
+        if (btn) { btn.disabled = true; btn.textContent = 'Connecting\u2026'; }
+        if (err) err.classList.add('hidden');
+        fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(entry) + '/connect', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+        })
+            .then(function(r) {
+                return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+            })
+            .then(function(res) {
+                if (btn) { btn.disabled = false; btn.textContent = 'Connect'; }
+                if (res.ok && res.data.session_id) { window.location.href = '/client/' + res.data.session_id; return; }
+                if (err) {
+                    err.textContent = res.data.error || 'Failed to connect.';
+                    err.classList.remove('hidden');
+                }
+            })
+            .catch(function(e) {
+                if (btn) { btn.disabled = false; btn.textContent = 'Connect'; }
+                if (err) { err.textContent = e.message || 'Connection failed.'; err.classList.remove('hidden'); }
+            });
+    }
+    function debounce(fn, ms) {
+        var t;
+        return function() { clearTimeout(t); t = setTimeout(fn, ms); };
+    }
+
     window.selectConnection=function(scope,folder,entry,el){
         document.querySelectorAll('.entry-row').forEach(function(r){r.classList.remove('selected')});
         if(el)el.classList.add('selected');
+        selectedEntryKey = scope+'/'+folder+'/'+entry;
+        var list=entriesByFolder[folderKey(scope,folder)]||[];
+        var render=function(e){
+            if(!e)return;
+            var panel=document.getElementById('detail-panel');
+            panel.classList.remove('hidden');
+            document.getElementById('detail-name').textContent=e.display_name||e.name;
+            var proto=(e.session_type||'').toLowerCase();
+            var badge=document.getElementById('detail-protocol');
+            badge.textContent=proto.toUpperCase();
+            badge.className='px-2 py-0.5 text-xs font-medium rounded border '+protoClass(proto);
+            document.getElementById('detail-host').textContent=entryHost(e)||'—';
+            document.getElementById('detail-connect').onclick=function(){connectEntry(scope,folder,entry)};
+            var params=document.getElementById('detail-params');
+            var fields=[['Port',e.port],['Username',e.username],['Domain',e.domain],['Security',e.security],['Recording',e.enable_recording?'On':null]];
+            params.innerHTML=fields.filter(function(f){return f[1]}).map(function(f){
+                return '<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:var(--text-muted)">'+escapeHtml(f[0])+'</span><span style="color:var(--text-secondary)">'+escapeHtml(String(f[1]))+'</span></div>';
+            }).join('');
+        };
+        var e=list.find(function(x){return x.name===entry});
+        if(e){render(e);return;}
         fetch('/api/addressbook/folders/'+encodeURIComponent(scope)+'/'+encodeURIComponent(folder)+'/entries',{credentials:'same-origin'})
             .then(function(r){return r.ok?r.json():[]})
             .then(function(entries){
-                var e=entries.find(function(x){return x.name===entry});
-                if(!e)return;
-                var panel=document.getElementById('detail-panel');
-                panel.classList.remove('hidden');
-                document.getElementById('detail-name').textContent=e.display_name||e.name;
-                var proto=(e.session_type||'').toLowerCase();
-                var badge=document.getElementById('detail-protocol');
-                badge.textContent=proto.toUpperCase();
-                badge.className='px-2 py-0.5 text-xs font-medium rounded border '+protoClass(proto);
-                document.getElementById('detail-host').textContent=e.hostname||'—';
-                document.getElementById('detail-connect').onclick=function(){
-                    window.location.href='/api/connect?scope='+encodeURIComponent(scope)+'&folder='+encodeURIComponent(folder)+'&entry='+encodeURIComponent(entry);
-                };
-                var params=document.getElementById('detail-params');
-                var fields=[['Port',e.port],['Username',e.username],['Domain',e.domain],['Security',e.security],['Recording',e.enable_recording?'On':null]];
-                params.innerHTML=fields.filter(function(f){return f[1]}).map(function(f){
-                    return '<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:var(--text-muted)">'+escapeHtml(f[0])+'</span><span style="color:var(--text-secondary)">'+escapeHtml(String(f[1]))+'</span></div>';
-                }).join('');
+                entriesByFolder[folderKey(scope,folder)]=entries;
+                render(entries.find(function(x){return x.name===entry}));
             });
     };
 
@@ -213,6 +448,20 @@
 
     document.getElementById('btn-vsphere-refresh').addEventListener('click',loadVSphere);
     loadVSphere();
+
+    // ── Address book init ───────────────────────────────────────────────
+    document.getElementById('connections-search').addEventListener('input',debounce(runSearch,250));
+    document.getElementById('scope-filter').addEventListener('change',renderFolders);
+    document.addEventListener('htmx:afterSwap',function(){
+        if (document.getElementById('main-content')) loadFolders();
+    });
+    fetch('/api/me',{credentials:'same-origin'})
+        .then(function(res){return res.ok?res.json():null})
+        .then(function(me){
+            if(me) isAdmin = me.role === 'admin';
+            loadFolders();
+        })
+        .catch(function(){ loadFolders(); });
 })();
 </script>
 {% endblock %}

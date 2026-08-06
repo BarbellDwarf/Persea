@@ -1,5 +1,8 @@
 # Configuration Reference
 
+> **Audience:** operators and admins configuring persea.
+> **Next:** [Security](security.md) for hardening, or the [API Reference](api.md) for endpoints.
+
 persea reads a TOML configuration file. All settings have sensible defaults and are optional.
 
 ```bash
@@ -29,6 +32,7 @@ See `config.example.toml` for a fully commented reference.
 | `session_pending_timeout_secs` | `60` | Seconds before pending sessions expire |
 | `session_max_duration_secs` | `28800` (8h) | Maximum active session duration |
 | `auth_session_ttl_secs` | `86400` (24h) | OIDC auth session cookie TTL |
+| `shutdown_timeout_secs` | `30` | Graceful shutdown drain window: after SIGTERM/SIGINT the server stops accepting new connections and waits this long for active sessions to drain before forcing exit |
 
 ## Browser session settings
 
@@ -244,16 +248,18 @@ When `db_url` is set, the SQLx pool is initialised alongside the existing rusqli
 
 ## `[storage]` section
 
-Controls credential encryption for DB-only mode (when not using Vault).
+Controls where address-book (connections) credentials live and how they are encrypted.
 
 | Key | Default | Description |
 |-----|---------|-------------|
+| `backend` | `db` | Storage backend: `db` (default) stores folder/entry metadata and credentials in the database; `vault` keeps credentials in Vault |
 | `encryption_key` | — | 64-character hex string (32 bytes) for AES-256-GCM encryption of credentials at rest in the database. Can also be set via the `PERSEA_STORAGE_KEY` environment variable |
 
 When `encryption_key` is set, connection credentials stored in the database are encrypted with AES-256-GCM. Encrypted values are prefixed with `enc:v1:` for future key rotation support.
 
 ```toml
 [storage]
+backend = "db"
 encryption_key = "aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344"
 ```
 
@@ -543,13 +549,13 @@ home_base = "/vdi-homes"
 | `VAULT_SHARED_SECRET_ID` | Vault AppRole secret ID for `[vault_shared]` (only if configured) |
 | `VAULT_LOCAL_SECRET_ID` | Vault AppRole secret ID for `[vault_local]` (only if configured) |
 | `PERSEA_STORAGE_KEY` | 64-char hex encryption key for DB credential storage (alternative to `[storage].encryption_key`) |
-| `VSPHERE_PASSWORD` | VMware vSphere password (alternative to `[vsphere].password_env`) |
+| `VSPHERE_PASSWORD` | VMware vSphere password — the default name of the env var referenced by `[vsphere].password_env` (override the name with `password_env` if you prefer another variable) |
 | `RUST_LOG` | Log level (e.g., `info`, `debug`, `persea=debug`) |
 | `RUST_LOG_FORMAT` | Log format: `text` (default) or `json` for JSON lines (structured logging). Equivalent to the `--log-format` CLI flag, which takes precedence. |
 
 ### Setting environment variables for systemd
 
-The shipped systemd unit (`persea.service`) does not include an `EnvironmentFile` directive by default. To provide secrets like `VAULT_SECRET_ID` and `OIDC_CLIENT_SECRET`, create a systemd drop-in override:
+The shipped systemd unit (`persea.service`) already includes `EnvironmentFile=-/opt/persea/env` (the `-` prefix means the file is optional — the service starts even if it does not exist). To provide secrets like `VAULT_SECRET_ID` and `OIDC_CLIENT_SECRET`, just create the env file:
 
 **1. Create the env file** with your secrets:
 
@@ -562,29 +568,13 @@ chmod 600 /opt/persea/env
 chown persea:persea /opt/persea/env
 ```
 
-**2. Create a systemd override** to load the env file:
+**2. Restart:**
 
 ```bash
-sudo systemctl edit persea
-```
-
-This opens an editor. Add the following:
-
-```ini
-[Service]
-EnvironmentFile=/opt/persea/env
-```
-
-Save and close. This creates a drop-in file at `/etc/systemd/system/persea.service.d/override.conf`.
-
-**3. Reload and restart:**
-
-```bash
-sudo systemctl daemon-reload
 sudo systemctl restart persea
 ```
 
-The override persists across package upgrades, `dpkg` will not overwrite files in the `.d/` directory.
+No drop-in override is needed — the shipped unit loads `/opt/persea/env` already. If you are using a custom unit or a Docker deployment, load the file yourself (e.g. `-e` flags for Docker, or a drop-in with `EnvironmentFile=/opt/persea/env`).
 
 ### Verifying the environment
 

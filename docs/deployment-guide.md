@@ -1,5 +1,8 @@
 # Deployment Guide
 
+> **Audience:** operators standing up a production persea deployment (architecture, HAProxy, RDP targets, hardening).
+> **Next:** [Installation](installation.md) for all install options; [Configuration](configuration.md) for the settings used below.
+
 This guide covers network architecture, server preparation, RDP target setup, security hardening, and ongoing operations for a production persea deployment.
 
 ## Architecture Overview
@@ -35,7 +38,7 @@ Internet
 
 ```bash
 # Download the latest .deb from GitHub releases
-wget https://github.com/BarbellDwarf/rustguac/releases/latest/download/persea_amd64.deb
+wget https://github.com/BarbellDwarf/persea/releases/latest/download/persea_amd64.deb
 sudo apt install ./persea_amd64.deb
 ```
 
@@ -44,13 +47,13 @@ This installs persea + guacd to `/opt/persea` with systemd services.
 ### Docker (recommended for non-Debian-13 hosts)
 
 ```bash
-docker pull ghcr.io/BarbellDwarf/rustguac:latest
+docker pull ghcr.io/barbelldwarf/persea:latest
 docker run -d \
   -p 443:8089 \
   -v persea-data:/opt/persea/data \
   -v persea-recordings:/opt/persea/recordings \
   -v ./config.toml:/opt/persea/config.toml \
-  ghcr.io/BarbellDwarf/rustguac:latest
+  ghcr.io/barbelldwarf/persea:latest
 ```
 
 The Docker image bundles guacd + FreeRDP + dependencies, so it runs cleanly on Ubuntu, RHEL, Rocky, Arch, and other distros where the bare-metal `.deb` would hit a FreeRDP ABI mismatch. See [installation.md](installation.md#other-linux-distributions) for the full story on non-Debian-13 targets.
@@ -171,7 +174,7 @@ For the best video experience with Linux desktops, use xrdp with x264 H.264 enco
 
 ```bash
 # On the RDP target machine (not the persea server):
-wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/BarbellDwarf/rustguac/main/contrib/setup-xrdp-gfx.sh
+wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/BarbellDwarf/persea/main/contrib/setup-xrdp-gfx.sh
 sudo bash setup-xrdp-gfx.sh --desktop mate
 ```
 
@@ -251,11 +254,11 @@ Once OIDC is working and you have an admin user, remove the initial API key:
 
 API keys are powerful (full admin, no MFA). For day-to-day use, OIDC with group-based roles is more secure. If you need programmatic API access, create scoped [user API tokens](roles-and-access-control.md) instead.
 
-## Step 6: Set Up the Connections (Vault)
+## Step 6: Set Up the Connections (Vault or DB)
 
-Connections stores connection entries in HashiCorp Vault or OpenBao. Credentials stay server-side, they never reach the browser.
+Connections stores connection entries in HashiCorp Vault/OpenBao, or — with the DB storage backend — in the local database with AES-256-GCM encrypted credentials. Credentials stay server-side, they never reach the browser. See [Configuration > `[storage]`](configuration.md#storage-section) for the backend choice.
 
-### Step 6: Configure Vault (optional, for Connections UI)
+### Configure Vault (optional, for Vault-backed Connections)
 
 If you want the Vault-backed Connections UI:
 
@@ -345,13 +348,14 @@ This creates a LUKS-encrypted volume with the encryption key stored in Vault. Se
 Session recordings are enabled by default and stored in `/opt/persea/recordings`.
 
 ```toml
-recording_path = "/opt/persea/recordings"
-
 [recording]
 enabled = true
+path = "/opt/persea/recordings"
 max_disk_percent = 80    # Auto-delete oldest when disk usage exceeds 80%
 rotation_interval_secs = 300   # Check every 5 minutes
 ```
+
+(The old top-level `recording_path` key is deprecated — see [Troubleshooting](troubleshooting.md#recording_path-deprecation-warning).)
 
 Recordings can be played back in the browser via the Sessions page, or exported for compliance.
 
@@ -359,7 +363,8 @@ Recordings can be played back in the browser via the Sessions page, or exported 
 
 ### Monitoring
 
-- **Health check:** `GET /api/health` returns 200 when persea and guacd are running
+- **Health check:** `GET /api/health` — shallow `{"status":"ok"}` without auth; authenticated operators get the deep check (guacd, DB, Vault, disk). See [API Reference](api.md#get-apihealth)
+- **Metrics:** `GET /metrics` (Prometheus format, unauthenticated — see [API Reference](api.md#metrics))
 - **System status:** `GET /api/system/status` (admin only) shows version, uptime, active sessions
 - **Reports:** Session history, top connections, top users available at `/reports.html` (poweruser+ role)
 
@@ -381,7 +386,7 @@ Back up these paths:
 - `/opt/persea/env`, secrets (Vault secret ID, OIDC client secret)
 - `/opt/persea/recordings/`, session recordings (if needed for compliance)
 
-Connections data lives in Vault. Back up Vault separately.
+Connections data lives in Vault (when `[storage] backend = "vault"`) or encrypted in the database. Back up Vault separately if you use it; otherwise the DB backup above covers connections.
 
 ### Security checklist
 

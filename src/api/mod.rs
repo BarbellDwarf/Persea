@@ -8,7 +8,7 @@ pub mod tokens;
 pub mod users;
 pub mod vsphere;
 
-use crate::vault::{AddressBookEntry, FolderConfig, VaultClient, VaultError};
+use crate::vault::{AddressBookEntry, FolderConfig, VaultBackend, VaultError};
 use std::sync::Arc;
 
 pub type AppState = Arc<crate::session::SessionManager>;
@@ -50,7 +50,9 @@ pub struct DriveConfigured(pub bool);
 pub struct CredentialDefaultScope(pub String);
 
 /// One Vault backend connection cell — `None` until connected / while down.
-pub type VaultCell = Arc<tokio::sync::RwLock<Option<Arc<VaultClient>>>>;
+/// Holds a trait object so tests can inject an in-memory backend
+/// ([`crate::testing::MockVault`]) in place of the real client.
+pub type VaultCell = Arc<tokio::sync::RwLock<Option<Arc<dyn VaultBackend>>>>;
 
 /// The set of Vault backends persea talks to.
 ///
@@ -81,9 +83,9 @@ impl VaultBackends {
         }
     }
 
-    /// Resolve the connected client for `scope`, or `Unavailable` if that
+    /// Resolve the connected backend for `scope`, or `Unavailable` if that
     /// backend is down / not yet connected.
-    async fn scoped(&self, scope: &str) -> Result<Arc<VaultClient>, VaultError> {
+    async fn scoped(&self, scope: &str) -> Result<Arc<dyn VaultBackend>, VaultError> {
         self.cell_for_scope(scope)
             .read()
             .await
@@ -201,7 +203,7 @@ impl VaultBackends {
         !Arc::ptr_eq(&self.shared, &self.local)
     }
 
-    async fn cred_client(&self, shared: bool) -> Result<Arc<VaultClient>, VaultError> {
+    async fn cred_client(&self, shared: bool) -> Result<Arc<dyn VaultBackend>, VaultError> {
         let cell = if shared { &self.shared } else { &self.local };
         cell.read().await.clone().ok_or(VaultError::Unavailable)
     }
