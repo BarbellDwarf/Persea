@@ -60,6 +60,9 @@ RUN for patch in /build/patches/*.patch; do \
 RUN autoreconf -fi
 
 WORKDIR /build/guacd-build
+# Same memory-safety cap as the rust stage: `make -j$(nproc)` ICEs gcc under
+# memory pressure on wide machines.
+ARG GUACD_JOBS=4
 RUN /build/guacamole-server/configure \
         --prefix=/opt/persea \
         --with-ssh \
@@ -72,7 +75,7 @@ RUN /build/guacamole-server/configure \
         --disable-guaclog \
         --disable-guacclip \
         --disable-static \
-    && make -j"$(nproc)" \
+    && make -j"${GUACD_JOBS}" \
     && make install \
     && mkdir -p /opt/persea/lib/freerdp3 \
     && cp /opt/persea/lib/libguac*.so* /opt/persea/lib/freerdp3/ \
@@ -82,6 +85,13 @@ RUN /build/guacamole-server/configure \
 # Stage 2: Build persea
 # ---------------------------------------------------------------------------
 FROM rust:1.97.1-bookworm AS rust-builder
+
+# Cap parallel codegen: 16-way `cargo build --release` routinely SIGSEGVs
+# rustc/cc under memory pressure (seen on constrained runners and nested
+# container builds). 4 jobs is a safe default; override with
+# --build-arg CARGO_JOBS=N for machines with more headroom.
+ARG CARGO_JOBS=4
+ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./

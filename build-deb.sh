@@ -128,7 +128,8 @@ build_guacd() {
         --disable-static
 
     info "Compiling guacd..."
-    make -j"$(nproc)"
+    # Memory-safety cap: -j$(nproc) ICEs gcc on wide/constrained machines.
+    make -j"${GUACD_JOBS:-4}"
 
     info "Installing guacd to staging..."
     rm -rf "$STAGING"
