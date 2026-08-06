@@ -96,6 +96,18 @@ ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
+
+# Compile all dependencies once with a dummy main so the dependency layer is
+# only rebuilt when Cargo.toml/Cargo.lock change, not on every source edit.
+# The registry/git/target cache mounts persist between builds (exported to
+# GHCR via the workflow's type=gha cache), so the second build below is
+# incremental: only crates touched by the new sources recompile.
+RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo build --release
+
 COPY src/ src/
 COPY templates/ templates/
 COPY migrations/ migrations/
@@ -104,7 +116,14 @@ COPY static/ static/
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
     cargo build --release
+
+# The target dir lives inside a cache mount, which is ephemeral and not part
+# of the image filesystem — copy the binary out so the runtime stage can
+# COPY --from it.
+RUN --mount=type=cache,target=/build/target \
+    cp /build/target/release/persea /build/persea
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image
@@ -138,7 +157,7 @@ COPY --from=guacd-builder /opt/persea/sbin/ /opt/persea/sbin/
 COPY --from=guacd-builder /opt/persea/lib/ /opt/persea/lib/
 
 # Install persea binary
-COPY --from=rust-builder /build/target/release/persea /opt/persea/bin/persea
+COPY --from=rust-builder /build/persea /opt/persea/bin/persea
 
 # Install static web assets
 COPY static/ /opt/persea/static/

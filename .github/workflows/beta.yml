@@ -12,6 +12,9 @@ on:
 permissions:
   contents: read
   packages: write
+  # type=gha cache needs the actions scope (write includes read); without it
+  # the cache exporter aborts the whole build.
+  actions: write
 
 jobs:
   build:
@@ -32,3 +35,5 @@ jobs:
           push: true
           build-args: PERSEA_BETA=1
           tags: ghcr.io/${{ steps.repo.outputs.name }}:beta
+          cache-from: type=gha,scope=beta
+          cache-to: type=gha,mode=max,scope=beta

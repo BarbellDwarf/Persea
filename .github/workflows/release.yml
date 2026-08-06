@@ -7,6 +7,8 @@ on:
 permissions:
   contents: write
   packages: write
+  # type=gha cache in the docker jobs needs the actions scope.
+  actions: write
 
 env:
   GUACD_REPO: https://github.com/apache/guacamole-server.git
@@ -39,22 +41,32 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Restore guacd build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/guacamole-server
+            /tmp/guacd-build
+          key: guacd-${{ runner.arch }}-${{ env.GUACD_COMMIT }}-${{ hashFiles('patches/*.patch') }}
       - name: Clone and build guacd
         run: |
-          git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
-          for patch in patches/*.patch; do
-            [ -f "$patch" ] || continue
-            git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch"
-          done
-          cd /tmp/guacamole-server && autoreconf -fi
-          mkdir /tmp/guacd-build && cd /tmp/guacd-build
-          /tmp/guacamole-server/configure \
-            --prefix=/opt/persea \
-            --with-ssh --with-vnc --with-rdp \
-            --without-telnet --without-kubernetes \
-            --disable-guacenc --disable-guaclog --disable-static
-          make -j"$(nproc)"
-          make DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
+          if [ ! -f /tmp/guacd-build/Makefile ]; then
+            git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
+            for patch in patches/*.patch; do
+              [ -f "$patch" ] || continue
+              git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch"
+            done
+            cd /tmp/guacamole-server && autoreconf -fi
+            mkdir /tmp/guacd-build && cd /tmp/guacd-build
+            /tmp/guacamole-server/configure \
+              --prefix=/opt/persea \
+              --with-ssh --with-vnc --with-rdp \
+              --without-telnet --without-kubernetes \
+              --disable-guacenc --disable-guaclog --disable-static
+          fi
+          make -C /tmp/guacd-build -j"$(nproc)"
+          make -C /tmp/guacd-build DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
+      - uses: Swatinem/rust-cache@v2
       - name: Build persea
         run: $HOME/.cargo/bin/cargo build --release
       - name: Build .deb
@@ -102,22 +114,32 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Restore guacd build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /tmp/guacamole-server
+            /tmp/guacd-build
+          key: guacd-${{ runner.arch }}-${{ env.GUACD_COMMIT }}-${{ hashFiles('patches/*.patch') }}
       - name: Clone and build guacd
         run: |
-          git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
-          for patch in patches/*.patch; do
-            [ -f "$patch" ] || continue
-            git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch"
-          done
-          cd /tmp/guacamole-server && autoreconf -fi
-          mkdir /tmp/guacd-build && cd /tmp/guacd-build
-          /tmp/guacamole-server/configure \
-            --prefix=/opt/persea \
-            --with-ssh --with-vnc --with-rdp \
-            --without-telnet --without-kubernetes \
-            --disable-guacenc --disable-guaclog --disable-static
-          make -j"$(nproc)"
-          make DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
+          if [ ! -f /tmp/guacd-build/Makefile ]; then
+            git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
+            for patch in patches/*.patch; do
+              [ -f "$patch" ] || continue
+              git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch"
+            done
+            cd /tmp/guacamole-server && autoreconf -fi
+            mkdir /tmp/guacd-build && cd /tmp/guacd-build
+            /tmp/guacamole-server/configure \
+              --prefix=/opt/persea \
+              --with-ssh --with-vnc --with-rdp \
+              --without-telnet --without-kubernetes \
+              --disable-guacenc --disable-guaclog --disable-static
+          fi
+          make -C /tmp/guacd-build -j"$(nproc)"
+          make -C /tmp/guacd-build DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
+      - uses: Swatinem/rust-cache@v2
       - name: Build persea
         run: $HOME/.cargo/bin/cargo build --release
       - name: Build .deb

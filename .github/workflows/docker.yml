@@ -7,6 +7,9 @@ on:
 
 permissions:
   packages: write
+  # type=gha cache needs the actions scope (write includes read); without it
+  # the cache exporter aborts the whole build.
+  actions: write
 
 jobs:
   build:
@@ -26,3 +29,5 @@ jobs:
         with:
           push: true
           tags: ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=docker
+          cache-to: type=gha,mode=max,scope=docker
