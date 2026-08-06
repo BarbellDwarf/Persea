@@ -94,7 +94,7 @@ fn ensure_folder(db: &Db, scope: &str, path: &str) -> Result<i64, AppError> {
 fn get_or_create_folder(db: &Db, scope: &str, name: &str) -> Result<i64, AppError> {
     match db::get_ab_folder(db, scope, name) {
         Ok(folder) => Ok(folder.id),
-        Err(e) if is_no_rows(&e) => db::create_ab_folder(db, scope, name, "")
+        Err(e) if is_no_rows(&e) => db::create_ab_folder(db, scope, name, "", "", false)
             .map_err(|e| AppError::Internal(format!("failed to create folder: {}", e))),
         Err(e) => Err(AppError::Internal(format!("folder lookup failed: {}", e))),
     }
@@ -121,7 +121,8 @@ pub async fn import_csv(
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
     storage_key: Option<Extension<StorageKey>>,
-    Json(req): Json<ImportRequest>,
+    headers_2: axum::http::HeaderMap,
+    body: axum::body::Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
@@ -134,6 +135,41 @@ pub async fn import_csv(
         ));
     }
 
+    // Accept either the JSON contract (`{"scope": ..., "rows": [...]}`) or
+    // a raw `text/csv` body (single source of truth: the CSV parser in
+    // src/csv_import.rs is the same code the template generator uses).
+    let req: ImportRequest = if headers_2
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.starts_with("text/csv"))
+        .unwrap_or(false)
+    {
+        let csv_text = String::from_utf8_lossy(&body).to_string();
+        let parsed =
+            csv_import::parse_rows(&csv_text).map_err(|e| AppError::Validation(e.message))?;
+        ImportRequest {
+            scope: String::new(),
+            rows: parsed
+                .rows
+                .into_iter()
+                .map(|r| ImportRow {
+                    name: r.name,
+                    protocol: r.protocol,
+                    hostname: r.hostname,
+                    port: r.port,
+                    username: r.username,
+                    password: r.password,
+                    folder: r.folder,
+                    display_name: r.display_name,
+                    allowed_groups: r.allowed_groups,
+                })
+                .collect(),
+        }
+    } else {
+        serde_json::from_slice::<ImportRequest>(&body)
+            .map_err(|e| AppError::Validation(format!("invalid JSON body: {}", e)))?
+    };
+
     let scope = if req.scope.trim().is_empty() {
         default_scope()
     } else {
@@ -144,6 +180,7 @@ pub async fn import_csv(
     let mut imported = 0usize;
     let mut skipped = 0usize;
     let mut errors: Vec<serde_json::Value> = Vec::new();
+    let mut passwords_dropped = 0usize;
 
     for (idx, row) in req.rows.iter().enumerate() {
         let row_index = idx + 1;
@@ -205,26 +242,31 @@ pub async fn import_csv(
         };
         imported += 1;
 
-        // Store the password encrypted when a storage key is available
-        // (exactly like ab_create_entry: without a key it is not stored).
-        if !encryption_key.is_empty() && !row.password.is_empty() {
-            let key = match crate::crypto::EncryptionKey::from_hex(&encryption_key) {
-                Ok(k) => k,
-                Err(e) => {
-                    errors.push(json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}));
-                    continue;
-                }
-            };
-            match crate::crypto::encrypt_value(&key, &row.password) {
-                Ok(encrypted) => {
-                    if let Err(e) =
-                        db::store_ab_credential(&database, entry_id, "password", &encrypted)
-                    {
-                        errors.push(json!({"row": row_index, "error": format!("failed to store password: {}", e)}));
+        // Store the password encrypted when a storage key is available.
+        // Without a key the entry is imported but its password is dropped
+        // and counted — the admin must not be left thinking it was stored.
+        if !row.password.is_empty() {
+            if encryption_key.is_empty() {
+                passwords_dropped += 1;
+            } else {
+                let key = match crate::crypto::EncryptionKey::from_hex(&encryption_key) {
+                    Ok(k) => k,
+                    Err(e) => {
+                        errors.push(json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}));
+                        continue;
                     }
-                }
-                Err(e) => {
-                    errors.push(json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}));
+                };
+                let stored = match crate::crypto::encrypt_value(&key, &row.password) {
+                    Ok(encrypted) => {
+                        db::store_ab_credential(&database, entry_id, "password", &encrypted)
+                    }
+                    Err(e) => {
+                        errors.push(json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}));
+                        continue;
+                    }
+                };
+                if let Err(e) = stored {
+                    errors.push(json!({"row": row_index, "error": format!("failed to store password: {}", e)}));
                 }
             }
         }
@@ -239,6 +281,7 @@ pub async fn import_csv(
         "imported": imported,
         "skipped": skipped,
         "errors": errors.len(),
+        "passwords_dropped": passwords_dropped,
     })
     .to_string();
     log_ab_event(
@@ -256,6 +299,7 @@ pub async fn import_csv(
     Ok(Json(json!({
         "imported": imported,
         "skipped": skipped,
+        "passwords_dropped": passwords_dropped,
         "errors": errors,
     })))
 }

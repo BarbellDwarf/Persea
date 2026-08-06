@@ -7,6 +7,7 @@
 //! values in `templates/pages/admin/settings.html` and the documented
 //! defaults in `src/config.rs`.
 
+use crate::api::SettingsBaseline;
 use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::error::AppError;
@@ -17,19 +18,20 @@ use std::net::SocketAddr;
 
 /// The full ordered set of keys this API manages. Order matters: it
 /// determines the JSON key order in GET/PUT responses.
+///
+/// Keys without a runtime effect are deliberately NOT managed here
+/// (`session_idle_timeout_secs`, `enable_browser_sessions`,
+/// `enable_proxmox`, `enable_vmware` have no Config equivalent and would
+/// silently lie in the UI).
 const SETTING_KEYS: &[&str] = &[
     "listen_addr",
     "guacd_addr",
     "tls_cert_path",
     "tls_key_path",
     "session_max_duration_secs",
-    "session_idle_timeout_secs",
     "max_concurrent_sessions",
     "session_history_retention_days",
-    "enable_browser_sessions",
-    "enable_proxmox",
     "enable_vdi",
-    "enable_vmware",
     "vault_enabled",
     "db_only_mode",
 ];
@@ -38,18 +40,15 @@ const STRING_KEYS: &[&str] = &["listen_addr", "guacd_addr", "tls_cert_path", "tl
 const ADDR_KEYS: &[&str] = &["listen_addr", "guacd_addr"];
 const DURATION_KEYS: &[&str] = &[
     "session_max_duration_secs",
-    "session_idle_timeout_secs",
     "max_concurrent_sessions",
     "session_history_retention_days",
 ];
-const BOOL_KEYS: &[&str] = &[
-    "enable_browser_sessions",
-    "enable_proxmox",
-    "enable_vdi",
-    "enable_vmware",
-    "vault_enabled",
-    "db_only_mode",
-];
+const BOOL_KEYS: &[&str] = &["enable_vdi", "vault_enabled", "db_only_mode"];
+
+/// Upper bounds for unbounded numeric settings (0 stays "unlimited" where
+/// the runtime treats it that way).
+const MAX_DURATION_SECS: u64 = 31_536_000; // 365 days
+const MAX_RETENTION_DAYS: u32 = 3650;
 
 /// Idempotent — the table is created by migration `003-system-settings.sql`
 /// on the sqlx backends; the rusqlite backend creates it lazily here.
@@ -78,7 +77,7 @@ fn default_value(key: &str) -> Value {
         "enable_vdi" => json!(false),
         "enable_vmware" => json!(false),
         "vault_enabled" => json!(false),
-        "db_only_mode" => json!(false),
+        "db_only_mode" => json!(true), // DB-first storage is the default
         _ => json!(null),
     }
 }
@@ -106,6 +105,25 @@ fn stored_to_value(key: &str, stored: &str) -> Value {
 }
 
 /// Merge stored rows with defaults into the full effective settings object.
+/// Merge the startup config baseline (from `SettingsBaseline`) with DB
+/// overrides; DB values win.
+fn effective_settings_with_baseline(
+    baseline: Value,
+    stored: &std::collections::HashMap<String, String>,
+) -> Value {
+    let mut out = serde_json::Map::new();
+    let base = baseline.as_object().cloned().unwrap_or_default();
+    for key in SETTING_KEYS {
+        let v = stored
+            .get(*key)
+            .map(|s| stored_to_value(key, s))
+            .or_else(|| base.get(*key).cloned())
+            .unwrap_or_else(|| default_value(key));
+        out.insert((*key).to_string(), v);
+    }
+    Value::Object(out)
+}
+
 fn effective_settings(stored: &std::collections::HashMap<String, String>) -> Value {
     let mut out = serde_json::Map::new();
     for key in SETTING_KEYS {
@@ -145,6 +163,7 @@ fn is_admin(identity: &Option<Extension<AuthIdentity>>) -> bool {
 pub async fn get_settings(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    baseline: Option<Extension<SettingsBaseline>>,
 ) -> Result<Json<Value>, AppError> {
     if !is_admin(&identity) {
         return Err(AppError::Forbidden("admin role required".into()));
@@ -153,7 +172,13 @@ pub async fn get_settings(
     let stored = tokio::task::spawn_blocking(move || read_all_settings(&db_clone))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
-    Ok(Json(effective_settings(&stored)))
+    // Report the effective values: config-file baseline overlaid with DB
+    // overrides (DB wins). Without the extension (tests, direct routers)
+    // fall back to defaults only.
+    Ok(Json(effective_settings_with_baseline(
+        baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
+        &stored,
+    )))
 }
 
 fn parse_u64(value: &Value, key: &str) -> Result<u64, AppError> {
@@ -191,8 +216,17 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
             .to_string())
     } else if DURATION_KEYS.contains(&key) {
         let n = parse_u64(value, key)?;
-        if n == 0 && (key == "session_max_duration_secs" || key == "session_idle_timeout_secs") {
-            return Err(AppError::Validation(format!("{key} must be positive")));
+        if key == "session_max_duration_secs" {
+            if n == 0 || n > MAX_DURATION_SECS {
+                return Err(AppError::Validation(format!(
+                    "{key} must be between 1 and {MAX_DURATION_SECS}"
+                )));
+            }
+        }
+        if key == "session_history_retention_days" && n > MAX_RETENTION_DAYS as u64 {
+            return Err(AppError::Validation(format!(
+                "{key} must be at most {MAX_RETENTION_DAYS}"
+            )));
         }
         Ok(n.to_string())
     } else if BOOL_KEYS.contains(&key) {

@@ -182,7 +182,7 @@ async fn test_create_oidc_provider_success() {
     assert_eq!(body["position"].as_i64().unwrap(), 0);
     assert_eq!(
         body["config"]["client_secret"].as_str().unwrap(),
-        "supersecret"
+        "\u{2022}\u{2022}\u{2022}configured\u{2022}\u{2022}\u{2022}"
     );
 }
 
@@ -299,7 +299,7 @@ async fn test_oidc_config_round_trips_through_api() {
     );
     assert_eq!(
         row["config"]["client_secret"].as_str().unwrap(),
-        "supersecret"
+        "\u{2022}\u{2022}\u{2022}configured\u{2022}\u{2022}\u{2022}"
     );
     assert_eq!(row["config"]["groups_claim"].as_str().unwrap(), "groups");
 
@@ -314,7 +314,10 @@ async fn test_oidc_config_round_trips_through_api() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let cfg = body_json(response).await;
-    assert_eq!(cfg, oidc_config());
+    // Secrets are masked in API responses.
+    let mut expected = oidc_config();
+    expected["client_secret"] = json!("\u{2022}\u{2022}\u{2022}configured\u{2022}\u{2022}\u{2022}");
+    assert_eq!(cfg, expected);
 }
 
 #[tokio::test]

@@ -7,7 +7,7 @@
 CREATE TABLE IF NOT EXISTS local_groups (
     id          BIGINT AUTO_INCREMENT PRIMARY KEY,
     name        VARCHAR(255) NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL,
     created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -77,13 +77,24 @@ pub fn migrate(db: &Db) -> rusqlite::Result<()> {
             config     TEXT NOT NULL DEFAULT '{}',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );",
+        );
+        -- Provider names are unique so the auth-chain key `db-provider-{name}`
+        -- cannot collide; the API maps the resulting conflict to 409.
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_providers_name
+            ON auth_providers(name);",
     )
 }
 
 /// Load all DB-configured providers in chain order (`position`, then `id`).
 pub fn load_providers(db: &Db) -> rusqlite::Result<Vec<DbProvider>> {
     let conn = db.lock().unwrap();
+    load_providers_on(&conn)
+}
+
+/// Load providers ordered by chain position from a given connection. Exposed
+/// so transactional callers (move/insert) read the list inside their own
+/// transaction instead of racing concurrent writes.
+fn load_providers_on(conn: &Connection) -> rusqlite::Result<Vec<DbProvider>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, type, enabled, position, config, created_at, updated_at
          FROM auth_providers ORDER BY position, id",
@@ -105,19 +116,22 @@ pub fn insert_provider(
     provider_type: &str,
     config: &Value,
 ) -> rusqlite::Result<DbProvider> {
-    let conn = db.lock().unwrap();
-    let next_position: i64 = conn.query_row(
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    let next_position: i64 = tx.query_row(
         "SELECT COALESCE(MAX(position), -1) + 1 FROM auth_providers",
         [],
         |row| row.get(0),
     )?;
-    conn.execute(
+    tx.execute(
         "INSERT INTO auth_providers (name, type, enabled, position, config)
          VALUES (?1, ?2, 1, ?3, ?4)",
         params![name, provider_type, next_position, config.to_string()],
     )?;
-    let id = conn.last_insert_rowid();
-    query_provider(&conn, id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
+    let id = tx.last_insert_rowid();
+    let provider = query_provider(&tx, id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+    tx.commit()?;
+    Ok(provider)
 }
 
 /// Replace a provider's config JSON. Returns `false` if the id is unknown.
@@ -156,7 +170,11 @@ pub fn move_provider(
     id: i64,
     direction: MoveDirection,
 ) -> rusqlite::Result<Option<DbProvider>> {
-    let providers = load_providers(db)?;
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    // Read the ordered list inside the transaction so a concurrent move
+    // cannot produce duplicate positions.
+    let providers = load_providers_on(&tx)?;
     let idx = match providers.iter().position(|p| p.id == id) {
         Some(i) => i,
         None => return Ok(None),
@@ -175,9 +193,6 @@ pub fn move_provider(
             idx + 1
         }
     };
-
-    let mut conn = db.lock().unwrap();
-    let tx = conn.transaction()?;
     // Swap positions; target takes the neighbour's, neighbour takes the target's.
     tx.execute(
         "UPDATE auth_providers SET position = ?1, updated_at = datetime('now') WHERE id = ?2",

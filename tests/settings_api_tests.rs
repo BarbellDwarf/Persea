@@ -15,6 +15,9 @@ mod db {
 mod error {
     pub use persea::error::*;
 }
+mod api {
+    pub use persea::api::SettingsBaseline;
+}
 
 #[path = "../src/api/settings.rs"]
 mod settings;
@@ -129,15 +132,11 @@ async fn get_settings_returns_defaults_when_empty() {
     assert_eq!(json["tls_cert_path"].as_str().unwrap(), "");
     assert_eq!(json["tls_key_path"].as_str().unwrap(), "");
     assert_eq!(json["session_max_duration_secs"].as_u64(), Some(28800));
-    assert_eq!(json["session_idle_timeout_secs"].as_u64(), Some(1800));
     assert_eq!(json["max_concurrent_sessions"].as_u64(), Some(500));
     assert_eq!(json["session_history_retention_days"].as_u64(), Some(90));
-    assert_eq!(json["enable_browser_sessions"].as_bool(), Some(false));
-    assert_eq!(json["enable_proxmox"].as_bool(), Some(false));
     assert_eq!(json["enable_vdi"].as_bool(), Some(false));
-    assert_eq!(json["enable_vmware"].as_bool(), Some(false));
     assert_eq!(json["vault_enabled"].as_bool(), Some(false));
-    assert_eq!(json["db_only_mode"].as_bool(), Some(false));
+    assert_eq!(json["db_only_mode"].as_bool(), Some(true));
 }
 
 // ── PUT + GET round trip ──
@@ -154,13 +153,9 @@ async fn put_persists_and_get_returns_saved_values() {
         "tls_cert_path": "/etc/persea/tls.crt",
         "tls_key_path": "/etc/persea/tls.key",
         "session_max_duration_secs": 7200,
-        "session_idle_timeout_secs": "3600",
         "max_concurrent_sessions": 25,
         "session_history_retention_days": 30,
-        "enable_browser_sessions": true,
-        "enable_proxmox": "true",
         "enable_vdi": false,
-        "enable_vmware": "false",
         "vault_enabled": true,
         "db_only_mode": false
     });
@@ -173,9 +168,7 @@ async fn put_persists_and_get_returns_saved_values() {
     assert_eq!(saved["listen_addr"].as_str().unwrap(), "0.0.0.0:9999");
     assert_eq!(saved["guacd_addr"].as_str().unwrap(), "10.0.0.5:4822");
     assert_eq!(saved["session_max_duration_secs"].as_u64(), Some(7200));
-    assert_eq!(saved["session_idle_timeout_secs"].as_u64(), Some(3600));
     assert_eq!(saved["max_concurrent_sessions"].as_u64(), Some(25));
-    assert_eq!(saved["enable_browser_sessions"].as_bool(), Some(true));
     assert_eq!(saved["enable_vdi"].as_bool(), Some(false));
     assert_eq!(saved["vault_enabled"].as_bool(), Some(true));
 
@@ -198,13 +191,9 @@ async fn put_persists_and_get_returns_saved_values() {
         "/etc/persea/tls.key"
     );
     assert_eq!(json["session_max_duration_secs"].as_u64(), Some(7200));
-    assert_eq!(json["session_idle_timeout_secs"].as_u64(), Some(3600));
     assert_eq!(json["max_concurrent_sessions"].as_u64(), Some(25));
     assert_eq!(json["session_history_retention_days"].as_u64(), Some(30));
-    assert_eq!(json["enable_browser_sessions"].as_bool(), Some(true));
-    assert_eq!(json["enable_proxmox"].as_bool(), Some(true));
     assert_eq!(json["enable_vdi"].as_bool(), Some(false));
-    assert_eq!(json["enable_vmware"].as_bool(), Some(false));
     assert_eq!(json["vault_enabled"].as_bool(), Some(true));
     assert_eq!(json["db_only_mode"].as_bool(), Some(false));
 }

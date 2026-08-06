@@ -59,6 +59,12 @@ pub struct CredentialDefaultScope(pub String);
 #[derive(Clone)]
 pub struct StorageKey(pub Option<String>);
 
+/// Effective config-file values for the admin settings page keys, captured
+/// at startup so `GET /api/system/settings` can report real values overlaid
+/// with DB overrides instead of DB-only defaults.
+#[derive(Clone)]
+pub struct SettingsBaseline(pub serde_json::Value);
+
 /// Storage backend for address book credentials, resolved from
 /// `[storage].backend` ("db" default | "vault") at startup. Folders and entry
 /// metadata always live in the DB; this marker decides where the credential

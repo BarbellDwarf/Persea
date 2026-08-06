@@ -47,7 +47,8 @@ pub struct LdapConfig {
 
     /// Use StartTLS instead of ldaps://.
     /// When true, connects on port 389 and upgrades to TLS.
-    #[serde(default)]
+    /// Accepts `start_tls` as an alias (admin UI provider config).
+    #[serde(default, alias = "start_tls")]
     pub starttls: bool,
 
     /// Connection timeout in seconds.

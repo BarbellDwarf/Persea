@@ -101,6 +101,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # ---------------------------------------------------------------------------
 FROM debian:trixie-slim AS runtime
 
+# Beta images (built by the beta workflow with --build-arg PERSEA_BETA=1)
+# print the running version at startup; production builds leave this unset.
+ARG PERSEA_BETA="0"
+ENV PERSEA_BETA=${PERSEA_BETA}
+
 # Runtime libraries for guacd
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 libjpeg62-turbo libpng16-16t64 libwebp7 \
@@ -232,6 +237,12 @@ if [ ! -f "$DB_PATH" ]; then
     echo ""
     echo "==> SAVE THE API KEY ABOVE — it is only shown once! <=="
     echo ""
+fi
+
+# Print the running version on beta images (PERSEA_BETA=1 set at build time
+# by the beta workflow); production images skip this.
+if [ "$PERSEA_BETA" = "1" ]; then
+    echo "persea version: $(/opt/persea/bin/persea --version 2>&1)"
 fi
 
 # Start guacd in background

@@ -350,6 +350,8 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             scope       TEXT NOT NULL DEFAULT 'shared',
             name        TEXT NOT NULL,
             description TEXT DEFAULT '',
+            allowed_groups TEXT NOT NULL DEFAULT '',
+            inherit_from_parent INTEGER NOT NULL DEFAULT 0,
             created_at  TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(scope, name)
@@ -384,6 +386,20 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         CREATE INDEX IF NOT EXISTS idx_ab_entries_folder ON address_book_entries(folder_id);
         CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);",
     )?;
+
+    // Folder-level ACLs (wayfinder ticket 027): columns added after the
+    // original address book schema. ALTER is idempotent-guarded — existing
+    // databases get the columns, fresh ones already have them.
+    for ddl in [
+        "ALTER TABLE address_book_folders ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE address_book_folders ADD COLUMN inherit_from_parent INTEGER NOT NULL DEFAULT 0",
+    ] {
+        if let Err(e) = conn.execute(ddl, []) {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
 
     // Migration: local groups + provider-group mappings (ticket #029).
     // Local groups are admin-defined named groups that folders/connections
@@ -2052,6 +2068,10 @@ pub struct AbFolder {
     pub scope: String,
     pub name: String,
     pub description: String,
+    /// Comma-separated group names allowed to use this folder (empty = open).
+    pub allowed_groups: String,
+    /// Whether subfolders inherit this folder's allowed_groups.
+    pub inherit_from_parent: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -2088,13 +2108,36 @@ pub fn create_ab_folder(
     scope: &str,
     name: &str,
     description: &str,
+    allowed_groups: &str,
+    inherit_from_parent: bool,
 ) -> rusqlite::Result<i64> {
     let conn = db.lock().unwrap();
     conn.execute(
-        "INSERT INTO address_book_folders (scope, name, description) VALUES (?1, ?2, ?3)",
-        params![scope, name, description],
+        "INSERT INTO address_book_folders (scope, name, description, allowed_groups, inherit_from_parent)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![scope, name, description, allowed_groups, inherit_from_parent as i64],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Update folder metadata (description / ACLs). Returns false if the folder
+/// does not exist.
+pub fn update_ab_folder(
+    db: &Db,
+    scope: &str,
+    name: &str,
+    description: &str,
+    allowed_groups: &str,
+    inherit_from_parent: bool,
+) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE address_book_folders
+         SET description = ?3, allowed_groups = ?4, inherit_from_parent = ?5, updated_at = datetime('now')
+         WHERE scope = ?1 AND name = ?2",
+        params![scope, name, description, allowed_groups, inherit_from_parent as i64],
+    )?;
+    Ok(changed > 0)
 }
 
 /// List all address book folders, optionally filtered by scope.
@@ -2102,12 +2145,12 @@ pub fn list_ab_folders(db: &Db, scope: Option<&str>) -> rusqlite::Result<Vec<AbF
     let conn = db.lock().unwrap();
     let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match scope {
         Some(s) => (
-            "SELECT id, scope, name, description, created_at, updated_at
+            "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at
              FROM address_book_folders WHERE scope = ?1 ORDER BY name",
             vec![Box::new(s.to_string())],
         ),
         None => (
-            "SELECT id, scope, name, description, created_at, updated_at
+            "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at
              FROM address_book_folders ORDER BY scope, name",
             vec![],
         ),
@@ -2119,8 +2162,10 @@ pub fn list_ab_folders(db: &Db, scope: Option<&str>) -> rusqlite::Result<Vec<AbF
             scope: row.get(1)?,
             name: row.get(2)?,
             description: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
+            allowed_groups: row.get(4)?,
+            inherit_from_parent: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
         })
     })?;
     rows.collect()
@@ -2130,7 +2175,7 @@ pub fn list_ab_folders(db: &Db, scope: Option<&str>) -> rusqlite::Result<Vec<AbF
 pub fn get_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<AbFolder> {
     let conn = db.lock().unwrap();
     conn.query_row(
-        "SELECT id, scope, name, description, created_at, updated_at
+        "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at
          FROM address_book_folders WHERE scope = ?1 AND name = ?2",
         params![scope, name],
         |row| {
@@ -2139,8 +2184,10 @@ pub fn get_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<AbFol
                 scope: row.get(1)?,
                 name: row.get(2)?,
                 description: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                allowed_groups: row.get(4)?,
+                inherit_from_parent: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         },
     )
@@ -3021,6 +3068,17 @@ pub fn create_provider_group_mapping(
 ) -> rusqlite::Result<ProviderGroupMapping> {
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
+    // Verify the group still exists inside the same transaction (the API's
+    // pre-check can race a concurrent delete, which would leave a dangling
+    // mapping on backends without FK enforcement).
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM local_groups WHERE id = ?1)",
+        params![group_id],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
     tx.execute(
         "DELETE FROM group_mappings WHERE provider_group = ?1",
         params![provider_group],

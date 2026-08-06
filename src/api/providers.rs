@@ -54,6 +54,29 @@ fn require_admin(identity: &Option<Extension<AuthIdentity>>) -> Result<(), AppEr
     Ok(())
 }
 
+/// Secret-bearing config keys, masked in API responses. The chain merge and
+/// the PUT endpoint operate on the unmasked DB row; only API output masks.
+const SECRET_KEYS: &[&str] = &["client_secret", "bind_password", "shared_secret", "secret"];
+
+fn mask_config(config: &Value) -> Value {
+    let mut out = config.clone();
+    if let Some(obj) = out.as_object_mut() {
+        for key in SECRET_KEYS {
+            if let Some(v) = obj.get_mut(*key) {
+                if v.as_str().map(|s| !s.is_empty()).unwrap_or(false) {
+                    *v = json!("\u{2022}\u{2022}\u{2022}configured\u{2022}\u{2022}\u{2022}");
+                }
+            }
+        }
+    }
+    out
+}
+
+fn mask_provider(mut provider: providers_db::DbProvider) -> providers_db::DbProvider {
+    provider.config = mask_config(&provider.config);
+    provider
+}
+
 /// GET /api/auth/providers — `{"providers": [{"id", "name", "type", "enabled", "position"}]}`
 pub async fn list_providers(
     identity: Option<Extension<AuthIdentity>>,
@@ -114,9 +137,87 @@ pub async fn create_provider(
         )
     })
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))??;
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(|e| {
+        use rusqlite::ErrorCode;
+        if matches!(
+            e,
+            rusqlite::Error::SqliteFailure(ref f, _)
+                if f.code == ErrorCode::ConstraintViolation
+        ) {
+            AppError::Conflict("a provider with this name already exists".into())
+        } else {
+            AppError::Internal(e.to_string())
+        }
+    })?;
 
-    Ok((StatusCode::CREATED, Json(json!(provider))))
+    super::groups::audit_config_change(
+        &database,
+        &identity,
+        json!({"action": "create_provider", "id": provider.id, "name": provider.name}),
+    )
+    .await;
+    Ok((StatusCode::CREATED, Json(json!(mask_provider(provider)))))
+}
+
+/// PUT /api/auth/providers/{id} — replace the provider's config JSON
+/// (admin only). The body is the config object itself, validated against the
+/// provider's type like create. Secrets are written unmasked to the DB; API
+/// responses mask them.
+pub async fn update_provider(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(id): Path<i64>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    require_admin(&identity)?;
+
+    let db_clone = database.clone();
+    let body_clone = body.clone();
+    let changed = tokio::task::spawn_blocking(move || -> Result<bool, AppError> {
+        let existing = providers_db::get_provider(&db_clone, id)?
+            .ok_or_else(|| AppError::Session("provider not found".into()))?;
+        // Secret fields sent empty (or as the masked sentinel from a GET
+        // round-trip) keep their stored value — the config modal shows them
+        // blank with "leave blank to keep". Validation runs on the merged
+        // config so required secrets still pass.
+        let mut merged = body_clone;
+        if let (Some(obj), Some(old_obj)) = (merged.as_object_mut(), existing.config.as_object()) {
+            for key in SECRET_KEYS {
+                let keep = match obj.get(*key) {
+                    Some(Value::String(inner)) => {
+                        inner.is_empty()
+                            || inner == "\u{2022}\u{2022}\u{2022}configured\u{2022}\u{2022}\u{2022}"
+                    }
+                    None => true,
+                    _ => false,
+                };
+                if keep {
+                    if let Some(old_val) = old_obj.get(*key) {
+                        obj.insert((*key).to_string(), old_val.clone());
+                    }
+                }
+            }
+        }
+        providers_db::validate_config(&existing.provider_type, &merged)
+            .map_err(AppError::Validation)?;
+        providers_db::update_config(&db_clone, id, &merged)
+            .map_err(|e| AppError::Internal(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))??;
+    if !changed {
+        return Err(AppError::Session("provider not found".into()));
+    }
+
+    super::groups::audit_config_change(
+        &database,
+        &identity,
+        json!({"action": "update_provider", "id": id}),
+    )
+    .await;
+    let provider = fetch_provider(&database, id).await?;
+    Ok(Json(json!(mask_provider(provider))))
 }
 
 /// GET /api/auth/providers/{id} — full row incl. config (admin only).
@@ -129,7 +230,7 @@ pub async fn get_provider(
 
     let db_clone = database.clone();
     let provider = fetch_provider(&db_clone, id).await?;
-    Ok(Json(json!(provider)))
+    Ok(Json(json!(mask_provider(provider))))
 }
 
 /// POST /api/auth/providers/{id}/enable
@@ -139,7 +240,7 @@ pub async fn enable_provider(
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, AppError> {
     require_admin(&identity)?;
-    flip_enabled(&database, id, true).await
+    flip_enabled(&database, id, true, &identity).await
 }
 
 /// POST /api/auth/providers/{id}/disable
@@ -149,7 +250,7 @@ pub async fn disable_provider(
     Path(id): Path<i64>,
 ) -> Result<Json<Value>, AppError> {
     require_admin(&identity)?;
-    flip_enabled(&database, id, false).await
+    flip_enabled(&database, id, false, &identity).await
 }
 
 /// POST /api/auth/providers/{id}/move — `{direction: "up"|"down"}`
@@ -178,6 +279,12 @@ pub async fn move_provider(
             .map_err(|e| AppError::Internal(e.to_string()))??
             .ok_or_else(|| AppError::Session("provider not found".into()))?;
 
+    super::groups::audit_config_change(
+        &database,
+        &identity,
+        json!({"action": "move_provider", "id": id}),
+    )
+    .await;
     Ok(Json(json!({ "ok": true, "provider": provider })))
 }
 
@@ -191,7 +298,7 @@ pub async fn get_provider_config(
 
     let db_clone = database.clone();
     let provider = fetch_provider(&db_clone, id).await?;
-    Ok(Json(provider.config))
+    Ok(Json(mask_config(&provider.config)))
 }
 
 /// POST /api/auth/providers/{id}/test — connection test for the provider.
@@ -213,7 +320,14 @@ pub async fn test_provider(
 
     let (ok, detail) = match provider.provider_type.as_str() {
         "oidc" => test_oidc_discovery(&provider).await,
-        "ldap" => test_ldap_bind(&provider),
+        "ldap" => {
+            // LDAP binds can block for seconds on unreachable hosts — run the
+            // sync bind off the executor thread.
+            let p = provider.clone();
+            tokio::task::spawn_blocking(move || test_ldap_bind(&p))
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+        }
         other => (
             false,
             format!("test not supported for provider type '{other}'"),
@@ -235,6 +349,12 @@ pub async fn delete_provider(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
     if found {
+        super::groups::audit_config_change(
+            &database,
+            &identity,
+            json!({"action": "delete_provider", "id": id}),
+        )
+        .await;
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::Session("provider not found".into()))
@@ -254,13 +374,24 @@ async fn fetch_provider(db: &Db, id: i64) -> Result<DbProvider, AppError> {
         .ok_or_else(|| AppError::Session("provider not found".into()))
 }
 
-async fn flip_enabled(db: &Db, id: i64, enabled: bool) -> Result<Json<Value>, AppError> {
+async fn flip_enabled(
+    db: &Db,
+    id: i64,
+    enabled: bool,
+    identity: &Option<Extension<AuthIdentity>>,
+) -> Result<Json<Value>, AppError> {
     let db_clone = db.clone();
     let found =
         tokio::task::spawn_blocking(move || providers_db::set_enabled(&db_clone, id, enabled))
             .await
             .map_err(|e| AppError::Internal(e.to_string()))??;
     if found {
+        super::groups::audit_config_change(
+            db,
+            identity,
+            json!({"action": if enabled { "enable_provider" } else { "disable_provider" }, "id": id}),
+        )
+        .await;
         Ok(Json(json!({ "ok": true })))
     } else {
         Err(AppError::Session("provider not found".into()))

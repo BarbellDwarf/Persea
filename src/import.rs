@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::config::Config;
 use crate::db::{self, Db};
-use crate::vault::{AddressBookEntry, FolderConfig, VaultClient};
+use crate::vault::{AddressBookEntry, VaultClient};
 
 /// Run the import-guacamole subcommand.
 pub async fn cmd_import_guacamole(
@@ -227,7 +227,14 @@ pub async fn cmd_import_guacamole(
     // Create the root folder (idempotent).
     let root_id = match db::get_ab_folder(database, scope, folder) {
         Ok(f) => f.id,
-        Err(_) => match db::create_ab_folder(database, scope, folder, "Imported from Guacamole") {
+        Err(_) => match db::create_ab_folder(
+            database,
+            scope,
+            folder,
+            "Imported from Guacamole",
+            "",
+            false,
+        ) {
             Ok(id) => id,
             Err(e) => {
                 eprintln!("Error creating folder \"{}\": {}", folder, e);
@@ -263,6 +270,8 @@ pub async fn cmd_import_guacamole(
                 scope,
                 &full,
                 &format!("Imported from Guacamole: {}", sub),
+                "",
+                false,
             ) {
                 Ok(id) => id,
                 Err(e) => {

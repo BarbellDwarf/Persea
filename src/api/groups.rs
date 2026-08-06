@@ -60,7 +60,7 @@ fn require_admin(identity: &Option<Extension<AuthIdentity>>) -> Result<(), AppEr
 }
 
 /// Fire-and-forget audit event for a config change, mirroring users.rs.
-async fn audit_config_change(
+pub(crate) async fn audit_config_change(
     database: &Db,
     identity: &Option<Extension<AuthIdentity>>,
     details: Value,
@@ -87,11 +87,15 @@ async fn audit_config_change(
 
 /// Map a rusqlite error: UNIQUE violations become 409, everything else 500.
 fn map_group_conflict(e: rusqlite::Error) -> AppError {
-    let msg = e.to_string();
-    if msg.contains("UNIQUE") {
+    use rusqlite::ErrorCode;
+    if matches!(
+        e,
+        rusqlite::Error::SqliteFailure(ref f, _)
+            if f.code == ErrorCode::ConstraintViolation
+    ) {
         AppError::Conflict("a group with this name already exists".into())
     } else {
-        AppError::Internal(msg)
+        AppError::Internal(e.to_string())
     }
 }
 
@@ -120,6 +124,11 @@ pub async fn create_group(
     let name = req.name.trim().to_string();
     if name.is_empty() {
         return Err(AppError::Validation("group name must not be empty".into()));
+    }
+    if name.contains(',') {
+        return Err(AppError::Validation(
+            "group name must not contain commas".into(),
+        ));
     }
 
     let db_clone = database.clone();
@@ -204,6 +213,11 @@ pub async fn update_group(
         if n.is_empty() {
             return Err(AppError::Validation("group name must not be empty".into()));
         }
+        if n.contains(',') {
+            return Err(AppError::Validation(
+                "group name must not contain commas".into(),
+            ));
+        }
     }
 
     let db_clone = database.clone();
@@ -226,7 +240,8 @@ pub async fn update_group(
         &database,
         &identity,
         json!({"action": "update_group", "id": id, "name": group.name}),
-    );
+    )
+    .await;
     Ok(Json(json!(group)))
 }
 
@@ -284,8 +299,13 @@ pub async fn add_group_mapping(
         if db::get_local_group(&db_clone, id)?.is_none() {
             return Err(AppError::Session("group not found".into()));
         }
-        db::create_provider_group_mapping(&db_clone, id, &pg_for_db)
-            .map_err(|e| AppError::Internal(e.to_string()))
+        db::create_provider_group_mapping(&db_clone, id, &pg_for_db).map_err(|e| {
+            if matches!(e, rusqlite::Error::QueryReturnedNoRows) {
+                AppError::Session("group not found".into())
+            } else {
+                AppError::Internal(e.to_string())
+            }
+        })
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;

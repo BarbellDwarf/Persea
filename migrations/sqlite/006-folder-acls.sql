@@ -1,0 +1,3 @@
+-- Folder-level ACLs (wayfinder ticket 027): allowed_groups + inherit flag on
+-- address_book_folders. Existing databases get the columns via ALTER in
+-- src/db.rs init_db; fresh databases create them inline.

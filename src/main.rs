@@ -50,8 +50,8 @@ mod vsphere;
 mod websocket;
 
 use crate::api::{
-    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, StorageBackend,
-    StorageKey, ThemeData, VaultBackends, VaultCell, VaultConfigured, VaultState,
+    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SettingsBaseline, SiteTitle,
+    StorageBackend, StorageKey, ThemeData, VaultBackends, VaultCell, VaultConfigured, VaultState,
 };
 use crate::auth_chain::AuthChain;
 use crate::auth_provider::AuthProvider;
@@ -74,7 +74,7 @@ use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "persea", about = "Lightweight Guacamole SSH proxy")]
+#[command(name = "persea", version, about = "Lightweight Guacamole SSH proxy")]
 struct Cli {
     /// Path to TOML config file
     #[arg(short, long)]
@@ -316,6 +316,43 @@ async fn main() {
             // merge maps the fields that have config equivalents.
             if let Ok(overrides) = crate::settings_merge::load_db_settings(&database) {
                 crate::settings_merge::apply_db_settings(&mut config, &overrides);
+                // DB values bypass the earlier validate() pass — re-run it so
+                // an invalid saved value fails fast with a clear message.
+                match config.validate() {
+                    Ok(warnings) => {
+                        for w in warnings {
+                            eprintln!("WARNING: {}", w);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            // DB-first storage (ticket 026): credentials are encrypted at
+            // rest in the DB — without a key they are stored/returned in
+            // plaintext. Warn loudly so operators notice.
+            if config
+                .storage
+                .as_ref()
+                .map(|st| st.backend != "vault")
+                .unwrap_or(true)
+                && config.storage_encryption_key().is_none()
+            {
+                eprintln!(
+                    "WARNING: no [storage].encryption_key / PERSEA_STORAGE_KEY set —                      connection credentials stored in the DB will NOT be encrypted.                      Generate one with: openssl rand -hex 32"
+                );
+            }
+            // The credential encryption key is used in every DB-credential
+            // request path; a malformed value would panic at runtime.
+            if let Some(ref k) = config.storage_encryption_key() {
+                if crate::crypto::EncryptionKey::from_hex(k).is_err() {
+                    eprintln!(
+                        "Error: [storage].encryption_key / PERSEA_STORAGE_KEY must be a 64-char hex string"
+                    );
+                    std::process::exit(1);
+                }
             }
             run_server(config, database, log_format).await
         }
@@ -921,8 +958,12 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         None
     };
 
-    // Build auth chain from [auth] config.
-    let auth_chain = match config.auth.as_ref() {
+    // Build the auth chain from [auth] config plus DB-configured providers
+    // (wayfinder ticket 025). DB entries added through the admin auth page
+    // extend the chain, appended after config methods in position order;
+    // they work with or without an [auth] section. OIDC keeps its own
+    // separate flow; TOTP remains [auth.totp]-only.
+    let (mut methods, mut providers) = match config.auth.as_ref() {
         Some(auth_cfg) => {
             let mut providers: std::collections::HashMap<String, Box<dyn AuthProvider>> =
                 std::collections::HashMap::new();
@@ -959,79 +1000,98 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
                     )),
                 );
             }
-
-            // Merge DB-configured providers (wayfinder ticket 025): entries
-            // added through the admin auth page extend the config chain,
-            // appended after config methods in position order. OIDC and TOTP
-            // entries are handled by their own flows, not the chain.
-            let mut db_methods: Vec<String> = Vec::new();
-            if let Ok(db_providers) = crate::providers_db::load_providers(&database) {
-                for p in db_providers.iter().filter(|p| p.enabled) {
-                    let key = format!("db-provider-{}", p.name);
-                    let provider: Option<Box<dyn AuthProvider>> =
-                        match p.provider_type.as_str() {
-                            "ldap" => serde_json::from_value::<
-                                crate::auth_providers::ldap::LdapConfig,
-                            >(p.config.clone())
-                            .ok()
-                            .map(|c| {
-                                Box::new(crate::auth_providers::ldap::LdapProvider::new(c))
-                                    as Box<dyn AuthProvider>
-                            }),
-                            "radius" => serde_json::from_value::<
-                                crate::auth_providers::radius::RadiusConfig,
-                            >(p.config.clone())
-                            .ok()
-                            .map(|c| {
-                                Box::new(crate::auth_providers::radius::RadiusProvider::new(c))
-                                    as Box<dyn AuthProvider>
-                            }),
-                            "saml" => serde_json::from_value::<
-                                crate::auth_providers::saml::SamlConfig,
-                            >(p.config.clone())
-                            .ok()
-                            .map(|c| {
-                                Box::new(crate::auth_providers::saml::SamlProvider::new(c))
-                                    as Box<dyn AuthProvider>
-                            }),
-                            "database" => Some(Box::new(
-                                crate::auth_providers::database::DatabaseProvider::new(
-                                    database.clone(),
-                                ),
-                            )
-                                as Box<dyn AuthProvider>),
-                            _ => None,
-                        };
-                    if let Some(prov) = provider {
-                        providers.insert(key.clone(), prov);
-                        db_methods.push(key);
-                    }
-                }
-            }
-            let mut methods = auth_cfg.methods.clone();
-            methods.extend(db_methods);
-
-            match AuthChain::from_config(&methods, providers) {
-                Ok(chain) => {
-                    tracing::info!(
-                        methods = ?methods,
-                        "Auth chain initialized"
-                    );
-                    chain
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to build auth chain: {} — falling back to database-only",
-                        e
-                    );
-                    AuthChain::new(vec![Box::new(
-                        crate::auth_providers::database::DatabaseProvider::new(database.clone()),
-                    )])
-                }
-            }
+            (auth_cfg.methods.clone(), providers)
         }
         None => {
-            // No [auth] config — default chain is database-only
+            let mut providers: std::collections::HashMap<String, Box<dyn AuthProvider>> =
+                std::collections::HashMap::new();
+            providers.insert(
+                "database".into(),
+                Box::new(crate::auth_providers::database::DatabaseProvider::new(
+                    database.clone(),
+                )),
+            );
+            (vec!["database".to_string()], providers)
+        }
+    };
+
+    let mut db_methods: Vec<String> = Vec::new();
+    if let Ok(db_providers) = crate::providers_db::load_providers(&database) {
+        for p in db_providers.iter().filter(|p| p.enabled) {
+            let key = format!("db-provider-{}", p.name);
+            if providers.contains_key(&key) || methods.contains(&key) {
+                tracing::warn!(
+                    "Duplicate DB auth provider name '{}' skipped (names must be unique)",
+                    p.name
+                );
+                continue;
+            }
+            let provider: Option<Box<dyn AuthProvider>> = match p.provider_type.as_str() {
+                "ldap" => serde_json::from_value::<crate::auth_providers::ldap::LdapConfig>(
+                    p.config.clone(),
+                )
+                .ok()
+                .map(|c| {
+                    Box::new(crate::auth_providers::ldap::LdapProvider::new(c))
+                        as Box<dyn AuthProvider>
+                }),
+                "radius" => serde_json::from_value::<crate::auth_providers::radius::RadiusConfig>(
+                    p.config.clone(),
+                )
+                .ok()
+                .map(|c| {
+                    Box::new(crate::auth_providers::radius::RadiusProvider::new(c))
+                        as Box<dyn AuthProvider>
+                }),
+                "saml" => serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
+                    p.config.clone(),
+                )
+                .ok()
+                .map(|c| {
+                    Box::new(crate::auth_providers::saml::SamlProvider::new(c))
+                        as Box<dyn AuthProvider>
+                }),
+                "database" => Some(
+                    Box::new(crate::auth_providers::database::DatabaseProvider::new(
+                        database.clone(),
+                    )) as Box<dyn AuthProvider>,
+                ),
+                "totp" => {
+                    tracing::warn!(
+                        "TOTP provider '{}' is not wired into the auth chain — configure [auth.totp] instead",
+                        p.name
+                    );
+                    None
+                }
+                other => {
+                    tracing::warn!("Unknown DB auth provider type '{}' skipped", other);
+                    None
+                }
+            };
+            if let Some(prov) = provider {
+                providers.insert(key.clone(), prov);
+                db_methods.push(key);
+            } else {
+                tracing::warn!(
+                    "DB auth provider '{}' (type {}) failed to load and was skipped",
+                    p.name,
+                    p.provider_type
+                );
+            }
+        }
+    }
+    methods.extend(db_methods);
+
+    let auth_chain = match AuthChain::from_config(&methods, providers) {
+        Ok(chain) => {
+            tracing::info!(methods = ?methods, "Auth chain initialized");
+            chain
+        }
+        Err(e) => {
+            tracing::error!(
+                "Failed to build auth chain: {} — falling back to database-only",
+                e
+            );
             AuthChain::new(vec![Box::new(
                 crate::auth_providers::database::DatabaseProvider::new(database.clone()),
             )])
@@ -1044,6 +1104,18 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     let credential_default_scope =
         CredentialDefaultScope(config.user_credentials_default_scope.clone());
     let storage_key = StorageKey(config.storage_encryption_key());
+    let settings_baseline = SettingsBaseline(serde_json::json!({
+        "listen_addr": config.listen_addr,
+        "guacd_addr": config.guacd_addr,
+        "tls_cert_path": config.tls.as_ref().and_then(|t| t.cert_path.as_ref()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        "tls_key_path": config.tls.as_ref().and_then(|t| t.key_path.as_ref()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        "session_max_duration_secs": config.session_max_duration_secs,
+        "max_concurrent_sessions": config.max_sessions,
+        "session_history_retention_days": config.session_history_retention_days,
+        "enable_vdi": config.vdi.as_ref().map(|v| v.enabled).unwrap_or(false),
+        "vault_enabled": config.vault.is_some(),
+        "db_only_mode": config.storage.as_ref().map(|st| st.backend != "vault").unwrap_or(true),
+    }));
     let storage_backend = StorageBackend(
         config
             .storage
@@ -1174,11 +1246,31 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     };
 
     // Extract SAML provider and TOTP enforcement before config is moved into SessionManager
-    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> =
-        config.auth.as_ref().and_then(|a| {
+    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> = config
+        .auth
+        .as_ref()
+        .and_then(|a| {
             a.saml
                 .as_ref()
                 .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone())))
+        })
+        .or_else(|| {
+            // A DB-configured SAML provider (admin auth page) also needs the
+            // ACS/metadata routes; build the provider from its stored config.
+            crate::providers_db::load_providers(&database)
+                .ok()
+                .and_then(|providers| {
+                    providers
+                        .iter()
+                        .find(|p| p.enabled && p.provider_type == "saml")
+                        .and_then(|p| {
+                            serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
+                                p.config.clone(),
+                            )
+                            .ok()
+                        })
+                        .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg)))
+                })
         });
     let totp_enforcement = config
         .auth
@@ -1386,7 +1478,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         )
         .route(
             "/api/auth/providers/{id}",
-            delete(api::providers::delete_provider),
+            put(api::providers::update_provider).delete(api::providers::delete_provider),
         )
         .route(
             "/api/auth/providers/{id}/enable",
@@ -1424,7 +1516,11 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
             "/api/admin/groups/{id}/mappings/{mapping_id}",
             delete(api::groups::remove_group_mapping),
         )
-        .route("/api/addressbook/import", post(api::imports::import_csv))
+        .route(
+            "/api/addressbook/import",
+            post(api::imports::import_csv)
+                .layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024)),
+        )
         .route(
             "/api/addressbook/import-template",
             get(api::imports::import_template),
@@ -1605,6 +1701,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(credential_default_scope.clone()))
         .layer(Extension(storage_key.clone()))
+        .layer(Extension(settings_baseline.clone()))
         .layer(Extension(storage_backend.clone()))
         .layer(Extension(vsphere_client))
         .layer(Extension(database.clone()));

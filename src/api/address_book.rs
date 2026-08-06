@@ -50,26 +50,35 @@ pub(crate) fn folder_allowed_for_user(
     }
     match db::get_ab_folder(db, scope, folder_name) {
         Ok(folder) => {
-            if folder.description.is_empty() {
-                // No description means no group restrictions set
-                return true;
+            let folder_groups: Vec<String> = folder
+                .allowed_groups
+                .split(',')
+                .map(|g| g.trim().to_string())
+                .filter(|g| !g.is_empty())
+                .collect();
+            if !folder_groups.is_empty() {
+                // Folder-level ACL: membership required.
+                return folder_groups
+                    .iter()
+                    .any(|g| user_groups.iter().any(|ug| ug == g));
             }
-            // Check if any entry in this folder has allowed_groups matching
+            // No folder ACL: fall back to entry-level groups (legacy/import
+            // data stored allowed_groups per entry). An entry with no groups
+            // is open.
             match db::list_ab_entries(db, folder.id) {
-                Ok(entries) => {
-                    for entry in &entries {
-                        if entry.allowed_groups.is_empty() {
-                            return true;
-                        }
-                        for group in entry.allowed_groups.split(',') {
-                            let g = group.trim();
-                            if !g.is_empty() && user_groups.iter().any(|ug| ug == g) {
-                                return true;
-                            }
-                        }
+                Ok(entries) => entries.iter().all(|entry| {
+                    let groups: Vec<String> = entry
+                        .allowed_groups
+                        .split(',')
+                        .map(|g| g.trim().to_string())
+                        .filter(|g| !g.is_empty())
+                        .collect();
+                    if groups.is_empty() {
+                        true
+                    } else {
+                        groups.iter().any(|g| user_groups.iter().any(|ug| ug == g))
                     }
-                    false
-                }
+                }),
                 Err(_) => false,
             }
         }
@@ -80,7 +89,7 @@ pub(crate) fn folder_allowed_for_user(
 /// Get folder ID by scope and name from DB.
 fn get_folder_id(db: &Db, scope: &str, name: &str) -> Result<i64, AppError> {
     let folder = db::get_ab_folder(db, scope, name)
-        .map_err(|e| AppError::Internal(format!("folder not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
     Ok(folder.id)
 }
 
@@ -458,23 +467,46 @@ pub(crate) fn build_protocol_config(
     config
 }
 
+/// Upsert an encrypted credential, or delete the stored one when `value` is
+/// an explicit empty string (clear semantics). `None` callers should not use
+/// this helper — omitted fields keep their stored value.
+fn upsert_or_clear_credential(
+    database: &Db,
+    entry_id: i64,
+    credential_type: &str,
+    value: &str,
+    encryption_key: &str,
+) -> Result<(), AppError> {
+    if value.is_empty() {
+        db::delete_ab_credential(database, entry_id, credential_type)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        return Ok(());
+    }
+    let encrypted = crate::crypto::encrypt_value(
+        &crate::crypto::EncryptionKey::from_hex(encryption_key)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+        value,
+    )
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    db::store_ab_credential(database, entry_id, credential_type, &encrypted)
+        .map_err(|e| AppError::Internal(e.to_string()))
+}
+
 /// Overlay decrypted DB credential rows onto an entry (db mode).
 fn apply_db_credentials(
     database: &Db,
     entry_id: i64,
     storage_key: Option<&StorageKey>,
     ab_entry: &mut AddressBookEntry,
-) {
+) -> Result<(), AppError> {
     let encryption_key = resolve_encryption_key(storage_key);
     let creds = db::list_ab_credentials(database, entry_id).unwrap_or_default();
     for cred in &creds {
         let decrypted = if !encryption_key.is_empty() {
-            crate::crypto::decrypt_value(
-                &crate::crypto::EncryptionKey::from_hex(&encryption_key)
-                    .unwrap_or_else(|_| panic!("invalid encryption key")),
-                &cred.credential_data,
-            )
-            .unwrap_or(cred.credential_data.clone())
+            let key = crate::crypto::EncryptionKey::from_hex(&encryption_key)
+                .map_err(|e| AppError::Internal(format!("invalid encryption key: {e}")))?;
+            crate::crypto::decrypt_value(&key, &cred.credential_data)
+                .unwrap_or(cred.credential_data.clone())
         } else {
             cred.credential_data.clone()
         };
@@ -486,6 +518,7 @@ fn apply_db_credentials(
             _ => {}
         }
     }
+    Ok(())
 }
 
 /// Overlay the credential fields from a vault copy onto a DB entry (vault
@@ -564,6 +597,20 @@ pub struct UpdateFolderRequest {
 #[derive(Deserialize)]
 pub struct CreateEntryRequest {
     pub name: String,
+    /// Comma-separated group names allowed to use this entry. Flattened
+    /// siblings of `entry` are ignored by serde when absent.
+    #[serde(default)]
+    pub allowed_groups: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub entry: AddressBookEntry,
+}
+
+/// Update payload: the flattened `AddressBookEntry` plus optional
+/// `allowed_groups` (serde keeps the wire format backward-compatible).
+#[derive(Deserialize, Clone)]
+pub struct UpdateEntryRequest {
+    #[serde(default)]
+    pub allowed_groups: Option<Vec<String>>,
     #[serde(flatten)]
     pub entry: AddressBookEntry,
 }
@@ -904,7 +951,7 @@ pub async fn ab_list_entries(
     check_folder_access_db(&database, &scope, &folder, id)?;
 
     let folder_rec = db::get_ab_folder(&database, &scope, &folder)
-        .map_err(|e| AppError::Internal(format!("folder not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
 
     let db_entries = db::list_ab_entries(&database, folder_rec.id)
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -1003,9 +1050,9 @@ pub async fn ab_connect_entry(
     }
 
     let folder_rec = db::get_ab_folder(&database, &scope, &folder)
-        .map_err(|e| AppError::Internal(format!("folder not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
     let entry_rec = db::get_ab_entry(&database, folder_rec.id, &entry)
-        .map_err(|e| AppError::Internal(format!("entry not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("entry not found: {}", e)))?;
 
     // Metadata always comes from the DB.
     let mut ab_entry = ab_entry_from_db(&entry_rec);
@@ -1015,7 +1062,17 @@ pub async fn ab_connect_entry(
         // from the vault copy; its metadata is ignored.
         match vault.get_entry(&scope, &folder, &entry).await {
             Ok(vault_entry) => apply_vault_credentials(&vault_entry, &mut ab_entry),
-            Err(VaultError::NotFound) => return Err(AppError::Vault("entry not found".into())),
+            // The DB entry exists but has no vault copy yet (e.g. the
+            // backend was switched to vault after DB-mode use, or the copy
+            // was never written). Fall back to the DB credential rows so the
+            // entry stays reachable; a genuinely missing entry was caught by
+            // the DB lookup above.
+            Err(VaultError::NotFound) => apply_db_credentials(
+                &database,
+                entry_rec.id,
+                storage_key.as_ref().map(|Extension(k)| k),
+                &mut ab_entry,
+            )?,
             Err(e) => return Err(AppError::Vault(e.to_string())),
         }
     } else {
@@ -1025,7 +1082,7 @@ pub async fn ab_connect_entry(
             entry_rec.id,
             storage_key.as_ref().map(|Extension(k)| k),
             &mut ab_entry,
-        );
+        )?;
     }
 
     let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
@@ -1215,10 +1272,16 @@ pub async fn ab_create_folder(
     let folder_name = req.name.clone();
     let folder_scope = req.scope.clone();
 
-    // Folders always live in the DB. `allowed_groups` / `inherit_from_parent`
-    // have no folder-level columns in the DB schema, so they are recorded in
-    // the audit event only.
-    match db::create_ab_folder(&database, &folder_scope, &folder_name, &req.description) {
+    // Folders always live in the DB; allowed_groups / inherit_from_parent
+    // are persisted on the folder row and also recorded in the audit event.
+    match db::create_ab_folder(
+        &database,
+        &folder_scope,
+        &folder_name,
+        &req.description,
+        &req.allowed_groups.join(","),
+        req.inherit_from_parent,
+    ) {
         Ok(_id) => {
             let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
             let details = json!({
@@ -1272,20 +1335,18 @@ pub async fn ab_update_folder(
         ));
     }
 
-    // Folders always live in the DB; only `description` has a column there
-    // (`allowed_groups` / `inherit_from_parent` are recorded in the audit
-    // event only).
-    let changed = {
-        let conn = database.lock().unwrap();
-        conn.execute(
-            "UPDATE address_book_folders
-             SET description = ?1, updated_at = datetime('now')
-             WHERE scope = ?2 AND name = ?3",
-            rusqlite::params![req.description, scope, folder],
-        )
-        .map_err(|e| AppError::Internal(e.to_string()))?
-    };
-    if changed == 0 {
+    // Folders always live in the DB; description and ACLs are persisted on
+    // the folder row.
+    let changed = db::update_ab_folder(
+        &database,
+        &scope,
+        &folder,
+        &req.description,
+        &req.allowed_groups.join(","),
+        req.inherit_from_parent,
+    )
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    if !changed {
         return Err(AppError::Internal("folder not found".into()));
     }
 
@@ -1330,14 +1391,17 @@ pub async fn ab_get_folder_config(
         ));
     }
 
-    // Folders always live in the DB. The DB schema has no folder-level
-    // `allowed_groups` / `inherit_from_parent` columns, so those default to
-    // empty/false; `description` comes from the folders table.
+    // Folders always live in the DB; ACLs come from the folder row.
     match db::get_ab_folder(&database, &scope, &folder) {
         Ok(folder_rec) => Ok(Json(json!({
-            "allowed_groups": Vec::<String>::new(),
+            "allowed_groups": folder_rec
+                .allowed_groups
+                .split(',')
+                .map(|g| g.trim().to_string())
+                .filter(|g| !g.is_empty())
+                .collect::<Vec<String>>(),
             "description": folder_rec.description,
-            "inherit_from_parent": false,
+            "inherit_from_parent": folder_rec.inherit_from_parent,
         }))),
         Err(_) => Ok(Json(json!({
             "allowed_groups": Vec::<String>::new(),
@@ -1368,14 +1432,9 @@ pub async fn ab_delete_folder(
         ));
     }
 
-    // Vault mode: also remove the credential copies from Vault.
-    if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
-        vault.delete_folder(&scope, &folder).await?;
-    }
-
     // The folder itself must exist.
     db::get_ab_folder(&database, &scope, &folder)
-        .map_err(|e| AppError::Internal(format!("folder not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
 
     let folders = db::list_ab_folders(&database, Some(&scope))
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -1404,6 +1463,18 @@ pub async fn ab_delete_folder(
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
     let subfolder_count = sub_paths.len();
+
+    // DB subtree is gone — only now remove the vault credential copies
+    // (best-effort: a vault failure must not undo the DB delete).
+    if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
+        if let Err(e) = vault.delete_folder(&scope, &folder).await {
+            tracing::warn!(
+                "folder deleted from DB but vault cleanup failed for '{}': {}",
+                folder,
+                e
+            );
+        }
+    }
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
     let details = json!({
         "subfolders_deleted": subfolder_count,
@@ -1470,8 +1541,23 @@ pub async fn ab_create_entry(
         req.entry.port,
         req.entry.username.as_deref().unwrap_or(""),
         &serde_json::to_string(&config).unwrap_or_else(|_| "{}".into()),
-        "",
-    )?;
+        &req.allowed_groups
+            .as_ref()
+            .map(|g| g.join(","))
+            .unwrap_or_default(),
+    )
+    .map_err(|e| {
+        use rusqlite::ErrorCode;
+        if matches!(
+            e,
+            rusqlite::Error::SqliteFailure(ref f, _)
+                if f.code == ErrorCode::ConstraintViolation
+        ) {
+            AppError::Conflict("an entry with this name already exists".into())
+        } else {
+            AppError::Internal(e.to_string())
+        }
+    })?;
 
     if vault_mode {
         // Credentials live in Vault: write the full entry (its metadata is
@@ -1558,7 +1644,7 @@ pub async fn ab_update_entry(
     storage_key: Option<Extension<StorageKey>>,
     backend: Option<Extension<StorageBackend>>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
-    Json(data): Json<AddressBookEntry>,
+    Json(data): Json<UpdateEntryRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
@@ -1575,9 +1661,9 @@ pub async fn ab_update_entry(
         vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await;
 
     let folder_rec = db::get_ab_folder(&database, &scope, &folder)
-        .map_err(|e| AppError::Internal(format!("folder not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
     let entry_rec = db::get_ab_entry(&database, folder_rec.id, &entry)
-        .map_err(|e| AppError::Internal(format!("entry not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("entry not found: {}", e)))?;
 
     if vault_mode {
         // Credentials live in Vault: merge the credential fields with the
@@ -1586,7 +1672,7 @@ pub async fn ab_update_entry(
         let payload = data.clone();
         let merged = match vault.get_entry(&scope, &folder, &entry).await {
             Ok(existing) => {
-                let merged_jump_hosts = if let Some(ref new_hops) = payload.jump_hosts {
+                let merged_jump_hosts = if let Some(ref new_hops) = payload.entry.jump_hosts {
                     let old_hops = existing.jump_hosts.as_deref().unwrap_or(&[]);
                     let merged: Vec<_> = new_hops
                         .iter()
@@ -1614,23 +1700,30 @@ pub async fn ab_update_entry(
                         .collect();
                     Some(merged)
                 } else {
-                    payload.jump_hosts.clone()
+                    payload.entry.jump_hosts.clone()
                 };
 
                 AddressBookEntry {
-                    password: payload.password.or(existing.password),
-                    private_key: payload.private_key.or(existing.private_key),
-                    container_password: payload.container_password.or(existing.container_password),
+                    password: payload.entry.password.or(existing.password),
+                    private_key: payload.entry.private_key.or(existing.private_key),
+                    container_password: payload
+                        .entry
+                        .container_password
+                        .or(existing.container_password),
                     proxmox_token_secret: payload
+                        .entry
                         .proxmox_token_secret
                         .or(existing.proxmox_token_secret),
                     jump_hosts: merged_jump_hosts,
                     jump_password: None,
                     jump_private_key: None,
-                    ..payload
+                    ..payload.entry
                 }
             }
-            Err(_) => payload,
+            // A transient vault read failure must not proceed with a bare
+            // payload — the put below would overwrite the stored credentials
+            // with `None`s. Abort instead.
+            Err(e) => return Err(AppError::Vault(e.to_string())),
         };
         vault.put_entry(&scope, &folder, &entry, &merged).await?;
     } else {
@@ -1638,39 +1731,45 @@ pub async fn ab_update_entry(
         // in the payload (fields omitted keep their stored value).
         let encryption_key = resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
         if !encryption_key.is_empty() {
-            if let Some(ref password) = data.password {
-                let encrypted = crate::crypto::encrypt_value(
-                    &crate::crypto::EncryptionKey::from_hex(&encryption_key)
-                        .map_err(|e| AppError::Internal(e.to_string()))?,
+            // A field sent as an explicit empty string clears the stored
+            // credential; `None` keeps it.
+            if let Some(ref password) = data.entry.password {
+                upsert_or_clear_credential(
+                    &database,
+                    entry_rec.id,
+                    "password",
                     password,
-                )
-                .map_err(|e| AppError::Internal(e.to_string()))?;
-                db::store_ab_credential(&database, entry_rec.id, "password", &encrypted)?;
+                    &encryption_key,
+                )?;
             }
-            if let Some(ref private_key) = data.private_key {
-                let encrypted = crate::crypto::encrypt_value(
-                    &crate::crypto::EncryptionKey::from_hex(&encryption_key)
-                        .map_err(|e| AppError::Internal(e.to_string()))?,
+            if let Some(ref private_key) = data.entry.private_key {
+                upsert_or_clear_credential(
+                    &database,
+                    entry_rec.id,
+                    "private_key",
                     private_key,
-                )
-                .map_err(|e| AppError::Internal(e.to_string()))?;
-                db::store_ab_credential(&database, entry_rec.id, "private_key", &encrypted)?;
+                    &encryption_key,
+                )?;
             }
-            if let Some(ref secret) = data.proxmox_token_secret {
-                let encrypted = crate::crypto::encrypt_value(
-                    &crate::crypto::EncryptionKey::from_hex(&encryption_key)
-                        .map_err(|e| AppError::Internal(e.to_string()))?,
-                    secret,
-                )
-                .map_err(|e| AppError::Internal(e.to_string()))?;
-                db::store_ab_credential(
+            if let Some(ref secret) = data.entry.proxmox_token_secret {
+                upsert_or_clear_credential(
                     &database,
                     entry_rec.id,
                     "proxmox_token_secret",
-                    &encrypted,
+                    secret,
+                    &encryption_key,
                 )?;
             }
-            if let Some(ref pw) = data.container_password {
+            if let Some(ref pw) = data.entry.container_password {
+                upsert_or_clear_credential(
+                    &database,
+                    entry_rec.id,
+                    "container_password",
+                    pw,
+                    &encryption_key,
+                )?;
+            }
+            if let Some(ref pw) = data.entry.container_password {
                 let encrypted = crate::crypto::encrypt_value(
                     &crate::crypto::EncryptionKey::from_hex(&encryption_key)
                         .map_err(|e| AppError::Internal(e.to_string()))?,
@@ -1683,21 +1782,25 @@ pub async fn ab_update_entry(
     }
 
     // Metadata always lives in the DB.
-    let config = build_protocol_config(&data);
+    let config = build_protocol_config(&data.entry);
     db::update_ab_entry(
         &database,
         entry_rec.id,
-        data.display_name.as_deref().unwrap_or(""),
-        &data.session_type,
-        data.hostname.as_deref().unwrap_or(""),
-        data.port,
-        data.username.as_deref().unwrap_or(""),
+        data.entry.display_name.as_deref().unwrap_or(""),
+        &data.entry.session_type,
+        data.entry.hostname.as_deref().unwrap_or(""),
+        data.entry.port,
+        data.entry.username.as_deref().unwrap_or(""),
         &serde_json::to_string(&config).unwrap_or_else(|_| "{}".into()),
-        "",
+        &data
+            .allowed_groups
+            .as_ref()
+            .map(|g| g.join(","))
+            .unwrap_or_default(),
     )
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let session_type = data.session_type.clone();
+    let session_type = data.entry.session_type.clone();
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
     let details = json!({ "type": session_type }).to_string();
     log_ab_event(
@@ -1750,9 +1853,9 @@ pub async fn ab_delete_entry(
 
     // Metadata always lives in the DB.
     let folder_rec = db::get_ab_folder(&database, &scope, &folder)
-        .map_err(|e| AppError::Internal(format!("folder not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
     let entry_rec = db::get_ab_entry(&database, folder_rec.id, &entry)
-        .map_err(|e| AppError::Internal(format!("entry not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("entry not found: {}", e)))?;
     db::delete_ab_entry(&database, entry_rec.id).map_err(|e| AppError::Internal(e.to_string()))?;
 
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
@@ -1883,7 +1986,7 @@ document.getElementById('cred-form').addEventListener('submit', async function(e
 </script>
 </body></html>"##,
         title = html_escape(title),
-        session_type_upper = session_type.to_uppercase(),
+        session_type_upper = html_escape(&session_type.to_uppercase()),
         domain_display = domain_display,
         scope = html_escape(scope),
         folder = html_escape(folder),
@@ -2017,12 +2120,14 @@ pub async fn quick_connect(
             }
         } else {
             // Credentials live in the DB: decrypt the stored rows.
-            apply_db_credentials(
+            if let Err(e) = apply_db_credentials(
                 &database,
                 entry_rec.id,
                 storage_key.as_ref().map(|Extension(k)| k),
                 &mut ab_entry,
-            );
+            ) {
+                return e.into_response();
+            }
         }
 
         let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {

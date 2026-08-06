@@ -47,6 +47,9 @@ pub enum AppError {
     #[error("validation error: {0}")]
     Validation(String),
 
+    #[error("not found: {0}")]
+    NotFound(String),
+
     #[error("{0}")]
     Internal(String),
 }
@@ -119,6 +122,7 @@ impl IntoResponse for AppError {
             AppError::Auth(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::Conflict(_) => (StatusCode::CONFLICT, self.to_string()),
+            AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::Browser(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Vdi(msg) if msg.contains("not enabled") => {
                 (StatusCode::SERVICE_UNAVAILABLE, self.to_string())

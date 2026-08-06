@@ -1,5 +1,6 @@
 //! `db-migrate-from-vault` subcommand: migrate address-book entries from Vault
-//! into the SQLite `connection_groups` / `connections` tables, encrypting
+//! into the address book tables (`address_book_folders` /
+//! `address_book_entries` / `address_book_credentials`), encrypting
 //! credential fields with AES-256-GCM.
 //!
 //! BFS-walks all Vault scope folders, reads each entry, encrypts sensitive
@@ -15,7 +16,7 @@ use rusqlite::params;
 
 use crate::config::Config;
 use crate::crypto::{encrypt_value, EncryptionKey};
-use crate::db::Db;
+use crate::db::{self, Db};
 use crate::vault::{self, AddressBookEntry, FolderConfig, VaultClient, VaultError};
 
 /// Credential fields that contain plaintext secrets and must be encrypted
@@ -175,17 +176,17 @@ pub async fn cmd_db_migrate_from_vault(
             // Check idempotency: skip if entry already exists
             if !overwrite
                 && !dry_run
-                && entry_exists(&database, entry_name, parent_group_id.as_deref())
+                && entry_exists(
+                    &database,
+                    scope,
+                    parent_group_id.as_deref().unwrap_or(""),
+                    entry_name,
+                )
             {
                 println!("  skip (exists): {}/{}", folder_path, entry_name);
                 entries_skipped += 1;
                 continue;
             }
-
-            // Serialize entry to JSON params, encrypting credential fields
-            let params_json = serialize_entry_params(&entry, &enc_key);
-
-            let display_name = entry.display_name.as_deref().unwrap_or(entry_name);
 
             if dry_run {
                 println!(
@@ -194,13 +195,13 @@ pub async fn cmd_db_migrate_from_vault(
                 );
                 entries_migrated += 1;
             } else {
-                match insert_connection(
+                match insert_ab_entry(
                     &database,
+                    scope,
+                    parent_group_id.as_deref().unwrap_or(""),
                     entry_name,
-                    parent_group_id.as_deref(),
-                    &entry.session_type,
-                    &params_json,
-                    display_name,
+                    &entry,
+                    &enc_key,
                 ) {
                     Ok(()) => {
                         println!(
@@ -304,8 +305,12 @@ fn ensure_folder_group(
     folder_config: &Result<FolderConfig, VaultError>,
     dry_run: bool,
 ) -> Option<String> {
+    // Get-or-create the folder row for each path segment (DB-first storage:
+    // folders always live in `address_book_folders`). The leaf folder picks
+    // up the vault .config's description and allowed_groups; intermediate
+    // segments get defaults. Existing rows are never overwritten.
     let segments: Vec<&str> = folder_path.split('/').collect();
-    let mut parent_id: Option<String> = None;
+    let mut parent: Option<String> = None;
 
     for (depth, segment) in segments.iter().enumerate() {
         let current_path = if depth == 0 {
@@ -314,21 +319,18 @@ fn ensure_folder_group(
             segments[..=depth].join("/")
         };
 
-        // Check if group already exists
-        if let Some(existing) = group_exists(db, segment, parent_id.as_deref()) {
-            parent_id = Some(existing);
+        if db::get_ab_folder(db, scope, &current_path).is_ok() {
+            parent = Some(current_path);
             continue;
         }
 
-        let group_id = uuid::Uuid::new_v4().to_string();
-        let description = if depth == segments.len() - 1 {
-            // This is the leaf folder — apply its .config description
+        let (description, allowed_groups) = if depth == segments.len() - 1 {
             match folder_config {
-                Ok(cfg) => cfg.description.clone(),
-                Err(_) => String::new(),
+                Ok(cfg) => (cfg.description.clone(), cfg.allowed_groups.join(",")),
+                Err(_) => (String::new(), String::new()),
             }
         } else {
-            String::new()
+            (String::new(), String::new())
         };
 
         if dry_run {
@@ -336,45 +338,37 @@ fn ensure_folder_group(
                 "  [group]  {} (scope={}, parent={})",
                 current_path,
                 scope,
-                parent_id.as_deref().unwrap_or("root")
+                parent.as_deref().unwrap_or("root")
             );
-        } else {
-            let conn = db.lock().unwrap();
-            let _ = conn.execute(
-                "INSERT OR IGNORE INTO connection_groups (id, name, parent_id, description, scope)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![group_id, segment, parent_id, description, scope],
-            );
+        } else if let Err(e) = db::create_ab_folder(
+            db,
+            scope,
+            &current_path,
+            &description,
+            &allowed_groups,
+            true,
+        ) {
+            // A concurrent migrate could have created it — treat as success.
+            if db::get_ab_folder(db, scope, &current_path).is_err() {
+                eprintln!(
+                    "  Warning: failed to create folder \"{}\": {}",
+                    current_path, e
+                );
+            }
         }
 
-        parent_id = Some(group_id);
+        parent = Some(current_path);
     }
 
-    parent_id
+    parent
 }
 
-/// Check if a group with the given name and parent already exists.
-fn group_exists(db: &Db, name: &str, parent_id: Option<&str>) -> Option<String> {
-    let conn = db.lock().unwrap();
-    let mut stmt = conn
-        .prepare("SELECT id FROM connection_groups WHERE name = ?1 AND parent_id IS ?2")
-        .ok()?;
-    let mut rows = stmt.query(params![name, parent_id]).ok()?;
-    rows.next()
-        .ok()
-        .flatten()
-        .and_then(|row| row.get::<_, String>(0).ok())
-}
-
-/// Check if an entry with the given name already exists under a group.
-fn entry_exists(db: &Db, name: &str, group_id: Option<&str>) -> bool {
-    let conn = db.lock().unwrap();
-    conn.query_row(
-        "SELECT 1 FROM connections WHERE name = ?1 AND group_id IS ?2 LIMIT 1",
-        params![name, group_id],
-        |_| Ok(true),
-    )
-    .unwrap_or(false)
+/// Check if an entry with the given name already exists in a folder.
+fn entry_exists(db: &Db, scope: &str, folder_path: &str, name: &str) -> bool {
+    match db::get_ab_folder(db, scope, folder_path) {
+        Ok(folder) => db::get_ab_entry(db, folder.id, name).is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Serialize an AddressBookEntry to JSON params, encrypting credential fields.
@@ -587,21 +581,49 @@ fn serialize_entry_params(entry: &AddressBookEntry, enc_key: &EncryptionKey) -> 
 }
 
 /// Insert a connection into the DB.
-fn insert_connection(
+fn insert_ab_entry(
     db: &Db,
+    scope: &str,
+    folder_path: &str,
     name: &str,
-    group_id: Option<&str>,
-    protocol: &str,
-    params_json: &str,
-    display_name: &str,
-) -> Result<(), rusqlite::Error> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let conn = db.lock().unwrap();
-    conn.execute(
-        "INSERT INTO connections (id, name, group_id, protocol, params, display_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![id, name, group_id, protocol, params_json, display_name],
-    )?;
+    entry: &AddressBookEntry,
+    enc_key: &EncryptionKey,
+) -> Result<(), String> {
+    let folder =
+        db::get_ab_folder(db, scope, folder_path).map_err(|e| format!("folder lookup: {}", e))?;
+    let protocol_config = crate::api::address_book::build_protocol_config(entry);
+    let entry_id = db::create_ab_entry(
+        db,
+        folder.id,
+        name,
+        entry.display_name.as_deref().unwrap_or(name),
+        &entry.session_type,
+        entry.hostname.as_deref().unwrap_or(""),
+        entry.port,
+        entry.username.as_deref().unwrap_or(""),
+        &serde_json::to_string(&protocol_config).unwrap_or_else(|_| "{}".into()),
+        "",
+    )
+    .map_err(|e| format!("insert entry: {}", e))?;
+
+    // Credential fields are encrypted with the configured storage key and
+    // stored in the credentials table (the same path the runtime uses).
+    for (ctype, value) in [
+        ("password", entry.password.as_deref()),
+        ("private_key", entry.private_key.as_deref()),
+        (
+            "proxmox_token_secret",
+            entry.proxmox_token_secret.as_deref(),
+        ),
+        ("container_password", entry.container_password.as_deref()),
+    ] {
+        if let Some(v) = value.filter(|v| !v.is_empty()) {
+            let encrypted =
+                encrypt_value(enc_key, v).map_err(|e| format!("encrypt {}: {}", ctype, e))?;
+            db::store_ab_credential(db, entry_id, ctype, &encrypted)
+                .map_err(|e| format!("store {}: {}", ctype, e))?;
+        }
+    }
     Ok(())
 }
 

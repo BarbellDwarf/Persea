@@ -198,7 +198,7 @@ function renderProviderRow(provider) {
 
     return '<tr class="hover:bg-gray-800/50">' +
         '<td class="px-4 py-3 text-gray-600 cursor-grab">⠿</td>' +
-        '<td class="px-4 py-3 text-sm text-gray-200">' + provider.name + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-200">' + escapeHtml(provider.name) + '</td>' +
         '<td class="px-4 py-3">' + providerTypeBadge(provider.type) + '</td>' +
         '<td class="px-4 py-3 text-sm">' + statusToggle + '</td>' +
         '<td class="px-4 py-3 text-sm text-gray-500">' + provider.position + '</td>' +
@@ -215,7 +215,10 @@ function toggleProvider(id, enable) {
     fetch('/api/auth/providers/' + id + (enable ? '/enable' : '/disable'), {
         method: 'POST',
         headers: apiHeaders()
-    }).then(function() { loadProviders(); });
+    }).then(function(r) {
+        if (r.status === 401) { window.location.href = '/'; return; }
+        loadProviders();
+    }).catch(function() { loadProviders(); });
 }
 
 function moveProvider(id, direction) {
@@ -223,52 +226,115 @@ function moveProvider(id, direction) {
         method: 'POST',
         headers: apiHeaders(),
         body: JSON.stringify({ direction: direction })
-    }).then(function() { loadProviders(); });
+    }).then(function(r) {
+        if (r.status === 401) { window.location.href = '/'; return; }
+        loadProviders();
+    }).catch(function() { loadProviders(); });
 }
 
 function configureProvider(id) {
+    editingProviderId = id;
     document.getElementById('provider-config-body').innerHTML = '<p class="text-sm text-gray-500">Loading configuration...</p>';
     document.getElementById('provider-config-modal').classList.remove('hidden');
     fetch('/api/auth/providers/' + id + '/config', { headers: apiHeaders() })
-        .then(function(r) { return r.json(); })
+        .then(function(r) {
+            if (r.status === 401) { window.location.href = '/'; throw new Error('unauthorized'); }
+            if (!r.ok) { throw new Error('HTTP ' + r.status); }
+            return r.json();
+        })
         .then(function(cfg) {
             document.getElementById('provider-config-body').innerHTML = buildConfigForm(cfg);
+        })
+        .catch(function(e) {
+            if (e && e.message === 'unauthorized') { return; }
+            document.getElementById('provider-config-body').innerHTML =
+                '<p class="text-sm text-red-400">Failed to load configuration.</p>';
         });
 }
 
+var editingProviderId = null;
+var editingProviderConfig = null;
+
+var SECRET_CONFIG_KEYS = ['client_secret', 'bind_password', 'shared_secret', 'secret'];
+
 function buildConfigForm(config) {
+    editingProviderConfig = config;
     var html = '<div class="space-y-4">';
     for (var key in config) {
         if (!config.hasOwnProperty(key)) continue;
         var val = config[key];
+        var isSecret = SECRET_CONFIG_KEYS.indexOf(key) !== -1;
         html += '<div><label class="form-label">' + key.replace(/_/g, ' ') + '</label>';
         if (typeof val === 'boolean') {
-            html += '<input type="checkbox" name="' + key + '" ' + (val ? 'checked' : '') + ' class="rounded bg-gray-800 border-gray-700 text-emerald-500">';
+            html += '<input type="checkbox" name="' + escapeAttr(key) + '" ' + (val ? 'checked' : '') + ' class="rounded bg-gray-800 border-gray-700 text-emerald-500">';
         } else if (typeof val === 'number') {
-            html += '<input type="number" name="' + key + '" value="' + val + '" class="form-input">';
+            html += '<input type="number" name="' + escapeAttr(key) + '" value="' + val + '" class="form-input">';
+        } else if (isSecret) {
+            html += '<input type="password" name="' + escapeAttr(key) + '" value="" placeholder="leave blank to keep" autocomplete="new-password" class="form-input">';
         } else {
-            html += '<input type="text" name="' + key + '" value="' + (val || '') + '" class="form-input">';
+            html += '<input type="text" name="' + escapeAttr(key) + '" value="' + escapeAttr(val || '') + '" class="form-input">';
         }
         html += '</div>';
     }
+    html += '<div id="provider-config-error" class="hidden text-red-400 text-sm" role="alert"></div>';
     html += '</div>';
     return html;
 }
 
 function testProvider() {
-    alert('Connection test: not yet implemented');
+    if (!editingProviderId) { return; }
+    testProviderConnection(editingProviderId);
 }
 
 function saveProviderConfig() {
-    alert('Config save: not yet implemented');
+    var inputs = document.querySelectorAll('#provider-config-body input');
+    var cfg = {};
+    var errEl = document.getElementById('provider-config-error');
+    if (errEl) { errEl.classList.add('hidden'); }
+    for (var i = 0; i < inputs.length; i++) {
+        var el = inputs[i];
+        if (el.type === 'checkbox') {
+            cfg[el.name] = el.checked;
+        } else {
+            cfg[el.name] = el.value;
+        }
+    }
+    fetch('/api/auth/providers/' + editingProviderId, {
+        method: 'PUT',
+        headers: apiHeaders(),
+        body: JSON.stringify(cfg)
+    }).then(function(r) {
+        if (r.status === 401) { window.location.href = '/'; return null; }
+        if (!r.ok) {
+            return r.json().catch(function() { return {}; }).then(function(data) {
+                if (errEl) {
+                    errEl.textContent = data.error || ('HTTP ' + r.status);
+                    errEl.classList.remove('hidden');
+                }
+                return null;
+            });
+        }
+        return r.json();
+    }).then(function(saved) {
+        if (!saved) { return; }
+        document.getElementById('provider-config-modal').classList.add('hidden');
+        loadProviders();
+    }).catch(function() {
+        if (errEl) { errEl.textContent = 'Network error saving config'; errEl.classList.remove('hidden'); }
+    });
 }
 
 function testProviderConnection(id) {
     fetch('/api/auth/providers/' + id + '/test', { method: 'POST', headers: apiHeaders() })
-        .then(function(r) { return r.json(); })
         .then(function(r) {
+            if (r.status === 401) { window.location.href = '/'; return null; }
+            return r.json();
+        })
+        .then(function(r) {
+            if (!r) { return; }
             alert(r.ok ? 'Connection successful' : 'Connection failed: ' + (r.detail || 'unknown error'));
-        });
+        })
+        .catch(function() { alert('Connection test failed (network error)'); });
 }
 
 function deleteProvider(id) {
@@ -279,16 +345,21 @@ function deleteProvider(id) {
 
 function loadProviders() {
     fetch('/api/auth/providers', { headers: apiHeaders() })
-        .then(function(r) { return r.json(); })
+        .then(function(r) {
+            if (r.status === 401) { window.location.href = '/'; throw new Error('unauthorized'); }
+            return r.json();
+        })
         .then(function(data) {
+            window.__providers = data.providers || [];
             var tbody = document.getElementById('provider-table-body');
-            if (!data.providers || !data.providers.length) {
+            if (!window.__providers.length) {
                 tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500 text-sm">No providers configured. Add one above.</td></tr>';
                 return;
             }
-            tbody.innerHTML = data.providers.map(renderProviderRow).join('');
+            tbody.innerHTML = window.__providers.map(renderProviderRow).join('');
         })
-        .catch(function() {
+        .catch(function(e) {
+            if (e && e.message === 'unauthorized') { return; }
             document.getElementById('provider-table-body').innerHTML =
                 '<tr><td colspan="6" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load providers</td></tr>';
         });

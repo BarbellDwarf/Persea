@@ -690,7 +690,7 @@ fn mock_vault_with_it_folder() -> Arc<crate::testing::MockVault> {
 async fn test_ab_list_folders_db_backed() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    db::create_ab_folder(&db, "shared", "IT", "IT servers").unwrap();
+    db::create_ab_folder(&db, "shared", "IT", "IT servers", "", false).unwrap();
     let app = build_test_router(db);
     let response = app
         .oneshot(make_auth_request("GET", "/api/addressbook/folders", &key))
@@ -719,7 +719,7 @@ async fn test_ab_list_folders_db_backed() {
 async fn test_ab_list_entries_db_backed() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    let folder_id = db::create_ab_folder(&db, "shared", "IT", "").unwrap();
+    let folder_id = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
     db::create_ab_entry(
         &db,
         folder_id,
@@ -784,8 +784,9 @@ async fn test_ab_list_subfolders_db_backed() {
     let key = insert_test_admin(&db, "admin");
     // Nested layout via slash-path folder names: Clients/Acme is a
     // subfolder of Clients.
-    db::create_ab_folder(&db, "shared", "Clients", "").unwrap();
-    let acme_id = db::create_ab_folder(&db, "shared", "Clients/Acme", "Acme subfolder").unwrap();
+    db::create_ab_folder(&db, "shared", "Clients", "", "", false).unwrap();
+    let acme_id =
+        db::create_ab_folder(&db, "shared", "Clients/Acme", "Acme subfolder", "", false).unwrap();
     db::create_ab_entry(
         &db,
         acme_id,
@@ -828,7 +829,7 @@ async fn test_ab_list_subfolders_db_backed() {
 async fn test_ab_db_backend_ignores_connected_vault() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "db desc").unwrap();
+    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "db desc", "", false).unwrap();
     db::create_ab_entry(
         &db,
         folder_id,
@@ -911,7 +912,7 @@ async fn test_ab_list_folders_operator_filters_by_entry_groups() {
     let user = db::get_user_by_email(&db, "op@test.com").unwrap();
     let session = db::create_auth_session(&db, user.id, 3600).unwrap();
 
-    let it_id = db::create_ab_folder(&db, "shared", "IT", "restricted").unwrap();
+    let it_id = db::create_ab_folder(&db, "shared", "IT", "restricted", "", false).unwrap();
     db::create_ab_entry(
         &db,
         it_id,
@@ -925,7 +926,7 @@ async fn test_ab_list_folders_operator_filters_by_entry_groups() {
         "team-it",
     )
     .unwrap();
-    let hr_id = db::create_ab_folder(&db, "shared", "HR", "restricted").unwrap();
+    let hr_id = db::create_ab_folder(&db, "shared", "HR", "restricted", "", false).unwrap();
     db::create_ab_entry(
         &db,
         hr_id,
@@ -986,7 +987,7 @@ async fn test_ab_list_entries_operator_denied() {
     let user = db::get_user_by_email(&db, "op@test.com").unwrap();
     let session = db::create_auth_session(&db, user.id, 3600).unwrap();
 
-    let folder_id = db::create_ab_folder(&db, "shared", "Sec", "restricted").unwrap();
+    let folder_id = db::create_ab_folder(&db, "shared", "Sec", "restricted", "", false).unwrap();
     db::create_ab_entry(
         &db,
         folder_id,
@@ -1019,7 +1020,7 @@ async fn test_ab_list_entries_operator_denied() {
 async fn test_ab_create_entry_vault_mode_writes_credentials_to_vault() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    db::create_ab_folder(&db, "shared", "VMode", "").unwrap();
+    db::create_ab_folder(&db, "shared", "VMode", "", "", false).unwrap();
     let mock = Arc::new(crate::testing::MockVault::new());
     let app = build_test_router_with_vault_and_backend(
         db.clone(),
@@ -1058,7 +1059,7 @@ async fn test_ab_create_entry_vault_mode_writes_credentials_to_vault() {
 async fn test_ab_delete_entry_vault_mode_removes_vault_copy() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    let folder_id = db::create_ab_folder(&db, "shared", "VMode", "").unwrap();
+    let folder_id = db::create_ab_folder(&db, "shared", "VMode", "", "", false).unwrap();
     db::create_ab_entry(
         &db,
         folder_id,
@@ -1108,7 +1109,7 @@ async fn test_ab_delete_folder_reports_subtree_counts() {
     let key = insert_test_admin(&db, "admin");
     // Tree: Clients (1 entry) + Clients/Acme subfolder (2 entries); an
     // unrelated "Other" folder must survive.
-    let clients_id = db::create_ab_folder(&db, "shared", "Clients", "").unwrap();
+    let clients_id = db::create_ab_folder(&db, "shared", "Clients", "", "", false).unwrap();
     db::create_ab_entry(
         &db,
         clients_id,
@@ -1122,7 +1123,7 @@ async fn test_ab_delete_folder_reports_subtree_counts() {
         "",
     )
     .unwrap();
-    let acme_id = db::create_ab_folder(&db, "shared", "Clients/Acme", "").unwrap();
+    let acme_id = db::create_ab_folder(&db, "shared", "Clients/Acme", "", "", false).unwrap();
     db::create_ab_entry(
         &db,
         acme_id,
@@ -1149,7 +1150,7 @@ async fn test_ab_delete_folder_reports_subtree_counts() {
         "",
     )
     .unwrap();
-    db::create_ab_folder(&db, "shared", "Other", "").unwrap();
+    db::create_ab_folder(&db, "shared", "Other", "", "", false).unwrap();
 
     let app = build_test_router(db.clone());
     let response = app
@@ -1205,7 +1206,7 @@ fn build_quick_connect_router(
 }
 
 fn seed_ssh_entry(db: &Db, folder: &str, entry: &str) -> i64 {
-    let folder_id = db::create_ab_folder(db, "shared", folder, "").unwrap();
+    let folder_id = db::create_ab_folder(db, "shared", folder, "", "", false).unwrap();
     db::create_ab_entry(
         db,
         folder_id,
@@ -1345,7 +1346,7 @@ async fn test_quick_connect_reads_credentials_from_vault() {
 async fn test_ab_list_folders_db_fallback() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    db::create_ab_folder(&db, "shared", "DBFolder", "desc").unwrap();
+    db::create_ab_folder(&db, "shared", "DBFolder", "desc", "", false).unwrap();
     let app = build_test_router(db); // empty vault cells — no backend connected
     let response = app
         .oneshot(make_auth_request("GET", "/api/addressbook/folders", &key))
@@ -1387,7 +1388,7 @@ async fn test_ab_list_folders_db_fallback_empty() {
 async fn test_ab_list_entries_db_fallback() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "").unwrap();
+    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "", "", false).unwrap();
     db::create_ab_entry(
         &db,
         folder_id,
@@ -1427,7 +1428,7 @@ async fn test_ab_list_entries_db_fallback() {
 async fn test_ab_create_entry_db_fallback() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "").unwrap();
+    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "", "", false).unwrap();
     let app = build_test_router(db.clone());
     let response = app
         .oneshot(make_json_request(
@@ -1461,5 +1462,6 @@ async fn test_ab_create_entry_db_fallback_missing_folder_fails() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    // Missing folder is a client error, not a server error.
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

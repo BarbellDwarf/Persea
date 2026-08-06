@@ -16,13 +16,9 @@ pub const SETTINGS_KEYS: &[&str] = &[
     "tls_cert_path",
     "tls_key_path",
     "session_max_duration_secs",
-    "session_idle_timeout_secs",
     "max_concurrent_sessions",
     "session_history_retention_days",
-    "enable_browser_sessions",
-    "enable_proxmox",
     "enable_vdi",
-    "enable_vmware",
     "vault_enabled",
     "db_only_mode",
 ];
@@ -86,14 +82,44 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                     config.session_history_retention_days = v;
                 }
             }
-            "enable_vdi" => {
-                if let Some(ref mut vdi) = config.vdi {
-                    vdi.enabled = value == "true";
+            "enable_vdi" => match value.as_str() {
+                "true" => {
+                    if config.vdi.is_none() {
+                        config.vdi = serde_json::from_str::<crate::config::VdiConfig>(
+                            r#"{"enabled": true}"#,
+                        )
+                        .ok();
+                    } else if let Some(ref mut vdi) = config.vdi {
+                        vdi.enabled = true;
+                    }
+                }
+                _ => {
+                    if let Some(ref mut vdi) = config.vdi {
+                        vdi.enabled = false;
+                    }
+                }
+            },
+            "vault_enabled" => {
+                // DB-first storage (ticket 026): flipping Vault on routes
+                // credential storage to Vault. Requires a [vault] section —
+                // without one there is nowhere to store them.
+                if value == "true" {
+                    if config.vault.is_some() {
+                        let storage =
+                            config
+                                .storage
+                                .get_or_insert_with(|| crate::config::StorageConfig {
+                                    backend: "db".into(),
+                                    encryption_key: None,
+                                });
+                        storage.backend = "vault".into();
+                    } else {
+                        tracing::warn!(
+                            "vault_enabled saved but no [vault] section — credentials stay in the DB"
+                        );
+                    }
                 }
             }
-            // No Config equivalent: enable_vmware (VsphereConfig has no
-            // `enabled` field — its presence is the enable), enable_browser_sessions,
-            // enable_proxmox, vault_enabled.
             "db_only_mode" => {
                 if value == "true" {
                     let storage =

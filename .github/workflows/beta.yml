@@ -1,0 +1,33 @@
+name: Beta Docker
+
+# Builds a rolling beta image from any branch (use the workflow_dispatch
+# branch picker, e.g. wayfinder-completion) so beta testers do not need to
+# merge with main first. The image is tagged `ghcr.io/<repo>:beta` and each
+# build overwrites the previous beta tag. Beta images print their version at
+# container startup (PERSEA_BETA=1 build arg); production images do not.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Lowercase repo name
+        id: repo
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v7
+        with:
+          push: true
+          build-args: PERSEA_BETA=1
+          tags: ghcr.io/${{ steps.repo.outputs.name }}:beta

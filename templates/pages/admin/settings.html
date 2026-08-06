@@ -9,7 +9,7 @@
         <p class="text-sm text-gray-500 mt-1">Configure server, session, and feature settings</p>
     </div>
 
-    <form id="settings-form" hx-put="/api/system/settings" hx-ext="json-enc"
+    <form id="settings-form" hx-put="/api/system/settings" hx-ext="json-enc" hx-swap="none"
           hx-on::after-request="showSaveConfirmation(event)"
           class="space-y-6">
 
@@ -55,11 +55,6 @@
                     <p class="text-xs text-gray-600 mt-1">8 hours default</p>
                 </div>
                 <div>
-                    <label class="form-label">Idle Timeout (seconds)</label>
-                    <input type="number" name="session_idle_timeout_secs" value="1800" class="form-input">
-                    <p class="text-xs text-gray-600 mt-1">30 minutes default</p>
-                </div>
-                <div>
                     <label class="form-label">Concurrent Session Limit</label>
                     <input type="number" name="max_concurrent_sessions" value="0" class="form-input">
                     <p class="text-xs text-gray-600 mt-1">0 = unlimited</p>
@@ -80,16 +75,6 @@
             <div class="space-y-3">
                 <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
                     <div>
-                        <span class="text-sm text-gray-200">Browser Sessions</span>
-                        <p class="text-xs text-gray-500">Headless Chromium via Xvnc (requires Xvnc + Chromium)</p>
-                    </div>
-                    <input type="checkbox" id="enable_browser_sessions" value="true"
-                           onchange="syncCheckbox('enable_browser_sessions')"
-                           class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
-                </label>
-                <input type="hidden" name="enable_browser_sessions" id="enable_browser_sessions-hidden" value="false">
-                <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
-                    <div>
                         <span class="text-sm text-gray-200">VDI (Docker)</span>
                         <p class="text-xs text-gray-500">Per-user Docker desktop containers</p>
                     </div>
@@ -98,26 +83,6 @@
                            class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
                 </label>
                 <input type="hidden" name="enable_vdi" id="enable_vdi-hidden" value="false">
-                <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
-                    <div>
-                        <span class="text-sm text-gray-200">Proxmox Integration</span>
-                        <p class="text-xs text-gray-500">VM management via Proxmox VE API</p>
-                    </div>
-                    <input type="checkbox" id="enable_proxmox" value="true"
-                           onchange="syncCheckbox('enable_proxmox')"
-                           class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
-                </label>
-                <input type="hidden" name="enable_proxmox" id="enable_proxmox-hidden" value="false">
-                <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
-                    <div>
-                        <span class="text-sm text-gray-200">VMware Integration</span>
-                        <p class="text-xs text-gray-500">VM management via vSphere API</p>
-                    </div>
-                    <input type="checkbox" id="enable_vmware" value="true"
-                           onchange="syncCheckbox('enable_vmware')"
-                           class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
-                </label>
-                <input type="hidden" name="enable_vmware" id="enable_vmware-hidden" value="false">
             </div>
         </div>
 
@@ -230,8 +195,7 @@ function syncCheckbox(name) {
                 }
             });
             var boxes = [
-                'enable_browser_sessions', 'enable_proxmox', 'enable_vdi',
-                'enable_vmware', 'vault_enabled', 'db_only_mode'
+                'enable_vdi', 'vault_enabled', 'db_only_mode'
             ];
             boxes.forEach(function(name) {
                 var box = document.getElementById(name);

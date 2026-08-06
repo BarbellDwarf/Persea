@@ -504,7 +504,7 @@ async fn import_skips_in_file_duplicates() {
 async fn import_skips_existing_db_entries() {
     let db = test_db();
     let key = create_admin(&db, "admin");
-    let folder_id = db::create_ab_folder(&db, "shared", "Existing", "").unwrap();
+    let folder_id = db::create_ab_folder(&db, "shared", "Existing", "", "", false).unwrap();
     db::create_ab_entry(
         &db,
         folder_id,

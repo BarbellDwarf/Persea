@@ -415,11 +415,25 @@ pub async fn list_credential_variables(
         super::address_book::vault_credentials_enabled(backend.as_ref().map(|b| &b.0), &vault)
             .await;
     let enc_key = super::address_book::resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
+    let enc_key_parsed = if enc_key.is_empty() {
+        None
+    } else {
+        match crate::crypto::EncryptionKey::from_hex(&enc_key) {
+            Ok(k) => Some(k),
+            Err(e) => {
+                return Err(AppError::Internal(format!("invalid encryption key: {e}")));
+            }
+        }
+    };
 
     let folders = db::list_ab_folders(&database, None).unwrap_or_default();
     let mut all_vars: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    // Seed the walk with top-level folders only; children are pushed as the
+    // slash-hierarchy is traversed (seeding all folders would double-visit
+    // every nested folder).
     let mut stack: Vec<(String, String)> = folders
         .iter()
+        .filter(|f| !f.name.contains('/'))
         .map(|f| (f.scope.clone(), f.name.clone()))
         .collect();
 
@@ -453,8 +467,7 @@ pub async fn list_credential_variables(
                 } else if !enc_key.is_empty() {
                     for cred in db::list_ab_credentials(&database, entry.id).unwrap_or_default() {
                         let decrypted = crate::crypto::decrypt_value(
-                            &crate::crypto::EncryptionKey::from_hex(&enc_key)
-                                .unwrap_or_else(|_| panic!("invalid encryption key")),
+                            enc_key_parsed.as_ref().unwrap(),
                             &cred.credential_data,
                         )
                         .unwrap_or(cred.credential_data.clone());

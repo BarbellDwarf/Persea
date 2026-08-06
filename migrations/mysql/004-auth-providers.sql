@@ -7,7 +7,9 @@ CREATE TABLE IF NOT EXISTS auth_providers (
     type       VARCHAR(32) NOT NULL,
     enabled    TINYINT(1) NOT NULL DEFAULT 1,
     position   INT NOT NULL DEFAULT 0,
-    config     MEDIUMTEXT NOT NULL DEFAULT '{}',
+    config     MEDIUMTEXT NOT NULL,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
+
+CREATE UNIQUE INDEX idx_auth_providers_name ON auth_providers(name);

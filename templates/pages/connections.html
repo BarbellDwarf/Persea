@@ -191,6 +191,34 @@
                 <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
                 <p class="text-xs text-gray-500 mt-1">Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
             </div>
+            <div id="em-url-field" style="display:none">
+                <label class="form-label" for="em-url">URL</label>
+                <input type="text" id="em-url" class="form-input" placeholder="https://10.0.1.5:8080" autocomplete="off">
+                <p class="text-xs text-gray-500 mt-1">Required for Web entries — the browser session opens this URL.</p>
+            </div>
+            <div id="em-container-field" style="display:none">
+                <label class="form-label" for="em-container-image">Container image</label>
+                <input type="text" id="em-container-image" class="form-input" placeholder="registry.example.com/desktop:latest" autocomplete="off">
+                <p class="text-xs text-gray-500 mt-1">Required for VDI entries — the Docker image to run.</p>
+            </div>
+            <div id="em-proxmox-fields" style="display:none">
+                <div>
+                    <label class="form-label" for="em-proxmox-url">Proxmox API URL</label>
+                    <input type="text" id="em-proxmox-url" class="form-input" placeholder="https://pve.example.com:8006" autocomplete="off">
+                </div>
+                <div>
+                    <label class="form-label" for="em-proxmox-vmid">VM ID</label>
+                    <input type="number" id="em-proxmox-vmid" class="form-input" min="100" max="999999" autocomplete="off">
+                </div>
+                <div>
+                    <label class="form-label" for="em-proxmox-node">Node</label>
+                    <input type="text" id="em-proxmox-node" class="form-input" placeholder="pve1" autocomplete="off">
+                </div>
+                <div>
+                    <label class="form-label" for="em-proxmox-token-id">API token ID</label>
+                    <input type="text" id="em-proxmox-token-id" class="form-input" placeholder="root@pam!persea" autocomplete="off">
+                </div>
+            </div>
             <div>
                 <label class="form-label" for="em-port">Port</label>
                 <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
@@ -619,6 +647,10 @@
             })
             .then(function(res) {
                 if (btn) { btn.disabled = false; btn.textContent = 'Connect'; }
+                if (res.data.error === 'authentication required' || res.data.error && String(res.data.error).indexOf('sign in') !== -1) {
+                    window.location.href = '/';
+                    return;
+                }
                 if (res.ok && res.data.session_id) {
                     var url = '/client/' + encodeURIComponent(res.data.session_id);
                     var list = entriesByFolder.get(folderKey(scope, folder)) || [];
@@ -665,9 +697,13 @@
         };
         var e = findByName(list, entry);
         if (e) { render(e); return; }
+        var requestedKey = entryKey(scope, folder, entry);
         fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(r) { return r.ok ? r.json() : []; })
             .then(function(entries) {
+                // A newer selection may have happened while this fetch was in
+                // flight — never render stale data over the current selection.
+                if (selectedEntryKey !== requestedKey) return;
                 entriesByFolder.set(folderKey(scope, folder), entries);
                 render(findByName(entries, entry));
             });
@@ -858,8 +894,10 @@
         loadKnownGroups(function() { populateGroupOptions('fm'); });
         openModal('folder-modal');
     }
+    var folderEditReqId = 0;
     function openEditFolder() {
         if (!selectedFolder) return;
+        var reqId = ++folderEditReqId;
         folderEditMode = { scope: selectedFolder.scope, path: selectedFolder.path, name: selectedFolder.name };
         document.getElementById('folder-modal-title').textContent = 'Edit Folder: ' + selectedFolder.path;
         document.getElementById('fm-name').value = selectedFolder.name;
@@ -877,6 +915,9 @@
         fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/config', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) { return res.ok ? res.json() : null; })
             .then(function(data) {
+                // Ignore responses from a superseded edit session (folder
+                // changed or modal closed/reopened while fetching).
+                if (reqId !== folderEditReqId) return;
                 if (!data) return;
                 if (data.description) document.getElementById('fm-desc').value = data.description;
                 if (Array.isArray(data.allowed_groups)) {
@@ -977,6 +1018,9 @@
         var type = document.getElementById('em-type').value;
         document.getElementById('em-proxmox-secret-field').style.display = type === 'proxmox' ? '' : 'none';
         document.getElementById('em-container-password-field').style.display = type === 'vdi' ? '' : 'none';
+        document.getElementById('em-url-field').style.display = type === 'web' ? '' : 'none';
+        document.getElementById('em-container-field').style.display = type === 'vdi' ? '' : 'none';
+        document.getElementById('em-proxmox-fields').style.display = type === 'proxmox' ? '' : 'none';
         var portEl = document.getElementById('em-port');
         if (!portEl.value && entryTypeDefaults[type]) portEl.value = entryTypeDefaults[type];
     }
@@ -1029,6 +1073,14 @@
         if (selectedEntry.has_container_password) {
             document.getElementById('em-container-password').placeholder = '(stored password unchanged unless you type a new one)';
         }
+        // Protocol-specific fields (edit mode): prefilled, type locked.
+        updateEntryTypeFields();
+        document.getElementById('em-url').value = selectedEntry.url || '';
+        document.getElementById('em-container-image').value = selectedEntry.container_image || '';
+        document.getElementById('em-proxmox-url').value = selectedEntry.proxmox_url || '';
+        if (selectedEntry.proxmox_vmid) document.getElementById('em-proxmox-vmid').value = String(selectedEntry.proxmox_vmid);
+        document.getElementById('em-proxmox-node').value = selectedEntry.proxmox_node || '';
+        document.getElementById('em-proxmox-token-id').value = selectedEntry.proxmox_token_id || '';
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
@@ -1076,6 +1128,40 @@
         var ts = document.getElementById('em-proxmox-token-secret').value.trim();
         if (ts) entry.proxmox_token_secret = ts;
         var cp = document.getElementById('em-container-password').value;
+        if (cp) entry.container_password = cp;
+        if (type === 'web') {
+            var url = document.getElementById('em-url').value.trim();
+            if (!url) {
+                errEl.textContent = 'URL is required for Web entries.';
+                errEl.classList.remove('hidden');
+                return;
+            }
+            entry.url = url;
+        }
+        if (type === 'vdi') {
+            var image = document.getElementById('em-container-image').value.trim();
+            if (!image) {
+                errEl.textContent = 'Container image is required for VDI entries.';
+                errEl.classList.remove('hidden');
+                return;
+            }
+            entry.container_image = image;
+        }
+        if (type === 'proxmox') {
+            var pveUrl = document.getElementById('em-proxmox-url').value.trim();
+            var vmid = document.getElementById('em-proxmox-vmid').value.trim();
+            if (!pveUrl || !vmid) {
+                errEl.textContent = 'Proxmox API URL and VM ID are required.';
+                errEl.classList.remove('hidden');
+                return;
+            }
+            entry.proxmox_url = pveUrl;
+            entry.proxmox_vmid = parseInt(vmid, 10);
+            var node = document.getElementById('em-proxmox-node').value.trim();
+            if (node) entry.proxmox_node = node;
+            var tokenId = document.getElementById('em-proxmox-token-id').value.trim();
+            if (tokenId) entry.proxmox_token_id = tokenId;
+        }
         if (cp) entry.container_password = cp;
         addGroupFromInput('em');
         if (emGroups.length > 0) entry.allowed_groups = emGroups.slice();

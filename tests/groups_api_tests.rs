@@ -583,7 +583,7 @@ async fn folder_count_counts_folders_referencing_the_group_name() {
     let router = test_router(db.clone());
 
     // Folder 1: entries listing "admins" (and "ops").
-    let f1 = db::create_ab_folder(&db, "shared", "Prod", "").unwrap();
+    let f1 = db::create_ab_folder(&db, "shared", "Prod", "", "", false).unwrap();
     db::create_ab_entry(
         &db,
         f1,
@@ -611,7 +611,7 @@ async fn folder_count_counts_folders_referencing_the_group_name() {
     )
     .unwrap();
     // Folder 2: only "devs" (case-sensitive: "Admins" must not match).
-    let f2 = db::create_ab_folder(&db, "shared", "Dev", "").unwrap();
+    let f2 = db::create_ab_folder(&db, "shared", "Dev", "", "", false).unwrap();
     db::create_ab_entry(
         &db,
         f2,

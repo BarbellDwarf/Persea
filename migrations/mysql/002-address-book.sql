@@ -6,7 +6,8 @@ CREATE TABLE IF NOT EXISTS address_book_folders (
     scope       VARCHAR(32) NOT NULL DEFAULT 'shared',
     name        VARCHAR(255) NOT NULL,
     description TEXT DEFAULT '',
-    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    allowed_groups      TEXT NOT NULL,
+    inherit_from_parent TINYINT(1) NOT NULL DEFAULT 0,    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_ab_folders (scope, name)
 );

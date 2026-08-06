@@ -14,3 +14,5 @@ CREATE TABLE IF NOT EXISTS auth_providers (
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_auth_providers_name ON auth_providers(name);
