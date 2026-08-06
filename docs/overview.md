@@ -139,7 +139,7 @@ Jump hosts can be configured:
 - **Per connections entry** — admins configure the tunnel chain in the entry editor
 - **Per ad-hoc session** — powerusers add jump hosts when creating sessions from the Sessions page
 
-Each hop supports independent credentials (username + password or private key). Jump host credentials are stored alongside the connections entry (Vault or encrypted DB, depending on the storage backend) and are never sent to the browser.
+Each hop supports independent credentials (username + password or private key). Jump host credentials are stored in Vault alongside the connections entry and are never sent to the browser.
 
 ## Ports
 
@@ -201,35 +201,24 @@ scripts/               Utility scripts (drive-setup.sh)
 
 ## Documentation
 
-> **Audience:** everyone — this is the entry point.
-> **Next:** [Installation](installation.md) to get persea running, or [Deployment Guide](deployment-guide.md) for the production architecture.
-
-Every guide states its audience and a "Next" link; the map below mirrors that.
-
 ### Getting started
-- [Installation](installation.md) — all install options (Debian, Docker, bare-metal, dev, RPM from source). *Audience: first-time installers. Next: deployment-guide.md*
-- [Deployment Guide](deployment-guide.md) — step-by-step production setup (architecture, HAProxy, RDP targets, hardening). *Audience: operators. Next: installation.md*
-- [Configuration](configuration.md) — full config.toml reference, including `[storage]`, `[vault]`, and `shutdown_timeout_secs`. *Audience: operators and admins. Next: security.md*
-- [Troubleshooting](troubleshooting.md) — guacd, Vault, database, CSRF, WebSocket, and disk failure modes. *Audience: operators. Next: configuration.md*
+- [Deployment Guide](deployment-guide.md) -- step-by-step production setup (start here)
+- [Installation](installation.md) -- all install options (Debian, Docker, bare-metal, dev, RPM from source)
+- [Configuration](configuration.md) -- full config.toml reference
 
 ### Features
-- [Roles and Access Control](roles-and-access-control.md) — 4-tier role hierarchy, connection-level RBAC, OIDC groups, user API tokens. *Audience: admins. Next: security.md*
-- [Web Browser Sessions](web-sessions.md) — autofill, domain allowlisting, login scripts. *Audience: admins. Next: security.md*
-- [Credential Variables](credential-variables.md) — shared credentials across entries. *Audience: admins. Next: configuration.md*
-- [Reports](reports.md) — session analytics, history, CSV export. *Audience: admins and powerusers. Next: api.md*
-- [RDP Video Performance](rdp-video-performance.md) — H.264 passthrough, GFX pipeline, xrdp/Windows tuning. *Audience: admins tuning RDP. Next: deployment-guide.md*
-- [VDI Desktop Containers](vdi.md) — ephemeral Docker desktops, image requirements, persistent homes. *Audience: admins. Next: configuration.md*
-- [Themes](themes.md) — presets, colour overrides, and authoring custom themes. *Audience: admins. Next: configuration.md*
+- [Roles and Access Control](roles-and-access-control.md) -- 4-tier role hierarchy, connection-level RBAC, OIDC groups, user API tokens
+- [Web Browser Sessions](web-sessions.md) -- autofill, domain allowlisting, login scripts
+- [Credential Variables](credential-variables.md) -- shared credentials across entries
+- [Reports](reports.md) -- session analytics, history, CSV export
+- [RDP Video Performance](rdp-video-performance.md) -- H.264 passthrough, GFX pipeline, xrdp/Windows tuning
+- [VDI Desktop Containers](vdi.md) -- ephemeral Docker desktops, image requirements, persistent homes
 
 ### Integrations
-- [Integrations](integrations.md) — OIDC, Vault, SSH tunnels, Kerberos, HAProxy, Knocknoc, drive/LUKS. *Audience: admins. Next: configuration.md*
-- [NetBox](netbox.md) — NetBox-side custom links and webhooks into persea. *Audience: NetBox admins. Next: api.md*
-- [Reverse Proxies](reverse-proxies.md) — nginx, Caddy, Apache, Traefik configs and the `%2F` gotcha. *Audience: operators. Next: deployment-guide.md*
-- [Migration from Apache Guacamole](migration.md) — MySQL/MariaDB import, Vault-to-Vault split, and Vault-to-DB migration. *Audience: admins. Next: configuration.md*
+- [Integrations](integrations.md) -- OIDC, Vault, SSH tunnels, Kerberos, HAProxy, Knocknoc, drive/LUKS
+- [NetBox](netbox.md) -- connections sync via custom fields and webhooks
+- [Migration from Apache Guacamole](migration.md) -- MySQL/MariaDB to Vault
 
 ### Reference
-- [Security](security.md) — TLS, network allowlists, headers, CSRF, rate limiting, audit logging, hardening. *Audience: security-minded operators and admins. Next: roles-and-access-control.md*
-- [API Reference](api.md) — REST API endpoints, unified error format, deep health check, `/metrics`, and the headless ws-ticket flow. *Audience: developers and integrators. Next: netbox.md*
-
-### Historical research
-- [docs/research/](research/) — pre-implementation research notes kept as historical decision records: [auth provider architecture](research/auth-provider-architecture.md), [multi-DB support](research/multi-db-support.md) (shipped), [enterprise session/RBAC/audit](research/enterprise-session-rbac-audit.md). *Audience: maintainers reviewing design rationale. Next: configuration.md*
+- [Security](security.md) -- TLS, network allowlists, headers, audit logging, hardening
+- [API Reference](api.md) -- complete REST API documentation

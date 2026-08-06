@@ -1,8 +1,5 @@
 # Security
 
-> **Audience:** operators and admins hardening a persea deployment.
-> **Next:** [Roles and Access Control](roles-and-access-control.md) for the role and permission model.
-
 ## TLS encryption
 
 ### Client-facing HTTPS
@@ -160,25 +157,17 @@ All token operations are recorded in a dedicated `token_audit_log` table:
 
 Audit logs are retained for 90 days and cleaned up hourly. Admins can view the log via the Admin UI or `GET /api/admin/token-audit`.
 
-## CSRF protection
-
-All state-changing requests (POST, PUT, DELETE, PATCH) must carry an `X-CSRF-Token` header that exactly matches the `csrf_token` cookie (double-submit pattern, `src/csrf.rs`). GET/HEAD/OPTIONS are exempt.
-
-- Every response sets a `csrf_token` cookie: `Path=/; SameSite=Lax` (plus `Secure` over HTTPS). It is deliberately **not** `HttpOnly`, so page JavaScript can read it and echo it back as `X-CSRF-Token` (htmx and `fetch()` are patched to do this automatically in `templates/base.html`)
-- A mismatch or missing pair returns `403` with `{"error": "CSRF token missing or invalid"}`
-- API clients must therefore make a first request to learn the cookie, then send it back — see the curl example in [Troubleshooting > CSRF 403 errors](troubleshooting.md#csrf-403-errors)
-
 ## Rate limiting
 
-Per-IP rate limiting uses `tower_governor` with the resolved client IP (honoring `trusted_proxies` for X-Forwarded-For):
+Per-IP rate limiting is applied to all endpoints using `tower_governor`:
 
-| Endpoint group | Rate | Burst | Active when |
-|---------------|------|-------|-------------|
-| API routes | 20/sec | 100 | `rate_limit = true` |
-| Session creation | 2/sec | 10 | `rate_limit = true` |
-| WebSocket connections | 5/sec | 50 | **always** |
+| Endpoint group | Rate | Burst |
+|---------------|------|-------|
+| API routes | 20/sec | 100 |
+| Session creation | 2/sec | 10 |
+| WebSocket connections | 5/sec | 50 |
 
-The API and session-creation limits are off by default (`rate_limit = false`) — when behind a rate-limiting reverse proxy or access gateway (HAProxy, Knocknoc), limiting is typically done upstream. The WebSocket limit is unconditional and applies even with `rate_limit = false`, so bursts of reconnects (or many users behind one NAT) can still be throttled; the upgrade fails with 429.
+Rate limiting uses the resolved client IP (honoring `trusted_proxies` for X-Forwarded-For).
 
 ## Security headers
 
@@ -402,7 +391,7 @@ Encrypted values are prefixed with `enc:v1:` for future key rotation support. Th
 
 ## SQL injection protection
 
-All database queries use parameterised statements (rusqlite's `params!` macro for the SQLite admin database, SQLx bind parameters for the multi-backend pool). No string concatenation is used in SQL queries.
+All database queries use parameterised statements via rusqlite's `params!` macro. No string concatenation is used in SQL queries.
 
 ## Path traversal protection
 
@@ -427,8 +416,7 @@ trusted_proxies = ["127.0.0.1/32"]
 ## Credential handling
 
 - **Vault credentials**: connections entries are read server-side from Vault. Connection passwords and private keys are never sent to the browser.
-- **DB credentials**: with the DB storage backend, credentials are AES-256-GCM encrypted at rest (`enc:v1:` prefix) with the key from `[storage].encryption_key` or `PERSEA_STORAGE_KEY`, and decrypted server-side at connect time. See [Multi-database encryption at rest](#multi-database-encryption-at-rest).
-- **SSH tunnel credentials**: jump host passwords and private keys are stored alongside the connections entry (Vault or encrypted DB). They are read server-side when establishing the tunnel chain and are never sent to the browser. For ad-hoc sessions, jump host credentials are provided in the session creation request and exist only in memory during tunnel setup.
+- **SSH tunnel credentials**: jump host passwords and private keys are stored in Vault alongside the connections entry. They are read server-side when establishing the tunnel chain and are never sent to the browser. For ad-hoc sessions, jump host credentials are provided in the session creation request and exist only in memory during tunnel setup.
 - **API keys**: only the SHA-256 hash is stored. The plaintext key is shown once at creation and cannot be retrieved.
 - **User API tokens**: same SHA-256 hash storage as admin API keys. The `rgu_` prefix enables secret scanning. Plaintext shown once at creation only.
 - **OIDC client secret**: can be provided via `OIDC_CLIENT_SECRET` environment variable instead of the config file.

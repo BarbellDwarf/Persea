@@ -10,11 +10,10 @@
 //! folder level are copied (the latter carries allowed_groups /
 //! inherit_from_parent — dropping it would silently lose a folder's ACL).
 
-use std::future::Future;
 use std::sync::Arc;
 
 use crate::config::Config;
-use crate::vault::{FolderInfo, VaultClient, VaultError};
+use crate::vault::{VaultClient, VaultError};
 
 /// Run the `vault-migrate` subcommand.
 pub async fn cmd_vault_migrate(
@@ -59,14 +58,17 @@ pub async fn cmd_vault_migrate(
             std::process::exit(1);
         }
     };
-    let folder_paths = collect_folder_paths(
-        top,
-        &mut ClientSubfolders {
-            client: &src,
-            scope,
-        },
-    )
-    .await;
+    let mut folder_paths: Vec<String> = top.into_iter().map(|f| f.path.unwrap_or(f.name)).collect();
+    let mut i = 0;
+    while i < folder_paths.len() {
+        let path = folder_paths[i].clone();
+        if let Ok(subs) = src.list_subfolders(scope, &path).await {
+            for s in subs {
+                folder_paths.push(s.path.unwrap_or_else(|| format!("{}/{}", path, s.name)));
+            }
+        }
+        i += 1;
+    }
 
     let mut folders_done = 0usize;
     let mut entries_copied = 0usize;
@@ -192,53 +194,6 @@ pub async fn cmd_vault_migrate(
     }
 }
 
-/// BFS-collect every folder path in the scope subtree, top-level folders
-/// first so ancestors always precede descendants.
-///
-/// `list_subfolders` resolves the children of a path; a failed listing is
-/// tolerated and contributes nothing, matching the error-tolerant walk in
-/// `cmd_vault_migrate`.
-/// Resolves the children of a folder path, for the BFS walk.
-trait SubfolderLister {
-    fn list_subfolders(
-        &mut self,
-        path: &str,
-    ) -> impl Future<Output = Result<Vec<FolderInfo>, VaultError>> + Send;
-}
-
-async fn collect_folder_paths(
-    top: Vec<FolderInfo>,
-    lister: &mut impl SubfolderLister,
-) -> Vec<String> {
-    let mut folder_paths: Vec<String> = top.into_iter().map(|f| f.path.unwrap_or(f.name)).collect();
-    let mut i = 0;
-    while i < folder_paths.len() {
-        let path = folder_paths[i].clone();
-        if let Ok(subs) = lister.list_subfolders(&path).await {
-            for s in subs {
-                folder_paths.push(s.path.unwrap_or_else(|| format!("{}/{}", path, s.name)));
-            }
-        }
-        i += 1;
-    }
-    folder_paths
-}
-
-/// Adapts a live `VaultClient` + scope for the BFS walk.
-struct ClientSubfolders<'a> {
-    client: &'a VaultClient,
-    scope: &'a str,
-}
-
-impl SubfolderLister for ClientSubfolders<'_> {
-    fn list_subfolders(
-        &mut self,
-        path: &str,
-    ) -> impl Future<Output = Result<Vec<FolderInfo>, VaultError>> + Send {
-        self.client.list_subfolders(self.scope, path)
-    }
-}
-
 /// Resolve a named backend (`vault` / `vault_shared` / `vault_local`) from
 /// config, read its secret ID from the matching env var, and connect. Exits
 /// the process with a clear message on any misconfiguration.
@@ -281,122 +236,5 @@ async fn connect_named(config: &Config, name: &str) -> Arc<VaultClient> {
             );
             std::process::exit(1);
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::collections::HashMap;
-
-    fn folder(name: &str) -> FolderInfo {
-        FolderInfo {
-            name: name.to_string(),
-            description: String::new(),
-            scope: "shared".to_string(),
-            path: None,
-            has_children: None,
-        }
-    }
-
-    fn folder_with_path(name: &str, path: &str) -> FolderInfo {
-        let mut f = folder(name);
-        f.path = Some(path.to_string());
-        f
-    }
-
-    /// Run the BFS walk against an in-memory subfolder map. Paths absent from
-    /// `subfolders` have no children; paths listed in `errors` fail to list
-    /// (exercising the walk's error tolerance).
-
-    /// Drives the BFS walk from an in-memory subfolder map. Paths absent from
-    /// `subfolders` have no children; paths listed in `errors` fail to list
-    /// (exercising the walk's error tolerance).
-    struct MapLister<'a> {
-        subfolders: &'a HashMap<String, Vec<FolderInfo>>,
-        errors: &'a [&'a str],
-    }
-
-    impl SubfolderLister for MapLister<'_> {
-        fn list_subfolders(
-            &mut self,
-            path: &str,
-        ) -> impl Future<Output = Result<Vec<FolderInfo>, VaultError>> + Send {
-            std::future::ready(if self.errors.contains(&path) {
-                Err(VaultError::NotFound)
-            } else {
-                Ok(self.subfolders.get(path).cloned().unwrap_or_default())
-            })
-        }
-    }
-
-    async fn run_walk(
-        top: Vec<FolderInfo>,
-        subfolders: &HashMap<String, Vec<FolderInfo>>,
-        errors: &[&str],
-    ) -> Vec<String> {
-        collect_folder_paths(top, &mut MapLister { subfolders, errors }).await
-    }
-
-    #[tokio::test]
-    async fn top_level_folders_fall_back_to_name_when_path_missing() {
-        let subs = HashMap::new();
-        let paths = run_walk(
-            vec![
-                folder("Clients"),
-                folder_with_path("Acme", "Customers/Acme"),
-            ],
-            &subs,
-            &[],
-        )
-        .await;
-        assert_eq!(paths, vec!["Clients", "Customers/Acme"]);
-    }
-
-    #[tokio::test]
-    async fn nested_subfolders_join_parent_path_when_path_missing() {
-        let mut subs = HashMap::new();
-        subs.insert(
-            "Clients".to_string(),
-            vec![folder_with_path("Acme", "Clients/Acme"), folder("Dept")],
-        );
-        subs.insert(
-            "Clients/Acme".to_string(),
-            vec![folder_with_path("Prod", "Clients/Acme/Prod")],
-        );
-        let paths = run_walk(vec![folder_with_path("Clients", "Clients")], &subs, &[]).await;
-        assert_eq!(
-            paths,
-            vec![
-                "Clients",
-                "Clients/Acme",
-                "Clients/Dept",
-                "Clients/Acme/Prod"
-            ]
-        );
-    }
-
-    #[tokio::test]
-    async fn walk_is_breadth_first_ancestors_before_descendants() {
-        let mut subs = HashMap::new();
-        subs.insert("A".to_string(), vec![folder("A1"), folder("A2")]);
-        subs.insert("B".to_string(), vec![folder("B1")]);
-        subs.insert("A/A1".to_string(), vec![folder("A1a")]);
-        let paths = run_walk(vec![folder("A"), folder("B")], &subs, &[]).await;
-        assert_eq!(paths, vec!["A", "B", "A/A1", "A/A2", "B/B1", "A/A1/A1a"]);
-    }
-
-    #[tokio::test]
-    async fn listing_errors_are_tolerated() {
-        let mut subs = HashMap::new();
-        subs.insert("B".to_string(), vec![folder("B1")]);
-        let paths = run_walk(vec![folder("A"), folder("B")], &subs, &["A"]).await;
-        assert_eq!(paths, vec!["A", "B", "B/B1"]);
-    }
-
-    #[tokio::test]
-    async fn empty_scope_produces_no_paths() {
-        let paths = run_walk(Vec::new(), &HashMap::new(), &[]).await;
-        assert!(paths.is_empty());
     }
 }

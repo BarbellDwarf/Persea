@@ -396,9 +396,8 @@ pub struct Config {
     #[serde(default = "default_guacd_addr")]
     pub guacd_addr: String,
 
-    /// Deprecated: top-level recording path. Use `[recording].path`.
-    #[serde(default)]
-    pub recording_path: Option<PathBuf>,
+    #[serde(default = "default_recording_path")]
+    pub recording_path: PathBuf,
 
     #[serde(default = "default_static_path")]
     pub static_path: PathBuf,
@@ -1282,7 +1281,7 @@ impl Default for Config {
         Self {
             listen_addr: default_listen_addr(),
             guacd_addr: default_guacd_addr(),
-            recording_path: None,
+            recording_path: default_recording_path(),
             static_path: default_static_path(),
             db_path: default_db_path(),
             session_pending_timeout_secs: default_session_timeout_secs(),
@@ -1482,19 +1481,16 @@ impl Config {
         }
 
         // ── Non-fatal warnings ────────────────────────────────────────
-        if self.recording_path.is_some() {
-            if self.recording.is_some() {
-                warnings.push(
-                    "top-level 'recording_path' is deprecated in favour of [recording].path — \
-                     the [recording] section takes precedence"
-                        .into(),
-                );
-            } else {
-                warnings.push(
-                    "top-level 'recording_path' is deprecated; migrate to [recording] section"
-                        .into(),
-                );
-            }
+        if !self.recording_path.to_string_lossy().is_empty() && self.recording.is_some() {
+            warnings.push(
+                "top-level 'recording_path' is deprecated in favour of [recording].path — \
+                 the [recording] section takes precedence"
+                    .into(),
+            );
+        } else if !self.recording_path.to_string_lossy().is_empty() {
+            warnings.push(
+                "top-level 'recording_path' is deprecated; migrate to [recording] section".into(),
+            );
         }
 
         Ok(warnings)
@@ -1531,13 +1527,11 @@ impl Config {
     }
 
     /// Effective recording path: `[recording].path` overrides top-level `recording_path`.
-    pub fn effective_recording_path(&self) -> std::borrow::Cow<'_, std::path::Path> {
+    pub fn effective_recording_path(&self) -> &std::path::Path {
         if let Some(ref rec) = self.recording {
-            std::borrow::Cow::Borrowed(&rec.path)
-        } else if let Some(ref path) = self.recording_path {
-            std::borrow::Cow::Borrowed(path)
+            &rec.path
         } else {
-            std::borrow::Cow::Owned(default_recording_path())
+            &self.recording_path
         }
     }
 
@@ -1564,10 +1558,7 @@ impl Config {
         match self.recording.clone() {
             Some(r) => r,
             None => RecordingConfig {
-                path: self
-                    .recording_path
-                    .clone()
-                    .unwrap_or_else(default_recording_path),
+                path: self.recording_path.clone(),
                 ..RecordingConfig::default()
             },
         }
@@ -2160,19 +2151,8 @@ mod tests {
 
     #[test]
     fn test_validate_recording_path_deprecation_warning() {
-        // No warning when recording_path is unset (default) even with [recording].
         let mut config = Config::default();
         config.recording = Some(RecordingConfig::default());
-        let warnings = config.validate().unwrap();
-        assert!(
-            !warnings.iter().any(|w| w.contains("recording_path")),
-            "expected no deprecation warning for unset field, got: {:?}",
-            warnings
-        );
-
-        // Warning fires when the deprecated top-level field is explicitly set.
-        let mut config = Config::default();
-        config.recording_path = Some(std::path::PathBuf::from("/tmp/rec"));
         let warnings = config.validate().unwrap();
         assert!(
             warnings.iter().any(|w| w.contains("recording_path")),

@@ -1,8 +1,5 @@
 # RDP Video Performance
 
-> **Audience:** admins tuning RDP video quality (H.264 passthrough, GFX pipeline) for persea sessions.
-> **Next:** [Deployment Guide](deployment-guide.md#step-4-prepare-rdp-targets) for the full RDP target setup, or [Configuration](configuration.md) for the entry-level RDP settings.
-
 Guide to optimizing RDP video quality and frame rate through persea, particularly for video monitoring workloads.
 
 ## Connections Settings
@@ -81,7 +78,7 @@ Debian 13 (trixie) ships xrdp 0.10.x, but the stock package does **not** include
 A single setup script handles everything — desktop, audio, xrdp rebuild, and configuration. Run **on the xrdp target machine** (not the persea server):
 
 ```bash
-wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/BarbellDwarf/persea/main/contrib/setup-xrdp-gfx.sh
+wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/persea-persea/persea/main/contrib/setup-xrdp-gfx.sh
 sudo bash setup-xrdp-gfx.sh --desktop mate
 ```
 

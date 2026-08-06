@@ -1,7 +1,5 @@
 # Enterprise Session Management, RBAC, and Audit Patterns for persea
 
-> **Historical decision record.** The findings in this document shipped: session lifecycle controls and RBAC are documented in [Roles and Access Control](../roles-and-access-control.md), and the SHA-256 hash-chain audit log in [Security](../security.md#hash-chain-audit-logging). Keep reading only for the original design rationale.
-
 Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-53, NIST 800-63B, and SOC 2 documentation.
 
 ---

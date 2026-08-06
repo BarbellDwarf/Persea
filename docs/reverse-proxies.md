@@ -1,8 +1,5 @@
 # Reverse Proxy Configuration
 
-> **Audience:** operators placing persea behind nginx, Caddy, Apache, or Traefik (HAProxy + Knocknoc is covered in [integrations.md](integrations.md) and [deployment-guide.md](deployment-guide.md#step-3-set-up-haproxy)).
-> **Next:** [Deployment Guide](deployment-guide.md) for the full production setup.
-
 persea is designed to run behind a TLS-terminating reverse proxy. The
 primary supported path is **HAProxy + Knocknoc** (see
 [`haproxy.example.cfg`](../haproxy.example.cfg) and

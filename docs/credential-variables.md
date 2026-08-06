@@ -1,11 +1,8 @@
 # Credential Variables
 
-> **Audience:** admins configuring shared credentials across connections entries.
-> **Next:** [Security](security.md#multi-database-encryption-at-rest) for how stored credentials are encrypted.
-
 Credential variables let connections entries reference shared credentials by name instead of storing passwords directly. Users maintain their own credential values in Vault via the **My Credentials** dialog (the **Credentials** link in the top navigation, or the gear menu). When a session launches, persea substitutes the variables from the user's saved values.
 
-This gives a similar experience to LDAP credential passthrough in Apache Guacamole, where users log in once and sessions just work, but without persea needing to bind to LDAP. Credentials never reach the browser. They are stored in Vault KV v2, or — with the DB storage backend — AES-256-GCM encrypted at rest in the database (see [Security > Multi-database encryption at rest](security.md#multi-database-encryption-at-rest)).
+This gives a similar experience to LDAP credential passthrough in Apache Guacamole, where users log in once and sessions just work, but without persea needing to bind to LDAP. Credentials stay in Vault, never on disk or in the browser.
 
 ## How it works
 
@@ -107,8 +104,6 @@ User credentials are stored in Vault KV v2 at:
 ```
 
 Each user gets a single Vault secret (per backend) containing their credential key-value pairs. Variable names are the keys, plaintext values are the values. The Vault policy must allow read/write to this path for authenticated users.
-
-With the DB storage backend, the `db-migrate-from-vault` command moves these values into the DB's `user_credentials` table, encrypted with the storage key — see [Migration > Vault to DB](migration.md#migrating-from-vault-to-the-database-backend).
 
 With multiple Vault backends configured, a user's credentials are split by scope: local credentials live at this path in the local backend, shared credentials at the same path in the shared backend. The `users/*` policy is needed on whichever backends hold credentials.
 

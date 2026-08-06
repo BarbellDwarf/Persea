@@ -1,88 +1,12 @@
 # API Reference
 
-> **Audience:** developers and integration engineers building clients, scripts, or NetBox/webhook integrations against persea.
-> **Next:** [NetBox Integration](netbox.md) for a concrete `GET /api/connect` integration example.
-
 All API endpoints are under `/api/`. Authentication is via `Authorization: Bearer <api-key>` header, `X-API-Key: <key>` header, or OIDC session cookie.
-
-## Error response format
-
-Every API endpoint returns errors in a unified JSON shape:
-
-```json
-{
-  "error": "human-readable message",
-  "code": 404,
-  "error_code": "NOT_FOUND"
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `error` | string | Human-readable error message |
-| `code` | integer | The HTTP status code, repeated in the body |
-| `error_code` | string | Machine-readable error category (see table below) |
-
-`error_code` values are derived from the HTTP status:
-
-| `error_code` | HTTP status | Meaning |
-|--------------|-------------|---------|
-| `NOT_FOUND` | 404 | Requested resource does not exist |
-| `VALIDATION_ERROR` | 400 | Bad request / validation failure |
-| `CONFLICT` | 409 | State conflict (e.g. session not active, duplicate mapping) |
-| `BAD_GATEWAY` | 502 | Upstream failure (guacd, Vault, browser, VDI, tunnel, Proxmox, vSphere) |
-| `UNAUTHORIZED` | 401 | Missing or invalid authentication |
-| `FORBIDDEN` | 403 | Authenticated but not allowed |
-| `SERVICE_UNAVAILABLE` | 503 | Feature not enabled or backend unavailable |
-| `GATEWAY_TIMEOUT` | 504 | Upstream timed out (e.g. VDI container readiness) |
-| `PAYLOAD_TOO_LARGE` | 413 | Request body over the 64 KB limit |
-| `INTERNAL_ERROR` | 500 | Server-side failure (also the fallback for any unmapped status) |
-
-The HTTP status is set per error variant (`src/error.rs`). The mapping is:
-
-| Error variant | HTTP status | Meaning |
-|---------------|-------------|---------|
-| `Auth` | 401 | Authentication failed or missing |
-| `Forbidden` | 403 | Insufficient role / permissions |
-| `Conflict` | 409 | State conflict |
-| `Validation` | 400 | Invalid request body or parameters |
-| `Session` | 404 / 400 / 409 / 502 | Message-dependent: "not found" → 404, "validation" → 400, "not active" → 409, otherwise 502 |
-| `Guacd` | 502 | guacd unreachable or protocol error |
-| `Vault` | 404 / 403 / 503 / 400 / 502 | Message-dependent: "not found" → 404, "forbidden"/"access denied" → 403, "unavailable" → 503, "invalid name" → 400, otherwise 502 |
-| `Browser` | 502 | Web browser session backend failure |
-| `Vdi` | 503 / 504 / 502 | "not enabled" → 503, "timeout" → 504, otherwise 502 |
-| `Tunnel` | 502 | SSH tunnel chain failure |
-| `Protocol` | 502 | Guacamole protocol error |
-| `Drive` | 500 | Drive / file transfer failure |
-| `Pve` | 502 | Proxmox VE API failure |
-| `Vsphere` | 502 | VMware vSphere API failure |
-| `Internal` | 500 | Unexpected server error |
-
-Two middleware-level rejections return the same JSON shape but with only the `error` field (no `code`/`error_code`): the CSRF layer (`{"error": "CSRF token missing or invalid"}` with 403 — see [Security](security.md#csrf-protection)) and the WebSocket Origin check (`{"error": "cross-origin WebSocket request rejected"}` / `{"error": "WebSocket upgrade requires Origin header"}` with 403).
 
 ## Health
 
 ### `GET /api/health`
 
-No authentication required for the shallow check, which returns `{"status": "ok"}` when the server is running.
-
-Authenticated requests with **operator** role or higher get a deep check: guacd TCP connect, database `SELECT 1`, Vault `/v1/sys/health` (when configured), recording-disk usage, and the active session count. The response is `{"status": "healthy"|"degraded", "checks": {...}, "uptime_seconds": ..., "active_sessions": ...}`. Each check object reports `status` (`up`/`down`/`ok`/`warning`/`unavailable`) and `latency_ms`; the disk check reports `usage_percent`. See [Troubleshooting](troubleshooting.md) for how to read the results.
-
-## Metrics
-
-### `GET /metrics`
-
-Prometheus text exposition format, **unauthenticated**. Five metrics are exposed:
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `persea_sessions_active` | gauge | Currently active sessions |
-| `persea_sessions_total` | counter | Total sessions created |
-| `persea_requests_total` | counter | Total HTTP requests |
-| `persea_errors_total` | counter | Total 5xx responses |
-| `persea_uptime_seconds` | gauge | Server uptime in seconds |
-
-Because it is unauthenticated, do not expose `/metrics` to untrusted networks (scrape it via a reverse-proxy ACL or on the loopback interface).
+No authentication required. Returns 200 OK when the server is running.
 
 ## Quick Connect
 
@@ -112,7 +36,7 @@ Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Cr
 | `height` | integer | Display height in pixels |
 | `dpi` | integer | Display DPI |
 
-When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the connections (credentials from the [Vault or DB backend](configuration.md#storage-section)). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode. If the target requires authentication, the user will see guacd's login prompt.
+When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the connections (credentials from Vault). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode. If the target requires authentication, the user will see guacd's login prompt.
 
 If the connections entry has `prompt_credentials: true` or has no stored password/key, the endpoint returns an inline credential form instead of creating the session immediately. The user enters credentials, which are POSTed to the connect endpoint and used for that session only (never stored).
 
@@ -506,7 +430,7 @@ Update a mapping.
 
 Delete a mapping.
 
-## Connections (Vault or DB backend)
+## Connections (requires Vault)
 
 ### `GET /api/addressbook/folders`
 
@@ -518,7 +442,7 @@ List entries in a folder. Scope is `shared` or `instance`. Requires folder group
 
 ### `POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect`
 
-Create a session from an connections entry. Reads credentials (including jump host credentials) from the stored entry (Vault or DB backend) server-side and creates a session. Requires **operator** role and folder group access.
+Create a session from an connections entry. Reads credentials (including jump host credentials) from Vault server-side and creates a session. Requires **operator** role and folder group access.
 
 Optional body to override or supply credentials at connect time:
 
@@ -611,7 +535,7 @@ For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed u
 
 ### `PUT /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 
-Update a connection entry. Uses read-modify-write: reads the existing entry from the storage backend (Vault or DB), merges incoming fields on top. Credentials (`password`, `private_key`) that are omitted from the request are preserved from the existing entry. Jump host credentials are merged per-hop by index.
+Update a connection entry. Uses read-modify-write: reads existing entry from Vault, merges incoming fields on top. Credentials (`password`, `private_key`) that are omitted from the request are preserved from the existing entry. Jump host credentials are merged per-hop by index.
 
 ### `DELETE /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
 

@@ -1,8 +1,5 @@
 # Installation
 
-> **Audience:** anyone installing persea for the first time (Debian package, Docker, bare-metal, dev builds).
-> **Next:** [Deployment Guide](deployment-guide.md) for the production architecture, or [Configuration](configuration.md) for config reference.
-
 > **Target platform**: persea is built and tested against **Debian 13
 > (Trixie)**. The pre-built `.deb` package and `install.sh` script
 > assume FreeRDP 3.15+ (Debian 13's `freerdp3-dev`). Other Linux
@@ -11,7 +8,7 @@
 
 ## Option A: Debian package (recommended)
 
-Pre-built `.deb` packages are available from the [releases page](https://github.com/BarbellDwarf/persea/releases) for Debian 13 (Trixie) and compatible distributions.
+Pre-built `.deb` packages are available from the [releases page](https://github.com/BarbellDwarf/rustguac/releases) for Debian 13 (Trixie) and compatible distributions.
 
 ```bash
 sudo apt install ./persea_*.deb
@@ -41,11 +38,11 @@ sudo systemctl enable --now persea
 
 This starts both `persea-guacd` (the protocol daemon) and `persea` (the web proxy).
 
-4. **(Required for connections) Set up a storage backend:**
+4. **(Required for connections) Set up Vault or OpenBao:**
 
-The connections page is persea's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries either in the local database with AES-256-GCM encrypted credentials (the default `[storage] backend = "db"`), or in [HashiCorp Vault](https://www.vaultproject.io/) / [OpenBao](https://openbao.org/) KV v2 (`backend = "vault"`). A storage backend is required for the Connections UI — without one, users can only run ad-hoc sessions via the Sessions page or the API.
+The connections page is persea's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2, and credentials never reach the browser. Vault or OpenBao is required for the Connections UI. Without it, users can only run ad-hoc sessions via the Sessions page or the API.
 
-For a Vault-backed install the fastest path is the bundled quickstart helper, which auto-detects vault or bao and provisions everything:
+For a single-host install the fastest path is the bundled quickstart helper, which auto-detects vault or bao and provisions everything:
 
 ```bash
 # Against an existing Vault or OpenBao:
@@ -100,7 +97,7 @@ After installation, verify everything works:
 3. **Check for errors in logs:**
    ```bash
    journalctl -u persea -n 20 --no-pager
-   journalctl -u persea-guacd -n 20 --no-pager
+   journalctl -u guacd -n 20 --no-pager
    ```
 
 4. **Create an admin user** (if not done during install):
@@ -169,11 +166,11 @@ The `persea` service loads environment variables from `/opt/persea/env` via syst
 
 ## Option C: Docker
 
-Pre-built images are published to the GitHub Container Registry:
+Pre-built images are available on [Docker Hub](https://hub.docker.com/r/persea/persea):
 
 ```bash
-docker pull ghcr.io/barbelldwarf/persea:latest
-docker run -d -p 8089:8089 ghcr.io/barbelldwarf/persea:latest
+docker pull persea/persea:latest
+docker run -d -p 8089:8089 persea/persea:latest
 ```
 
 To build from source instead:
@@ -212,7 +209,7 @@ To persist config changes across container restarts, bind-mount a local `config.
 1. **Copy the default config** from the image:
 
 ```bash
-docker run --rm --entrypoint cat ghcr.io/barbelldwarf/persea:latest /opt/persea/config.toml.default > config.toml
+docker run --rm --entrypoint cat persea/persea:latest /opt/persea/config.toml.default > config.toml
 ```
 
 2. **Edit** `config.toml` as needed (see [Configuration](configuration.md)):
@@ -231,7 +228,7 @@ If no config file is mounted, the container uses a built-in default on first sta
 ```yaml
 services:
   persea:
-    image: ghcr.io/barbelldwarf/persea:latest
+    image: persea/persea:latest
     ports:
       - "8089:8089"
     volumes:
@@ -258,7 +255,7 @@ services:
     # ... your existing guacd config ...
 
   persea:
-    image: ghcr.io/barbelldwarf/persea:latest
+    image: persea/persea:latest
     entrypoint: ["/opt/persea/bin/persea"]
     command: ["--config", "/opt/persea/config.toml", "serve"]
     ports:
@@ -353,7 +350,7 @@ daemon. This is the supported path for Ubuntu, RHEL/Rocky/Alma, Arch,
 and any other non-Debian-13 distribution.
 
 ```bash
-docker pull ghcr.io/barbelldwarf/persea:latest
+docker pull persea/persea:latest
 ```
 
 See [Option C: Docker](#option-c-docker) above for the full setup.
@@ -385,7 +382,7 @@ sudo apt-get install -y \
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
 # Build guacd against system FreeRDP 3.5 (skip our 3.15+ patches)
-git clone https://github.com/BarbellDwarf/persea.git
+git clone https://github.com/BarbellDwarf/rustguac.git
 git clone https://github.com/apache/guacamole-server.git
 cd guacamole-server
 git checkout de97609007c088b5e6afd827eff5e9076013a247   # same pin persea uses

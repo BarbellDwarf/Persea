@@ -238,30 +238,6 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # # instance_name = "prod-1"  # optional, enables instance-scoped entries
 # # tls_skip_verify = false   # skip TLS cert verification (dev only, default: false)
 
-# [vault_shared]
-# Optional dedicated backend for the `shared` scope — e.g. a central Vault
-# shared across the fleet. When set, shared-scope folders/entries route here
-# instead of [vault]. Secret ID via VAULT_SHARED_SECRET_ID env var.
-# addr = "https://vault-central.example.com:8200"
-# mount = "secret"            # KV v2 mount (default: "secret")
-# base_path = "persea"      # base path under mount (default: "persea")
-# role_id = "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"
-# # namespace = "my-ns"       # optional, Vault Enterprise / OpenBao namespaces
-# # tls_skip_verify = false   # skip TLS cert verification (dev only, default: false)
-
-# [vault_local]
-# Optional dedicated backend for the `instance` (local) scope — e.g. a per-host
-# Vault that stays reachable during a central outage. When set, instance-scope
-# folders/entries route here instead of [vault]. Set instance_name to the value
-# data was originally stored under. Secret ID via VAULT_LOCAL_SECRET_ID env var.
-# addr = "https://127.0.0.1:8200"
-# mount = "secret"            # KV v2 mount (default: "secret")
-# base_path = "persea"      # base path under mount (default: "persea")
-# role_id = "zzzzzzzz-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
-# instance_name = "prod-1"    # must match the name data was stored under
-# # namespace = "my-ns"       # optional, Vault Enterprise / OpenBao namespaces
-# # tls_skip_verify = false   # skip TLS cert verification (dev only, default: false)
-
 # ─── Recording ──────────────────────────────────────────────────────────────
 #
 # Controls session recording and automatic rotation.

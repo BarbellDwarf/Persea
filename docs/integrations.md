@@ -1,8 +1,5 @@
 # Integrations
 
-> **Audience:** admins wiring persea into OIDC providers, Vault/OpenBao, SSH bastions, Kerberos, HAProxy/Knocknoc, and drive/LUKS storage.
-> **Next:** [Configuration](configuration.md) for the config keys each integration needs.
-
 ## OIDC Single Sign-On
 
 persea supports OpenID Connect for user authentication. Any OIDC provider works: Authentik, Keycloak, Okta, Azure AD, Google, etc.

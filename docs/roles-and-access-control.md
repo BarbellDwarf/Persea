@@ -1,8 +1,5 @@
 # Roles and Access Control
 
-> **Audience:** admins managing roles, group mappings, and API tokens.
-> **Next:** [Security](security.md) for authentication and hardening, or [API Reference](api.md) for the user/token endpoints.
-
 ## Role hierarchy
 
 persea implements a 4-tier role hierarchy:

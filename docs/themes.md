@@ -1,8 +1,5 @@
 # Themes
 
-> **Audience:** admins customising the persea UI (presets, colours, logo, custom theme files).
-> **Next:** [Configuration](configuration.md#theme-section) for where theme settings live in `config.toml`.
-
 persea ships with a small set of built-in colour presets and lets you
 add your own without recompiling. This page covers everything theme:
 choosing a preset, overriding individual colours, and authoring a brand

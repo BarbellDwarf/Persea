@@ -1,8 +1,5 @@
 # VDI Desktop Containers
 
-> **Audience:** admins enabling VDI sessions (Docker desktop containers per user).
-> **Next:** [Configuration](configuration.md#vdi-section) for the `[vdi]` section, or [Installation](installation.md) to set up Docker.
-
 persea can spawn ephemeral Docker desktop containers on demand. Each user gets their own isolated Linux desktop accessible via the browser, with no client software required.
 
 ## How it works
