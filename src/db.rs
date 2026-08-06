@@ -1002,6 +1002,32 @@ pub fn upsert_seen_groups(db: &Db, groups: &[String]) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Auto-provision `local_groups` for the given provider groups (wayfinder fog
+/// item: "map OIDC groups to local groups without manual mapping"). Folder
+/// ACLs reference local group names, so a provider group that shows up in
+/// login claims becomes usable in the connections page immediately. Groups
+/// already created (or mapped) are left untouched.
+pub fn ensure_local_groups(db: &Db, groups: &[String]) -> rusqlite::Result<usize> {
+    if groups.is_empty() {
+        return Ok(0);
+    }
+    let mut conn = db.lock().unwrap();
+    let mut created = 0usize;
+    {
+        let mut stmt = conn.prepare(
+            "INSERT OR IGNORE INTO local_groups (name, description)
+             VALUES (?1, 'Auto-provisioned from auth provider groups')",
+        )?;
+        for g in groups {
+            let trimmed = g.trim();
+            if !trimmed.is_empty() && !trimmed.contains(',') {
+                created += stmt.execute(params![trimmed])?;
+            }
+        }
+    }
+    Ok(created)
+}
+
 /// List all known OIDC groups — union of configured role-mappings and groups
 /// ever seen in a user's login claims. Sorted case-insensitively.
 pub fn list_known_groups(db: &Db) -> rusqlite::Result<Vec<String>> {
@@ -2831,6 +2857,22 @@ mod tests {
         for n in &names {
             assert!(got.contains(n), "missing: {n:?}");
         }
+    }
+
+    #[test]
+    fn ensure_local_groups_provisions_once_and_skips_invalid() {
+        let db = test_db();
+        let created = ensure_local_groups(&db, &["ops".into(), "platform".into()]).unwrap();
+        assert_eq!(created, 2);
+        // Second call is a no-op.
+        let created = ensure_local_groups(&db, &["ops".into()]).unwrap();
+        assert_eq!(created, 0);
+        // Commas are rejected (would corrupt the folder ACL column format).
+        let created = ensure_local_groups(&db, &["a,b".into()]).unwrap();
+        assert_eq!(created, 0);
+        // The groups are visible to the group API.
+        let rows = list_local_groups(&db).unwrap();
+        assert!(rows.iter().any(|g| g.name == "ops"));
     }
 
     #[test]

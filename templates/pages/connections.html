@@ -1290,9 +1290,11 @@
                 }
             }
             var payload = [];
+            var rowErrors = [];
             for (var r = 1; r < rows.length; r++) {
                 var cols = rows[r];
                 if (cols.length === 1 && !cols[0]) continue;
+                var rowNo = r + 1;
                 var rowObj = {
                     name: (cols[0] || '').trim(),
                     protocol: (cols[1] || '').trim().toLowerCase(),
@@ -1305,11 +1307,23 @@
                 var portRaw = (cols[3] || '').trim();
                 if (portRaw !== '') {
                     var p = parseInt(portRaw, 10);
-                    if (!isNaN(p) && p >= 1 && p <= 65535) rowObj.port = p;
+                    if (isNaN(p) || p < 1 || p > 65535) {
+                        rowErrors.push('Row ' + rowNo + ': invalid port "' + portRaw + '" (skipped)');
+                    } else {
+                        rowObj.port = p;
+                    }
+                }
+                if (!rowObj.name || !rowObj.protocol) {
+                    rowErrors.push('Row ' + rowNo + ': name and protocol are required (skipped)');
+                    continue;
                 }
                 var groups = (cols[8] || '').split(',').map(function(g) { return g.trim(); }).filter(function(g) { return g !== ''; });
                 if (groups.length) rowObj.allowed_groups = groups;
                 payload.push(rowObj);
+            }
+            if (rowErrors.length) {
+                errEl.textContent = rowErrors.slice(0, 5).join('; ') + (rowErrors.length > 5 ? '; and ' + (rowErrors.length - 5) + ' more' : '');
+                errEl.classList.remove('hidden');
             }
             if (!payload.length) {
                 errEl.textContent = 'No data rows found in the file.';

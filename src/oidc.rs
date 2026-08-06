@@ -432,6 +432,15 @@ pub async fn callback(
             if let Err(e) = db::upsert_seen_groups(&db_for_seen, &groups_for_seen) {
                 tracing::warn!(error = %e, "failed to persist seen OIDC groups");
             }
+            // Auto-provision local groups from the claims so folder ACLs
+            // referencing provider groups work without manual mapping.
+            match db::ensure_local_groups(&db_for_seen, &groups_for_seen) {
+                Ok(created) if created > 0 => {
+                    tracing::info!(created, "auto-provisioned local groups from OIDC claims");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "failed to auto-provision local groups"),
+            }
         })
         .await;
     }
