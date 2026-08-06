@@ -118,7 +118,7 @@ guacd (C, from guacamole-server)
 | Component | Status | Notes |
 |-----------|--------|-------|
 | guacd | Required | Built from `apache/guacamole-server`, ships in the .deb and Docker image. |
-| Vault or OpenBao | Optional | For the Connections UI. Stores connection entries and credentials server-side. Without it, users run ad-hoc sessions via the API or Sessions page. Use [`contrib/vault-quickstart.sh`](contrib/vault-quickstart.sh) for one-command setup. |
+| Vault or OpenBao | Optional | For the Connections UI. Stores connection credentials server-side when `[storage] backend = "vault"`. By default connections and credentials live in the app database; Vault is not required. Use [`contrib/vault-quickstart.sh`](contrib/vault-quickstart.sh) for one-command setup. |
 | OIDC provider | Optional | For SSO. API-key auth works on its own. |
 | Docker | Optional | Only needed for VDI desktop containers. |
 

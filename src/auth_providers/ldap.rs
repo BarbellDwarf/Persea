@@ -23,10 +23,14 @@ pub struct LdapConfig {
     pub bind_password: String,
 
     /// Base DN for user searches, e.g. `ou=users,dc=example,dc=com`.
+    /// Accepts `search_base` as an alias (admin UI provider config).
+    #[serde(alias = "search_base")]
     pub user_search_base: String,
 
     /// Search filter with `{}` as username placeholder.
     /// Example: `(uid={})` or `(sAMAccountName={})`.
+    /// Accepts `search_filter` as an alias (admin UI provider config).
+    #[serde(alias = "search_filter")]
     pub user_search_filter: String,
 
     /// Optional base DN for group searches. If omitted, groups are not resolved.
@@ -47,7 +51,8 @@ pub struct LdapConfig {
 
     /// Use StartTLS instead of ldaps://.
     /// When true, connects on port 389 and upgrades to TLS.
-    #[serde(default)]
+    /// Accepts `start_tls` as an alias (admin UI provider config).
+    #[serde(default, alias = "start_tls")]
     pub starttls: bool,
 
     /// Connection timeout in seconds.

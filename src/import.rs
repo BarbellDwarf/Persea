@@ -7,11 +7,13 @@
 use std::collections::HashMap;
 
 use crate::config::Config;
-use crate::vault::{AddressBookEntry, FolderConfig, VaultClient};
+use crate::db::{self, Db};
+use crate::vault::{AddressBookEntry, VaultClient};
 
 /// Run the import-guacamole subcommand.
 pub async fn cmd_import_guacamole(
     config: &Config,
+    database: &Db,
     file: &str,
     folder: &str,
     scope: &str,
@@ -192,48 +194,57 @@ pub async fn cmd_import_guacamole(
         return;
     }
 
-    // Connect to Vault
-    let vault_config = match config.vault {
-        Some(ref vc) => vc,
-        None => {
-            eprintln!("Error: [vault] section required in config for import");
-            std::process::exit(1);
+    // DB-first storage (wayfinder ticket 026): folder/entry metadata always
+    // lives in the app database. Credentials are stored encrypted in the DB
+    // unless [storage].backend = "vault", in which case they go to Vault.
+    let vault_mode = config
+        .storage
+        .as_ref()
+        .map(|s| s.backend == "vault")
+        .unwrap_or(false)
+        && config.vault.is_some();
+    let vault_client = if vault_mode {
+        let vault_config = config.vault.as_ref().unwrap();
+        let secret_id = match std::env::var("VAULT_SECRET_ID") {
+            Ok(s) if !s.is_empty() => s,
+            _ => {
+                eprintln!("Error: VAULT_SECRET_ID env var required (vault storage mode)");
+                std::process::exit(1);
+            }
+        };
+        match VaultClient::new(vault_config, &secret_id).await {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("Error connecting to Vault: {}", e);
+                std::process::exit(1);
+            }
         }
+    } else {
+        None
+    };
+    let enc_key = config.storage_encryption_key().unwrap_or_default();
+
+    // Create the root folder (idempotent).
+    let root_id = match db::get_ab_folder(database, scope, folder) {
+        Ok(f) => f.id,
+        Err(_) => match db::create_ab_folder(
+            database,
+            scope,
+            folder,
+            "Imported from Guacamole",
+            "",
+            false,
+        ) {
+            Ok(id) => id,
+            Err(e) => {
+                eprintln!("Error creating folder \"{}\": {}", folder, e);
+                std::process::exit(1);
+            }
+        },
     };
 
-    let secret_id = match std::env::var("VAULT_SECRET_ID") {
-        Ok(s) if !s.is_empty() => s,
-        _ => {
-            eprintln!("Error: VAULT_SECRET_ID env var required");
-            std::process::exit(1);
-        }
-    };
-
-    let client = match VaultClient::new(vault_config, &secret_id).await {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error connecting to Vault: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    // Create the root folder (idempotent). The root carries the ACL chosen
-    // by --allowed-groups; subfolders default to inherit_from_parent=true so
-    // the whole imported tree picks up the same access rules without having
-    // to write identical allowed_groups on every child.
-    let root_config = FolderConfig {
-        allowed_groups: allowed_groups.to_vec(),
-        description: "Imported from Guacamole".to_string(),
-        inherit_from_parent: false,
-    };
-    if let Err(e) = client.put_folder_config(scope, folder, &root_config).await {
-        eprintln!("Error creating folder \"{}\": {}", folder, e);
-        std::process::exit(1);
-    }
-
-    // Create a .config for every subfolder used by any entry (including intermediate
-    // ancestors, so an empty parent still shows up in the tree with a description).
-    // Deduplicate before writing so we don't hit Vault N times for the same path.
+    // Create every subfolder used by any entry (including intermediate
+    // ancestors). Deduplicate before writing.
     let mut subfolder_paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for ((subfolder, _), _) in &entries {
         if subfolder.is_empty() {
@@ -248,29 +259,90 @@ pub async fn cmd_import_guacamole(
             subfolder_paths.insert(acc.clone());
         }
     }
+    let mut folder_ids: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    folder_ids.insert(folder.to_string(), root_id);
     for sub in &subfolder_paths {
         let full = format!("{}/{}", folder, sub);
-        let cfg = FolderConfig {
-            allowed_groups: vec![],
-            description: format!("Imported from Guacamole: {}", sub),
-            inherit_from_parent: true,
+        let id = match db::get_ab_folder(database, scope, &full) {
+            Ok(f) => f.id,
+            Err(_) => match db::create_ab_folder(
+                database,
+                scope,
+                &full,
+                &format!("Imported from Guacamole: {}", sub),
+                "",
+                false,
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    eprintln!("  Warning: failed to create subfolder \"{}\": {}", full, e);
+                    continue;
+                }
+            },
         };
-        if let Err(e) = client.put_folder_config(scope, &full, &cfg).await {
-            eprintln!("  Warning: failed to create subfolder \"{}\": {}", full, e);
-        }
+        folder_ids.insert(full.clone(), id);
     }
 
     // Write entries into their respective subfolders.
     let mut success = 0;
     let mut failed = 0;
+    let entry_groups = allowed_groups.join(",");
     for ((subfolder, name), entry) in &entries {
         let target_folder = if subfolder.is_empty() {
             folder.to_string()
         } else {
             format!("{}/{}", folder, subfolder)
         };
-        match client.put_entry(scope, &target_folder, name, entry).await {
-            Ok(()) => {
+        let Some(&folder_id) = folder_ids.get(&target_folder) else {
+            eprintln!("  Failed: {}/{} — folder missing", target_folder, name);
+            failed += 1;
+            continue;
+        };
+        let protocol_config = crate::api::address_book::build_protocol_config(entry);
+        let entry_result = db::create_ab_entry(
+            database,
+            folder_id,
+            name,
+            entry.display_name.as_deref().unwrap_or(name),
+            &entry.session_type,
+            entry.hostname.as_deref().unwrap_or(""),
+            entry.port,
+            entry.username.as_deref().unwrap_or(""),
+            &serde_json::to_string(&protocol_config).unwrap_or_else(|_| "{}".into()),
+            &entry_groups,
+        );
+        match entry_result {
+            Ok(entry_id) => {
+                // Credentials: Vault mode writes the full entry object (only
+                // credential fields are read back); DB mode encrypts and
+                // stores each credential field when a key is configured.
+                if let Some(client) = vault_client.as_ref() {
+                    if let Err(e) = client.put_entry(scope, &target_folder, name, entry).await {
+                        eprintln!(
+                            "  Warning: failed to store credentials for {}/{} in Vault: {}",
+                            target_folder, name, e
+                        );
+                        failed += 1;
+                        continue;
+                    }
+                } else if !enc_key.is_empty() {
+                    let key =
+                        crate::crypto::EncryptionKey::from_hex(&enc_key).unwrap_or_else(|e| {
+                            eprintln!("Error: invalid encryption key: {}", e);
+                            std::process::exit(1);
+                        });
+                    for (ctype, value) in [
+                        ("password", entry.password.as_deref()),
+                        ("private_key", entry.private_key.as_deref()),
+                    ] {
+                        if let Some(v) = value {
+                            if let Ok(encrypted) = crate::crypto::encrypt_value(&key, v) {
+                                let _ =
+                                    db::store_ab_credential(database, entry_id, ctype, &encrypted);
+                            }
+                        }
+                    }
+                }
                 println!("  Imported: {}/{}", target_folder, name);
                 success += 1;
             }

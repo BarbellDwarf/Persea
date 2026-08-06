@@ -1,11 +1,16 @@
-name: Docker
+name: Beta Docker
+
+# Builds a rolling beta image from any branch (use the workflow_dispatch
+# branch picker, e.g. wayfinder-completion) so beta testers do not need to
+# merge with main first. The image is tagged `ghcr.io/<repo>:beta` and each
+# build overwrites the previous beta tag. Beta images print their version at
+# container startup (PERSEA_BETA=1 build arg); production images do not.
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
+  workflow_dispatch:
 
 permissions:
+  contents: read
   packages: write
   # type=gha cache needs the actions scope (write includes read); without it
   # the cache exporter aborts the whole build.
@@ -28,6 +33,7 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           push: true
-          tags: ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
-          cache-from: type=gha,scope=docker
-          cache-to: type=gha,mode=max,scope=docker
+          build-args: PERSEA_BETA=1
+          tags: ghcr.io/${{ steps.repo.outputs.name }}:beta
+          cache-from: type=gha,scope=beta
+          cache-to: type=gha,mode=max,scope=beta

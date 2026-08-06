@@ -1,4 +1,4 @@
-use super::{AppState, VaultBackends, VaultState};
+use super::{AppState, StorageBackend, StorageKey, VaultBackends, VaultState};
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
@@ -7,7 +7,7 @@ use crate::session::{
     CreateSessionRequest, ProxmoxParams, RdpParams, SessionType, SpiceParams, SshParams, VdiParams,
     VncParams, WebParams,
 };
-use crate::vault::{AddressBookEntry, FolderConfig, VaultError};
+use crate::vault::{AddressBookEntry, VaultError};
 use axum::{
     extract::{ConnectInfo, Path, State},
     http::StatusCode,
@@ -23,8 +23,33 @@ fn is_db_storage_available(db: &Db) -> bool {
     db::list_ab_folders(db, None).is_ok()
 }
 
+/// Resolve the credential encryption key: the startup-resolved `StorageKey`
+/// extension (config `[storage].encryption_key`, falling back to the
+/// `PERSEA_STORAGE_KEY` env var) takes precedence; the env var is re-checked
+/// for callers that run without the extension (e.g. handler tests).
+pub(crate) fn resolve_encryption_key(storage_key: Option<&StorageKey>) -> String {
+    storage_key
+        .and_then(|k| k.0.clone())
+        .or_else(|| {
+            std::env::var("PERSEA_STORAGE_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
+        })
+        .unwrap_or_default()
+}
+
 /// Check if a folder's allowed_groups grant access to the given user groups.
-fn folder_allowed_for_user(
+/// Groups of a folder row, as a cleaned list.
+fn folder_groups(folder: &db::AbFolder) -> Vec<String> {
+    folder
+        .allowed_groups
+        .split(',')
+        .map(|g| g.trim().to_string())
+        .filter(|g| !g.is_empty())
+        .collect()
+}
+
+pub(crate) fn folder_allowed_for_user(
     db: &Db,
     scope: &str,
     folder_name: &str,
@@ -33,40 +58,569 @@ fn folder_allowed_for_user(
     if user_groups.is_empty() {
         return false;
     }
-    match db::get_ab_folder(db, scope, folder_name) {
-        Ok(folder) => {
-            if folder.description.is_empty() {
-                // No description means no group restrictions set
-                return true;
-            }
-            // Check if any entry in this folder has allowed_groups matching
-            match db::list_ab_entries(db, folder.id) {
-                Ok(entries) => {
-                    for entry in &entries {
-                        if entry.allowed_groups.is_empty() {
+    // Walk up the slash-path hierarchy: a folder without its own ACL
+    // inherits from its nearest ancestor that has one (`inherit_from_parent`
+    // is the default for migrated/imported trees, so the subtree must not
+    // silently open up). A folder WITH an ACL is evaluated directly.
+    let mut current = folder_name.to_string();
+    loop {
+        let folder = match db::get_ab_folder(db, scope, &current) {
+            Ok(f) => f,
+            // Missing folder mid-walk (deleted concurrently) — deny.
+            Err(_) => return false,
+        };
+        let groups = folder_groups(&folder);
+        if !groups.is_empty() {
+            return groups.iter().any(|g| user_groups.iter().any(|ug| ug == g));
+        }
+        if current == folder_name || folder.inherit_from_parent {
+            // The folder itself defines no ACL: fall back to entry-level
+            // groups (legacy/import data stored allowed_groups per entry).
+            if current == folder_name {
+                match db::list_ab_entries(db, folder.id) {
+                    Ok(entries) => {
+                        if entries.iter().all(|entry| {
+                            let groups: Vec<String> = entry
+                                .allowed_groups
+                                .split(',')
+                                .map(|g| g.trim().to_string())
+                                .filter(|g| !g.is_empty())
+                                .collect();
+                            if groups.is_empty() {
+                                true
+                            } else {
+                                groups.iter().any(|g| user_groups.iter().any(|ug| ug == g))
+                            }
+                        }) {
                             return true;
                         }
-                        for group in entry.allowed_groups.split(',') {
-                            let g = group.trim();
-                            if !g.is_empty() && user_groups.iter().any(|ug| ug == g) {
-                                return true;
-                            }
-                        }
                     }
-                    false
+                    Err(_) => return false,
                 }
-                Err(_) => false,
+            }
+            // If the target folder has no ACL and no entry grants access,
+            // continue up the tree only when inheritance is enabled.
+            if !folder.inherit_from_parent {
+                return false;
             }
         }
-        Err(_) => false,
+        match current.rsplit_once('/') {
+            Some((parent, _)) if !parent.is_empty() => current = parent.to_string(),
+            _ => return false,
+        }
     }
 }
 
 /// Get folder ID by scope and name from DB.
 fn get_folder_id(db: &Db, scope: &str, name: &str) -> Result<i64, AppError> {
     let folder = db::get_ab_folder(db, scope, name)
-        .map_err(|e| AppError::Internal(format!("folder not found: {}", e)))?;
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
     Ok(folder.id)
+}
+
+/// Whether address book credentials live in Vault: config `[storage].backend`
+/// is `"vault"` AND at least one Vault backend is currently connected. Folder
+/// and entry metadata always live in the DB regardless.
+pub(crate) async fn vault_credentials_enabled(
+    backend: Option<&StorageBackend>,
+    vault: &VaultState,
+) -> bool {
+    backend.map(|b| b.0 == "vault").unwrap_or(false) && vault.any_connected().await
+}
+
+/// Reconstruct an `AddressBookEntry` (metadata only, no credentials) from a
+/// DB row. Credential fields are left `None`; callers overlay them from the
+/// vault copy (vault mode) or the decrypted credential rows (db mode).
+fn ab_entry_from_db(row: &db::AbEntry) -> AddressBookEntry {
+    let protocol_config: serde_json::Value = serde_json::from_str(&row.protocol_config)
+        .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+    AddressBookEntry {
+        session_type: row.protocol.clone(),
+        hostname: Some(row.hostname.clone()),
+        port: row.port,
+        username: if row.username.is_empty() {
+            None
+        } else {
+            Some(row.username.clone())
+        },
+        password: None,
+        private_key: None,
+        display_name: if row.display_name.is_empty() {
+            None
+        } else {
+            Some(row.display_name.clone())
+        },
+        jump_hosts: protocol_config
+            .get("jump_hosts")
+            .and_then(|v| serde_json::from_value::<Vec<crate::tunnel::JumpHost>>(v.clone()).ok()),
+        domain: protocol_config
+            .get("domain")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        security: protocol_config
+            .get("security")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        ignore_cert: protocol_config.get("ignore_cert").and_then(|v| v.as_bool()),
+        url: protocol_config
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        enable_drive: protocol_config
+            .get("enable_drive")
+            .and_then(|v| v.as_bool()),
+        auth_pkg: protocol_config
+            .get("auth_pkg")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        kdc_url: protocol_config
+            .get("kdc_url")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        color_depth: protocol_config
+            .get("color_depth")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u8),
+        enable_recording: protocol_config
+            .get("enable_recording")
+            .and_then(|v| v.as_bool()),
+        record_typescript: protocol_config
+            .get("record_typescript")
+            .and_then(|v| v.as_bool()),
+        remote_app: protocol_config
+            .get("remote_app")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        remote_app_dir: protocol_config
+            .get("remote_app_dir")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        remote_app_args: protocol_config
+            .get("remote_app_args")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        enable_gfx: protocol_config.get("enable_gfx").and_then(|v| v.as_bool()),
+        enable_desktop_composition: protocol_config
+            .get("enable_desktop_composition")
+            .and_then(|v| v.as_bool()),
+        enable_wallpaper: protocol_config
+            .get("enable_wallpaper")
+            .and_then(|v| v.as_bool()),
+        enable_theming: protocol_config
+            .get("enable_theming")
+            .and_then(|v| v.as_bool()),
+        enable_full_window_drag: protocol_config
+            .get("enable_full_window_drag")
+            .and_then(|v| v.as_bool()),
+        force_lossless: protocol_config
+            .get("force_lossless")
+            .and_then(|v| v.as_bool()),
+        enable_h264: protocol_config.get("enable_h264").and_then(|v| v.as_bool()),
+        banner: protocol_config
+            .get("banner")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        prompt_credentials: protocol_config
+            .get("prompt_credentials")
+            .and_then(|v| v.as_bool()),
+        allow_sharing: protocol_config
+            .get("allow_sharing")
+            .and_then(|v| v.as_bool()),
+        auto_open_if_singleton: protocol_config
+            .get("auto_open_if_singleton")
+            .and_then(|v| v.as_bool()),
+        fullscreen_on_connect: protocol_config
+            .get("fullscreen_on_connect")
+            .and_then(|v| v.as_bool()),
+        autohide_side_tabs: protocol_config
+            .get("autohide_side_tabs")
+            .and_then(|v| v.as_bool()),
+        spice_tls: protocol_config.get("spice_tls").and_then(|v| v.as_bool()),
+        spice_tls_port: protocol_config
+            .get("spice_tls_port")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u16),
+        spice_ca_cert: protocol_config
+            .get("spice_ca_cert")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        spice_cert_subject: protocol_config
+            .get("spice_cert_subject")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        spice_proxy: protocol_config
+            .get("spice_proxy")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        proxmox_url: protocol_config
+            .get("proxmox_url")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        proxmox_node: protocol_config
+            .get("proxmox_node")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        proxmox_vmid: protocol_config
+            .get("proxmox_vmid")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        proxmox_token_id: protocol_config
+            .get("proxmox_token_id")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        proxmox_token_secret: None,
+        proxmox_verify_tls: protocol_config
+            .get("proxmox_verify_tls")
+            .and_then(|v| v.as_bool()),
+        container_image: protocol_config
+            .get("container_image")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        container_cpu_limit: protocol_config
+            .get("container_cpu_limit")
+            .and_then(|v| v.as_f64()),
+        container_memory_limit: protocol_config
+            .get("container_memory_limit")
+            .and_then(|v| v.as_u64()),
+        container_env: None,
+        container_idle_timeout_mins: protocol_config
+            .get("container_idle_timeout_mins")
+            .and_then(|v| v.as_u64()),
+        container_username: protocol_config
+            .get("container_username")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        container_password: None,
+        max_monitors: protocol_config
+            .get("max_monitors")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        max_recordings: protocol_config
+            .get("max_recordings")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        login_script: protocol_config
+            .get("login_script")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        autofill: protocol_config
+            .get("autofill")
+            .and_then(|v| v.as_str())
+            .map(String::from),
+        allowed_domains: protocol_config
+            .get("allowed_domains")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            }),
+        disable_copy: protocol_config
+            .get("disable_copy")
+            .and_then(|v| v.as_bool()),
+        disable_paste: protocol_config
+            .get("disable_paste")
+            .and_then(|v| v.as_bool()),
+        ..Default::default()
+    }
+}
+
+/// Build the public `EntryInfo` for a DB entry, with `has_credentials`
+/// reflecting whether credential rows exist (values stay encrypted).
+fn entry_info_from_db_row(database: &Db, row: &db::AbEntry) -> crate::vault::EntryInfo {
+    let ab_entry = ab_entry_from_db(row);
+    let mut info = crate::vault::EntryInfo::from((row.name.as_str(), &ab_entry));
+    info.has_credentials = db::list_ab_credentials(database, row.id)
+        .map(|creds| {
+            creds
+                .iter()
+                .any(|c| c.credential_type == "password" || c.credential_type == "private_key")
+        })
+        .unwrap_or(false);
+    info.allowed_groups = row.allowed_groups.clone();
+    info
+}
+
+/// Serialize the non-credential entry fields into the `protocol_config` JSON
+/// column. Credential fields are stored separately (DB credentials table in
+/// db mode, vault copy in vault mode).
+pub(crate) fn build_protocol_config(
+    entry: &AddressBookEntry,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut config = serde_json::Map::new();
+    // Jump hosts are part of the routing config: persist them so the DB row
+    // round-trips them (they were silently dropped before).
+    if let Some(ref hops) = entry.jump_hosts {
+        config.insert("jump_hosts".into(), json!(hops));
+    }
+    if let Some(ref v) = entry.domain {
+        config.insert("domain".into(), json!(v));
+    }
+    if let Some(ref v) = entry.security {
+        config.insert("security".into(), json!(v));
+    }
+    if let Some(v) = entry.ignore_cert {
+        config.insert("ignore_cert".into(), json!(v));
+    }
+    if let Some(ref v) = entry.url {
+        config.insert("url".into(), json!(v));
+    }
+    if let Some(v) = entry.enable_drive {
+        config.insert("enable_drive".into(), json!(v));
+    }
+    if let Some(ref v) = entry.auth_pkg {
+        config.insert("auth_pkg".into(), json!(v));
+    }
+    if let Some(ref v) = entry.kdc_url {
+        config.insert("kdc_url".into(), json!(v));
+    }
+    if let Some(v) = entry.color_depth {
+        config.insert("color_depth".into(), json!(v));
+    }
+    if let Some(v) = entry.enable_recording {
+        config.insert("enable_recording".into(), json!(v));
+    }
+    if let Some(v) = entry.record_typescript {
+        config.insert("record_typescript".into(), json!(v));
+    }
+    if let Some(ref v) = entry.remote_app {
+        config.insert("remote_app".into(), json!(v));
+    }
+    if let Some(ref v) = entry.remote_app_dir {
+        config.insert("remote_app_dir".into(), json!(v));
+    }
+    if let Some(ref v) = entry.remote_app_args {
+        config.insert("remote_app_args".into(), json!(v));
+    }
+    if let Some(v) = entry.enable_gfx {
+        config.insert("enable_gfx".into(), json!(v));
+    }
+    if let Some(v) = entry.enable_desktop_composition {
+        config.insert("enable_desktop_composition".into(), json!(v));
+    }
+    if let Some(v) = entry.enable_wallpaper {
+        config.insert("enable_wallpaper".into(), json!(v));
+    }
+    if let Some(v) = entry.enable_theming {
+        config.insert("enable_theming".into(), json!(v));
+    }
+    if let Some(v) = entry.enable_full_window_drag {
+        config.insert("enable_full_window_drag".into(), json!(v));
+    }
+    if let Some(v) = entry.force_lossless {
+        config.insert("force_lossless".into(), json!(v));
+    }
+    if let Some(v) = entry.enable_h264 {
+        config.insert("enable_h264".into(), json!(v));
+    }
+    if let Some(ref v) = entry.banner {
+        config.insert("banner".into(), json!(v));
+    }
+    if let Some(v) = entry.prompt_credentials {
+        config.insert("prompt_credentials".into(), json!(v));
+    }
+    if let Some(v) = entry.allow_sharing {
+        config.insert("allow_sharing".into(), json!(v));
+    }
+    if let Some(v) = entry.auto_open_if_singleton {
+        config.insert("auto_open_if_singleton".into(), json!(v));
+    }
+    if let Some(v) = entry.fullscreen_on_connect {
+        config.insert("fullscreen_on_connect".into(), json!(v));
+    }
+    if let Some(v) = entry.autohide_side_tabs {
+        config.insert("autohide_side_tabs".into(), json!(v));
+    }
+    if let Some(v) = entry.spice_tls {
+        config.insert("spice_tls".into(), json!(v));
+    }
+    if let Some(v) = entry.spice_tls_port {
+        config.insert("spice_tls_port".into(), json!(v));
+    }
+    if let Some(ref v) = entry.spice_ca_cert {
+        config.insert("spice_ca_cert".into(), json!(v));
+    }
+    if let Some(ref v) = entry.spice_cert_subject {
+        config.insert("spice_cert_subject".into(), json!(v));
+    }
+    if let Some(ref v) = entry.spice_proxy {
+        config.insert("spice_proxy".into(), json!(v));
+    }
+    if let Some(ref v) = entry.proxmox_url {
+        config.insert("proxmox_url".into(), json!(v));
+    }
+    if let Some(ref v) = entry.proxmox_node {
+        config.insert("proxmox_node".into(), json!(v));
+    }
+    if let Some(v) = entry.proxmox_vmid {
+        config.insert("proxmox_vmid".into(), json!(v));
+    }
+    if let Some(ref v) = entry.proxmox_token_id {
+        config.insert("proxmox_token_id".into(), json!(v));
+    }
+    if let Some(v) = entry.proxmox_verify_tls {
+        config.insert("proxmox_verify_tls".into(), json!(v));
+    }
+    if let Some(ref v) = entry.container_image {
+        config.insert("container_image".into(), json!(v));
+    }
+    if let Some(v) = entry.container_cpu_limit {
+        config.insert("container_cpu_limit".into(), json!(v));
+    }
+    if let Some(v) = entry.container_memory_limit {
+        config.insert("container_memory_limit".into(), json!(v));
+    }
+    if let Some(v) = entry.container_idle_timeout_mins {
+        config.insert("container_idle_timeout_mins".into(), json!(v));
+    }
+    if let Some(ref v) = entry.container_username {
+        config.insert("container_username".into(), json!(v));
+    }
+    if let Some(v) = entry.max_monitors {
+        config.insert("max_monitors".into(), json!(v));
+    }
+    if let Some(v) = entry.max_recordings {
+        config.insert("max_recordings".into(), json!(v));
+    }
+    if let Some(ref v) = entry.login_script {
+        config.insert("login_script".into(), json!(v));
+    }
+    if let Some(ref v) = entry.autofill {
+        config.insert("autofill".into(), json!(v));
+    }
+    if let Some(ref v) = entry.allowed_domains {
+        config.insert("allowed_domains".into(), json!(v));
+    }
+    if let Some(v) = entry.disable_copy {
+        config.insert("disable_copy".into(), json!(v));
+    }
+    if let Some(v) = entry.disable_paste {
+        config.insert("disable_paste".into(), json!(v));
+    }
+    config
+}
+
+/// Upsert an encrypted credential, or delete the stored one when `value` is
+/// an explicit empty string (clear semantics). `None` callers should not use
+/// this helper — omitted fields keep their stored value.
+fn upsert_or_clear_credential(
+    database: &Db,
+    entry_id: i64,
+    credential_type: &str,
+    value: &str,
+    encryption_key: &str,
+) -> Result<(), AppError> {
+    if value.is_empty() {
+        db::delete_ab_credential(database, entry_id, credential_type)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        return Ok(());
+    }
+    let encrypted = crate::crypto::encrypt_value(
+        &crate::crypto::EncryptionKey::from_hex(encryption_key)
+            .map_err(|e| AppError::Internal(e.to_string()))?,
+        value,
+    )
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    db::store_ab_credential(database, entry_id, credential_type, &encrypted)
+        .map_err(|e| AppError::Internal(e.to_string()))
+}
+
+/// Whether any credential field is present in a create/update payload.
+fn has_credential_fields(entry: &AddressBookEntry) -> bool {
+    entry.password.is_some()
+        || entry.private_key.is_some()
+        || entry.proxmox_token_secret.is_some()
+        || entry.container_password.is_some()
+}
+
+/// Overlay decrypted DB credential rows onto an entry (db mode).
+fn apply_db_credentials(
+    database: &Db,
+    entry_id: i64,
+    storage_key: Option<&StorageKey>,
+    ab_entry: &mut AddressBookEntry,
+) -> Result<(), AppError> {
+    let encryption_key = resolve_encryption_key(storage_key);
+    let creds = db::list_ab_credentials(database, entry_id).unwrap_or_default();
+    for cred in &creds {
+        let decrypted = if !encryption_key.is_empty() {
+            let key = crate::crypto::EncryptionKey::from_hex(&encryption_key)
+                .map_err(|e| AppError::Internal(format!("invalid encryption key: {e}")))?;
+            crate::crypto::decrypt_value(&key, &cred.credential_data)
+                .unwrap_or(cred.credential_data.clone())
+        } else {
+            cred.credential_data.clone()
+        };
+        match cred.credential_type.as_str() {
+            "password" => ab_entry.password = Some(decrypted),
+            "private_key" => ab_entry.private_key = Some(decrypted),
+            "proxmox_token_secret" => ab_entry.proxmox_token_secret = Some(decrypted),
+            "container_password" => ab_entry.container_password = Some(decrypted),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Overlay the credential fields from a vault copy onto a DB entry (vault
+/// mode). The vault copy's metadata is ignored — only the credential fields
+/// are read back.
+fn apply_vault_credentials(vault_entry: &AddressBookEntry, ab_entry: &mut AddressBookEntry) {
+    ab_entry.password = vault_entry.password.clone();
+    ab_entry.private_key = vault_entry.private_key.clone();
+    ab_entry.proxmox_token_secret = vault_entry.proxmox_token_secret.clone();
+    ab_entry.container_password = vault_entry.container_password.clone();
+    // Routing config (jump hosts) also lives on the vault copy.
+    ab_entry.jump_hosts = vault_entry.jump_hosts.clone();
+}
+
+/// DB-side folder access check (metadata always lives in the DB now).
+/// Admins bypass; everyone else needs a folder the DB grants access to.
+fn check_folder_access_db(
+    db: &Db,
+    scope: &str,
+    folder: &str,
+    identity: &AuthIdentity,
+) -> Result<(), AppError> {
+    if identity.has_role("admin") {
+        return Ok(());
+    }
+    if folder_allowed_for_user(db, scope, folder, identity.groups()) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden("no access to this folder".into()))
+    }
+}
+
+/// Entry-level ACL: an entry with `allowed_groups` set is only usable by
+/// members of one of those groups, even inside an accessible folder.
+fn check_entry_access_db(
+    db: &Db,
+    folder_id: i64,
+    entry_name: &str,
+    identity: &AuthIdentity,
+) -> Result<(), AppError> {
+    if identity.has_role("admin") {
+        return Ok(());
+    }
+    let entry = db::get_ab_entry(db, folder_id, entry_name)
+        .map_err(|e| AppError::NotFound(format!("entry not found: {}", e)))?;
+    let groups: Vec<String> = entry
+        .allowed_groups
+        .split(',')
+        .map(|g| g.trim().to_string())
+        .filter(|g| !g.is_empty())
+        .collect();
+    if groups.is_empty()
+        || groups
+            .iter()
+            .any(|g| identity.groups().iter().any(|ug| ug == g))
+    {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden("no access to this entry".into()))
+    }
 }
 
 #[derive(Deserialize)]
@@ -117,6 +671,20 @@ pub struct UpdateFolderRequest {
 #[derive(Deserialize)]
 pub struct CreateEntryRequest {
     pub name: String,
+    /// Comma-separated group names allowed to use this entry. Flattened
+    /// siblings of `entry` are ignored by serde when absent.
+    #[serde(default)]
+    pub allowed_groups: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub entry: AddressBookEntry,
+}
+
+/// Update payload: the flattened `AddressBookEntry` plus optional
+/// `allowed_groups` (serde keeps the wire format backward-compatible).
+#[derive(Deserialize, Clone)]
+pub struct UpdateEntryRequest {
+    #[serde(default)]
+    pub allowed_groups: Option<Vec<String>>,
     #[serde(flatten)]
     pub entry: AddressBookEntry,
 }
@@ -208,96 +776,68 @@ pub(crate) async fn check_folder_access(
     }
 }
 
-pub(crate) fn folder_or_descendant_accessible<'a>(
-    vault: &'a VaultBackends,
-    scope: &'a str,
-    path: &'a str,
-    user_groups: &'a [String],
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
-    Box::pin(async move {
-        if vault
-            .resolve_folder_access(scope, path, user_groups)
-            .await
-            .unwrap_or(false)
-        {
-            return true;
-        }
-        if let Ok(subs) = vault.list_subfolders(scope, path).await {
-            for sub in subs {
-                let child = sub.path.unwrap_or(sub.name);
-                if folder_or_descendant_accessible(vault, scope, &child, user_groups).await {
-                    return true;
-                }
+/// DB-based descendant walk: true if the folder itself grants access, or any
+/// DB folder with a slash-path under it does (mirrors the vault subtree walk).
+fn folder_or_descendant_accessible_db(
+    db: &Db,
+    scope: &str,
+    path: &str,
+    user_groups: &[String],
+) -> bool {
+    if folder_allowed_for_user(db, scope, path, user_groups) {
+        return true;
+    }
+    if let Ok(folders) = db::list_ab_folders(db, Some(scope)) {
+        let prefix = format!("{}/", path);
+        for folder in folders {
+            if folder.name.starts_with(&prefix)
+                && folder_or_descendant_accessible_db(db, scope, &folder.name, user_groups)
+            {
+                return true;
             }
         }
-        false
-    })
+    }
+    false
 }
 
 pub async fn ab_list_folders(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
-    Extension(vault): Extension<VaultState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id,
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
-    // Try Vault first if connected, otherwise use DB backend
-    if vault.any_connected().await {
-        let folders = vault
-            .list_all_folders()
-            .await
-            .map_err(|e| AppError::Vault(e.to_string()))?
-            .0;
-
-        let user_groups = id.groups();
-        let mut visible = Vec::new();
-        for folder in folders {
-            if id.has_role("admin")
-                || vault
-                    .resolve_folder_access(&folder.scope, &folder.name, user_groups)
-                    .await
-                    .unwrap_or(false)
-            {
-                visible.push(folder);
-            }
-        }
-
-        return Ok(Json(json!(visible)));
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
     }
 
-    // DB backend fallback
-    if is_db_storage_available(&database) {
-        let db_folders =
-            db::list_ab_folders(&database, None).map_err(|e| AppError::Internal(e.to_string()))?;
-        let user_groups = id.groups();
-        let mut visible = Vec::new();
-        for folder in db_folders {
-            if id.has_role("admin")
-                || folder_allowed_for_user(&database, &folder.scope, &folder.name, user_groups)
-            {
-                visible.push(serde_json::json!({
-                    "name": folder.name,
-                    "scope": folder.scope,
-                    "description": folder.description,
-                    "path": folder.name,
-                    "has_children": None::<bool>,
-                }));
-            }
+    let db_folders =
+        db::list_ab_folders(&database, None).map_err(|e| AppError::Internal(e.to_string()))?;
+    let user_groups = id.groups();
+    let mut visible = Vec::new();
+    for folder in db_folders {
+        if id.has_role("admin")
+            || folder_allowed_for_user(&database, &folder.scope, &folder.name, user_groups)
+        {
+            visible.push(serde_json::json!({
+                "name": folder.name,
+                "scope": folder.scope,
+                "description": folder.description,
+                "path": folder.name,
+                "has_children": None::<bool>,
+            }));
         }
-        return Ok(Json(json!(visible)));
     }
-
-    Err(AppError::Vault(
-        "address book unavailable: no storage backend configured".into(),
-    ))
+    Ok(Json(json!(visible)))
 }
 
 pub async fn ab_list_subfolders(
     identity: Option<Extension<AuthIdentity>>,
-    Extension(vault): Extension<VaultState>,
+    Extension(database): Extension<Db>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
@@ -305,139 +845,163 @@ pub async fn ab_list_subfolders(
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
-    check_folder_access(&vault, &scope, &folder, id).await?;
-
-    match vault.list_subfolders(&scope, &folder).await {
-        Ok(subfolders) => {
-            if id.has_role("admin") {
-                return Ok(Json(json!(subfolders)));
-            }
-            let user_groups = id.groups();
-            let mut visible = Vec::with_capacity(subfolders.len());
-            for sf in subfolders {
-                let path = sf.path.clone().unwrap_or_else(|| sf.name.clone());
-                if folder_or_descendant_accessible(&vault, &scope, &path, user_groups).await {
-                    visible.push(sf);
-                }
-            }
-            Ok(Json(json!(visible)))
-        }
-        Err(crate::vault::VaultError::NotFound) => Ok(Json(json!([]))),
-        Err(e) => Err(AppError::Vault(e.to_string())),
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
     }
+
+    check_folder_access_db(&database, &scope, &folder, id)?;
+
+    // DB folders are flat rows; hierarchy is expressed through slash-paths
+    // (`Clients/Acme` is a subfolder of `Clients`), mirroring the vault path
+    // layout. Only immediate children are returned.
+    let folders = db::list_ab_folders(&database, Some(&scope))
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let prefix = format!("{}/", folder);
+
+    let mut subfolders: Vec<crate::vault::FolderInfo> = folders
+        .iter()
+        .filter(|f| {
+            f.name
+                .strip_prefix(&prefix)
+                .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
+        })
+        .map(|f| crate::vault::FolderInfo {
+            name: f.name[prefix.len()..].to_string(),
+            description: f.description.clone(),
+            scope: f.scope.clone(),
+            path: Some(f.name.clone()),
+            has_children: Some(
+                folders
+                    .iter()
+                    .any(|g| g.name.starts_with(&format!("{}/", f.name))),
+            ),
+        })
+        .collect();
+
+    if !id.has_role("admin") {
+        let user_groups = id.groups();
+        subfolders.retain(|sf| {
+            let path = sf.path.clone().unwrap_or_else(|| sf.name.clone());
+            folder_or_descendant_accessible_db(&database, &scope, &path, user_groups)
+        });
+    }
+
+    Ok(Json(json!(subfolders)))
 }
 
 pub async fn ab_list_all(
     identity: Option<Extension<AuthIdentity>>,
-    Extension(vault): Extension<VaultState>,
+    Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id,
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
-    let (folders, unavailable_scopes) = vault
-        .list_all_folders()
-        .await
-        .map_err(|e| AppError::Vault(e.to_string()))?;
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    let db_folders =
+        db::list_ab_folders(&database, None).map_err(|e| AppError::Internal(e.to_string()))?;
+    let user_groups = id.groups();
 
     let mut result = Vec::new();
-    let user_groups = id.groups();
-    for folder in folders {
+    for folder in &db_folders {
         if !id.has_role("admin")
-            && !vault
-                .resolve_folder_access(&folder.scope, &folder.name, user_groups)
-                .await
-                .unwrap_or(false)
+            && !folder_allowed_for_user(&database, &folder.scope, &folder.name, user_groups)
         {
             continue;
         }
 
-        let config = vault
-            .get_folder_config(&folder.scope, &folder.name)
-            .await
-            .ok();
+        let has_children = db_folders
+            .iter()
+            .any(|f| f.scope == folder.scope && f.name.starts_with(&format!("{}/", folder.name)));
 
-        let entry_names = vault
-            .list_entries(&folder.scope, &folder.name)
-            .await
-            .unwrap_or_default();
         let mut entries = Vec::new();
-        for name in &entry_names {
-            if let Ok(entry) = vault.get_entry(&folder.scope, &folder.name, name).await {
-                entries.push(crate::vault::EntryInfo::from((name.as_str(), &entry)));
+        if let Ok(db_entries) = db::list_ab_entries(&database, folder.id) {
+            for entry in &db_entries {
+                entries.push(entry_info_from_db_row(&database, entry));
             }
         }
 
         result.push(json!({
             "name": folder.name,
             "scope": folder.scope,
-            "path": folder.path,
-            "has_children": folder.has_children,
+            "path": folder.name,
+            "has_children": has_children,
             "description": folder.description,
-            "allowed_groups": config.as_ref().map(|c| &c.allowed_groups),
+            "allowed_groups": serde_json::Value::Null,
             "entries": entries,
         }));
     }
 
     Ok(Json(
-        json!({"folders": result, "unavailable_scopes": unavailable_scopes}),
+        json!({"folders": result, "unavailable_scopes": Vec::<String>::new()}),
     ))
 }
 
 pub async fn ab_search_index(
     identity: Option<Extension<AuthIdentity>>,
-    Extension(vault): Extension<VaultState>,
+    Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
         Some(Extension(ref id)) if id.has_role("operator") => id,
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
     let user_groups = id.groups();
     let is_admin = id.has_role("admin");
 
-    let top = vault
-        .list_all_folders()
-        .await
-        .map_err(|e| AppError::Vault(e.to_string()))?
-        .0;
+    let all_folders =
+        db::list_ab_folders(&database, None).map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let mut queue: Vec<(String, String)> = top
-        .into_iter()
-        .map(|f| (f.scope, f.path.unwrap_or(f.name)))
+    // BFS over the slash-path folder tree (top-level = no `/` in the name).
+    let mut queue: Vec<(String, String)> = all_folders
+        .iter()
+        .filter(|f| !f.name.contains('/'))
+        .map(|f| (f.scope.clone(), f.name.clone()))
         .collect();
     let mut emitted = Vec::new();
 
     while let Some((scope, path)) = queue.pop() {
-        if let Ok(subs) = vault.list_subfolders(&scope, &path).await {
-            for s in subs {
-                let child_path = s.path.unwrap_or_else(|| s.name.clone());
-                queue.push((scope.clone(), child_path));
-            }
+        for child in all_folders.iter().filter(|f| {
+            f.scope == scope
+                && f.name
+                    .strip_prefix(&format!("{}/", path))
+                    .is_some_and(|rest| !rest.contains('/'))
+        }) {
+            queue.push((scope.clone(), child.name.clone()));
         }
 
-        let allowed = is_admin
-            || vault
-                .resolve_folder_access(&scope, &path, user_groups)
-                .await
-                .unwrap_or(false);
-        if !allowed {
+        if !is_admin && !folder_allowed_for_user(&database, &scope, &path, user_groups) {
             continue;
         }
 
-        let names = match vault.list_entries(&scope, &path).await {
-            Ok(n) => n,
+        let folder_rec = match db::get_ab_folder(&database, &scope, &path) {
+            Ok(f) => f,
             Err(_) => continue,
         };
-        for name in &names {
-            if let Ok(entry) = vault.get_entry(&scope, &path, name).await {
-                emitted.push(json!({
-                    "scope": scope,
-                    "folder_path": path,
-                    "entry": crate::vault::EntryInfo::from((name.as_str(), &entry)),
-                }));
-            }
+        let db_entries = match db::list_ab_entries(&database, folder_rec.id) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        for entry in &db_entries {
+            emitted.push(json!({
+                "scope": scope,
+                "folder_path": path,
+                "entry": entry_info_from_db_row(&database, entry),
+            }));
         }
     }
 
@@ -447,7 +1011,6 @@ pub async fn ab_search_index(
 pub async fn ab_list_entries(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
-    Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
@@ -455,67 +1018,24 @@ pub async fn ab_list_entries(
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
-    // Try Vault first if connected
-    if vault.any_connected().await {
-        check_folder_access(&vault, &scope, &folder, id).await?;
-
-        let entry_names = match vault.list_entries(&scope, &folder).await {
-            Ok(e) => e,
-            Err(VaultError::NotFound) => Vec::new(),
-            Err(e) => return Err(AppError::Vault(e.to_string())),
-        };
-
-        let mut entries = Vec::new();
-        for name in &entry_names {
-            if let Ok(entry) = vault.get_entry(&scope, &folder, name).await {
-                entries.push(crate::vault::EntryInfo::from((name.as_str(), &entry)));
-            }
-        }
-
-        return Ok(Json(json!(entries)));
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault("address book unavailable".into()));
     }
 
-    // DB backend
-    if is_db_storage_available(&database) {
-        let folder = db::get_ab_folder(&database, &scope, &folder)
-            .map_err(|e| AppError::Internal(format!("folder not found: {}", e)))?;
+    check_folder_access_db(&database, &scope, &folder, id)?;
 
-        let db_entries = db::list_ab_entries(&database, folder.id)
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+    let folder_rec = db::get_ab_folder(&database, &scope, &folder)
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
 
-        let mut entries = Vec::new();
-        for entry in &db_entries {
-            // Reconstruct an AddressBookEntry from DB fields for EntryInfo conversion
-            let _protocol_config: serde_json::Value = serde_json::from_str(&entry.protocol_config)
-                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    let db_entries = db::list_ab_entries(&database, folder_rec.id)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
 
-            let ab_entry = AddressBookEntry {
-                session_type: entry.protocol.clone(),
-                hostname: Some(entry.hostname.clone()),
-                port: entry.port,
-                username: if entry.username.is_empty() {
-                    None
-                } else {
-                    Some(entry.username.clone())
-                },
-                display_name: if entry.display_name.is_empty() {
-                    None
-                } else {
-                    Some(entry.display_name.clone())
-                },
-                ..Default::default()
-            };
-
-            entries.push(crate::vault::EntryInfo::from((
-                entry.name.as_str(),
-                &ab_entry,
-            )));
-        }
-
-        return Ok(Json(json!(entries)));
+    let mut entries = Vec::new();
+    for entry in &db_entries {
+        entries.push(entry_info_from_db_row(&database, entry));
     }
 
-    Err(AppError::Vault("address book unavailable".into()))
+    Ok(Json(json!(entries)))
 }
 
 pub async fn ssh_probe_host_key(
@@ -556,6 +1076,8 @@ pub async fn ab_connect_entry(
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
+    storage_key: Option<Extension<StorageKey>>,
+    backend: Option<Extension<StorageBackend>>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
     Json(req): Json<ConnectRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -564,7 +1086,11 @@ pub async fn ab_connect_entry(
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
-    check_folder_access(&vault, &scope, &folder, &id).await?;
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault("address book unavailable".into()));
+    }
+
+    check_folder_access_db(&database, &scope, &folder, &id)?;
 
     // RBAC connection permission check (skip for admin role)
     if !id.has_role("admin") {
@@ -597,242 +1123,43 @@ pub async fn ab_connect_entry(
         }
     }
 
-    let ab_entry = if vault.any_connected().await {
+    let folder_rec = db::get_ab_folder(&database, &scope, &folder)
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
+    let entry_rec = db::get_ab_entry(&database, folder_rec.id, &entry)
+        .map_err(|e| AppError::NotFound(format!("entry not found: {}", e)))?;
+
+    check_entry_access_db(&database, folder_rec.id, &entry, &id)?;
+
+    // Metadata always comes from the DB.
+    let mut ab_entry = ab_entry_from_db(&entry_rec);
+
+    if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
+        // Credentials live in Vault: read only the credential fields back
+        // from the vault copy; its metadata is ignored.
         match vault.get_entry(&scope, &folder, &entry).await {
-            Ok(e) => e,
-            Err(VaultError::NotFound) => return Err(AppError::Vault("entry not found".into())),
+            Ok(vault_entry) => apply_vault_credentials(&vault_entry, &mut ab_entry),
+            // The DB entry exists but has no vault copy yet (e.g. the
+            // backend was switched to vault after DB-mode use, or the copy
+            // was never written). Fall back to the DB credential rows so the
+            // entry stays reachable; a genuinely missing entry was caught by
+            // the DB lookup above.
+            Err(VaultError::NotFound) => apply_db_credentials(
+                &database,
+                entry_rec.id,
+                storage_key.as_ref().map(|Extension(k)| k),
+                &mut ab_entry,
+            )?,
             Err(e) => return Err(AppError::Vault(e.to_string())),
         }
-    } else if is_db_storage_available(&database) {
-        // Read entry from DB
-        let folder_rec = db::get_ab_folder(&database, &scope, &folder)
-            .map_err(|e| AppError::Internal(format!("folder not found: {}", e)))?;
-        let entry_rec = db::get_ab_entry(&database, folder_rec.id, &entry)
-            .map_err(|e| AppError::Internal(format!("entry not found: {}", e)))?;
-
-        // Read credentials from DB
-        let encryption_key = std::env::var("PERSEA_STORAGE_KEY").unwrap_or_default();
-        let creds = db::list_ab_credentials(&database, entry_rec.id).unwrap_or_default();
-
-        let mut password = None;
-        let mut private_key = None;
-        let mut proxmox_token_secret = None;
-        let mut container_password = None;
-
-        for cred in &creds {
-            let decrypted = if !encryption_key.is_empty() {
-                crate::crypto::decrypt_value(
-                    &crate::crypto::EncryptionKey::from_hex(&encryption_key)
-                        .unwrap_or_else(|_| panic!("invalid encryption key")),
-                    &cred.credential_data,
-                )
-                .unwrap_or(cred.credential_data.clone())
-            } else {
-                cred.credential_data.clone()
-            };
-
-            match cred.credential_type.as_str() {
-                "password" => password = Some(decrypted),
-                "private_key" => private_key = Some(decrypted),
-                "proxmox_token_secret" => proxmox_token_secret = Some(decrypted),
-                "container_password" => container_password = Some(decrypted),
-                _ => {}
-            }
-        }
-
-        // Parse protocol_config JSON
-        let protocol_config: serde_json::Value = serde_json::from_str(&entry_rec.protocol_config)
-            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-
-        AddressBookEntry {
-            session_type: entry_rec.protocol,
-            hostname: Some(entry_rec.hostname),
-            port: entry_rec.port,
-            username: if entry_rec.username.is_empty() {
-                None
-            } else {
-                Some(entry_rec.username)
-            },
-            password,
-            private_key,
-            display_name: if entry_rec.display_name.is_empty() {
-                None
-            } else {
-                Some(entry_rec.display_name)
-            },
-            domain: protocol_config
-                .get("domain")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            security: protocol_config
-                .get("security")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            ignore_cert: protocol_config.get("ignore_cert").and_then(|v| v.as_bool()),
-            url: protocol_config
-                .get("url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            enable_drive: protocol_config
-                .get("enable_drive")
-                .and_then(|v| v.as_bool()),
-            auth_pkg: protocol_config
-                .get("auth_pkg")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            kdc_url: protocol_config
-                .get("kdc_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            color_depth: protocol_config
-                .get("color_depth")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u8),
-            enable_recording: protocol_config
-                .get("enable_recording")
-                .and_then(|v| v.as_bool()),
-            record_typescript: protocol_config
-                .get("record_typescript")
-                .and_then(|v| v.as_bool()),
-            remote_app: protocol_config
-                .get("remote_app")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            remote_app_dir: protocol_config
-                .get("remote_app_dir")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            remote_app_args: protocol_config
-                .get("remote_app_args")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            enable_gfx: protocol_config.get("enable_gfx").and_then(|v| v.as_bool()),
-            enable_desktop_composition: protocol_config
-                .get("enable_desktop_composition")
-                .and_then(|v| v.as_bool()),
-            enable_wallpaper: protocol_config
-                .get("enable_wallpaper")
-                .and_then(|v| v.as_bool()),
-            enable_theming: protocol_config
-                .get("enable_theming")
-                .and_then(|v| v.as_bool()),
-            enable_full_window_drag: protocol_config
-                .get("enable_full_window_drag")
-                .and_then(|v| v.as_bool()),
-            force_lossless: protocol_config
-                .get("force_lossless")
-                .and_then(|v| v.as_bool()),
-            enable_h264: protocol_config.get("enable_h264").and_then(|v| v.as_bool()),
-            banner: protocol_config
-                .get("banner")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            prompt_credentials: protocol_config
-                .get("prompt_credentials")
-                .and_then(|v| v.as_bool()),
-            allow_sharing: protocol_config
-                .get("allow_sharing")
-                .and_then(|v| v.as_bool()),
-            auto_open_if_singleton: protocol_config
-                .get("auto_open_if_singleton")
-                .and_then(|v| v.as_bool()),
-            fullscreen_on_connect: protocol_config
-                .get("fullscreen_on_connect")
-                .and_then(|v| v.as_bool()),
-            autohide_side_tabs: protocol_config
-                .get("autohide_side_tabs")
-                .and_then(|v| v.as_bool()),
-            spice_tls: protocol_config.get("spice_tls").and_then(|v| v.as_bool()),
-            spice_tls_port: protocol_config
-                .get("spice_tls_port")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u16),
-            spice_ca_cert: protocol_config
-                .get("spice_ca_cert")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            spice_cert_subject: protocol_config
-                .get("spice_cert_subject")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            spice_proxy: protocol_config
-                .get("spice_proxy")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            proxmox_url: protocol_config
-                .get("proxmox_url")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            proxmox_node: protocol_config
-                .get("proxmox_node")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            proxmox_vmid: protocol_config
-                .get("proxmox_vmid")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32),
-            proxmox_token_id: protocol_config
-                .get("proxmox_token_id")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            proxmox_token_secret,
-            proxmox_verify_tls: protocol_config
-                .get("proxmox_verify_tls")
-                .and_then(|v| v.as_bool()),
-            container_image: protocol_config
-                .get("container_image")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            container_cpu_limit: protocol_config
-                .get("container_cpu_limit")
-                .and_then(|v| v.as_f64()),
-            container_memory_limit: protocol_config
-                .get("container_memory_limit")
-                .and_then(|v| v.as_u64()),
-            container_env: None,
-            container_idle_timeout_mins: protocol_config
-                .get("container_idle_timeout_mins")
-                .and_then(|v| v.as_u64()),
-            container_username: protocol_config
-                .get("container_username")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            container_password,
-            max_monitors: protocol_config
-                .get("max_monitors")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32),
-            max_recordings: protocol_config
-                .get("max_recordings")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32),
-            login_script: protocol_config
-                .get("login_script")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            autofill: protocol_config
-                .get("autofill")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            allowed_domains: protocol_config
-                .get("allowed_domains")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect()
-                }),
-            disable_copy: protocol_config
-                .get("disable_copy")
-                .and_then(|v| v.as_bool()),
-            disable_paste: protocol_config
-                .get("disable_paste")
-                .and_then(|v| v.as_bool()),
-            ..Default::default()
-        }
     } else {
-        return Err(AppError::Vault("address book unavailable".into()));
-    };
+        // Credentials live in the DB: decrypt the stored credential rows.
+        apply_db_credentials(
+            &database,
+            entry_rec.id,
+            storage_key.as_ref().map(|Extension(k)| k),
+            &mut ab_entry,
+        )?;
+    }
 
     let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
         let user_email = match &id {
@@ -1003,7 +1330,6 @@ pub async fn ab_create_folder(
     identity: Option<Extension<AuthIdentity>>,
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
-    Extension(vault): Extension<VaultState>,
     Json(req): Json<CreateFolderRequest>,
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
@@ -1011,53 +1337,27 @@ pub async fn ab_create_folder(
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
     let allowed_count = req.allowed_groups.len();
     let inherit = req.inherit_from_parent;
     let folder_name = req.name.clone();
     let folder_scope = req.scope.clone();
-    let folder_desc = req.description.clone();
 
-    // Try Vault first if connected
-    if vault.any_connected().await {
-        let config = FolderConfig {
-            allowed_groups: req.allowed_groups,
-            description: req.description,
-            inherit_from_parent: req.inherit_from_parent,
-        };
-
-        match vault
-            .put_folder_config(&folder_scope, &folder_name, &config)
-            .await
-        {
-            Ok(()) => {
-                let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-                let details = json!({
-                    "allowed_groups_count": allowed_count,
-                    "inherit_from_parent": inherit,
-                })
-                .to_string();
-                log_ab_event(
-                    &database,
-                    &admin_email,
-                    "create_folder",
-                    &folder_scope,
-                    &folder_name,
-                    None,
-                    &ip,
-                    Some(&details),
-                )
-                .await;
-                return Ok(StatusCode::CREATED);
-            }
-            Err(e) => {
-                tracing::error!(error = %e, scope = %folder_scope, folder = %folder_name, "Failed to create folder in Vault");
-                // Fall through to DB
-            }
-        }
-    }
-
-    // DB backend
-    match db::create_ab_folder(&database, &folder_scope, &folder_name, &folder_desc) {
+    // Folders always live in the DB; allowed_groups / inherit_from_parent
+    // are persisted on the folder row and also recorded in the audit event.
+    match db::create_ab_folder(
+        &database,
+        &folder_scope,
+        &folder_name,
+        &req.description,
+        &req.allowed_groups.join(","),
+        req.inherit_from_parent,
+    ) {
         Ok(_id) => {
             let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
             let details = json!({
@@ -1097,7 +1397,6 @@ pub async fn ab_update_folder(
     identity: Option<Extension<AuthIdentity>>,
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
-    Extension(vault): Extension<VaultState>,
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<UpdateFolderRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
@@ -1106,15 +1405,29 @@ pub async fn ab_update_folder(
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    // Folders always live in the DB; description and ACLs are persisted on
+    // the folder row.
+    let changed = db::update_ab_folder(
+        &database,
+        &scope,
+        &folder,
+        &req.description,
+        &req.allowed_groups.join(","),
+        req.inherit_from_parent,
+    )
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+    if !changed {
+        return Err(AppError::Internal("folder not found".into()));
+    }
+
     let allowed_count = req.allowed_groups.len();
     let inherit = req.inherit_from_parent;
-    let config = FolderConfig {
-        allowed_groups: req.allowed_groups,
-        description: req.description,
-        inherit_from_parent: req.inherit_from_parent,
-    };
-
-    vault.put_folder_config(&scope, &folder, &config).await?;
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
     let details = json!({
         "allowed_groups_count": allowed_count,
@@ -1137,7 +1450,7 @@ pub async fn ab_update_folder(
 
 pub async fn ab_get_folder_config(
     identity: Option<Extension<AuthIdentity>>,
-    Extension(vault): Extension<VaultState>,
+    Extension(database): Extension<Db>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if !identity
@@ -1148,18 +1461,25 @@ pub async fn ab_get_folder_config(
         return Err(AppError::Forbidden("admin role required".into()));
     }
 
-    match vault.get_folder_config(&scope, &folder).await {
-        Ok(cfg) => Ok(Json(json!({
-            "allowed_groups": cfg.allowed_groups,
-            "description": cfg.description,
-            "inherit_from_parent": cfg.inherit_from_parent,
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    // Folders always live in the DB; ACLs come from the folder row.
+    match db::get_ab_folder(&database, &scope, &folder) {
+        Ok(folder_rec) => Ok(Json(json!({
+            "allowed_groups": folder_rec
+                .allowed_groups
+                .split(',')
+                .map(|g| g.trim().to_string())
+                .filter(|g| !g.is_empty())
+                .collect::<Vec<String>>(),
+            "description": folder_rec.description,
+            "inherit_from_parent": folder_rec.inherit_from_parent,
         }))),
-        Err(crate::vault::VaultError::NotFound) => Ok(Json(json!({
-            "allowed_groups": Vec::<String>::new(),
-            "description": "",
-            "inherit_from_parent": false,
-        }))),
-        Err(e) => Err(AppError::Vault(e.to_string())),
+        Err(e) => Err(AppError::NotFound(format!("folder not found: {}", e))),
     }
 }
 
@@ -1170,6 +1490,7 @@ pub async fn ab_delete_folder(
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
+    backend: Option<Extension<StorageBackend>>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
@@ -1177,11 +1498,59 @@ pub async fn ab_delete_folder(
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
-    let (subfolders, entries) = vault.delete_folder(&scope, &folder).await?;
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    // The folder itself must exist.
+    db::get_ab_folder(&database, &scope, &folder)
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
+
+    let folders = db::list_ab_folders(&database, Some(&scope))
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let prefix = format!("{}/", folder);
+    let sub_paths: Vec<String> = folders
+        .iter()
+        .filter(|f| f.name.starts_with(&prefix))
+        .map(|f| f.name.clone())
+        .collect();
+
+    // Count entries across the subtree, then delete every folder row (their
+    // entries/credentials cascade via the FK).
+    let mut entry_count = 0usize;
+    for path in sub_paths.iter().chain(std::iter::once(&folder)) {
+        if let Ok(f) = db::get_ab_folder(&database, &scope, path) {
+            entry_count += db::list_ab_entries(&database, f.id)
+                .map(|e| e.len())
+                .unwrap_or(0);
+        }
+    }
+    for path in &sub_paths {
+        db::delete_ab_folder(&database, &scope, path)
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+    }
+    db::delete_ab_folder(&database, &scope, &folder)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let subfolder_count = sub_paths.len();
+
+    // DB subtree is gone — only now remove the vault credential copies
+    // (best-effort: a vault failure must not undo the DB delete).
+    if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
+        if let Err(e) = vault.delete_folder(&scope, &folder).await {
+            tracing::warn!(
+                "folder deleted from DB but vault cleanup failed for '{}': {}",
+                folder,
+                e
+            );
+        }
+    }
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
     let details = json!({
-        "subfolders_deleted": subfolders,
-        "entries_deleted": entries,
+        "subfolders_deleted": subfolder_count,
+        "entries_deleted": entry_count,
     })
     .to_string();
     log_ab_event(
@@ -1197,8 +1566,8 @@ pub async fn ab_delete_folder(
     .await;
     Ok(Json(json!({
         "ok": true,
-        "subfolders_deleted": subfolders,
-        "entries_deleted": entries,
+        "subfolders_deleted": subfolder_count,
+        "entries_deleted": entry_count,
     })))
 }
 
@@ -1210,6 +1579,8 @@ pub async fn ab_create_entry(
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
+    storage_key: Option<Extension<StorageKey>>,
+    backend: Option<Extension<StorageBackend>>,
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<CreateEntryRequest>,
 ) -> Result<StatusCode, AppError> {
@@ -1218,187 +1589,20 @@ pub async fn ab_create_entry(
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
-    let session_type = req.entry.session_type.clone();
-
-    // Try Vault first if connected
-    if vault.any_connected().await {
-        match vault
-            .put_entry(&scope, &folder, &req.name, &req.entry)
-            .await
-        {
-            Ok(()) => {
-                let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-                let details = json!({ "type": session_type }).to_string();
-                log_ab_event(
-                    &database,
-                    &admin_email,
-                    "create_entry",
-                    &scope,
-                    &folder,
-                    Some(&req.name),
-                    &ip,
-                    Some(&details),
-                )
-                .await;
-                return Ok(StatusCode::CREATED);
-            }
-            Err(e) => {
-                tracing::error!(error = %e, scope = %scope, folder = %folder, entry = %req.name, "Failed to create entry in Vault");
-                // Fall through to DB
-            }
-        }
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
     }
 
-    // DB backend
+    let session_type = req.entry.session_type.clone();
+    let vault_mode =
+        vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await;
+
+    // Metadata always lives in the DB.
     let folder_id = get_folder_id(&database, &scope, &folder)?;
 
-    // Build protocol_config JSON from entry fields
-    let mut config = serde_json::Map::new();
-    if let Some(ref v) = req.entry.domain {
-        config.insert("domain".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.security {
-        config.insert("security".into(), json!(v));
-    }
-    if let Some(v) = req.entry.ignore_cert {
-        config.insert("ignore_cert".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.url {
-        config.insert("url".into(), json!(v));
-    }
-    if let Some(v) = req.entry.enable_drive {
-        config.insert("enable_drive".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.auth_pkg {
-        config.insert("auth_pkg".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.kdc_url {
-        config.insert("kdc_url".into(), json!(v));
-    }
-    if let Some(v) = req.entry.color_depth {
-        config.insert("color_depth".into(), json!(v));
-    }
-    if let Some(v) = req.entry.enable_recording {
-        config.insert("enable_recording".into(), json!(v));
-    }
-    if let Some(v) = req.entry.record_typescript {
-        config.insert("record_typescript".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.remote_app {
-        config.insert("remote_app".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.remote_app_dir {
-        config.insert("remote_app_dir".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.remote_app_args {
-        config.insert("remote_app_args".into(), json!(v));
-    }
-    if let Some(v) = req.entry.enable_gfx {
-        config.insert("enable_gfx".into(), json!(v));
-    }
-    if let Some(v) = req.entry.enable_desktop_composition {
-        config.insert("enable_desktop_composition".into(), json!(v));
-    }
-    if let Some(v) = req.entry.enable_wallpaper {
-        config.insert("enable_wallpaper".into(), json!(v));
-    }
-    if let Some(v) = req.entry.enable_theming {
-        config.insert("enable_theming".into(), json!(v));
-    }
-    if let Some(v) = req.entry.enable_full_window_drag {
-        config.insert("enable_full_window_drag".into(), json!(v));
-    }
-    if let Some(v) = req.entry.force_lossless {
-        config.insert("force_lossless".into(), json!(v));
-    }
-    if let Some(v) = req.entry.enable_h264 {
-        config.insert("enable_h264".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.banner {
-        config.insert("banner".into(), json!(v));
-    }
-    if let Some(v) = req.entry.prompt_credentials {
-        config.insert("prompt_credentials".into(), json!(v));
-    }
-    if let Some(v) = req.entry.allow_sharing {
-        config.insert("allow_sharing".into(), json!(v));
-    }
-    if let Some(v) = req.entry.auto_open_if_singleton {
-        config.insert("auto_open_if_singleton".into(), json!(v));
-    }
-    if let Some(v) = req.entry.fullscreen_on_connect {
-        config.insert("fullscreen_on_connect".into(), json!(v));
-    }
-    if let Some(v) = req.entry.autohide_side_tabs {
-        config.insert("autohide_side_tabs".into(), json!(v));
-    }
-    if let Some(v) = req.entry.spice_tls {
-        config.insert("spice_tls".into(), json!(v));
-    }
-    if let Some(v) = req.entry.spice_tls_port {
-        config.insert("spice_tls_port".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.spice_ca_cert {
-        config.insert("spice_ca_cert".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.spice_cert_subject {
-        config.insert("spice_cert_subject".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.spice_proxy {
-        config.insert("spice_proxy".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.proxmox_url {
-        config.insert("proxmox_url".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.proxmox_node {
-        config.insert("proxmox_node".into(), json!(v));
-    }
-    if let Some(v) = req.entry.proxmox_vmid {
-        config.insert("proxmox_vmid".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.proxmox_token_id {
-        config.insert("proxmox_token_id".into(), json!(v));
-    }
-    if let Some(v) = req.entry.proxmox_verify_tls {
-        config.insert("proxmox_verify_tls".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.container_image {
-        config.insert("container_image".into(), json!(v));
-    }
-    if let Some(v) = req.entry.container_cpu_limit {
-        config.insert("container_cpu_limit".into(), json!(v));
-    }
-    if let Some(v) = req.entry.container_memory_limit {
-        config.insert("container_memory_limit".into(), json!(v));
-    }
-    if let Some(v) = req.entry.container_idle_timeout_mins {
-        config.insert("container_idle_timeout_mins".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.container_username {
-        config.insert("container_username".into(), json!(v));
-    }
-    if let Some(v) = req.entry.max_monitors {
-        config.insert("max_monitors".into(), json!(v));
-    }
-    if let Some(v) = req.entry.max_recordings {
-        config.insert("max_recordings".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.login_script {
-        config.insert("login_script".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.autofill {
-        config.insert("autofill".into(), json!(v));
-    }
-    if let Some(ref v) = req.entry.allowed_domains {
-        config.insert("allowed_domains".into(), json!(v));
-    }
-    if let Some(v) = req.entry.disable_copy {
-        config.insert("disable_copy".into(), json!(v));
-    }
-    if let Some(v) = req.entry.disable_paste {
-        config.insert("disable_paste".into(), json!(v));
-    }
-
+    let config = build_protocol_config(&req.entry);
     let entry_id = db::create_ab_entry(
         &database,
         folder_id,
@@ -1409,52 +1613,96 @@ pub async fn ab_create_entry(
         req.entry.port,
         req.entry.username.as_deref().unwrap_or(""),
         &serde_json::to_string(&config).unwrap_or_else(|_| "{}".into()),
-        "",
-    )?;
+        &req.allowed_groups
+            .as_ref()
+            .map(|g| g.join(","))
+            .unwrap_or_default(),
+    )
+    .map_err(|e| {
+        use rusqlite::ErrorCode;
+        if matches!(
+            e,
+            rusqlite::Error::SqliteFailure(ref f, _)
+                if f.code == ErrorCode::ConstraintViolation
+        ) {
+            AppError::Conflict("an entry with this name already exists".into())
+        } else {
+            AppError::Internal(e.to_string())
+        }
+    })?;
 
-    // Store credentials if present
-    let encryption_key = std::env::var("PERSEA_STORAGE_KEY").unwrap_or_default();
-    if !encryption_key.is_empty() {
-        if let Some(ref password) = req.entry.password {
-            let encrypted = crate::crypto::encrypt_value(
-                &crate::crypto::EncryptionKey::from_hex(&encryption_key)
-                    .map_err(|e| AppError::Internal(e.to_string()))?,
-                password,
-            )
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-            db::store_ab_credential(&database, entry_id, "password", &encrypted)?;
+    // No encryption key in db mode means credentials would be silently
+    // dropped — fail loudly instead of pretending the password was saved.
+    if !vault_mode
+        && resolve_encryption_key(storage_key.as_ref().map(|k| &k.0)).is_empty()
+        && has_credential_fields(&req.entry)
+    {
+        return Err(AppError::Validation(
+            "no [storage].encryption_key / PERSEA_STORAGE_KEY configured —              credentials cannot be stored; set a key first"
+                .into(),
+        ));
+    }
+
+    if vault_mode {
+        // Credentials live in Vault: write the full entry (its metadata is
+        // ignored on read — only the credential fields are used).
+        if let Err(e) = vault
+            .put_entry(&scope, &folder, &req.name, &req.entry)
+            .await
+        {
+            // Roll back the DB row so the entry doesn't linger credential-less.
+            let _ = db::delete_ab_entry(&database, entry_id);
+            return Err(AppError::Vault(e.to_string()));
         }
-        if let Some(ref private_key) = req.entry.private_key {
-            let encrypted = crate::crypto::encrypt_value(
-                &crate::crypto::EncryptionKey::from_hex(&encryption_key)
-                    .map_err(|e| AppError::Internal(e.to_string()))?,
-                private_key,
-            )
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-            db::store_ab_credential(&database, entry_id, "private_key", &encrypted)?;
-        }
-        if let Some(ref secret) = req.entry.proxmox_token_secret {
-            let encrypted = crate::crypto::encrypt_value(
-                &crate::crypto::EncryptionKey::from_hex(&encryption_key)
-                    .map_err(|e| AppError::Internal(e.to_string()))?,
-                secret,
-            )
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-            db::store_ab_credential(&database, entry_id, "proxmox_token_secret", &encrypted)?;
-        }
-        if let Some(ref pw) = req.entry.container_password {
-            let encrypted = crate::crypto::encrypt_value(
-                &crate::crypto::EncryptionKey::from_hex(&encryption_key)
-                    .map_err(|e| AppError::Internal(e.to_string()))?,
-                pw,
-            )
-            .map_err(|e| AppError::Internal(e.to_string()))?;
-            db::store_ab_credential(&database, entry_id, "container_password", &encrypted)?;
+    } else {
+        // Credentials live in the DB: encrypt and store the provided fields.
+        let encryption_key = resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
+        if !encryption_key.is_empty() {
+            if let Some(ref password) = req.entry.password {
+                let encrypted = crate::crypto::encrypt_value(
+                    &crate::crypto::EncryptionKey::from_hex(&encryption_key)
+                        .map_err(|e| AppError::Internal(e.to_string()))?,
+                    password,
+                )
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+                db::store_ab_credential(&database, entry_id, "password", &encrypted)?;
+            }
+            if let Some(ref private_key) = req.entry.private_key {
+                let encrypted = crate::crypto::encrypt_value(
+                    &crate::crypto::EncryptionKey::from_hex(&encryption_key)
+                        .map_err(|e| AppError::Internal(e.to_string()))?,
+                    private_key,
+                )
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+                db::store_ab_credential(&database, entry_id, "private_key", &encrypted)?;
+            }
+            if let Some(ref secret) = req.entry.proxmox_token_secret {
+                let encrypted = crate::crypto::encrypt_value(
+                    &crate::crypto::EncryptionKey::from_hex(&encryption_key)
+                        .map_err(|e| AppError::Internal(e.to_string()))?,
+                    secret,
+                )
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+                db::store_ab_credential(&database, entry_id, "proxmox_token_secret", &encrypted)?;
+            }
+            if let Some(ref pw) = req.entry.container_password {
+                let encrypted = crate::crypto::encrypt_value(
+                    &crate::crypto::EncryptionKey::from_hex(&encryption_key)
+                        .map_err(|e| AppError::Internal(e.to_string()))?,
+                    pw,
+                )
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+                db::store_ab_credential(&database, entry_id, "container_password", &encrypted)?;
+            }
         }
     }
 
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-    let details = json!({ "type": session_type, "backend": "db" }).to_string();
+    let details = json!({
+        "type": session_type,
+        "backend": if vault_mode { "vault" } else { "db" },
+    })
+    .to_string();
     log_ab_event(
         &database,
         &admin_email,
@@ -1477,63 +1725,202 @@ pub async fn ab_update_entry(
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
+    storage_key: Option<Extension<StorageKey>>,
+    backend: Option<Extension<StorageBackend>>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
-    Json(data): Json<AddressBookEntry>,
+    Json(data): Json<UpdateEntryRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
-    let merged = match vault.get_entry(&scope, &folder, &entry).await {
-        Ok(existing) => {
-            let merged_jump_hosts = if let Some(ref new_hops) = data.jump_hosts {
-                let old_hops = existing.jump_hosts.as_deref().unwrap_or(&[]);
-                let merged: Vec<_> = new_hops
-                    .iter()
-                    .enumerate()
-                    .map(|(i, hop)| {
-                        let old = old_hops.get(i);
-                        crate::tunnel::JumpHost {
-                            hostname: hop.hostname.clone(),
-                            port: hop.port,
-                            username: hop.username.clone(),
-                            password: hop
-                                .password
-                                .clone()
-                                .or_else(|| old.and_then(|o| o.password.clone())),
-                            private_key: hop
-                                .private_key
-                                .clone()
-                                .or_else(|| old.and_then(|o| o.private_key.clone())),
-                            host_key: hop
-                                .host_key
-                                .clone()
-                                .or_else(|| old.and_then(|o| o.host_key.clone())),
-                        }
-                    })
-                    .collect();
-                Some(merged)
-            } else {
-                data.jump_hosts.clone()
-            };
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
 
-            AddressBookEntry {
-                password: data.password.or(existing.password),
-                private_key: data.private_key.or(existing.private_key),
-                container_password: data.container_password.or(existing.container_password),
-                proxmox_token_secret: data.proxmox_token_secret.or(existing.proxmox_token_secret),
-                jump_hosts: merged_jump_hosts,
-                jump_password: None,
-                jump_private_key: None,
-                ..data
+    let vault_mode =
+        vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await;
+
+    let folder_rec = db::get_ab_folder(&database, &scope, &folder)
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
+    let entry_rec = db::get_ab_entry(&database, folder_rec.id, &entry)
+        .map_err(|e| AppError::NotFound(format!("entry not found: {}", e)))?;
+
+    // Same guard as create: db mode without a key cannot store credentials.
+    if !vault_mode
+        && resolve_encryption_key(storage_key.as_ref().map(|k| &k.0)).is_empty()
+        && has_credential_fields(&data.entry)
+    {
+        return Err(AppError::Validation(
+            "no [storage].encryption_key / PERSEA_STORAGE_KEY configured —              credentials cannot be stored; set a key first"
+                .into(),
+        ));
+    }
+
+    if vault_mode {
+        // Credentials live in Vault: merge the credential fields with the
+        // existing vault copy (keeps credentials when the payload omits
+        // them), then rewrite the copy.
+        let payload = data.clone();
+        let merged = match vault.get_entry(&scope, &folder, &entry).await {
+            Ok(existing) => {
+                let merged_jump_hosts = if let Some(ref new_hops) = payload.entry.jump_hosts {
+                    let old_hops = existing.jump_hosts.as_deref().unwrap_or(&[]);
+                    let merged: Vec<_> = new_hops
+                        .iter()
+                        .enumerate()
+                        .map(|(i, hop)| {
+                            let old = old_hops.get(i);
+                            crate::tunnel::JumpHost {
+                                hostname: hop.hostname.clone(),
+                                port: hop.port,
+                                username: hop.username.clone(),
+                                password: hop
+                                    .password
+                                    .clone()
+                                    .or_else(|| old.and_then(|o| o.password.clone())),
+                                private_key: hop
+                                    .private_key
+                                    .clone()
+                                    .or_else(|| old.and_then(|o| o.private_key.clone())),
+                                host_key: hop
+                                    .host_key
+                                    .clone()
+                                    .or_else(|| old.and_then(|o| o.host_key.clone())),
+                            }
+                        })
+                        .collect();
+                    Some(merged)
+                } else {
+                    payload.entry.jump_hosts.clone()
+                };
+
+                AddressBookEntry {
+                    password: payload.entry.password.or(existing.password),
+                    private_key: payload.entry.private_key.or(existing.private_key),
+                    container_password: payload
+                        .entry
+                        .container_password
+                        .or(existing.container_password),
+                    proxmox_token_secret: payload
+                        .entry
+                        .proxmox_token_secret
+                        .or(existing.proxmox_token_secret),
+                    jump_hosts: merged_jump_hosts,
+                    jump_password: None,
+                    jump_private_key: None,
+                    ..payload.entry
+                }
+            }
+            // A missing vault copy (e.g. after a db→vault backend switch)
+            // behaves like an empty copy: write the payload as-is. Any OTHER
+            // read failure must not proceed — the put below would overwrite
+            // the stored credentials with `None`s.
+            Err(VaultError::NotFound) => payload.entry,
+            Err(e) => return Err(AppError::Vault(e.to_string())),
+        };
+        // Preserve metadata the modal doesn't edit (same merge contract as
+        // the DB path): fields omitted from the payload keep their vault
+        // values.
+        let merged = {
+            let existing = vault.get_entry(&scope, &folder, &entry).await.ok();
+            let mut full = merged.clone();
+            if let Some(existing) = existing {
+                if full.domain.is_none() {
+                    full.domain = existing.domain.clone();
+                }
+                if full.jump_hosts.is_none() {
+                    full.jump_hosts = existing.jump_hosts.clone();
+                }
+                if full.display_name.is_none() {
+                    full.display_name = existing.display_name.clone();
+                }
+            }
+            full
+        };
+        vault.put_entry(&scope, &folder, &entry, &merged).await?;
+    } else {
+        // Credentials live in the DB: upsert the credential fields present
+        // in the payload (fields omitted keep their stored value).
+        let encryption_key = resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
+        if !encryption_key.is_empty() {
+            // A field sent as an explicit empty string clears the stored
+            // credential; `None` keeps it.
+            if let Some(ref password) = data.entry.password {
+                upsert_or_clear_credential(
+                    &database,
+                    entry_rec.id,
+                    "password",
+                    password,
+                    &encryption_key,
+                )?;
+            }
+            if let Some(ref private_key) = data.entry.private_key {
+                upsert_or_clear_credential(
+                    &database,
+                    entry_rec.id,
+                    "private_key",
+                    private_key,
+                    &encryption_key,
+                )?;
+            }
+            if let Some(ref secret) = data.entry.proxmox_token_secret {
+                upsert_or_clear_credential(
+                    &database,
+                    entry_rec.id,
+                    "proxmox_token_secret",
+                    secret,
+                    &encryption_key,
+                )?;
+            }
+            if let Some(ref pw) = data.entry.container_password {
+                upsert_or_clear_credential(
+                    &database,
+                    entry_rec.id,
+                    "container_password",
+                    pw,
+                    &encryption_key,
+                )?;
             }
         }
-        Err(_) => data,
-    };
+    }
 
-    let session_type = merged.session_type.clone();
-    vault.put_entry(&scope, &folder, &entry, &merged).await?;
+    // Metadata always lives in the DB. The edit modal sends only a subset
+    // of fields — MERGE over the stored protocol_config so untouched fields
+    // (security, jump_hosts, recording, login_script, proxmox_* …) survive
+    // the edit. `allowed_groups` omitted by the client keeps the stored
+    // value (same keep-on-blank contract as credentials).
+    let mut merged_config: serde_json::Map<String, serde_json::Value> = {
+        let existing_config: serde_json::Value = serde_json::from_str(&entry_rec.protocol_config)
+            .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+        existing_config.as_object().cloned().unwrap_or_default()
+    };
+    let payload_config = build_protocol_config(&data.entry);
+    for (k, v) in payload_config {
+        merged_config.insert(k, v);
+    }
+    let allowed_groups = data
+        .allowed_groups
+        .as_ref()
+        .map(|g| g.join(","))
+        .unwrap_or_else(|| entry_rec.allowed_groups.clone());
+    db::update_ab_entry(
+        &database,
+        entry_rec.id,
+        data.entry.display_name.as_deref().unwrap_or(""),
+        &data.entry.session_type,
+        data.entry.hostname.as_deref().unwrap_or(""),
+        data.entry.port,
+        data.entry.username.as_deref().unwrap_or(""),
+        &serde_json::to_string(&merged_config).unwrap_or_else(|_| "{}".into()),
+        &allowed_groups,
+    )
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let session_type = data.entry.session_type.clone();
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
     let details = json!({ "type": session_type }).to_string();
     log_ab_event(
@@ -1557,6 +1944,7 @@ pub async fn ab_delete_entry(
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
     Extension(vault): Extension<VaultState>,
+    backend: Option<Extension<StorageBackend>>,
     Path((scope, folder, entry)): Path<(String, String, String)>,
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
@@ -1564,28 +1952,45 @@ pub async fn ab_delete_entry(
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
-    match vault.delete_entry(&scope, &folder, &entry).await {
-        Ok(()) => {
-            let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-            log_ab_event(
-                &database,
-                &admin_email,
-                "delete_entry",
-                &scope,
-                &folder,
-                Some(&entry),
-                &ip,
-                None,
-            )
-            .await;
-            Ok(StatusCode::NO_CONTENT)
-        }
-        Err(VaultError::NotFound) => Err(AppError::Session("entry not found".into())),
-        Err(e) => {
-            tracing::error!(error = %e, scope = %scope, folder = %folder, entry = %entry, "Failed to delete entry");
-            Err(AppError::Vault(e.to_string()))
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    // Vault mode: remove the credential copy first — if that fails, nothing
+    // is deleted and the error propagates.
+    if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
+        match vault.delete_entry(&scope, &folder, &entry).await {
+            Ok(()) => {}
+            Err(VaultError::NotFound) => return Err(AppError::Session("entry not found".into())),
+            Err(e) => {
+                tracing::error!(error = %e, scope = %scope, folder = %folder, entry = %entry, "Failed to delete entry");
+                return Err(AppError::Vault(e.to_string()));
+            }
         }
     }
+
+    // Metadata always lives in the DB.
+    let folder_rec = db::get_ab_folder(&database, &scope, &folder)
+        .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
+    let entry_rec = db::get_ab_entry(&database, folder_rec.id, &entry)
+        .map_err(|e| AppError::NotFound(format!("entry not found: {}", e)))?;
+    db::delete_ab_entry(&database, entry_rec.id).map_err(|e| AppError::Internal(e.to_string()))?;
+
+    let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+    log_ab_event(
+        &database,
+        &admin_email,
+        "delete_entry",
+        &scope,
+        &folder,
+        Some(&entry),
+        &ip,
+        None,
+    )
+    .await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 pub(crate) fn html_escape(s: &str) -> String {
@@ -1701,7 +2106,7 @@ document.getElementById('cred-form').addEventListener('submit', async function(e
 </script>
 </body></html>"##,
         title = html_escape(title),
-        session_type_upper = session_type.to_uppercase(),
+        session_type_upper = html_escape(&session_type.to_uppercase()),
         domain_display = domain_display,
         scope = html_escape(scope),
         folder = html_escape(folder),
@@ -1734,6 +2139,9 @@ pub async fn quick_connect(
     trusted: Option<Extension<TrustedProxies>>,
     Extension(vault): Extension<VaultState>,
     Extension(oidc_enabled): Extension<super::OidcEnabled>,
+    Extension(database): Extension<Db>,
+    storage_key: Option<Extension<StorageKey>>,
+    backend: Option<Extension<StorageBackend>>,
     request: axum::extract::Request,
 ) -> Response {
     let query_string = request.uri().query().unwrap_or("");
@@ -1780,35 +2188,77 @@ pub async fn quick_connect(
             );
         }
 
-        if !vault.any_connected().await {
+        if !is_db_storage_available(&database) {
             return quick_connect_error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "Address book is temporarily unavailable (Vault offline).",
+                "Address book is temporarily unavailable.",
             );
         }
 
-        if check_folder_access(&vault, scope, folder, &id)
-            .await
-            .is_err()
-        {
+        if check_folder_access_db(&database, scope, folder, &id).is_err() {
             return quick_connect_error(StatusCode::FORBIDDEN, "No access to this folder.");
         }
 
-        let ab_entry = match vault.get_entry(scope, folder, entry).await {
+        // Metadata always comes from the DB.
+        let folder_rec = match db::get_ab_folder(&database, scope, folder) {
+            Ok(f) => f,
+            Err(_) => {
+                return quick_connect_error(
+                    StatusCode::NOT_FOUND,
+                    &format!("Folder '{}' not found in {}.", folder, scope),
+                );
+            }
+        };
+        let entry_rec = match db::get_ab_entry(&database, folder_rec.id, entry) {
             Ok(e) => e,
-            Err(VaultError::NotFound) => {
+            Err(_) => {
                 return quick_connect_error(
                     StatusCode::NOT_FOUND,
                     &format!("Entry '{}' not found in {}/{}.", entry, scope, folder),
                 );
             }
-            Err(e) => {
-                return quick_connect_error(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("Failed to read address book entry: {}", e),
-                );
-            }
         };
+        let mut ab_entry = ab_entry_from_db(&entry_rec);
+
+        if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
+            // Credentials live in Vault: read only the credential fields
+            // back from the vault copy; its metadata is ignored.
+            match vault.get_entry(scope, folder, entry).await {
+                Ok(vault_entry) => apply_vault_credentials(&vault_entry, &mut ab_entry),
+                // No vault copy (db→vault switch, or the copy was never
+                // written): fall back to the DB credential rows, exactly
+                // like ab_connect_entry, so the entry stays reachable.
+                Err(VaultError::NotFound) => {
+                    if let Err(e) = apply_db_credentials(
+                        &database,
+                        entry_rec.id,
+                        storage_key.as_ref().map(|Extension(k)| k),
+                        &mut ab_entry,
+                    ) {
+                        return quick_connect_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            &format!("Failed to read stored credentials: {}", e),
+                        );
+                    }
+                }
+                Err(e) => {
+                    return quick_connect_error(
+                        StatusCode::BAD_GATEWAY,
+                        &format!("Failed to read address book entry: {}", e),
+                    );
+                }
+            }
+        } else {
+            // Credentials live in the DB: decrypt the stored rows.
+            if let Err(e) = apply_db_credentials(
+                &database,
+                entry_rec.id,
+                storage_key.as_ref().map(|Extension(k)| k),
+                &mut ab_entry,
+            ) {
+                return e.into_response();
+            }
+        }
 
         let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
             let user_email = match &id {

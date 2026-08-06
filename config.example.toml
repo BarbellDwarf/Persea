@@ -21,7 +21,7 @@ guacd_addr = "127.0.0.1:4822"
 # Directory for session recording files (.guac format).
 # Default: "./recordings"
 # DEPRECATED: use [recording] section below. Kept for backwards compatibility.
-recording_path = "./recordings"
+# recording_path = "./recordings"
 
 # Directory containing static web files (HTML, JS, CSS).
 # Default: "./static"
@@ -288,10 +288,10 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # [vdi]
 # enabled = false
 # docker_socket = "/var/run/docker.sock"
-# default_cpu_limit = "1.0"              # CPU cores (Docker --cpus)
-# default_memory_limit = "512m"          # Memory limit (Docker --memory)
-# ready_timeout_secs = 120               # max wait for container ready
-# idle_timeout_mins = 30                 # destroy after idle period
+# default_cpu_limit = 1.0               # CPU cores (Docker --cpus)
+# default_memory_limit = 512            # Memory limit in MB (Docker --memory)
+# ready_timeout_secs = 30               # max wait for container ready
+# idle_timeout_mins = 60                # destroy after idle period
 # allowed_images = []                    # empty = allow all images
 # home_base = "/opt/persea/vdi"        # base dir for user home mounts
 

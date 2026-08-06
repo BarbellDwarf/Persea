@@ -192,12 +192,6 @@ pub async fn cmd_vault_migrate(
     }
 }
 
-/// BFS-collect every folder path in the scope subtree, top-level folders
-/// first so ancestors always precede descendants.
-///
-/// `list_subfolders` resolves the children of a path; a failed listing is
-/// tolerated and contributes nothing, matching the error-tolerant walk in
-/// `cmd_vault_migrate`.
 /// Resolves the children of a folder path, for the BFS walk.
 trait SubfolderLister {
     fn list_subfolders(
@@ -206,6 +200,12 @@ trait SubfolderLister {
     ) -> impl Future<Output = Result<Vec<FolderInfo>, VaultError>> + Send;
 }
 
+/// BFS-collect every folder path in the scope subtree, top-level folders
+/// first so ancestors always precede descendants.
+///
+/// `list_subfolders` resolves the children of a path; a failed listing is
+/// tolerated and contributes nothing, matching the error-tolerant walk in
+/// `cmd_vault_migrate`.
 async fn collect_folder_paths(
     top: Vec<FolderInfo>,
     lister: &mut impl SubfolderLister,
@@ -304,10 +304,6 @@ mod tests {
         f.path = Some(path.to_string());
         f
     }
-
-    /// Run the BFS walk against an in-memory subfolder map. Paths absent from
-    /// `subfolders` have no children; paths listed in `errors` fail to list
-    /// (exercising the walk's error tolerance).
 
     /// Drives the BFS walk from an in-memory subfolder map. Paths absent from
     /// `subfolders` have no children; paths listed in `errors` fail to list

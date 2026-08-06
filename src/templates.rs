@@ -67,6 +67,11 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     )
     .expect("Failed to register pages/admin/auth.html");
     env.add_template(
+        "pages/admin/groups.html",
+        include_str!("../templates/pages/admin/groups.html"),
+    )
+    .expect("Failed to register pages/admin/groups.html");
+    env.add_template(
         "pages/admin/audit.html",
         include_str!("../templates/pages/admin/audit.html"),
     )
@@ -149,6 +154,10 @@ pub struct LoginTemplate {
     pub saml_enabled: bool,
     pub oidc_button_text: String,
     pub saml_button_text: String,
+    /// One entry per configured OIDC provider (multi-provider SSO).
+    pub oidc_providers: Vec<String>,
+    /// Error message from a failed login redirect (`/?error=...`).
+    pub error: Option<String>,
 }
 
 impl IntoResponse for LoginTemplate {
@@ -233,6 +242,21 @@ pub struct AdminAuthTemplate {
 impl IntoResponse for AdminAuthTemplate {
     fn into_response(self) -> Response {
         render_template("pages/admin/auth.html", &self)
+    }
+}
+
+/// Admin groups page template context.
+#[derive(Serialize)]
+pub struct AdminGroupsTemplate {
+    pub site_title: String,
+    pub logo_url: String,
+    pub is_admin: bool,
+    pub active_page: String,
+}
+
+impl IntoResponse for AdminGroupsTemplate {
+    fn into_response(self) -> Response {
+        render_template("pages/admin/groups.html", &self)
     }
 }
 

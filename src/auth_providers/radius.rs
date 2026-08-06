@@ -48,12 +48,16 @@ pub struct RadiusConfig {
     /// RADIUS server hostname or IP.
     pub hostname: String,
     /// RADIUS server port (standard: 1812).
-    #[serde(default = "default_port")]
+    /// Accepts `auth_port` as an alias (admin UI provider config).
+    #[serde(default = "default_port", alias = "auth_port")]
     pub port: u16,
     /// Shared secret for RADIUS communication.
+    /// Accepts `secret` as an alias (admin UI provider config).
+    #[serde(alias = "secret")]
     pub shared_secret: String,
     /// Request timeout in seconds.
-    #[serde(default = "default_timeout_secs")]
+    /// Accepts `timeout` as an alias (admin UI provider config).
+    #[serde(default = "default_timeout_secs", alias = "timeout")]
     pub timeout_secs: u64,
     /// Number of retries on timeout.
     #[serde(default = "default_retries")]

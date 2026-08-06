@@ -25,6 +25,10 @@ pub struct SessionManager {
     /// creation while allowing existing sessions to drain gracefully.
     pub(super) shutdown: Arc<AtomicBool>,
     /// Effective recording directory, resolved once at construction.
+    ///
+    /// `Config` is immutable after `SessionManager::new` (it is moved into the
+    /// manager and never mutated), so caching the resolution here keeps
+    /// `recording_path()` zero-copy without drifting from `recording_config()`.
     pub(super) recording_dir: std::path::PathBuf,
     /// Notified when `shutdown` flips to `true` so background tasks can exit.
     pub(super) shutdown_notify: Arc<tokio::sync::Notify>,

@@ -1,8 +1,8 @@
 //! API handler integration tests using axum test utilities with in-memory SQLite DB.
 
 use super::{
-    CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, VaultBackends, VaultCell,
-    VaultConfigured, VaultState,
+    CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, StorageBackend, StorageKey,
+    VaultBackends, VaultCell, VaultConfigured, VaultState,
 };
 use crate::db::{self, Db};
 use axum::body::Body;
@@ -16,6 +16,17 @@ use tower::ServiceExt;
 
 fn test_db() -> Db {
     db::init_db(std::path::Path::new(":memory:")).expect("Failed to create test DB")
+}
+
+/// Whether a local guacd is listening on the default port (127.0.0.1:4822).
+/// Quick-connect tests that create real sessions need it; CI does not run
+/// guacd, so those tests skip there.
+fn guacd_reachable() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:4822".parse().unwrap(),
+        std::time::Duration::from_millis(300),
+    )
+    .is_ok()
 }
 
 fn insert_test_admin(db: &Db, name: &str) -> String {
@@ -82,6 +93,17 @@ fn build_test_router(db: Db) -> axum::Router {
 }
 
 fn build_test_router_with_vault(db: Db, vault: VaultState) -> axum::Router {
+    build_test_router_with_vault_and_backend(db, vault, None)
+}
+
+/// Router with an explicit `StorageBackend` marker ("db" | "vault").
+/// `None` exercises the default-db path (handlers default to "db" when the
+/// extension is absent).
+fn build_test_router_with_vault_and_backend(
+    db: Db,
+    vault: VaultState,
+    backend: Option<&str>,
+) -> axum::Router {
     use axum::routing::{delete, get, post, put};
 
     let api_routes = axum::Router::new()
@@ -111,7 +133,22 @@ fn build_test_router_with_vault(db: Db, vault: VaultState) -> axum::Router {
             "/api/admin/user-tokens/{id}",
             delete(super::tokens::admin_revoke_user_token),
         )
+        .route("/api/addressbook", get(super::ab_list_all))
+        .route("/api/addressbook/search-index", get(super::ab_search_index))
         .route("/api/addressbook/folders", get(super::ab_list_folders))
+        .route("/api/addressbook/folders", post(super::ab_create_folder))
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}",
+            put(super::ab_update_folder),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}",
+            delete(super::ab_delete_folder),
+        )
+        .route(
+            "/api/addressbook/folders/{scope}/{folder}/config",
+            get(super::ab_get_folder_config),
+        )
         .route(
             "/api/addressbook/folders/{scope}/{folder}/subfolders",
             get(super::ab_list_subfolders),
@@ -130,7 +167,7 @@ fn build_test_router_with_vault(db: Db, vault: VaultState) -> axum::Router {
         )
         .with_state(());
 
-    api_routes
+    let mut api_routes = api_routes
         .layer(axum::middleware::from_fn(crate::auth::require_auth))
         .layer(Extension(db))
         .layer(Extension(vault))
@@ -138,7 +175,11 @@ fn build_test_router_with_vault(db: Db, vault: VaultState) -> axum::Router {
         .layer(Extension(OidcEnabled(false)))
         .layer(Extension(DriveConfigured(false)))
         .layer(Extension(CredentialDefaultScope("local".into())))
-        .layer(Extension(SiteTitle("Test".into())))
+        .layer(Extension(SiteTitle("Test".into())));
+    if let Some(b) = backend {
+        api_routes = api_routes.layer(Extension(StorageBackend(b.into())));
+    }
+    api_routes
 }
 
 fn make_request(method: &str, uri: &str) -> Request<Body> {
@@ -606,9 +647,9 @@ async fn test_me_returns_identity() {
     assert_eq!(body["role"].as_str().unwrap(), "admin");
 }
 
-// ── Address book: Vault path through MockVault ──
+// ── Address book: DB-first storage (Vault optional) ──
 
-/// Seed a MockVault with a folder config + entries, mirroring the real
+/// Seed a MockVault with a folder config + entries, mirroring the old
 /// Vault KV v2 layout (`shared/<folder>/<entry>`, `shared/<folder>/.config`).
 fn mock_vault_with_it_folder() -> Arc<crate::testing::MockVault> {
     use crate::vault::AddressBookEntry;
@@ -646,10 +687,11 @@ fn mock_vault_with_it_folder() -> Arc<crate::testing::MockVault> {
 }
 
 #[tokio::test]
-async fn test_ab_list_folders_mock_vault() {
+async fn test_ab_list_folders_db_backed() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    let app = build_test_router_with_vault(db, mock_vault_state(mock_vault_with_it_folder()));
+    db::create_ab_folder(&db, "shared", "IT", "IT servers", "", false).unwrap();
+    let app = build_test_router(db);
     let response = app
         .oneshot(make_auth_request("GET", "/api/addressbook/folders", &key))
         .await
@@ -674,10 +716,37 @@ async fn test_ab_list_folders_mock_vault() {
 }
 
 #[tokio::test]
-async fn test_ab_list_entries_mock_vault() {
+async fn test_ab_list_entries_db_backed() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    let app = build_test_router_with_vault(db, mock_vault_state(mock_vault_with_it_folder()));
+    let folder_id = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+    db::create_ab_entry(
+        &db,
+        folder_id,
+        "srv-01",
+        "",
+        "ssh",
+        "10.0.0.5",
+        Some(22),
+        "root",
+        "{}",
+        "",
+    )
+    .unwrap();
+    db::create_ab_entry(
+        &db,
+        folder_id,
+        "web-01",
+        "",
+        "web",
+        "",
+        None,
+        "",
+        r#"{"url":"https://web.internal"}"#,
+        "",
+    )
+    .unwrap();
+    let app = build_test_router(db);
     let response = app
         .oneshot(make_auth_request(
             "GET",
@@ -710,27 +779,28 @@ async fn test_ab_list_entries_mock_vault() {
 }
 
 #[tokio::test]
-async fn test_ab_list_subfolders_mock_vault() {
+async fn test_ab_list_subfolders_db_backed() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    // Nested layout: shared/Clients/.config + shared/Clients/Acme/srv + Acme/.config
-    let mock = Arc::new(
-        crate::testing::MockVault::new()
-            .with_entry(
-                "shared/Clients/Acme/.config",
-                &serde_json::to_string(&crate::vault::FolderConfig {
-                    allowed_groups: vec![],
-                    description: "Acme subfolder".into(),
-                    inherit_from_parent: false,
-                })
-                .unwrap(),
-            )
-            .with_entry(
-                "shared/Clients/Acme/srv-01",
-                r#"{"type":"ssh","hostname":"10.9.0.1"}"#,
-            ),
-    );
-    let app = build_test_router_with_vault(db, mock_vault_state(mock));
+    // Nested layout via slash-path folder names: Clients/Acme is a
+    // subfolder of Clients.
+    db::create_ab_folder(&db, "shared", "Clients", "", "", false).unwrap();
+    let acme_id =
+        db::create_ab_folder(&db, "shared", "Clients/Acme", "Acme subfolder", "", false).unwrap();
+    db::create_ab_entry(
+        &db,
+        acme_id,
+        "srv-01",
+        "",
+        "ssh",
+        "10.9.0.1",
+        Some(22),
+        "",
+        "{}",
+        "",
+    )
+    .unwrap();
+    let app = build_test_router(db);
     let response = app
         .oneshot(make_auth_request(
             "GET",
@@ -753,55 +823,83 @@ async fn test_ab_list_subfolders_mock_vault() {
     assert_eq!(subs[0]["description"].as_str().unwrap(), "Acme subfolder");
 }
 
+/// Vault CONNECTED but backend default "db": metadata must come from the DB
+/// and the MockVault must stay untouched.
 #[tokio::test]
-async fn test_ab_create_entry_writes_to_mock_vault() {
+async fn test_ab_db_backend_ignores_connected_vault() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
+    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "db desc", "", false).unwrap();
+    db::create_ab_entry(
+        &db,
+        folder_id,
+        "dbentry",
+        "",
+        "ssh",
+        "10.1.1.1",
+        Some(22),
+        "root",
+        "{}",
+        "",
+    )
+    .unwrap();
+
     let mock = mock_vault_with_it_folder();
     let app = build_test_router_with_vault(db, mock_vault_state(mock.clone()));
+
     let response = app
-        .oneshot(make_json_request(
-            "POST",
-            "/api/addressbook/folders/shared/IT/entries",
-            &key,
-            json!({"name": "newbox-01", "type": "ssh", "hostname": "10.0.0.9", "port": 22}),
-        ))
+        .clone()
+        .oneshot(make_auth_request("GET", "/api/addressbook/folders", &key))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let folders = body.as_array().unwrap();
+    assert_eq!(
+        folders.len(),
+        1,
+        "vault folders must not appear with the default db backend: {}",
+        body
+    );
+    assert_eq!(folders[0]["name"].as_str().unwrap(), "DBFolder");
 
-    // The handler must have written the entry into the mock backend.
-    let written = mock
-        .get_entry("shared", "IT", "newbox-01")
-        .expect("entry must exist in MockVault after POST");
-    assert_eq!(written.session_type, "ssh");
-    assert_eq!(written.hostname.as_deref(), Some("10.0.0.9"));
-    assert_eq!(written.port, Some(22));
-}
-
-#[tokio::test]
-async fn test_ab_delete_entry_removes_from_mock_vault() {
-    let db = test_db();
-    let key = insert_test_admin(&db, "admin");
-    let mock = mock_vault_with_it_folder();
-    let app = build_test_router_with_vault(db, mock_vault_state(mock.clone()));
     let response = app
         .oneshot(make_auth_request(
-            "DELETE",
-            "/api/addressbook/folders/shared/IT/entries/srv-01",
+            "GET",
+            "/api/addressbook/folders/shared/DBFolder/entries",
             &key,
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    assert!(mock.get_entry("shared", "IT", "srv-01").is_err());
-    assert!(mock.get_entry("shared", "IT", "web-01").is_ok());
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let entries = body.as_array().unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["name"].as_str().unwrap(), "dbentry");
+    assert_eq!(entries[0]["hostname"].as_str().unwrap(), "10.1.1.1");
+
+    // MockVault untouched: its seeded entries survive and nothing was
+    // written for the DB-only folder.
+    assert_eq!(mock.list_entries("shared", "IT").unwrap().len(), 2);
+    assert!(mock.list_entries("shared", "DBFolder").unwrap().is_empty());
+    assert!(mock.get_entry("shared", "IT", "srv-01").is_ok());
 }
 
 #[tokio::test]
-async fn test_ab_list_folders_operator_filters_by_folder_config() {
+async fn test_ab_list_folders_operator_filters_by_entry_groups() {
     let db = test_db();
-    // Operator in group "team-it": sees IT (allowed team-it) but not HR (team-hr).
+    // Operator in group "team-it": sees IT (entry allowed team-it) but not
+    // HR (team-hr). Folder descriptions are set so entry groups apply.
     insert_test_user(&db, "op@test.com", "Op", "operator");
     {
         let conn = db.lock().unwrap();
@@ -814,29 +912,36 @@ async fn test_ab_list_folders_operator_filters_by_folder_config() {
     let user = db::get_user_by_email(&db, "op@test.com").unwrap();
     let session = db::create_auth_session(&db, user.id, 3600).unwrap();
 
-    let mock = Arc::new(
-        crate::testing::MockVault::new()
-            .with_entry(
-                "shared/IT/.config",
-                &serde_json::to_string(&crate::vault::FolderConfig {
-                    allowed_groups: vec!["team-it".into()],
-                    description: String::new(),
-                    inherit_from_parent: false,
-                })
-                .unwrap(),
-            )
-            .with_entry(
-                "shared/HR/.config",
-                &serde_json::to_string(&crate::vault::FolderConfig {
-                    allowed_groups: vec!["team-hr".into()],
-                    description: String::new(),
-                    inherit_from_parent: false,
-                })
-                .unwrap(),
-            ),
-    );
-    let app = build_test_router_with_vault(db, mock_vault_state(mock));
+    let it_id = db::create_ab_folder(&db, "shared", "IT", "restricted", "", false).unwrap();
+    db::create_ab_entry(
+        &db,
+        it_id,
+        "it-01",
+        "",
+        "ssh",
+        "10.0.0.1",
+        Some(22),
+        "",
+        "{}",
+        "team-it",
+    )
+    .unwrap();
+    let hr_id = db::create_ab_folder(&db, "shared", "HR", "restricted", "", false).unwrap();
+    db::create_ab_entry(
+        &db,
+        hr_id,
+        "hr-01",
+        "",
+        "ssh",
+        "10.0.0.2",
+        Some(22),
+        "",
+        "{}",
+        "team-hr",
+    )
+    .unwrap();
 
+    let app = build_test_router(db);
     let mut req = Request::builder()
         .method("GET")
         .uri("/api/addressbook/folders")
@@ -865,13 +970,383 @@ async fn test_ab_list_folders_operator_filters_by_folder_config() {
     );
 }
 
+#[tokio::test]
+async fn test_ab_list_entries_operator_denied() {
+    let db = test_db();
+    // Operator in group "team-other" hitting a folder restricted to
+    // "team-sec" must get 403 on the entries listing.
+    insert_test_user(&db, "op@test.com", "Op", "operator");
+    {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET oidc_groups = 'team-other' WHERE email = 'op@test.com'",
+            [],
+        )
+        .unwrap();
+    }
+    let user = db::get_user_by_email(&db, "op@test.com").unwrap();
+    let session = db::create_auth_session(&db, user.id, 3600).unwrap();
+
+    let folder_id = db::create_ab_folder(&db, "shared", "Sec", "restricted", "", false).unwrap();
+    db::create_ab_entry(
+        &db,
+        folder_id,
+        "sec-01",
+        "",
+        "ssh",
+        "10.0.0.9",
+        Some(22),
+        "",
+        "{}",
+        "team-sec",
+    )
+    .unwrap();
+
+    let app = build_test_router(db);
+    let mut req = Request::builder()
+        .method("GET")
+        .uri("/api/addressbook/folders/shared/Sec/entries")
+        .header("cookie", format!("persea_session={}", session))
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(test_addr()));
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+// ── Address book: vault-credential mode (StorageBackend "vault") ──
+
+#[tokio::test]
+async fn test_ab_create_entry_vault_mode_writes_credentials_to_vault() {
+    let db = test_db();
+    let key = insert_test_admin(&db, "admin");
+    db::create_ab_folder(&db, "shared", "VMode", "", "", false).unwrap();
+    let mock = Arc::new(crate::testing::MockVault::new());
+    let app = build_test_router_with_vault_and_backend(
+        db.clone(),
+        mock_vault_state(mock.clone()),
+        Some("vault"),
+    );
+    let response = app
+        .oneshot(make_json_request(
+            "POST",
+            "/api/addressbook/folders/shared/VMode/entries",
+            &key,
+            json!({"name": "vm-01", "type": "ssh", "hostname": "10.0.0.7", "port": 22, "username": "root", "password": "vmsecret"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    // Metadata in the DB...
+    let folder = db::get_ab_folder(&db, "shared", "VMode").unwrap();
+    let entries = db::list_ab_entries(&db, folder.id).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].name, "vm-01");
+    // ...no DB credential rows (they belong to the vault now)...
+    assert!(db::list_ab_credentials(&db, entries[0].id)
+        .unwrap()
+        .is_empty());
+    // ...and the vault copy carries the credentials.
+    let vault_entry = mock
+        .get_entry("shared", "VMode", "vm-01")
+        .expect("vault copy must exist after create in vault mode");
+    assert_eq!(vault_entry.password.as_deref(), Some("vmsecret"));
+    assert_eq!(vault_entry.hostname.as_deref(), Some("10.0.0.7"));
+}
+
+#[tokio::test]
+async fn test_ab_delete_entry_vault_mode_removes_vault_copy() {
+    let db = test_db();
+    let key = insert_test_admin(&db, "admin");
+    let folder_id = db::create_ab_folder(&db, "shared", "VMode", "", "", false).unwrap();
+    db::create_ab_entry(
+        &db,
+        folder_id,
+        "vm-01",
+        "",
+        "ssh",
+        "10.0.0.7",
+        Some(22),
+        "root",
+        "{}",
+        "",
+    )
+    .unwrap();
+    let mock = Arc::new(crate::testing::MockVault::new().with_entry(
+        "shared/VMode/vm-01",
+        r#"{"type":"ssh","hostname":"10.0.0.7","password":"vmsecret"}"#,
+    ));
+    let app = build_test_router_with_vault_and_backend(
+        db.clone(),
+        mock_vault_state(mock.clone()),
+        Some("vault"),
+    );
+    let response = app
+        .oneshot(make_auth_request(
+            "DELETE",
+            "/api/addressbook/folders/shared/VMode/entries/vm-01",
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+    let folder = db::get_ab_folder(&db, "shared", "VMode").unwrap();
+    assert!(
+        db::list_ab_entries(&db, folder.id).unwrap().is_empty(),
+        "DB entry row must be gone"
+    );
+    assert!(
+        mock.get_entry("shared", "VMode", "vm-01").is_err(),
+        "vault copy must be gone in vault mode"
+    );
+}
+
+#[tokio::test]
+async fn test_ab_delete_folder_reports_subtree_counts() {
+    let db = test_db();
+    let key = insert_test_admin(&db, "admin");
+    // Tree: Clients (1 entry) + Clients/Acme subfolder (2 entries); an
+    // unrelated "Other" folder must survive.
+    let clients_id = db::create_ab_folder(&db, "shared", "Clients", "", "", false).unwrap();
+    db::create_ab_entry(
+        &db,
+        clients_id,
+        "cli-01",
+        "",
+        "ssh",
+        "10.0.0.1",
+        Some(22),
+        "",
+        "{}",
+        "",
+    )
+    .unwrap();
+    let acme_id = db::create_ab_folder(&db, "shared", "Clients/Acme", "", "", false).unwrap();
+    db::create_ab_entry(
+        &db,
+        acme_id,
+        "acme-01",
+        "",
+        "ssh",
+        "10.0.0.2",
+        Some(22),
+        "",
+        "{}",
+        "",
+    )
+    .unwrap();
+    db::create_ab_entry(
+        &db,
+        acme_id,
+        "acme-02",
+        "",
+        "ssh",
+        "10.0.0.3",
+        Some(22),
+        "",
+        "{}",
+        "",
+    )
+    .unwrap();
+    db::create_ab_folder(&db, "shared", "Other", "", "", false).unwrap();
+
+    let app = build_test_router(db.clone());
+    let response = app
+        .oneshot(make_auth_request(
+            "DELETE",
+            "/api/addressbook/folders/shared/Clients",
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(body["ok"].as_bool(), Some(true));
+    assert_eq!(body["subfolders_deleted"].as_u64(), Some(1));
+    assert_eq!(body["entries_deleted"].as_u64(), Some(3));
+
+    assert!(db::get_ab_folder(&db, "shared", "Clients").is_err());
+    assert!(db::get_ab_folder(&db, "shared", "Clients/Acme").is_err());
+    assert!(db::get_ab_folder(&db, "shared", "Other").is_ok());
+}
+
+// ── Address book: connect credential sources (via /api/connect) ──
+
+/// Router for `quick_connect` with a real SessionManager. The observable is
+/// the credential prompt: an entry whose credentials resolved skips the
+/// prompt and creates a session (307 redirect to /client/<id>); one without
+/// credentials renders the prompt form (200).
+fn build_quick_connect_router(
+    db: Db,
+    vault: VaultState,
+    storage_key: Option<String>,
+    backend: &str,
+) -> axum::Router {
+    use axum::routing::get;
+    let mut config = crate::config::Config::default();
+    // Keep the manager's recording dir out of the repo working dir.
+    config.recording_path = Some(std::path::PathBuf::from(std::env::temp_dir()));
+    let manager: super::AppState = Arc::new(crate::session::SessionManager::new(config, None));
+    axum::Router::new()
+        .route("/api/connect", get(super::quick_connect))
+        .with_state(manager)
+        .layer(axum::middleware::from_fn(crate::auth::require_auth))
+        .layer(Extension(db))
+        .layer(Extension(vault))
+        .layer(Extension(OidcEnabled(false)))
+        .layer(Extension(StorageKey(storage_key)))
+        .layer(Extension(StorageBackend(backend.into())))
+}
+
+fn seed_ssh_entry(db: &Db, folder: &str, entry: &str) -> i64 {
+    let folder_id = db::create_ab_folder(db, "shared", folder, "", "", false).unwrap();
+    db::create_ab_entry(
+        db,
+        folder_id,
+        entry,
+        "",
+        "ssh",
+        "127.0.0.1",
+        Some(22),
+        "root",
+        "{}",
+        "",
+    )
+    .unwrap()
+}
+
+/// Control: without any stored credentials the connect flow renders the
+/// credential prompt form (200) instead of attempting a session.
+#[tokio::test]
+async fn test_quick_connect_prompts_when_no_credentials() {
+    let db = test_db();
+    let key = insert_test_admin(&db, "admin");
+    seed_ssh_entry(&db, "QC", "nocred");
+    let app = build_quick_connect_router(db, test_vault_state(), None, "db");
+    let response = app
+        .oneshot(make_auth_request(
+            "GET",
+            "/api/connect?scope=shared&folder=QC&entry=nocred",
+            &key,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        html.contains("<form"),
+        "expected the credential prompt form: {}",
+        &html[..html.len().min(200)]
+    );
+}
+
+#[tokio::test]
+async fn test_quick_connect_reads_credentials_from_db() {
+    if !guacd_reachable() {
+        eprintln!("skipping: no guacd on 127.0.0.1:4822");
+        return;
+    }
+    let db = test_db();
+    let key = insert_test_admin(&db, "admin");
+    let entry_id = seed_ssh_entry(&db, "QC", "dbcred");
+
+    // Encrypted password in the DB credentials table.
+    let enc_key = "a".repeat(64);
+    let encrypted = crate::crypto::encrypt_value(
+        &crate::crypto::EncryptionKey::from_hex(&enc_key).unwrap(),
+        "sup3rs3cret",
+    )
+    .unwrap();
+    db::store_ab_credential(&db, entry_id, "password", &encrypted).unwrap();
+
+    // Vault is CONNECTED and holds a credential-less copy of the entry —
+    // with backend "db" it must not be consulted.
+    let mock = Arc::new(crate::testing::MockVault::new().with_entry(
+        "shared/QC/dbcred",
+        r#"{"type":"ssh","hostname":"127.0.0.1"}"#,
+    ));
+    let app = build_quick_connect_router(db, mock_vault_state(mock), Some(enc_key), "db");
+    let response = app
+        .oneshot(make_auth_request(
+            "GET",
+            "/api/connect?scope=shared&folder=QC&entry=dbcred",
+            &key,
+        ))
+        .await
+        .unwrap();
+    // Password came from the DB → no prompt → session created → redirect to
+    // the client page, not the 200 credential prompt form.
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        location.starts_with("/client/"),
+        "expected redirect to the session: {}",
+        location
+    );
+}
+
+#[tokio::test]
+async fn test_quick_connect_reads_credentials_from_vault() {
+    if !guacd_reachable() {
+        eprintln!("skipping: no guacd on 127.0.0.1:4822");
+        return;
+    }
+    let db = test_db();
+    let key = insert_test_admin(&db, "admin");
+    seed_ssh_entry(&db, "QC", "vaultcred");
+
+    // No DB credentials; the vault copy carries the password.
+    let mock = Arc::new(crate::testing::MockVault::new().with_entry(
+        "shared/QC/vaultcred",
+        r#"{"type":"ssh","hostname":"127.0.0.1","password":"vaultpass"}"#,
+    ));
+    let app = build_quick_connect_router(db, mock_vault_state(mock), None, "vault");
+    let response = app
+        .oneshot(make_auth_request(
+            "GET",
+            "/api/connect?scope=shared&folder=QC&entry=vaultcred",
+            &key,
+        ))
+        .await
+        .unwrap();
+    // Password came from the vault copy → no prompt → session created →
+    // redirect to the client page, not the 200 credential prompt form.
+    assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        location.starts_with("/client/"),
+        "expected redirect to the session: {}",
+        location
+    );
+}
+
 // ── Address book: DB fallback when no Vault backend is connected ──
 
 #[tokio::test]
 async fn test_ab_list_folders_db_fallback() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    db::create_ab_folder(&db, "shared", "DBFolder", "desc").unwrap();
+    db::create_ab_folder(&db, "shared", "DBFolder", "desc", "", false).unwrap();
     let app = build_test_router(db); // empty vault cells — no backend connected
     let response = app
         .oneshot(make_auth_request("GET", "/api/addressbook/folders", &key))
@@ -913,7 +1388,7 @@ async fn test_ab_list_folders_db_fallback_empty() {
 async fn test_ab_list_entries_db_fallback() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "").unwrap();
+    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "", "", false).unwrap();
     db::create_ab_entry(
         &db,
         folder_id,
@@ -953,7 +1428,7 @@ async fn test_ab_list_entries_db_fallback() {
 async fn test_ab_create_entry_db_fallback() {
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
-    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "").unwrap();
+    let folder_id = db::create_ab_folder(&db, "shared", "DBFolder", "", "", false).unwrap();
     let app = build_test_router(db.clone());
     let response = app
         .oneshot(make_json_request(
@@ -987,5 +1462,6 @@ async fn test_ab_create_entry_db_fallback_missing_folder_fails() {
         ))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    // Missing folder is a client error, not a server error.
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }

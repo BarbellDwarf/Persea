@@ -2,8 +2,12 @@
 
 pub mod address_book;
 pub mod admin;
+pub mod groups;
+pub mod imports;
+pub mod providers;
 pub mod reports;
 pub mod sessions;
+pub mod settings;
 pub mod tokens;
 pub mod users;
 pub mod vsphere;
@@ -48,6 +52,32 @@ pub struct DriveConfigured(pub bool);
 /// one Vault backend is configured.
 #[derive(Clone)]
 pub struct CredentialDefaultScope(pub String);
+
+/// Encryption key for DB-stored credentials, resolved from
+/// `[storage].encryption_key` (config) or `PERSEA_STORAGE_KEY` (env) at
+/// startup. `None` when no key is configured (credentials stored unencrypted).
+#[derive(Clone)]
+pub struct StorageKey(pub Option<String>);
+
+/// Names of configured OIDC providers for the login page's SSO buttons
+/// (multi-provider support, wayfinder D29).
+#[derive(Clone)]
+pub struct OidcProviderNames(pub Vec<String>);
+
+/// Effective config-file values for the admin settings page keys, captured
+/// at startup so `GET /api/system/settings` can report real values overlaid
+/// with DB overrides instead of DB-only defaults.
+#[derive(Clone)]
+pub struct SettingsBaseline(pub serde_json::Value);
+
+/// Storage backend for address book credentials, resolved from
+/// `[storage].backend` ("db" default | "vault") at startup. Folders and entry
+/// metadata always live in the DB; this marker decides where the credential
+/// fields (password, private_key, proxmox_token_secret, container_password)
+/// are stored. `"vault"` only takes effect when the scope's Vault backend is
+/// connected.
+#[derive(Clone)]
+pub struct StorageBackend(pub String);
 
 /// One Vault backend connection cell — `None` until connected / while down.
 /// Holds a trait object so tests can inject an in-memory backend

@@ -321,6 +321,9 @@ pub struct EntryInfo {
     pub prompt_credentials: Option<bool>,
     /// Whether the entry has a stored password or private key.
     pub has_credentials: bool,
+    /// Comma-separated group names allowed to use this entry (empty = open).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub allowed_groups: String,
     /// VNC color depth.
     pub color_depth: Option<u8>,
     /// SSH tunnel jump hosts (no credentials exposed).
@@ -483,6 +486,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             prompt_credentials: e.prompt_credentials,
             has_credentials: e.password.as_ref().is_some_and(|p| !p.is_empty())
                 || e.private_key.as_ref().is_some_and(|k| !k.is_empty()),
+            allowed_groups: String::new(), // filled from the DB row by the handler
             color_depth: e.color_depth,
             jump_hosts,
             remote_app: e.remote_app.clone(),
@@ -1665,7 +1669,7 @@ pub fn validate_path(path: &str) -> Result<(), VaultError> {
 
 /// Sanitize an email address for use as a Vault path component.
 /// Replaces `@` with `_at_` and strips any characters not in `[a-zA-Z0-9._-]`.
-fn sanitize_email_key(email: &str) -> String {
+pub(crate) fn sanitize_email_key(email: &str) -> String {
     email
         .replace('@', "_at_")
         .chars()
@@ -1683,7 +1687,7 @@ pub fn is_credential_variable(s: &str) -> bool {
 }
 
 /// Extract the variable name from a `$variable` reference.
-fn variable_name(s: &str) -> Option<&str> {
+pub(crate) fn variable_name(s: &str) -> Option<&str> {
     if is_credential_variable(s) {
         Some(&s[1..])
     } else {

@@ -350,6 +350,8 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             scope       TEXT NOT NULL DEFAULT 'shared',
             name        TEXT NOT NULL,
             description TEXT DEFAULT '',
+            allowed_groups TEXT NOT NULL DEFAULT '',
+            inherit_from_parent INTEGER NOT NULL DEFAULT 0,
             created_at  TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(scope, name)
@@ -383,6 +385,43 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
 
         CREATE INDEX IF NOT EXISTS idx_ab_entries_folder ON address_book_entries(folder_id);
         CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);",
+    )?;
+
+    // Folder-level ACLs (wayfinder ticket 027): columns added after the
+    // original address book schema. ALTER is idempotent-guarded — existing
+    // databases get the columns, fresh ones already have them.
+    for ddl in [
+        "ALTER TABLE address_book_folders ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE address_book_folders ADD COLUMN inherit_from_parent INTEGER NOT NULL DEFAULT 0",
+    ] {
+        if let Err(e) = conn.execute(ddl, []) {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+
+    // Migration: local groups + provider-group mappings (ticket #029).
+    // Local groups are admin-defined named groups that folders/connections
+    // can grant access to. `group_mappings` links an auth-provider group name
+    // (from OIDC/LDAP claims, see list_known_groups) to a local group; one
+    // provider group maps to at most one local group (UNIQUE). The FK cascade
+    // is declared for postgres/mysql parity — SQLite runs without
+    // `PRAGMA foreign_keys`, so delete_local_group removes mappings explicitly.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS local_groups (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL UNIQUE,
+            description TEXT NOT NULL DEFAULT '',
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS group_mappings (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            group_id       INTEGER NOT NULL REFERENCES local_groups(id) ON DELETE CASCADE,
+            provider_group TEXT NOT NULL UNIQUE,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
     )?;
 
     let db = Arc::new(Mutex::new(conn));
@@ -961,6 +1000,32 @@ pub fn upsert_seen_groups(db: &Db, groups: &[String]) -> rusqlite::Result<()> {
     }
     tx.commit()?;
     Ok(())
+}
+
+/// Auto-provision `local_groups` for the given provider groups (wayfinder fog
+/// item: "map OIDC groups to local groups without manual mapping"). Folder
+/// ACLs reference local group names, so a provider group that shows up in
+/// login claims becomes usable in the connections page immediately. Groups
+/// already created (or mapped) are left untouched.
+pub fn ensure_local_groups(db: &Db, groups: &[String]) -> rusqlite::Result<usize> {
+    if groups.is_empty() {
+        return Ok(0);
+    }
+    let mut conn = db.lock().unwrap();
+    let mut created = 0usize;
+    {
+        let mut stmt = conn.prepare(
+            "INSERT OR IGNORE INTO local_groups (name, description)
+             VALUES (?1, 'Auto-provisioned from auth provider groups')",
+        )?;
+        for g in groups {
+            let trimmed = g.trim();
+            if !trimmed.is_empty() && !trimmed.contains(',') {
+                created += stmt.execute(params![trimmed])?;
+            }
+        }
+    }
+    Ok(created)
 }
 
 /// List all known OIDC groups — union of configured role-mappings and groups
@@ -1676,7 +1741,7 @@ pub fn session_summary(db: &Db) -> rusqlite::Result<serde_json::Value> {
         "SELECT COUNT(*) AS total_sessions,
                 COALESCE(SUM(duration_secs), 0) AS total_secs,
                 COUNT(DISTINCT created_by) AS unique_users,
-                SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active_now
+                COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS active_now
          FROM session_history",
     )?;
     stmt.query_row([], |row| {
@@ -2029,6 +2094,10 @@ pub struct AbFolder {
     pub scope: String,
     pub name: String,
     pub description: String,
+    /// Comma-separated group names allowed to use this folder (empty = open).
+    pub allowed_groups: String,
+    /// Whether subfolders inherit this folder's allowed_groups.
+    pub inherit_from_parent: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -2065,13 +2134,36 @@ pub fn create_ab_folder(
     scope: &str,
     name: &str,
     description: &str,
+    allowed_groups: &str,
+    inherit_from_parent: bool,
 ) -> rusqlite::Result<i64> {
     let conn = db.lock().unwrap();
     conn.execute(
-        "INSERT INTO address_book_folders (scope, name, description) VALUES (?1, ?2, ?3)",
-        params![scope, name, description],
+        "INSERT INTO address_book_folders (scope, name, description, allowed_groups, inherit_from_parent)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![scope, name, description, allowed_groups, inherit_from_parent as i64],
     )?;
     Ok(conn.last_insert_rowid())
+}
+
+/// Update folder metadata (description / ACLs). Returns false if the folder
+/// does not exist.
+pub fn update_ab_folder(
+    db: &Db,
+    scope: &str,
+    name: &str,
+    description: &str,
+    allowed_groups: &str,
+    inherit_from_parent: bool,
+) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE address_book_folders
+         SET description = ?3, allowed_groups = ?4, inherit_from_parent = ?5, updated_at = datetime('now')
+         WHERE scope = ?1 AND name = ?2",
+        params![scope, name, description, allowed_groups, inherit_from_parent as i64],
+    )?;
+    Ok(changed > 0)
 }
 
 /// List all address book folders, optionally filtered by scope.
@@ -2079,12 +2171,12 @@ pub fn list_ab_folders(db: &Db, scope: Option<&str>) -> rusqlite::Result<Vec<AbF
     let conn = db.lock().unwrap();
     let (sql, params_vec): (&str, Vec<Box<dyn rusqlite::types::ToSql>>) = match scope {
         Some(s) => (
-            "SELECT id, scope, name, description, created_at, updated_at
+            "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at
              FROM address_book_folders WHERE scope = ?1 ORDER BY name",
             vec![Box::new(s.to_string())],
         ),
         None => (
-            "SELECT id, scope, name, description, created_at, updated_at
+            "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at
              FROM address_book_folders ORDER BY scope, name",
             vec![],
         ),
@@ -2096,8 +2188,10 @@ pub fn list_ab_folders(db: &Db, scope: Option<&str>) -> rusqlite::Result<Vec<AbF
             scope: row.get(1)?,
             name: row.get(2)?,
             description: row.get(3)?,
-            created_at: row.get(4)?,
-            updated_at: row.get(5)?,
+            allowed_groups: row.get(4)?,
+            inherit_from_parent: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
         })
     })?;
     rows.collect()
@@ -2107,7 +2201,7 @@ pub fn list_ab_folders(db: &Db, scope: Option<&str>) -> rusqlite::Result<Vec<AbF
 pub fn get_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<AbFolder> {
     let conn = db.lock().unwrap();
     conn.query_row(
-        "SELECT id, scope, name, description, created_at, updated_at
+        "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at
          FROM address_book_folders WHERE scope = ?1 AND name = ?2",
         params![scope, name],
         |row| {
@@ -2116,8 +2210,10 @@ pub fn get_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<AbFol
                 scope: row.get(1)?,
                 name: row.get(2)?,
                 description: row.get(3)?,
-                created_at: row.get(4)?,
-                updated_at: row.get(5)?,
+                allowed_groups: row.get(4)?,
+                inherit_from_parent: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
             })
         },
     )
@@ -2125,11 +2221,34 @@ pub fn get_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<AbFol
 
 /// Delete a folder and cascade-delete its entries/credentials.
 pub fn delete_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<bool> {
-    let conn = db.lock().unwrap();
-    let changed = conn.execute(
+    let mut conn = db.lock().unwrap();
+    // SQLite runs without PRAGMA foreign_keys, so the FK cascade never
+    // fires — delete entries + credentials explicitly, in one transaction.
+    let tx = conn.transaction()?;
+    let entry_ids: Vec<i64> = {
+        let mut stmt = tx.prepare(
+            "SELECT id FROM address_book_entries WHERE folder_id IN
+             (SELECT id FROM address_book_folders WHERE scope = ?1 AND name = ?2)",
+        )?;
+        let rows = stmt.query_map(params![scope, name], |r| r.get::<_, i64>(0))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    for id in &entry_ids {
+        tx.execute(
+            "DELETE FROM address_book_credentials WHERE entry_id = ?1",
+            params![id],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM address_book_entries WHERE folder_id IN
+         (SELECT id FROM address_book_folders WHERE scope = ?1 AND name = ?2)",
+        params![scope, name],
+    )?;
+    let changed = tx.execute(
         "DELETE FROM address_book_folders WHERE scope = ?1 AND name = ?2",
         params![scope, name],
     )?;
+    tx.commit()?;
     Ok(changed > 0)
 }
 
@@ -2247,11 +2366,17 @@ pub fn update_ab_entry(
 
 /// Delete an entry and cascade-delete its credentials.
 pub fn delete_ab_entry(db: &Db, entry_id: i64) -> rusqlite::Result<bool> {
-    let conn = db.lock().unwrap();
-    let changed = conn.execute(
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "DELETE FROM address_book_credentials WHERE entry_id = ?1",
+        params![entry_id],
+    )?;
+    let changed = tx.execute(
         "DELETE FROM address_book_entries WHERE id = ?1",
         params![entry_id],
     )?;
+    tx.commit()?;
     Ok(changed > 0)
 }
 
@@ -2764,6 +2889,22 @@ mod tests {
     }
 
     #[test]
+    fn ensure_local_groups_provisions_once_and_skips_invalid() {
+        let db = test_db();
+        let created = ensure_local_groups(&db, &["ops".into(), "platform".into()]).unwrap();
+        assert_eq!(created, 2);
+        // Second call is a no-op.
+        let created = ensure_local_groups(&db, &["ops".into()]).unwrap();
+        assert_eq!(created, 0);
+        // Commas are rejected (would corrupt the folder ACL column format).
+        let created = ensure_local_groups(&db, &["a,b".into()]).unwrap();
+        assert_eq!(created, 0);
+        // The groups are visible to the group API.
+        let rows = list_local_groups(&db).unwrap();
+        assert!(rows.iter().any(|g| g.name == "ops"));
+    }
+
+    #[test]
     fn parse_expires_at_accepts_expected_formats() {
         assert!(parse_expires_at("2030-01-01T00:00:00Z").is_some()); // RFC 3339
         assert!(parse_expires_at("2030-01-01 00:00:00").is_some()); // SQLite datetime
@@ -2801,4 +2942,245 @@ mod tests {
         let k = add_admin(&db, "none", None, None).unwrap();
         assert!(validate_api_key(&db, &k, None).is_ok());
     }
+}
+
+// ── Local groups + provider-group mappings (ticket #029) ────────────────────
+// This block was appended at the end of the file because parallel workstreams
+// may be editing db.rs.
+//
+// Local groups are admin-defined named groups that folders/connections can
+// grant access to. Auth-provider groups (OIDC/LDAP claim groups, see
+// `list_known_groups`) are mapped onto them via `group_mappings`; one
+// provider group maps to at most one local group.
+//
+// NOTE: group names remain free-form strings — folder `allowed_groups`
+// reference a local group by its *name*, not its id. Renaming a local group
+// does not rewrite folder references, and deleting one leaves folder
+// `allowed_groups` untouched (anyone whose claims carry that name keeps
+// access).
+
+/// A local group with usage counts.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct LocalGroup {
+    pub id: i64,
+    pub name: String,
+    pub description: String,
+    pub created_at: String,
+    /// Number of auth-provider groups mapped to this local group.
+    pub provider_group_count: i64,
+    /// Number of address-book folders whose entries list this group name in
+    /// `allowed_groups` (vault-side folder configs are not scanned).
+    pub folder_count: i64,
+}
+
+/// A mapping from an auth-provider group name to a local group.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProviderGroupMapping {
+    pub id: i64,
+    pub group_id: i64,
+    pub provider_group: String,
+    pub created_at: String,
+}
+
+fn local_group_row(row: &rusqlite::Row) -> rusqlite::Result<LocalGroup> {
+    Ok(LocalGroup {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        created_at: row.get(3)?,
+        provider_group_count: row.get(4)?,
+        folder_count: row.get(5)?,
+    })
+}
+
+/// COUNTs computed for every local group listing. `folder_count` counts
+/// address-book folders whose entries carry the group name in their
+/// comma-separated `allowed_groups` (INSTR is case-sensitive, matching the
+/// exact-match semantics of `resolve_folder_access`).
+const LOCAL_GROUP_COLUMNS: &str = "lg.id, lg.name, lg.description, lg.created_at, \
+     (SELECT COUNT(*) FROM group_mappings gm WHERE gm.group_id = lg.id), \
+     (SELECT COUNT(DISTINCT e.folder_id) FROM address_book_entries e \
+       WHERE INSTR(',' || e.allowed_groups || ',', ',' || lg.name || ',') > 0)";
+
+/// List all local groups with usage counts, ordered by name.
+pub fn list_local_groups(db: &Db) -> rusqlite::Result<Vec<LocalGroup>> {
+    let conn = db.lock().unwrap();
+    let sql = format!(
+        "SELECT {} FROM local_groups lg ORDER BY lg.name COLLATE NOCASE",
+        LOCAL_GROUP_COLUMNS
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], local_group_row)?;
+    rows.collect()
+}
+
+/// Fetch a single local group by id (with usage counts), or `None`.
+pub fn get_local_group(db: &Db, id: i64) -> rusqlite::Result<Option<LocalGroup>> {
+    let conn = db.lock().unwrap();
+    let sql = format!(
+        "SELECT {} FROM local_groups lg WHERE lg.id = ?1",
+        LOCAL_GROUP_COLUMNS
+    );
+    match conn.query_row(&sql, params![id], local_group_row) {
+        Ok(g) => Ok(Some(g)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Create a local group. Returns the new group (with usage counts).
+/// The UNIQUE name constraint is enforced by the schema; callers surface
+/// UNIQUE violations as 409 conflicts.
+pub fn create_local_group(db: &Db, name: &str, description: &str) -> rusqlite::Result<LocalGroup> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO local_groups (name, description) VALUES (?1, ?2)",
+        params![name, description],
+    )?;
+    let id = conn.last_insert_rowid();
+    let sql = format!(
+        "SELECT {} FROM local_groups lg WHERE lg.id = ?1",
+        LOCAL_GROUP_COLUMNS
+    );
+    conn.query_row(&sql, params![id], local_group_row)
+}
+
+/// Update a local group (rename / re-describe). `None` fields keep their
+/// current value. Returns the updated group (with usage counts), or `None`
+/// if the id is unknown.
+pub fn update_local_group(
+    db: &Db,
+    id: i64,
+    name: Option<&str>,
+    description: Option<&str>,
+) -> rusqlite::Result<Option<LocalGroup>> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE local_groups
+         SET name = COALESCE(?2, name), description = COALESCE(?3, description)
+         WHERE id = ?1",
+        params![id, name, description],
+    )?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    let sql = format!(
+        "SELECT {} FROM local_groups lg WHERE lg.id = ?1",
+        LOCAL_GROUP_COLUMNS
+    );
+    conn.query_row(&sql, params![id], local_group_row).map(Some)
+}
+
+/// Delete a local group and all of its provider-group mappings. Returns
+/// `Some(mappings_removed)` on success, `None` if the group is unknown.
+/// Folder `allowed_groups` referencing the group name are NOT touched (group
+/// names are free-form strings; see the module note above).
+pub fn delete_local_group(db: &Db, id: i64) -> rusqlite::Result<Option<usize>> {
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    let mappings: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM group_mappings WHERE group_id = ?1",
+        params![id],
+        |row| row.get(0),
+    )?;
+    let changed = tx.execute("DELETE FROM local_groups WHERE id = ?1", params![id])?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    // SQLite runs without `PRAGMA foreign_keys`, so the ON DELETE CASCADE
+    // declared on group_mappings.group_id never fires — delete explicitly.
+    tx.execute(
+        "DELETE FROM group_mappings WHERE group_id = ?1",
+        params![id],
+    )?;
+    tx.commit()?;
+    Ok(Some(mappings as usize))
+}
+
+/// List provider-group mappings, optionally filtered to one local group.
+pub fn list_provider_group_mappings(
+    db: &Db,
+    group_id: Option<i64>,
+) -> rusqlite::Result<Vec<ProviderGroupMapping>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = match group_id {
+        Some(_) => conn.prepare(
+            "SELECT id, group_id, provider_group, created_at FROM group_mappings
+             WHERE group_id = ?1 ORDER BY provider_group COLLATE NOCASE",
+        )?,
+        None => conn.prepare(
+            "SELECT id, group_id, provider_group, created_at FROM group_mappings
+             ORDER BY group_id, provider_group COLLATE NOCASE",
+        )?,
+    };
+    let mapper = |row: &rusqlite::Row| {
+        Ok(ProviderGroupMapping {
+            id: row.get(0)?,
+            group_id: row.get(1)?,
+            provider_group: row.get(2)?,
+            created_at: row.get(3)?,
+        })
+    };
+    let rows = match group_id {
+        Some(gid) => stmt.query_map(params![gid], mapper)?,
+        None => stmt.query_map([], mapper)?,
+    };
+    rows.collect()
+}
+
+/// Map an auth-provider group to a local group. Any existing mapping for the
+/// same provider group is replaced — one provider group maps to one local
+/// group. The caller must verify the local group exists first
+/// (`get_local_group`); SQLite does not enforce the FK.
+pub fn create_provider_group_mapping(
+    db: &Db,
+    group_id: i64,
+    provider_group: &str,
+) -> rusqlite::Result<ProviderGroupMapping> {
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    // Verify the group still exists inside the same transaction (the API's
+    // pre-check can race a concurrent delete, which would leave a dangling
+    // mapping on backends without FK enforcement).
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM local_groups WHERE id = ?1)",
+        params![group_id],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    tx.execute(
+        "DELETE FROM group_mappings WHERE provider_group = ?1",
+        params![provider_group],
+    )?;
+    tx.execute(
+        "INSERT INTO group_mappings (group_id, provider_group) VALUES (?1, ?2)",
+        params![group_id, provider_group],
+    )?;
+    let id = tx.last_insert_rowid();
+    let mapping = tx.query_row(
+        "SELECT id, group_id, provider_group, created_at FROM group_mappings WHERE id = ?1",
+        params![id],
+        |row| {
+            Ok(ProviderGroupMapping {
+                id: row.get(0)?,
+                group_id: row.get(1)?,
+                provider_group: row.get(2)?,
+                created_at: row.get(3)?,
+            })
+        },
+    )?;
+    tx.commit()?;
+    Ok(mapping)
+}
+
+/// Remove a provider-group mapping by id.
+pub fn delete_provider_group_mapping(db: &Db, mapping_id: i64) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "DELETE FROM group_mappings WHERE id = ?1",
+        params![mapping_id],
+    )?;
+    Ok(changed > 0)
 }

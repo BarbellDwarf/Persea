@@ -1,7 +1,7 @@
 # Multi-Database Backend Support for persea
 
 **Date**: 2026-08-01  
-**Status**: **Shipped.** Multi-backend database support via SQLx is implemented: the address book (`[storage]`), session history, and audit data can live in MySQL or PostgreSQL (or SQLite via SQLx) by setting `db_url` — see `src/db_pool.rs`, the per-backend DDL in `migrations/{mysql,postgres,sqlite}/`, and [Configuration](../configuration.md#multi-database-backend). The `[storage] backend` key (`"db"` default or `"vault"`) selects where connection credentials live; DB credentials are AES-256-GCM encrypted. This document is kept as a historical record of the original design research.
+**Status**: **Shipped.** Multi-backend database support via SQLx is implemented: the SQLx pool and per-backend DDL (`migrations/{mysql,postgres,sqlite}/`) ship and the pool is initialized at startup, but all runtime data (session history, audit, address book) still routes through the rusqlite admin DB (`src/db.rs`). Setting `db_url` does not yet redirect data to MySQL/PostgreSQL. The `[storage] backend` key (`"db"` default or `"vault"`) selects where connection credentials live; DB credentials are AES-256-GCM encrypted. This document is kept as a historical record of the original design research.
 
 ## Current State
 

@@ -49,6 +49,33 @@ pub struct OidcState {
     pub pending: PendingFlows,
 }
 
+/// One named OIDC provider (DB-configured via the admin auth page, or the
+/// `[oidc]` config section) with its own client and pending-flow state.
+pub struct OidcProvider {
+    pub name: String,
+    pub state: OidcState,
+}
+
+/// All configured OIDC providers, for multi-provider SSO (wayfinder ticket
+/// D29): the login page renders one button per provider and the state cookie
+/// carries the provider name so the callback resolves the right client.
+pub struct OidcRegistry {
+    pub providers: Vec<OidcProvider>,
+}
+
+impl OidcRegistry {
+    /// Resolve a provider by name. An absent name falls back to the first
+    /// configured provider; an UNKNOWN name returns `None` so a stale or
+    /// typo'd `?provider=` never silently signs the user into a different
+    /// IdP than the one they clicked.
+    pub fn get(&self, name: Option<&str>) -> Option<&OidcProvider> {
+        match name {
+            Some(n) => self.providers.iter().find(|p| p.name == n),
+            None => self.providers.first(),
+        }
+    }
+}
+
 /// Initialize OIDC client by discovering provider metadata.
 pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<OidcState, String> {
     let mut builder = openidconnect::reqwest::ClientBuilder::new()
@@ -113,14 +140,23 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
 #[derive(Deserialize)]
 pub struct LoginParams {
     pub next: Option<String>,
+    /// OIDC provider name (multi-provider SSO). Defaults to the first
+    /// configured provider when absent.
+    pub provider: Option<String>,
 }
 
 /// GET /auth/login — redirect user to OIDC provider.
 pub async fn login(
-    State(oidc): State<OidcState>,
+    State(registry): State<std::sync::Arc<OidcRegistry>>,
     Query(params): Query<LoginParams>,
     headers: axum::http::HeaderMap,
 ) -> Response {
+    let Some(provider) = registry.get(params.provider.as_deref()) else {
+        tracing::error!("OIDC login requested but no OIDC provider is configured");
+        return axum::response::Redirect::to("/?sso_error=1").into_response();
+    };
+    let oidc = &provider.state;
+
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let mut auth_request = oidc
@@ -175,8 +211,17 @@ pub async fn login(
         "persea_oidc_state={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
         cookie_value
     );
+    // The provider name lives in its own cookie (names may contain colons,
+    // which would be ambiguous inside the state cookie).
+    let provider_cookie = format!(
+        "persea_oidc_provider={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
+        provider.name
+    );
 
-    let mut cookies = vec![(header::SET_COOKIE, state_cookie)];
+    let mut cookies = vec![
+        (header::SET_COOKIE, state_cookie),
+        (header::SET_COOKIE, provider_cookie),
+    ];
 
     // Store post-login redirect URL in a cookie if provided and safe
     if let Some(ref next) = params.next {
@@ -206,7 +251,7 @@ pub struct CallbackParams {
 
 /// GET /auth/callback — exchange code for tokens, create session.
 pub async fn callback(
-    State(oidc): State<OidcState>,
+    State(registry): State<std::sync::Arc<OidcRegistry>>,
     Extension(database): Extension<Db>,
     Extension(totp_enforcement): Extension<TotpEnforcement>,
     headers: axum::http::HeaderMap,
@@ -238,13 +283,28 @@ pub async fn callback(
         }
     };
 
+    // Resolve which provider this flow belongs to from the provider cookie
+    // (set alongside the state cookie at login). Cookies from before
+    // multi-provider support have no provider cookie and fall back to the
+    // first configured provider.
+    let provider = registry.get(extract_cookie(&headers, "persea_oidc_provider").as_deref());
+    let Some(oidc) = provider.map(|p| &p.state) else {
+        tracing::warn!("OIDC callback: no provider configured");
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": "no OIDC provider configured"})),
+        )
+            .into_response();
+    };
+
     // Verify the state cookie matches the state query parameter (binds flow to browser)
     // Cookie format is "state_key:fingerprint" — verify both
     let state_cookie = extract_cookie(&headers, "persea_oidc_state");
+    // Format: `state_key:fingerprint` (provider name lives in its own
+    // cookie). Old 2-part cookies parse identically.
     let cookie_valid = match state_cookie.as_deref() {
-        Some(cookie_val) => {
-            if let Some((cookie_state, cookie_fingerprint)) = cookie_val.split_once(':') {
-                // Verify state matches
+        Some(cookie_val) => match cookie_val.split_once(':') {
+            Some((cookie_state, cookie_fingerprint)) => {
                 if cookie_state != state {
                     false
                 } else {
@@ -266,11 +326,9 @@ pub async fn callback(
                     let current_fp = format!("{:x}", h.finish());
                     cookie_fingerprint == current_fp
                 }
-            } else {
-                // Old format without fingerprint — reject
-                false
             }
-        }
+            None => false,
+        },
         None => false,
     };
     if !cookie_valid {
@@ -370,6 +428,15 @@ pub async fn callback(
         let _ = tokio::task::spawn_blocking(move || {
             if let Err(e) = db::upsert_seen_groups(&db_for_seen, &groups_for_seen) {
                 tracing::warn!(error = %e, "failed to persist seen OIDC groups");
+            }
+            // Auto-provision local groups from the claims so folder ACLs
+            // referencing provider groups work without manual mapping.
+            match db::ensure_local_groups(&db_for_seen, &groups_for_seen) {
+                Ok(created) if created > 0 => {
+                    tracing::info!(created, "auto-provisioned local groups from OIDC claims");
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "failed to auto-provision local groups"),
             }
         })
         .await;

@@ -40,8 +40,13 @@ WORKDIR /build
 # Pin to main HEAD (de97609, 2026-07-28) — the base the patch set is built
 # against. The 1.6.0 tag predates the display-layer refactor the H.264 patch
 # needs; staging/1.6.1 lacks the clipboard-recording API the SPICE patch uses.
-RUN git clone --depth 1 --branch main https://github.com/apache/guacamole-server.git \
-    && cd guacamole-server && git checkout de97609007c088b5e6afd827eff5e9076013a247
+# Fetch the exact commit rather than cloning main: a shallow clone of main
+# cannot check out a pin once upstream moves past it.
+RUN git init guacamole-server \
+    && cd guacamole-server \
+    && git remote add origin https://github.com/apache/guacamole-server.git \
+    && git fetch --depth 1 origin de97609007c088b5e6afd827eff5e9076013a247 \
+    && git checkout FETCH_HEAD
 
 # Apply patches for FreeRDP 3.x / Debian 13 compatibility
 COPY patches/ /build/patches/
@@ -55,6 +60,9 @@ RUN for patch in /build/patches/*.patch; do \
 RUN autoreconf -fi
 
 WORKDIR /build/guacd-build
+# Same memory-safety cap as the rust stage: `make -j$(nproc)` ICEs gcc under
+# memory pressure on wide machines.
+ARG GUACD_JOBS=4
 RUN /build/guacamole-server/configure \
         --prefix=/opt/persea \
         --with-ssh \
@@ -67,7 +75,7 @@ RUN /build/guacamole-server/configure \
         --disable-guaclog \
         --disable-guacclip \
         --disable-static \
-    && make -j"$(nproc)" \
+    && make -j"${GUACD_JOBS}" \
     && make install \
     && mkdir -p /opt/persea/lib/freerdp3 \
     && cp /opt/persea/lib/libguac*.so* /opt/persea/lib/freerdp3/ \
@@ -76,11 +84,30 @@ RUN /build/guacamole-server/configure \
 # ---------------------------------------------------------------------------
 # Stage 2: Build persea
 # ---------------------------------------------------------------------------
-FROM rust:1.96.1-bookworm AS rust-builder
+FROM rust:1.97.1-bookworm AS rust-builder
+
+# Cap parallel codegen: 16-way `cargo build --release` routinely SIGSEGVs
+# rustc/cc under memory pressure (seen on constrained runners and nested
+# container builds). 4 jobs is a safe default; override with
+# --build-arg CARGO_JOBS=N for machines with more headroom.
+ARG CARGO_JOBS=4
+ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
+
+# Compile all dependencies once with a dummy main so the dependency layer is
+# only rebuilt when Cargo.toml/Cargo.lock change, not on every source edit.
+# The registry/git/target cache mounts persist between builds (exported to
+# GHCR via the workflow's type=gha cache), so the second build below is
+# incremental: only crates touched by the new sources recompile.
+RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    cargo build --release
+
 COPY src/ src/
 COPY templates/ templates/
 COPY migrations/ migrations/
@@ -89,12 +116,24 @@ COPY static/ static/
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
     cargo build --release
+
+# The target dir lives inside a cache mount, which is ephemeral and not part
+# of the image filesystem — copy the binary out so the runtime stage can
+# COPY --from it.
+RUN --mount=type=cache,target=/build/target \
+    cp /build/target/release/persea /build/persea
 
 # ---------------------------------------------------------------------------
 # Stage 3: Runtime image
 # ---------------------------------------------------------------------------
 FROM debian:trixie-slim AS runtime
+
+# Beta images (built by the beta workflow with --build-arg PERSEA_BETA=1)
+# print the running version at startup; production builds leave this unset.
+ARG PERSEA_BETA="0"
+ENV PERSEA_BETA=${PERSEA_BETA}
 
 # Runtime libraries for guacd
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -118,7 +157,7 @@ COPY --from=guacd-builder /opt/persea/sbin/ /opt/persea/sbin/
 COPY --from=guacd-builder /opt/persea/lib/ /opt/persea/lib/
 
 # Install persea binary
-COPY --from=rust-builder /build/target/release/persea /opt/persea/bin/persea
+COPY --from=rust-builder /build/persea /opt/persea/bin/persea
 
 # Install static web assets
 COPY static/ /opt/persea/static/
@@ -227,6 +266,12 @@ if [ ! -f "$DB_PATH" ]; then
     echo ""
     echo "==> SAVE THE API KEY ABOVE — it is only shown once! <=="
     echo ""
+fi
+
+# Print the running version on beta images (PERSEA_BETA=1 set at build time
+# by the beta workflow); production images skip this.
+if [ "$PERSEA_BETA" = "1" ]; then
+    echo "persea version: $(/opt/persea/bin/persea --version 2>&1)"
 fi
 
 # Start guacd in background

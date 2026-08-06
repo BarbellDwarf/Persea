@@ -18,6 +18,7 @@ mod browser;
 mod config;
 mod crypto;
 mod csrf;
+mod csv_import;
 mod db;
 mod db_migrate;
 mod db_pool;
@@ -31,11 +32,13 @@ mod migrate;
 mod oidc;
 mod password;
 mod protocol;
+mod providers_db;
 mod pve;
 mod rbac;
 mod recording;
 mod role;
 mod session;
+mod settings_merge;
 mod templates;
 #[cfg(test)]
 mod testing;
@@ -47,8 +50,9 @@ mod vsphere;
 mod websocket;
 
 use crate::api::{
-    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, ThemeData,
-    VaultBackends, VaultCell, VaultConfigured, VaultState,
+    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, OidcProviderNames,
+    SettingsBaseline, SiteTitle, StorageBackend, StorageKey, ThemeData, VaultBackends, VaultCell,
+    VaultConfigured, VaultState,
 };
 use crate::auth_chain::AuthChain;
 use crate::auth_provider::AuthProvider;
@@ -71,7 +75,7 @@ use tower_http::services::ServeDir;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "persea", about = "Lightweight Guacamole SSH proxy")]
+#[command(name = "persea", version, about = "Lightweight Guacamole SSH proxy")]
 struct Cli {
     /// Path to TOML config file
     #[arg(short, long)]
@@ -275,7 +279,7 @@ async fn main() {
     let cli = Cli::parse();
 
     // Load config
-    let config = Config::load(cli.config.as_deref());
+    let mut config = Config::load(cli.config.as_deref());
 
     // Validate config values (fatal errors exit, warnings are printed)
     match config.validate() {
@@ -292,6 +296,9 @@ async fn main() {
 
     // Open database
     let database = db::init_db(&config.db_path).expect("Failed to open database");
+    // DB-configured auth providers (wayfinder ticket 025) — schema + rows
+    // live in the app database; config-file providers still work alongside.
+    crate::providers_db::migrate(&database).expect("Failed to migrate auth_providers table");
 
     // Resolve log format: CLI flag wins, then RUST_LOG_FORMAT=json env var.
     let log_format = match cli.log_format {
@@ -302,8 +309,74 @@ async fn main() {
         },
     };
 
+    // Capture the pristine config-file values for the settings page BEFORE
+    // the DB overlay, so GET /api/system/settings reports the real config
+    // baseline under the DB overrides.
+
+    // Capture the pristine config-file values for the settings page BEFORE
+    // the DB overlay, so GET /api/system/settings reports the real config
+    // baseline under the DB overrides.
+    let settings_baseline = SettingsBaseline(serde_json::json!({
+        "listen_addr": config.listen_addr,
+        "guacd_addr": config.guacd_addr,
+        "tls_cert_path": config.tls.as_ref().and_then(|t| t.cert_path.as_ref()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        "tls_key_path": config.tls.as_ref().and_then(|t| t.key_path.as_ref()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        "session_max_duration_secs": config.session_max_duration_secs,
+        "max_concurrent_sessions": config.max_sessions,
+        "session_history_retention_days": config.session_history_retention_days,
+        "enable_vdi": config.vdi.as_ref().map(|v| v.enabled).unwrap_or(false),
+        "vault_enabled": config.vault.is_some(),
+        "db_only_mode": config.storage.as_ref().map(|st| st.backend != "vault").unwrap_or(true),
+    }));
+
     match cli.command {
-        None | Some(Command::Serve) => run_server(config, database, log_format).await,
+        None | Some(Command::Serve) => {
+            // Overlay DB-persisted settings (admin settings page) onto the
+            // config-file values before the server starts. The settings API
+            // (wayfinder ticket 024) stores these in `system_settings`; the
+            // merge maps the fields that have config equivalents.
+            if let Ok(overrides) = crate::settings_merge::load_db_settings(&database) {
+                crate::settings_merge::apply_db_settings(&mut config, &overrides);
+                // DB values bypass the earlier validate() pass — re-run it so
+                // an invalid saved value fails fast with a clear message.
+                match config.validate() {
+                    Ok(warnings) => {
+                        for w in warnings {
+                            eprintln!("WARNING: {}", w);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            // DB-first storage (ticket 026): credentials are encrypted at
+            // rest in the DB — without a key they are stored/returned in
+            // plaintext. Warn loudly so operators notice.
+            if config
+                .storage
+                .as_ref()
+                .map(|st| st.backend != "vault")
+                .unwrap_or(true)
+                && config.storage_encryption_key().is_none()
+            {
+                eprintln!(
+                    "WARNING: no [storage].encryption_key / PERSEA_STORAGE_KEY set —                      connection credentials stored in the DB will NOT be encrypted.                      Generate one with: openssl rand -hex 32"
+                );
+            }
+            // The credential encryption key is used in every DB-credential
+            // request path; a malformed value would panic at runtime.
+            if let Some(ref k) = config.storage_encryption_key() {
+                if crate::crypto::EncryptionKey::from_hex(k).is_err() {
+                    eprintln!(
+                        "Error: [storage].encryption_key / PERSEA_STORAGE_KEY must be a 64-char hex string"
+                    );
+                    std::process::exit(1);
+                }
+            }
+            run_server(config, database, log_format, settings_baseline).await
+        }
         Some(Command::CreateUser {
             email,
             name,
@@ -342,8 +415,16 @@ async fn main() {
             allowed_groups,
             dry_run,
         }) => {
-            import::cmd_import_guacamole(&config, &file, &folder, &scope, &allowed_groups, dry_run)
-                .await;
+            import::cmd_import_guacamole(
+                &config,
+                &database,
+                &file,
+                &folder,
+                &scope,
+                &allowed_groups,
+                dry_run,
+            )
+            .await;
         }
         Some(Command::DbMigrateFromVault {
             scope,
@@ -757,7 +838,12 @@ async fn connect_vault_backend(
     }
 }
 
-async fn run_server(config: Config, database: Db, log_format: LogFormat) {
+async fn run_server(
+    config: Config,
+    database: Db,
+    log_format: LogFormat,
+    settings_baseline: SettingsBaseline,
+) {
     // Initialize logging. RUST_LOG_FORMAT=json (or --log-format json) selects
     // JSON lines for structured log ingestion; plain fmt is the default.
     let subscriber = tracing_subscriber::fmt().with_env_filter(
@@ -773,22 +859,69 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     let static_path = config.static_path.clone();
     let tls_config = config.tls.clone();
 
-    // Initialize OIDC if configured
-    let oidc_state = if let Some(ref oidc_config) = config.oidc {
-        match oidc::init_oidc(oidc_config, config.auth_session_ttl_secs).await {
-            Ok(state) => {
-                tracing::info!("OIDC configured with issuer: {}", oidc_config.issuer_url);
-                Some(state)
-            }
-            Err(e) => {
-                tracing::error!("Failed to initialize OIDC: {}", e);
-                tracing::warn!("Continuing without OIDC — only API key auth will work");
-                None
+    // Initialize OIDC providers. Every enabled DB-configured OIDC provider
+    // (admin auth page, wayfinder ticket 025) becomes an SSO button, plus the
+    // `[oidc]` config section as a fallback ("sso") when no DB provider is set.
+    let mut oidc_registry: crate::oidc::OidcRegistry = crate::oidc::OidcRegistry {
+        providers: Vec::new(),
+    };
+    if let Ok(db_providers) = crate::providers_db::load_providers(&database) {
+        for p in db_providers
+            .iter()
+            .filter(|p| p.enabled && p.provider_type == "oidc")
+        {
+            match serde_json::from_value::<crate::config::OidcConfig>(p.config.clone()) {
+                Ok(cfg) => match crate::oidc::init_oidc(&cfg, config.auth_session_ttl_secs).await {
+                    Ok(state) => {
+                        tracing::info!(
+                            "OIDC provider '{}' configured with issuer: {}",
+                            p.name,
+                            cfg.issuer_url
+                        );
+                        oidc_registry.providers.push(crate::oidc::OidcProvider {
+                            name: p.name.clone(),
+                            state,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to initialize OIDC provider '{}': {}", p.name, e);
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("Invalid OIDC config for provider '{}': {}", p.name, e);
+                }
             }
         }
-    } else {
-        None
-    };
+    }
+    // The [oidc] config section is the fallback whenever the registry ends
+    // up empty — including when DB providers existed but all failed init,
+    // so a broken DB entry cannot silently kill previously-working SSO.
+    if oidc_registry.providers.is_empty() {
+        if let Some(ref oidc_config) = config.oidc {
+            match crate::oidc::init_oidc(oidc_config, config.auth_session_ttl_secs).await {
+                Ok(state) => {
+                    tracing::info!("OIDC configured with issuer: {}", oidc_config.issuer_url);
+                    oidc_registry.providers.push(crate::oidc::OidcProvider {
+                        name: "sso".to_string(),
+                        state,
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to initialize OIDC: {}", e);
+                    tracing::warn!("Continuing without OIDC — only API key auth will work");
+                }
+            }
+        }
+    }
+    let oidc_registry = std::sync::Arc::new(oidc_registry);
+    let oidc_state = oidc_registry.providers.first().map(|p| p.state.clone());
+    let oidc_provider_names = OidcProviderNames(
+        oidc_registry
+            .providers
+            .iter()
+            .map(|p| p.name.clone())
+            .collect(),
+    );
 
     // Initialize Vault backend(s) if configured.
     //
@@ -887,8 +1020,12 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         None
     };
 
-    // Build auth chain from [auth] config.
-    let auth_chain = match config.auth.as_ref() {
+    // Build the auth chain from [auth] config plus DB-configured providers
+    // (wayfinder ticket 025). DB entries added through the admin auth page
+    // extend the chain, appended after config methods in position order;
+    // they work with or without an [auth] section. OIDC keeps its own
+    // separate flow; TOTP remains [auth.totp]-only.
+    let (mut methods, mut providers) = match config.auth.as_ref() {
         Some(auth_cfg) => {
             let mut providers: std::collections::HashMap<String, Box<dyn AuthProvider>> =
                 std::collections::HashMap::new();
@@ -925,28 +1062,98 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
                     )),
                 );
             }
-
-            match AuthChain::from_config(&auth_cfg.methods, providers) {
-                Ok(chain) => {
-                    tracing::info!(
-                        methods = ?auth_cfg.methods,
-                        "Auth chain initialized"
-                    );
-                    chain
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to build auth chain: {} — falling back to database-only",
-                        e
-                    );
-                    AuthChain::new(vec![Box::new(
-                        crate::auth_providers::database::DatabaseProvider::new(database.clone()),
-                    )])
-                }
-            }
+            (auth_cfg.methods.clone(), providers)
         }
         None => {
-            // No [auth] config — default chain is database-only
+            let mut providers: std::collections::HashMap<String, Box<dyn AuthProvider>> =
+                std::collections::HashMap::new();
+            providers.insert(
+                "database".into(),
+                Box::new(crate::auth_providers::database::DatabaseProvider::new(
+                    database.clone(),
+                )),
+            );
+            (vec!["database".to_string()], providers)
+        }
+    };
+
+    let mut db_methods: Vec<String> = Vec::new();
+    if let Ok(db_providers) = crate::providers_db::load_providers(&database) {
+        for p in db_providers.iter().filter(|p| p.enabled) {
+            let key = format!("db-provider-{}", p.name);
+            if providers.contains_key(&key) || methods.contains(&key) {
+                tracing::warn!(
+                    "Duplicate DB auth provider name '{}' skipped (names must be unique)",
+                    p.name
+                );
+                continue;
+            }
+            let provider: Option<Box<dyn AuthProvider>> = match p.provider_type.as_str() {
+                "ldap" => serde_json::from_value::<crate::auth_providers::ldap::LdapConfig>(
+                    p.config.clone(),
+                )
+                .ok()
+                .map(|c| {
+                    Box::new(crate::auth_providers::ldap::LdapProvider::new(c))
+                        as Box<dyn AuthProvider>
+                }),
+                "radius" => serde_json::from_value::<crate::auth_providers::radius::RadiusConfig>(
+                    p.config.clone(),
+                )
+                .ok()
+                .map(|c| {
+                    Box::new(crate::auth_providers::radius::RadiusProvider::new(c))
+                        as Box<dyn AuthProvider>
+                }),
+                "saml" => serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
+                    p.config.clone(),
+                )
+                .ok()
+                .map(|c| {
+                    Box::new(crate::auth_providers::saml::SamlProvider::new(c))
+                        as Box<dyn AuthProvider>
+                }),
+                "database" => Some(
+                    Box::new(crate::auth_providers::database::DatabaseProvider::new(
+                        database.clone(),
+                    )) as Box<dyn AuthProvider>,
+                ),
+                "totp" => {
+                    tracing::warn!(
+                        "TOTP provider '{}' is not wired into the auth chain — configure [auth.totp] instead",
+                        p.name
+                    );
+                    None
+                }
+                other => {
+                    tracing::warn!("Unknown DB auth provider type '{}' skipped", other);
+                    None
+                }
+            };
+            if let Some(prov) = provider {
+                providers.insert(key.clone(), prov);
+                db_methods.push(key);
+            } else {
+                tracing::warn!(
+                    "DB auth provider '{}' (type {}) failed to load and was skipped",
+                    p.name,
+                    p.provider_type
+                );
+            }
+        }
+    }
+    methods.extend(db_methods);
+
+    let auth_chain = match AuthChain::from_config(&methods, providers) {
+        Ok(chain) => {
+            tracing::info!(methods = ?methods, "Auth chain initialized");
+            chain
+        }
+        Err(e) => {
+            tracing::error!(
+                "Failed to build auth chain: {} — falling back to database-only",
+                e
+            );
             AuthChain::new(vec![Box::new(
                 crate::auth_providers::database::DatabaseProvider::new(database.clone()),
             )])
@@ -958,6 +1165,14 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     let vault_configured = VaultConfigured(config.vault.is_some());
     let credential_default_scope =
         CredentialDefaultScope(config.user_credentials_default_scope.clone());
+    let storage_key = StorageKey(config.storage_encryption_key());
+    let storage_backend = StorageBackend(
+        config
+            .storage
+            .as_ref()
+            .map(|s| s.backend.clone())
+            .unwrap_or_else(|| "db".into()),
+    );
     let drive_configured = DriveConfigured(config.drive.is_some());
     let site_title = SiteTitle(config.site_title.clone());
     let theme_data = {
@@ -1081,11 +1296,31 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     };
 
     // Extract SAML provider and TOTP enforcement before config is moved into SessionManager
-    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> =
-        config.auth.as_ref().and_then(|a| {
+    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> = config
+        .auth
+        .as_ref()
+        .and_then(|a| {
             a.saml
                 .as_ref()
                 .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone())))
+        })
+        .or_else(|| {
+            // A DB-configured SAML provider (admin auth page) also needs the
+            // ACS/metadata routes; build the provider from its stored config.
+            crate::providers_db::load_providers(&database)
+                .ok()
+                .and_then(|providers| {
+                    providers
+                        .iter()
+                        .find(|p| p.enabled && p.provider_type == "saml")
+                        .and_then(|p| {
+                            serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
+                                p.config.clone(),
+                            )
+                            .ok()
+                        })
+                        .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg)))
+                })
         });
     let totp_enforcement = config
         .auth
@@ -1281,6 +1516,65 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .route("/api/reports/top-users", get(api::report_top_users))
         .route("/api/reports/summary", get(api::report_summary))
         .route("/api/system/status", get(api::system_status))
+        .route(
+            "/api/system/settings",
+            get(api::settings::get_settings).put(api::settings::put_settings),
+        )
+        .route("/api/auth/providers", get(api::providers::list_providers))
+        .route("/api/auth/providers", post(api::providers::create_provider))
+        .route(
+            "/api/auth/providers/{id}",
+            get(api::providers::get_provider),
+        )
+        .route(
+            "/api/auth/providers/{id}",
+            put(api::providers::update_provider).delete(api::providers::delete_provider),
+        )
+        .route(
+            "/api/auth/providers/{id}/enable",
+            post(api::providers::enable_provider),
+        )
+        .route(
+            "/api/auth/providers/{id}/disable",
+            post(api::providers::disable_provider),
+        )
+        .route(
+            "/api/auth/providers/{id}/move",
+            post(api::providers::move_provider),
+        )
+        .route(
+            "/api/auth/providers/{id}/config",
+            get(api::providers::get_provider_config),
+        )
+        .route(
+            "/api/auth/providers/{id}/test",
+            post(api::providers::test_provider),
+        )
+        .route("/api/admin/groups", get(api::groups::list_groups))
+        .route("/api/admin/groups", post(api::groups::create_group))
+        .route(
+            "/api/admin/groups/{id}",
+            get(api::groups::get_group)
+                .put(api::groups::update_group)
+                .delete(api::groups::delete_group),
+        )
+        .route(
+            "/api/admin/groups/{id}/mappings",
+            post(api::groups::add_group_mapping),
+        )
+        .route(
+            "/api/admin/groups/{id}/mappings/{mapping_id}",
+            delete(api::groups::remove_group_mapping),
+        )
+        .route(
+            "/api/addressbook/import",
+            post(api::imports::import_csv)
+                .layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024)),
+        )
+        .route(
+            "/api/addressbook/import-template",
+            get(api::imports::import_template),
+        )
         .route("/api/users", get(api::list_users).post(api::create_user))
         .route("/api/users/{email}/role", put(api::set_user_role))
         .route(
@@ -1456,6 +1750,9 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
         .layer(Extension(credential_default_scope.clone()))
+        .layer(Extension(storage_key.clone()))
+        .layer(Extension(settings_baseline.clone()))
+        .layer(Extension(storage_backend.clone()))
         .layer(Extension(vsphere_client))
         .layer(Extension(database.clone()));
 
@@ -1482,6 +1779,8 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .layer(middleware::from_fn(auth::optional_auth))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(oidc_enabled.clone()))
+        .layer(Extension(storage_key.clone()))
+        .layer(Extension(storage_backend.clone()))
         .layer(Extension(database.clone()));
 
     // Health check with optional auth (deep check when authenticated)
@@ -1564,6 +1863,10 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         // Admin sub-pages (templates)
         .route("/admin/users.html", get(handlers::pages::admin_users_page))
         .route("/admin/auth.html", get(handlers::pages::admin_auth_page))
+        .route(
+            "/admin/groups.html",
+            get(handlers::pages::admin_groups_page),
+        )
         .route("/admin/audit.html", get(handlers::pages::admin_audit_page))
         .route(
             "/admin/settings.html",
@@ -1607,7 +1910,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         let oidc_routes = Router::new()
             .route("/auth/login", get(oidc::login))
             .route("/auth/callback", get(oidc::callback))
-            .with_state(oidc_st.clone())
+            .with_state(oidc_registry.clone())
             .layer(Extension(database.clone()))
             .layer(Extension(totp_enforcement))
             .layer(GovernorLayer::new(auth_rate_conf));
@@ -1639,6 +1942,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .layer(middleware::from_fn(security_headers))
         .layer(Extension(tls_enabled))
         .layer(Extension(oidc_enabled))
+        .layer(Extension(oidc_provider_names))
         .layer(Extension(drive_configured))
         .layer(Extension(site_title))
         .layer(Extension(theme_data))
