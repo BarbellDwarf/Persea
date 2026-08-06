@@ -1251,6 +1251,10 @@ async fn test_quick_connect_prompts_when_no_credentials() {
 
 #[tokio::test]
 async fn test_quick_connect_reads_credentials_from_db() {
+    if !guacd_reachable() {
+        eprintln!("skipping: no guacd on 127.0.0.1:4822");
+        return;
+    }
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
     let entry_id = seed_ssh_entry(&db, "QC", "dbcred");
