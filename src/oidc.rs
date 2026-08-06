@@ -49,6 +49,35 @@ pub struct OidcState {
     pub pending: PendingFlows,
 }
 
+/// One named OIDC provider (DB-configured via the admin auth page, or the
+/// `[oidc]` config section) with its own client and pending-flow state.
+pub struct OidcProvider {
+    pub name: String,
+    pub state: OidcState,
+}
+
+/// All configured OIDC providers, for multi-provider SSO (wayfinder ticket
+/// D29): the login page renders one button per provider and the state cookie
+/// carries the provider name so the callback resolves the right client.
+pub struct OidcRegistry {
+    pub providers: Vec<OidcProvider>,
+}
+
+impl OidcRegistry {
+    /// Resolve a provider by name, falling back to the first configured
+    /// provider when the name is absent or unknown.
+    pub fn get(&self, name: Option<&str>) -> Option<&OidcProvider> {
+        if let Some(n) = name {
+            self.providers
+                .iter()
+                .find(|p| p.name == n)
+                .or_else(|| self.providers.first())
+        } else {
+            self.providers.first()
+        }
+    }
+}
+
 /// Initialize OIDC client by discovering provider metadata.
 pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<OidcState, String> {
     let mut builder = openidconnect::reqwest::ClientBuilder::new()
@@ -113,14 +142,23 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
 #[derive(Deserialize)]
 pub struct LoginParams {
     pub next: Option<String>,
+    /// OIDC provider name (multi-provider SSO). Defaults to the first
+    /// configured provider when absent.
+    pub provider: Option<String>,
 }
 
 /// GET /auth/login — redirect user to OIDC provider.
 pub async fn login(
-    State(oidc): State<OidcState>,
+    State(registry): State<std::sync::Arc<OidcRegistry>>,
     Query(params): Query<LoginParams>,
     headers: axum::http::HeaderMap,
 ) -> Response {
+    let Some(provider) = registry.get(params.provider.as_deref()) else {
+        tracing::error!("OIDC login requested but no OIDC provider is configured");
+        return axum::response::Redirect::to("/?sso_error=1").into_response();
+    };
+    let oidc = &provider.state;
+
     let (pkce_challenge, pkce_verifier) = PkceCodeChallenge::new_random_sha256();
 
     let mut auth_request = oidc
@@ -169,7 +207,7 @@ pub async fn login(
             .hash(&mut h);
         format!("{:x}", h.finish())
     };
-    let cookie_value = format!("{}:{}", state_key, fingerprint);
+    let cookie_value = format!("{}:{}:{}", state_key, fingerprint, provider.name);
 
     let state_cookie = format!(
         "persea_oidc_state={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
@@ -206,7 +244,7 @@ pub struct CallbackParams {
 
 /// GET /auth/callback — exchange code for tokens, create session.
 pub async fn callback(
-    State(oidc): State<OidcState>,
+    State(registry): State<std::sync::Arc<OidcRegistry>>,
     Extension(database): Extension<Db>,
     Extension(totp_enforcement): Extension<TotpEnforcement>,
     headers: axum::http::HeaderMap,
@@ -238,37 +276,60 @@ pub async fn callback(
         }
     };
 
+    // Resolve which provider this flow belongs to from the state cookie
+    // (`state_key:fingerprint:provider_name`); falls back to the first
+    // configured provider for cookies written before multi-provider support.
+    let provider_cookie = extract_cookie(&headers, "persea_oidc_state").and_then(|v| {
+        let mut parts = v.rsplitn(3, ':');
+        let name = parts.next()?;
+        let fingerprint = parts.next()?;
+        if fingerprint.is_empty() {
+            None
+        } else {
+            Some(name.to_string())
+        }
+    });
+    let provider = registry.get(provider_cookie.as_deref());
+    let Some(oidc) = provider.map(|p| &p.state) else {
+        tracing::warn!("OIDC callback: no provider configured");
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": "no OIDC provider configured"})),
+        )
+            .into_response();
+    };
+
     // Verify the state cookie matches the state query parameter (binds flow to browser)
     // Cookie format is "state_key:fingerprint" — verify both
     let state_cookie = extract_cookie(&headers, "persea_oidc_state");
     let cookie_valid = match state_cookie.as_deref() {
         Some(cookie_val) => {
-            if let Some((cookie_state, cookie_fingerprint)) = cookie_val.split_once(':') {
-                // Verify state matches
-                if cookie_state != state {
-                    false
-                } else {
-                    // Verify fingerprint matches current request
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    let mut h = DefaultHasher::new();
-                    headers
-                        .get("x-forwarded-for")
-                        .or_else(|| headers.get("x-real-ip"))
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown")
-                        .hash(&mut h);
-                    headers
-                        .get(header::USER_AGENT)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown")
-                        .hash(&mut h);
-                    let current_fp = format!("{:x}", h.finish());
-                    cookie_fingerprint == current_fp
-                }
-            } else {
-                // Old format without fingerprint — reject
+            // Format: `state_key:fingerprint[:provider_name]` — split from
+            // the right so the provider name (a config label) can contain
+            // colons without breaking the parse.
+            let parts: Vec<&str> = cookie_val.rsplitn(3, ':').collect();
+            let cookie_state = parts.get(2).copied().unwrap_or("");
+            let cookie_fingerprint = parts.get(1).copied().unwrap_or("");
+            if cookie_state != state {
                 false
+            } else {
+                // Verify fingerprint matches current request
+                use std::collections::hash_map::DefaultHasher;
+                use std::hash::{Hash, Hasher};
+                let mut h = DefaultHasher::new();
+                headers
+                    .get("x-forwarded-for")
+                    .or_else(|| headers.get("x-real-ip"))
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("unknown")
+                    .hash(&mut h);
+                headers
+                    .get(header::USER_AGENT)
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("unknown")
+                    .hash(&mut h);
+                let current_fp = format!("{:x}", h.finish());
+                cookie_fingerprint == current_fp
             }
         }
         None => false,

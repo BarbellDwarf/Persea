@@ -50,8 +50,9 @@ mod vsphere;
 mod websocket;
 
 use crate::api::{
-    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, SettingsBaseline, SiteTitle,
-    StorageBackend, StorageKey, ThemeData, VaultBackends, VaultCell, VaultConfigured, VaultState,
+    AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, OidcProviderNames,
+    SettingsBaseline, SiteTitle, StorageBackend, StorageKey, ThemeData, VaultBackends, VaultCell,
+    VaultConfigured, VaultState,
 };
 use crate::auth_chain::AuthChain;
 use crate::auth_provider::AuthProvider;
@@ -833,33 +834,66 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     let static_path = config.static_path.clone();
     let tls_config = config.tls.clone();
 
-    // Initialize OIDC if configured. A DB-configured OIDC provider (added via
-    // the admin auth page) takes precedence over the [oidc] config section.
-    let db_oidc_config = crate::providers_db::load_providers(&database)
-        .ok()
-        .and_then(|providers| {
-            providers
-                .iter()
-                .find(|p| p.enabled && p.provider_type == "oidc")
-                .and_then(|p| {
-                    serde_json::from_value::<crate::config::OidcConfig>(p.config.clone()).ok()
-                })
-        });
-    let oidc_state = if let Some(ref oidc_config) = db_oidc_config.or(config.oidc.clone()) {
-        match oidc::init_oidc(oidc_config, config.auth_session_ttl_secs).await {
-            Ok(state) => {
-                tracing::info!("OIDC configured with issuer: {}", oidc_config.issuer_url);
-                Some(state)
-            }
-            Err(e) => {
-                tracing::error!("Failed to initialize OIDC: {}", e);
-                tracing::warn!("Continuing without OIDC — only API key auth will work");
-                None
+    // Initialize OIDC providers. Every enabled DB-configured OIDC provider
+    // (admin auth page, wayfinder ticket 025) becomes an SSO button, plus the
+    // `[oidc]` config section as a fallback ("sso") when no DB provider is set.
+    let mut oidc_registry: crate::oidc::OidcRegistry = crate::oidc::OidcRegistry {
+        providers: Vec::new(),
+    };
+    if let Ok(db_providers) = crate::providers_db::load_providers(&database) {
+        for p in db_providers
+            .iter()
+            .filter(|p| p.enabled && p.provider_type == "oidc")
+        {
+            match serde_json::from_value::<crate::config::OidcConfig>(p.config.clone()) {
+                Ok(cfg) => match crate::oidc::init_oidc(&cfg, config.auth_session_ttl_secs).await {
+                    Ok(state) => {
+                        tracing::info!(
+                            "OIDC provider '{}' configured with issuer: {}",
+                            p.name,
+                            cfg.issuer_url
+                        );
+                        oidc_registry.providers.push(crate::oidc::OidcProvider {
+                            name: p.name.clone(),
+                            state,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to initialize OIDC provider '{}': {}", p.name, e);
+                    }
+                },
+                Err(e) => {
+                    tracing::error!("Invalid OIDC config for provider '{}': {}", p.name, e);
+                }
             }
         }
-    } else {
-        None
-    };
+    }
+    if oidc_registry.providers.is_empty() {
+        if let Some(ref oidc_config) = config.oidc {
+            match crate::oidc::init_oidc(oidc_config, config.auth_session_ttl_secs).await {
+                Ok(state) => {
+                    tracing::info!("OIDC configured with issuer: {}", oidc_config.issuer_url);
+                    oidc_registry.providers.push(crate::oidc::OidcProvider {
+                        name: "sso".to_string(),
+                        state,
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Failed to initialize OIDC: {}", e);
+                    tracing::warn!("Continuing without OIDC — only API key auth will work");
+                }
+            }
+        }
+    }
+    let oidc_registry = std::sync::Arc::new(oidc_registry);
+    let oidc_state = oidc_registry.providers.first().map(|p| p.state.clone());
+    let oidc_provider_names = OidcProviderNames(
+        oidc_registry
+            .providers
+            .iter()
+            .map(|p| p.name.clone())
+            .collect(),
+    );
 
     // Initialize Vault backend(s) if configured.
     //
@@ -1860,7 +1894,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         let oidc_routes = Router::new()
             .route("/auth/login", get(oidc::login))
             .route("/auth/callback", get(oidc::callback))
-            .with_state(oidc_st.clone())
+            .with_state(oidc_registry.clone())
             .layer(Extension(database.clone()))
             .layer(Extension(totp_enforcement))
             .layer(GovernorLayer::new(auth_rate_conf));
@@ -1892,6 +1926,7 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
         .layer(middleware::from_fn(security_headers))
         .layer(Extension(tls_enabled))
         .layer(Extension(oidc_enabled))
+        .layer(Extension(oidc_provider_names))
         .layer(Extension(drive_configured))
         .layer(Extension(site_title))
         .layer(Extension(theme_data))

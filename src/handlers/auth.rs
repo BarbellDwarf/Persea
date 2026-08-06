@@ -5,7 +5,7 @@ use axum::Extension;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::api::OidcEnabled;
+use crate::api::{OidcEnabled, OidcProviderNames};
 use crate::audit;
 use crate::auth::{client_ip, extract_cookie, TrustedProxies};
 use crate::auth_chain::AuthChain;
@@ -93,6 +93,7 @@ pub async fn login_page(
     headers: HeaderMap,
     Extension(database): Extension<Db>,
     Extension(oidc_enabled): Extension<OidcEnabled>,
+    oidc_provider_names: Option<Extension<OidcProviderNames>>,
     Extension(_nonce): Extension<CspNonce>,
 ) -> Response {
     // Redirect to setup wizard if no users exist (first run)
@@ -133,6 +134,9 @@ pub async fn login_page(
         .as_ref()
         .is_some_and(|a| a.saml.is_some());
 
+    let providers = oidc_provider_names
+        .map(|Extension(p)| p.0.clone())
+        .unwrap_or_default();
     let tmpl = LoginPageTemplate {
         site_title,
         logo_url,
@@ -140,6 +144,7 @@ pub async fn login_page(
         saml_enabled,
         oidc_button_text: "Sign in with SSO".into(),
         saml_button_text: "Sign in with SSO".into(),
+        oidc_providers: providers,
     };
 
     tmpl.into_response()

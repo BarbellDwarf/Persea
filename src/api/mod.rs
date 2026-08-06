@@ -59,6 +59,11 @@ pub struct CredentialDefaultScope(pub String);
 #[derive(Clone)]
 pub struct StorageKey(pub Option<String>);
 
+/// Names of configured OIDC providers for the login page's SSO buttons
+/// (multi-provider support, wayfinder D29).
+#[derive(Clone)]
+pub struct OidcProviderNames(pub Vec<String>);
+
 /// Effective config-file values for the admin settings page keys, captured
 /// at startup so `GET /api/system/settings` can report real values overlaid
 /// with DB overrides instead of DB-only defaults.

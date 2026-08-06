@@ -154,6 +154,8 @@ pub struct LoginTemplate {
     pub saml_enabled: bool,
     pub oidc_button_text: String,
     pub saml_button_text: String,
+    /// One entry per configured OIDC provider (multi-provider SSO).
+    pub oidc_providers: Vec<String>,
 }
 
 impl IntoResponse for LoginTemplate {
