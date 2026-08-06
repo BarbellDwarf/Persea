@@ -64,6 +64,16 @@ pub struct ImportRow {
     pub allowed_groups: Vec<String>,
 }
 
+/// Normalize an entry name for near-duplicate detection: lowercase,
+/// alphanumerics only. "web-server-01", "Web Server 01" and "webserver01"
+/// all collapse to the same key.
+fn fuzzy_key(name: &str) -> String {
+    name.to_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ImportRequest {
     #[serde(default = "default_scope")]
@@ -138,15 +148,26 @@ pub async fn import_csv(
     // Accept either the JSON contract (`{"scope": ..., "rows": [...]}`) or
     // a raw `text/csv` body (single source of truth: the CSV parser in
     // src/csv_import.rs is the same code the template generator uses).
+    let mut csv_parser_report: Option<Vec<csv_import::CsvError>> = None;
+    let mut csv_parser_skipped = 0usize;
     let req: ImportRequest = if headers_2
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .map(|ct| ct.starts_with("text/csv"))
+        .map(|ct| {
+            ct.split(';')
+                .next()
+                .map(|m| m.trim().eq_ignore_ascii_case("text/csv"))
+                .unwrap_or(false)
+        })
         .unwrap_or(false)
     {
         let csv_text = String::from_utf8_lossy(&body).to_string();
         let parsed =
             csv_import::parse_rows(&csv_text).map_err(|e| AppError::Validation(e.message))?;
+        // Parser-level row errors (invalid ports, malformed rows) must not
+        // vanish — they are surfaced alongside handler-level errors below.
+        csv_parser_report = Some(parsed.errors);
+        csv_parser_skipped = parsed.skipped.len();
         ImportRequest {
             scope: String::new(),
             rows: parsed
@@ -181,6 +202,12 @@ pub async fn import_csv(
     let mut skipped = 0usize;
     let mut errors: Vec<serde_json::Value> = Vec::new();
     let mut passwords_dropped = 0usize;
+    if let Some(report) = csv_parser_report {
+        for e in report {
+            errors.push(json!({"row": e.row, "error": e.message}));
+        }
+    }
+    skipped += csv_parser_skipped;
 
     for (idx, row) in req.rows.iter().enumerate() {
         let row_index = idx + 1;
@@ -202,10 +229,25 @@ pub async fn import_csv(
             }
         };
 
-        // Skip duplicates by (folder, name).
+        // Exact duplicates are skipped silently; near-duplicates (same
+        // normalized name) are reported so the admin can decide.
         if db::get_ab_entry(&database, folder_id, &name).is_ok() {
             skipped += 1;
             continue;
+        }
+        let fuzzy = fuzzy_key(&name);
+        if let Ok(existing) = db::list_ab_entries(&database, folder_id) {
+            if let Some(hit) = existing.iter().find(|e| fuzzy_key(&e.name) == fuzzy) {
+                errors.push(json!({
+                    "row": row_index,
+                    "error": format!(
+                        "'{}' is a near-duplicate of existing entry '{}' (skipped)",
+                        name, hit.name
+                    ),
+                }));
+                skipped += 1;
+                continue;
+            }
         }
 
         let display_name = row.display_name.trim().to_string();
@@ -240,36 +282,50 @@ pub async fn import_csv(
                 continue;
             }
         };
-        imported += 1;
-
         // Store the password encrypted when a storage key is available.
         // Without a key the entry is imported but its password is dropped
         // and counted — the admin must not be left thinking it was stored.
+        // On any credential failure the just-created entry is rolled back so
+        // a corrected re-import is possible (an orphan row would otherwise
+        // be skipped as a duplicate forever).
+        let mut cred_failed = false;
         if !row.password.is_empty() {
             if encryption_key.is_empty() {
                 passwords_dropped += 1;
             } else {
-                let key = match crate::crypto::EncryptionKey::from_hex(&encryption_key) {
-                    Ok(k) => k,
-                    Err(e) => {
-                        errors.push(json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}));
-                        continue;
+                let mut key: Option<crate::crypto::EncryptionKey> = None;
+                if let Err(e) = crate::crypto::EncryptionKey::from_hex(&encryption_key) {
+                    errors.push(json!({"row": row_index, "error": format!("failed to parse encryption key: {}", e)}));
+                    cred_failed = true;
+                } else {
+                    key = Some(crate::crypto::EncryptionKey::from_hex(&encryption_key).unwrap());
+                }
+                if !cred_failed {
+                    let stored = match crate::crypto::encrypt_value(
+                        key.as_ref().unwrap(),
+                        &row.password,
+                    ) {
+                        Ok(encrypted) => {
+                            db::store_ab_credential(&database, entry_id, "password", &encrypted)
+                        }
+                        Err(e) => {
+                            errors.push(json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}));
+                            cred_failed = true;
+                            Ok(())
+                        }
+                    };
+                    if let Err(e) = stored {
+                        errors.push(json!({"row": row_index, "error": format!("failed to store password: {}", e)}));
+                        cred_failed = true;
                     }
-                };
-                let stored = match crate::crypto::encrypt_value(&key, &row.password) {
-                    Ok(encrypted) => {
-                        db::store_ab_credential(&database, entry_id, "password", &encrypted)
-                    }
-                    Err(e) => {
-                        errors.push(json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}));
-                        continue;
-                    }
-                };
-                if let Err(e) = stored {
-                    errors.push(json!({"row": row_index, "error": format!("failed to store password: {}", e)}));
                 }
             }
         }
+        if cred_failed {
+            let _ = db::delete_ab_entry(&database, entry_id);
+            continue;
+        }
+        imported += 1;
     }
 
     let proxies = trusted

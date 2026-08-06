@@ -2221,11 +2221,34 @@ pub fn get_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<AbFol
 
 /// Delete a folder and cascade-delete its entries/credentials.
 pub fn delete_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<bool> {
-    let conn = db.lock().unwrap();
-    let changed = conn.execute(
+    let mut conn = db.lock().unwrap();
+    // SQLite runs without PRAGMA foreign_keys, so the FK cascade never
+    // fires — delete entries + credentials explicitly, in one transaction.
+    let tx = conn.transaction()?;
+    let entry_ids: Vec<i64> = {
+        let mut stmt = tx.prepare(
+            "SELECT id FROM address_book_entries WHERE folder_id IN
+             (SELECT id FROM address_book_folders WHERE scope = ?1 AND name = ?2)",
+        )?;
+        let rows = stmt.query_map(params![scope, name], |r| r.get::<_, i64>(0))?;
+        rows.filter_map(|r| r.ok()).collect()
+    };
+    for id in &entry_ids {
+        tx.execute(
+            "DELETE FROM address_book_credentials WHERE entry_id = ?1",
+            params![id],
+        )?;
+    }
+    tx.execute(
+        "DELETE FROM address_book_entries WHERE folder_id IN
+         (SELECT id FROM address_book_folders WHERE scope = ?1 AND name = ?2)",
+        params![scope, name],
+    )?;
+    let changed = tx.execute(
         "DELETE FROM address_book_folders WHERE scope = ?1 AND name = ?2",
         params![scope, name],
     )?;
+    tx.commit()?;
     Ok(changed > 0)
 }
 
@@ -2343,11 +2366,17 @@ pub fn update_ab_entry(
 
 /// Delete an entry and cascade-delete its credentials.
 pub fn delete_ab_entry(db: &Db, entry_id: i64) -> rusqlite::Result<bool> {
-    let conn = db.lock().unwrap();
-    let changed = conn.execute(
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "DELETE FROM address_book_credentials WHERE entry_id = ?1",
+        params![entry_id],
+    )?;
+    let changed = tx.execute(
         "DELETE FROM address_book_entries WHERE id = ?1",
         params![entry_id],
     )?;
+    tx.commit()?;
     Ok(changed > 0)
 }
 

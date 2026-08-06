@@ -218,6 +218,10 @@
                     <label class="form-label" for="em-proxmox-token-id">API token ID</label>
                     <input type="text" id="em-proxmox-token-id" class="form-input" placeholder="root@pam!persea" autocomplete="off">
                 </div>
+                <label class="flex items-center gap-2 text-sm text-gray-300" style="margin-top:8px">
+                    <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-gray-800 border-gray-700 text-emerald-500">
+                    Verify TLS certificate
+                </label>
             </div>
             <div>
                 <label class="form-label" for="em-port">Port</label>
@@ -228,8 +232,15 @@
                 <input type="text" id="em-username" class="form-input" autocomplete="off">
             </div>
             <div>
-                <label class="form-label" for="em-password">Password</label>
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                    <label class="form-label" for="em-password" style="margin:0">Password</label>
+                    <div style="display:flex;gap:8px">
+                        <button type="button" id="em-password-generate" class="btn btn-secondary btn-sm" title="Generate a strong random password">Generate</button>
+                        <button type="button" id="em-password-clear" class="btn btn-secondary btn-sm hidden" title="Remove the stored password on save">Clear stored</button>
+                    </div>
+                </div>
                 <input type="password" id="em-password" class="form-input" autocomplete="new-password">
+                <p class="text-xs text-gray-500 mt-1" id="em-password-hint">Saving with an empty password field keeps the stored value.</p>
             </div>
             <div>
                 <label class="form-label" for="em-private-key">Private key (PEM)</label>
@@ -647,7 +658,7 @@
             })
             .then(function(res) {
                 if (btn) { btn.disabled = false; btn.textContent = 'Connect'; }
-                if (res.data.error === 'authentication required' || res.data.error && String(res.data.error).indexOf('sign in') !== -1) {
+                if (!res.ok && res.data.code === 401) {
                     window.location.href = '/';
                     return;
                 }
@@ -927,7 +938,15 @@
                 }
                 document.getElementById('fm-inherit').checked = !!data.inherit_from_parent;
             })
-            .catch(function() {});
+            .catch(function() {
+                var saveBtn = document.getElementById('fm-save');
+                if (saveBtn) { saveBtn.disabled = true; }
+                var err = document.getElementById('fm-error');
+                if (err) {
+                    err.textContent = 'Failed to load folder config — reload the page before saving (saving would overwrite the ACLs).';
+                    err.classList.remove('hidden');
+                }
+            });
         openModal('folder-modal');
     }
     function saveFolder() {
@@ -1025,7 +1044,7 @@
         if (!portEl.value && entryTypeDefaults[type]) portEl.value = entryTypeDefaults[type];
     }
     function clearEntryFields() {
-        var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password'];
+        var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id'];
         for (var i = 0; i < ids.length; i++) document.getElementById(ids[i]).value = '';
         document.getElementById('em-password').placeholder = '';
         document.getElementById('em-private-key').placeholder = '-----BEGIN OPENSSH PRIVATE KEY-----';
@@ -1045,6 +1064,8 @@
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
+        passwordClearArmed = false;
+        updatePasswordButtons();
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
@@ -1063,6 +1084,10 @@
         document.getElementById('em-hostname').value = selectedEntry.hostname || '';
         if (selectedEntry.port) document.getElementById('em-port').value = String(selectedEntry.port);
         document.getElementById('em-username').value = selectedEntry.username || '';
+        // Entry-level ACLs round-trip via EntryInfo.allowed_groups.
+        emGroups = (selectedEntry.allowed_groups || '').split(',').map(function(g) { return g.trim(); }).filter(function(g) { return g !== ''; });
+        renderGroupChips('em-groups-chips', emGroups);
+        populateGroupOptions('em');
         if (selectedEntry.has_credentials) {
             document.getElementById('em-password').placeholder = '(stored password unchanged unless you type a new one)';
             document.getElementById('em-private-key').placeholder = '(stored key unchanged unless you type a new one)';
@@ -1081,14 +1106,47 @@
         if (selectedEntry.proxmox_vmid) document.getElementById('em-proxmox-vmid').value = String(selectedEntry.proxmox_vmid);
         document.getElementById('em-proxmox-node').value = selectedEntry.proxmox_node || '';
         document.getElementById('em-proxmox-token-id').value = selectedEntry.proxmox_token_id || '';
+        document.getElementById('em-proxmox-verify-tls').checked = !!selectedEntry.proxmox_verify_tls;
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
+        passwordClearArmed = false;
+        updatePasswordButtons();
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
         openModal('entry-modal');
     }
+    var passwordClearArmed = false;
+    var PASSWORD_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}';
+    function generatePassword() {
+        var out = '';
+        var buf = new Uint32Array(24);
+        if (window.crypto && crypto.getRandomValues) {
+            crypto.getRandomValues(buf);
+            for (var i = 0; i < 24; i++) out += PASSWORD_CHARS[buf[i] % PASSWORD_CHARS.length];
+        } else {
+            for (var i = 0; i < 24; i++) out += PASSWORD_CHARS[Math.floor(Math.random() * PASSWORD_CHARS.length)];
+        }
+        return out;
+    }
+    function markPasswordCleared() {
+        passwordClearArmed = true;
+        document.getElementById('em-password').value = '';
+        var hint = document.getElementById('em-password-hint');
+        if (hint) hint.textContent = 'The stored password WILL BE REMOVED when you save.';
+    }
+    function updatePasswordButtons() {
+        var clearBtn = document.getElementById('em-password-clear');
+        if (!clearBtn) return;
+        clearBtn.classList.toggle('hidden', !entryEditMode || !(selectedEntry && selectedEntry.has_credentials));
+        if (clearBtn.classList.contains('hidden')) {
+            passwordClearArmed = false;
+            var hint = document.getElementById('em-password-hint');
+            if (hint) hint.textContent = 'Saving with an empty password field keeps the stored value.';
+        }
+    }
+
     function saveEntry() {
         var name = document.getElementById('em-name').value.trim();
         var displayName = document.getElementById('em-display-name').value.trim();
@@ -1123,6 +1181,7 @@
         if (username) entry.username = username;
         var password = document.getElementById('em-password').value;
         if (password) entry.password = password;
+        else if (passwordClearArmed) entry.password = '';
         var privateKey = document.getElementById('em-private-key').value.trim();
         if (privateKey) entry.private_key = privateKey;
         var ts = document.getElementById('em-proxmox-token-secret').value.trim();
@@ -1161,6 +1220,7 @@
             if (node) entry.proxmox_node = node;
             var tokenId = document.getElementById('em-proxmox-token-id').value.trim();
             if (tokenId) entry.proxmox_token_id = tokenId;
+            entry.proxmox_verify_tls = document.getElementById('em-proxmox-verify-tls').checked;
         }
         if (cp) entry.container_password = cp;
         addGroupFromInput('em');
@@ -1309,9 +1369,9 @@
                     var p = parseInt(portRaw, 10);
                     if (isNaN(p) || p < 1 || p > 65535) {
                         rowErrors.push('Row ' + rowNo + ': invalid port "' + portRaw + '" (skipped)');
-                    } else {
-                        rowObj.port = p;
+                        continue;
                     }
+                    rowObj.port = p;
                 }
                 if (!rowObj.name || !rowObj.protocol) {
                     rowErrors.push('Row ' + rowNo + ': name and protocol are required (skipped)');
@@ -1472,6 +1532,14 @@
 
     document.getElementById('em-cancel').addEventListener('click', function() { closeModal('entry-modal'); });
     document.getElementById('em-save').addEventListener('click', saveEntry);
+    document.getElementById('em-password-generate').addEventListener('click', function() {
+        document.getElementById('em-password').value = generatePassword();
+        var hint = document.getElementById('em-password-hint');
+        if (hint) hint.textContent = 'Generated password will be stored on save.';
+    });
+    document.getElementById('em-password-clear').addEventListener('click', function() {
+        markPasswordCleared();
+    });
     document.getElementById('em-groups-add').addEventListener('click', function() { addGroupFromInput('em'); });
     wireGroupCombo('em');
     document.getElementById('em-type').addEventListener('change', updateEntryTypeFields);

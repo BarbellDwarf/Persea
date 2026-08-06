@@ -309,6 +309,26 @@ async fn main() {
         },
     };
 
+    // Capture the pristine config-file values for the settings page BEFORE
+    // the DB overlay, so GET /api/system/settings reports the real config
+    // baseline under the DB overrides.
+
+    // Capture the pristine config-file values for the settings page BEFORE
+    // the DB overlay, so GET /api/system/settings reports the real config
+    // baseline under the DB overrides.
+    let settings_baseline = SettingsBaseline(serde_json::json!({
+        "listen_addr": config.listen_addr,
+        "guacd_addr": config.guacd_addr,
+        "tls_cert_path": config.tls.as_ref().and_then(|t| t.cert_path.as_ref()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        "tls_key_path": config.tls.as_ref().and_then(|t| t.key_path.as_ref()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
+        "session_max_duration_secs": config.session_max_duration_secs,
+        "max_concurrent_sessions": config.max_sessions,
+        "session_history_retention_days": config.session_history_retention_days,
+        "enable_vdi": config.vdi.as_ref().map(|v| v.enabled).unwrap_or(false),
+        "vault_enabled": config.vault.is_some(),
+        "db_only_mode": config.storage.as_ref().map(|st| st.backend != "vault").unwrap_or(true),
+    }));
+
     match cli.command {
         None | Some(Command::Serve) => {
             // Overlay DB-persisted settings (admin settings page) onto the
@@ -355,7 +375,7 @@ async fn main() {
                     std::process::exit(1);
                 }
             }
-            run_server(config, database, log_format).await
+            run_server(config, database, log_format, settings_baseline).await
         }
         Some(Command::CreateUser {
             email,
@@ -818,7 +838,12 @@ async fn connect_vault_backend(
     }
 }
 
-async fn run_server(config: Config, database: Db, log_format: LogFormat) {
+async fn run_server(
+    config: Config,
+    database: Db,
+    log_format: LogFormat,
+    settings_baseline: SettingsBaseline,
+) {
     // Initialize logging. RUST_LOG_FORMAT=json (or --log-format json) selects
     // JSON lines for structured log ingestion; plain fmt is the default.
     let subscriber = tracing_subscriber::fmt().with_env_filter(
@@ -868,6 +893,9 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
             }
         }
     }
+    // The [oidc] config section is the fallback whenever the registry ends
+    // up empty — including when DB providers existed but all failed init,
+    // so a broken DB entry cannot silently kill previously-working SSO.
     if oidc_registry.providers.is_empty() {
         if let Some(ref oidc_config) = config.oidc {
             match crate::oidc::init_oidc(oidc_config, config.auth_session_ttl_secs).await {
@@ -1138,18 +1166,6 @@ async fn run_server(config: Config, database: Db, log_format: LogFormat) {
     let credential_default_scope =
         CredentialDefaultScope(config.user_credentials_default_scope.clone());
     let storage_key = StorageKey(config.storage_encryption_key());
-    let settings_baseline = SettingsBaseline(serde_json::json!({
-        "listen_addr": config.listen_addr,
-        "guacd_addr": config.guacd_addr,
-        "tls_cert_path": config.tls.as_ref().and_then(|t| t.cert_path.as_ref()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        "tls_key_path": config.tls.as_ref().and_then(|t| t.key_path.as_ref()).map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
-        "session_max_duration_secs": config.session_max_duration_secs,
-        "max_concurrent_sessions": config.max_sessions,
-        "session_history_retention_days": config.session_history_retention_days,
-        "enable_vdi": config.vdi.as_ref().map(|v| v.enabled).unwrap_or(false),
-        "vault_enabled": config.vault.is_some(),
-        "db_only_mode": config.storage.as_ref().map(|st| st.backend != "vault").unwrap_or(true),
-    }));
     let storage_backend = StorageBackend(
         config
             .storage

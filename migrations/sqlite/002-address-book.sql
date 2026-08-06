@@ -6,8 +6,7 @@ CREATE TABLE IF NOT EXISTS address_book_folders (
     scope       TEXT NOT NULL DEFAULT 'shared',
     name        TEXT NOT NULL,
     description TEXT DEFAULT '',
-    allowed_groups      TEXT NOT NULL DEFAULT '',
-    inherit_from_parent BOOLEAN NOT NULL DEFAULT FALSE,    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(scope, name)
 );

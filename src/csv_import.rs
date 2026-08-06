@@ -184,7 +184,9 @@ pub fn validate_row(
             VALID_PROTOCOLS.join(", ")
         ));
     }
-    if hostname.trim().is_empty() && protocol != "web" {
+    // Web/VDI/Proxmox entries use url / container_image / proxmox_url
+    // instead of a plain hostname.
+    if hostname.trim().is_empty() && !matches!(protocol.as_str(), "web" | "vdi" | "proxmox") {
         return Err(format!("hostname is required for protocol '{}'", protocol));
     }
     Ok(())

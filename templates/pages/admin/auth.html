@@ -295,6 +295,8 @@ function saveProviderConfig() {
         var el = inputs[i];
         if (el.type === 'checkbox') {
             cfg[el.name] = el.checked;
+        } else if (el.type === 'number') {
+            cfg[el.name] = Number(el.value);
         } else {
             cfg[el.name] = el.value;
         }

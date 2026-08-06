@@ -321,6 +321,9 @@ pub struct EntryInfo {
     pub prompt_credentials: Option<bool>,
     /// Whether the entry has a stored password or private key.
     pub has_credentials: bool,
+    /// Comma-separated group names allowed to use this entry (empty = open).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub allowed_groups: String,
     /// VNC color depth.
     pub color_depth: Option<u8>,
     /// SSH tunnel jump hosts (no credentials exposed).
@@ -483,6 +486,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             prompt_credentials: e.prompt_credentials,
             has_credentials: e.password.as_ref().is_some_and(|p| !p.is_empty())
                 || e.private_key.as_ref().is_some_and(|k| !k.is_empty()),
+            allowed_groups: String::new(), // filled from the DB row by the handler
             color_depth: e.color_depth,
             jump_hosts,
             remote_app: e.remote_app.clone(),

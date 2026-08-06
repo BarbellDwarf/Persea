@@ -156,6 +156,8 @@ pub struct LoginTemplate {
     pub saml_button_text: String,
     /// One entry per configured OIDC provider (multi-provider SSO).
     pub oidc_providers: Vec<String>,
+    /// Error message from a failed login redirect (`/?error=...`).
+    pub error: Option<String>,
 }
 
 impl IntoResponse for LoginTemplate {

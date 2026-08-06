@@ -87,6 +87,14 @@ async fn redirect_to_mfa(db: &Db, user: &db::User, ttl_secs: u64) -> Response {
 }
 
 /// GET / — login page (or redirect to connections if already authenticated).
+#[derive(serde::Deserialize)]
+pub struct LoginQueryParams {
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub next: Option<String>,
+}
+
 pub async fn login_page(
     State(state): State<crate::api::AppState>,
     _addr: ConnectInfo<SocketAddr>,
@@ -95,6 +103,7 @@ pub async fn login_page(
     Extension(oidc_enabled): Extension<OidcEnabled>,
     oidc_provider_names: Option<Extension<OidcProviderNames>>,
     Extension(_nonce): Extension<CspNonce>,
+    axum::extract::Query(query): axum::extract::Query<LoginQueryParams>,
 ) -> Response {
     // Redirect to setup wizard if no users exist (first run)
     if crate::handlers::setup::needs_setup(&database) {
@@ -145,6 +154,7 @@ pub async fn login_page(
         oidc_button_text: "Sign in with SSO".into(),
         saml_button_text: "Sign in with SSO".into(),
         oidc_providers: providers,
+        error: query.error,
     };
 
     tmpl.into_response()
@@ -178,8 +188,31 @@ pub async fn login_submit(
             subject,
             display_name,
             role,
+            groups,
             ..
         } => {
+            // Auto-provision local groups from provider claims (SAML/LDAP/
+            // RADIUS) so folder ACLs referencing them work without manual
+            // mapping — same behavior as the OIDC callback.
+            if !groups.is_empty() {
+                let db_groups = database.clone();
+                let groups_provision = groups.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    match db::ensure_local_groups(&db_groups, &groups_provision) {
+                        Ok(created) if created > 0 => {
+                            tracing::info!(
+                                created,
+                                "auto-provisioned local groups from auth claims"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to auto-provision local groups")
+                        }
+                    }
+                })
+                .await;
+            }
             // Look up the user to get their ID
             let db_clone = database.clone();
             let email = subject.clone();

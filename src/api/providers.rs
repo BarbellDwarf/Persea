@@ -56,7 +56,14 @@ fn require_admin(identity: &Option<Extension<AuthIdentity>>) -> Result<(), AppEr
 
 /// Secret-bearing config keys, masked in API responses. The chain merge and
 /// the PUT endpoint operate on the unmasked DB row; only API output masks.
-const SECRET_KEYS: &[&str] = &["client_secret", "bind_password", "shared_secret", "secret"];
+const SECRET_KEYS: &[&str] = &[
+    "client_secret",
+    "bind_password",
+    "shared_secret",
+    "secret",
+    // SAML SP signing key (PEM) — equivalent to a private key.
+    "private_key",
+];
 
 fn mask_config(config: &Value) -> Value {
     let mut out = config.clone();
@@ -114,6 +121,16 @@ pub async fn create_provider(
     let name = body.name.trim().to_string();
     if name.is_empty() {
         return Err(AppError::Validation("name is required".into()));
+    }
+    // Provider names appear in URLs (SSO buttons) and cookies — keep them
+    // to a safe charset so no encoding/escaping can be bypassed.
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'))
+    {
+        return Err(AppError::Validation(
+            "name may only contain letters, digits, spaces, '-', '_' and '.'".into(),
+        ));
     }
     if !providers_db::PROVIDER_TYPES.contains(&body.provider_type.as_str()) {
         return Err(AppError::Validation(format!(
@@ -179,23 +196,35 @@ pub async fn update_provider(
             .ok_or_else(|| AppError::Session("provider not found".into()))?;
         // Secret fields sent empty (or as the masked sentinel from a GET
         // round-trip) keep their stored value — the config modal shows them
-        // blank with "leave blank to keep". Validation runs on the merged
-        // config so required secrets still pass.
+        // blank with "leave blank to keep". Secrets must be strings; any
+        // other type is rejected so masking can never be bypassed. When a
+        // secret is blank but nothing is stored, the key is dropped so
+        // validation fails for providers that require it — the correct error
+        // rather than storing the literal sentinel.
         let mut merged = body_clone;
-        if let (Some(obj), Some(old_obj)) = (merged.as_object_mut(), existing.config.as_object()) {
+        if let Some(obj) = merged.as_object_mut() {
             for key in SECRET_KEYS {
-                let keep = match obj.get(*key) {
-                    Some(Value::String(inner)) => {
-                        inner.is_empty()
-                            || inner == "\u{2022}\u{2022}\u{2022}configured\u{2022}\u{2022}\u{2022}"
+                let masked = "\u{2022}\u{2022}\u{2022}configured\u{2022}\u{2022}\u{2022}";
+                match obj.get(*key) {
+                    Some(Value::String(inner)) if inner.is_empty() || inner == masked => {
+                        if let Some(old_val) = existing
+                            .config
+                            .as_object()
+                            .and_then(|o| o.get(*key))
+                            .cloned()
+                        {
+                            obj.insert((*key).to_string(), old_val);
+                        } else {
+                            obj.remove(*key);
+                        }
                     }
-                    None => true,
-                    _ => false,
-                };
-                if keep {
-                    if let Some(old_val) = old_obj.get(*key) {
-                        obj.insert((*key).to_string(), old_val.clone());
+                    Some(Value::String(_)) => {}
+                    Some(_) => {
+                        return Err(AppError::Validation(format!(
+                            "provider config key '{key}' must be a string"
+                        )));
                     }
+                    None => {}
                 }
             }
         }
@@ -285,7 +314,9 @@ pub async fn move_provider(
         json!({"action": "move_provider", "id": id}),
     )
     .await;
-    Ok(Json(json!({ "ok": true, "provider": provider })))
+    Ok(Json(
+        json!({ "ok": true, "provider": mask_provider(provider) }),
+    ))
 }
 
 /// GET /api/auth/providers/{id}/config — the raw config JSON object.

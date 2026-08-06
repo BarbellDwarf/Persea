@@ -205,9 +205,22 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
         let addr = value
             .as_str()
             .ok_or_else(|| AppError::Validation(format!("{key} must be a string")))?;
-        addr.parse::<SocketAddr>().map_err(|_| {
-            AppError::Validation(format!("{key} must be a valid host:port address"))
-        })?;
+        if key == "listen_addr" {
+            addr.parse::<SocketAddr>().map_err(|_| {
+                AppError::Validation(format!("{key} must be a valid host:port address"))
+            })?;
+        } else {
+            // guacd_addr mirrors the config validation: IP:port OR
+            // hostname:port, only the port is checked.
+            match addr.rsplit(':').next() {
+                Some(p) if p.parse::<u16>().is_ok() => {}
+                _ => {
+                    return Err(AppError::Validation(format!(
+                        "{key} must end in a valid port (:1-65535)"
+                    )));
+                }
+            }
+        }
         Ok(addr.to_string())
     } else if STRING_KEYS.contains(&key) {
         Ok(value
@@ -232,9 +245,11 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
     } else if BOOL_KEYS.contains(&key) {
         Ok(parse_bool(value, key)?.to_string())
     } else {
-        // Unknown keys are ignored so partial form submissions (e.g. from
-        // older templates) never break the save.
-        Ok(String::new())
+        // A key in SETTING_KEYS without a type handler is a programming
+        // error — fail loudly instead of silently persisting "".
+        Err(AppError::Validation(format!(
+            "internal error: no validator for settings key '{key}'"
+        )))
     }
 }
 
@@ -244,6 +259,7 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
 pub async fn put_settings(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    baseline: Option<Extension<SettingsBaseline>>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, AppError> {
     if !is_admin(&identity) {
@@ -284,5 +300,9 @@ pub async fn put_settings(
     let stored = tokio::task::spawn_blocking(move || read_all_settings(&db_clone))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
-    Ok(Json(effective_settings(&stored)))
+    // Same merge as GET so PUT and GET always agree on effective values.
+    Ok(Json(effective_settings_with_baseline(
+        baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
+        &stored,
+    )))
 }

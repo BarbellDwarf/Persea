@@ -188,6 +188,7 @@ pub async fn cmd_db_migrate_from_vault(
                 continue;
             }
 
+            let mut inserted_ok = false;
             if dry_run {
                 println!(
                     "  [entry]  {}/{} ({})",
@@ -195,19 +196,22 @@ pub async fn cmd_db_migrate_from_vault(
                 );
                 entries_migrated += 1;
             } else {
-                match insert_ab_entry(
+                let inserted = insert_ab_entry(
                     &database,
                     scope,
                     parent_group_id.as_deref().unwrap_or(""),
                     entry_name,
                     &entry,
                     &enc_key,
-                ) {
+                    overwrite,
+                );
+                match &inserted {
                     Ok(()) => {
                         println!(
                             "  migrated: {}/{} ({})",
                             folder_path, entry_name, entry.session_type
                         );
+                        inserted_ok = true;
                         entries_migrated += 1;
                     }
                     Err(e) => {
@@ -217,8 +221,10 @@ pub async fn cmd_db_migrate_from_vault(
                 }
             }
 
-            // Optionally delete from Vault after migration
-            if vault_delete && !dry_run {
+            // Optionally delete from Vault after migration — only when the
+            // DB write succeeded, so the source of truth is never destroyed
+            // by a failed insert.
+            if vault_delete && !dry_run && inserted_ok {
                 if let Err(e) = vault.delete_entry(scope, folder_path, entry_name).await {
                     eprintln!(
                         "  Warning: failed to delete {}/{} from Vault: {}",
@@ -588,11 +594,12 @@ fn insert_ab_entry(
     name: &str,
     entry: &AddressBookEntry,
     enc_key: &EncryptionKey,
+    overwrite: bool,
 ) -> Result<(), String> {
     let folder =
         db::get_ab_folder(db, scope, folder_path).map_err(|e| format!("folder lookup: {}", e))?;
     let protocol_config = crate::api::address_book::build_protocol_config(entry);
-    let entry_id = db::create_ab_entry(
+    let entry_id = match db::create_ab_entry(
         db,
         folder.id,
         name,
@@ -603,8 +610,29 @@ fn insert_ab_entry(
         entry.username.as_deref().unwrap_or(""),
         &serde_json::to_string(&protocol_config).unwrap_or_else(|_| "{}".into()),
         "",
-    )
-    .map_err(|e| format!("insert entry: {}", e))?;
+    ) {
+        Ok(id) => id,
+        // A re-run with --overwrite updates the existing row instead of
+        // failing on the UNIQUE(folder_id, name) constraint.
+        Err(e) if overwrite => {
+            let existing = db::get_ab_entry(db, folder.id, name)
+                .map_err(|e2| format!("overwrite lookup: {}", e2))?;
+            db::update_ab_entry(
+                db,
+                existing.id,
+                entry.display_name.as_deref().unwrap_or(name),
+                &entry.session_type,
+                entry.hostname.as_deref().unwrap_or(""),
+                entry.port,
+                entry.username.as_deref().unwrap_or(""),
+                &serde_json::to_string(&protocol_config).unwrap_or_else(|_| "{}".into()),
+                "",
+            )
+            .map_err(|e2| format!("overwrite update: {}", e2))?;
+            existing.id
+        }
+        Err(e) => return Err(format!("insert entry: {}", e)),
+    };
 
     // Credential fields are encrypted with the configured storage key and
     // stored in the credentials table (the same path the runtime uses).

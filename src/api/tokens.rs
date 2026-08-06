@@ -489,11 +489,16 @@ pub async fn list_credential_variables(
             }
         }
 
-        // BFS: folders are flat rows whose names carry slash hierarchy.
-        for sub in folders
-            .iter()
-            .filter(|f| f.scope == scope && f.name.starts_with(&format!("{}/", path)))
-        {
+        // BFS: folders are flat rows whose names carry slash hierarchy —
+        // push only IMMEDIATE children (a grandchild is pushed when its
+        // parent is processed, so it can never be visited twice).
+        for sub in folders.iter().filter(|f| {
+            f.scope == scope
+                && f.name
+                    .strip_prefix(&format!("{}/", path))
+                    .map(|rest| !rest.contains('/'))
+                    .unwrap_or(false)
+        }) {
             stack.push((scope.clone(), sub.name.clone()));
         }
     }

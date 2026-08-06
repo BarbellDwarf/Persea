@@ -64,16 +64,14 @@ pub struct OidcRegistry {
 }
 
 impl OidcRegistry {
-    /// Resolve a provider by name, falling back to the first configured
-    /// provider when the name is absent or unknown.
+    /// Resolve a provider by name. An absent name falls back to the first
+    /// configured provider; an UNKNOWN name returns `None` so a stale or
+    /// typo'd `?provider=` never silently signs the user into a different
+    /// IdP than the one they clicked.
     pub fn get(&self, name: Option<&str>) -> Option<&OidcProvider> {
-        if let Some(n) = name {
-            self.providers
-                .iter()
-                .find(|p| p.name == n)
-                .or_else(|| self.providers.first())
-        } else {
-            self.providers.first()
+        match name {
+            Some(n) => self.providers.iter().find(|p| p.name == n),
+            None => self.providers.first(),
         }
     }
 }
@@ -207,14 +205,23 @@ pub async fn login(
             .hash(&mut h);
         format!("{:x}", h.finish())
     };
-    let cookie_value = format!("{}:{}:{}", state_key, fingerprint, provider.name);
+    let cookie_value = format!("{}:{}", state_key, fingerprint);
 
     let state_cookie = format!(
         "persea_oidc_state={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
         cookie_value
     );
+    // The provider name lives in its own cookie (names may contain colons,
+    // which would be ambiguous inside the state cookie).
+    let provider_cookie = format!(
+        "persea_oidc_provider={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
+        provider.name
+    );
 
-    let mut cookies = vec![(header::SET_COOKIE, state_cookie)];
+    let mut cookies = vec![
+        (header::SET_COOKIE, state_cookie),
+        (header::SET_COOKIE, provider_cookie),
+    ];
 
     // Store post-login redirect URL in a cookie if provided and safe
     if let Some(ref next) = params.next {
@@ -276,20 +283,11 @@ pub async fn callback(
         }
     };
 
-    // Resolve which provider this flow belongs to from the state cookie
-    // (`state_key:fingerprint:provider_name`); falls back to the first
-    // configured provider for cookies written before multi-provider support.
-    let provider_cookie = extract_cookie(&headers, "persea_oidc_state").and_then(|v| {
-        let mut parts = v.rsplitn(3, ':');
-        let name = parts.next()?;
-        let fingerprint = parts.next()?;
-        if fingerprint.is_empty() {
-            None
-        } else {
-            Some(name.to_string())
-        }
-    });
-    let provider = registry.get(provider_cookie.as_deref());
+    // Resolve which provider this flow belongs to from the provider cookie
+    // (set alongside the state cookie at login). Cookies from before
+    // multi-provider support have no provider cookie and fall back to the
+    // first configured provider.
+    let provider = registry.get(extract_cookie(&headers, "persea_oidc_provider").as_deref());
     let Some(oidc) = provider.map(|p| &p.state) else {
         tracing::warn!("OIDC callback: no provider configured");
         return (
@@ -302,36 +300,35 @@ pub async fn callback(
     // Verify the state cookie matches the state query parameter (binds flow to browser)
     // Cookie format is "state_key:fingerprint" — verify both
     let state_cookie = extract_cookie(&headers, "persea_oidc_state");
+    // Format: `state_key:fingerprint` (provider name lives in its own
+    // cookie). Old 2-part cookies parse identically.
     let cookie_valid = match state_cookie.as_deref() {
-        Some(cookie_val) => {
-            // Format: `state_key:fingerprint[:provider_name]` — split from
-            // the right so the provider name (a config label) can contain
-            // colons without breaking the parse.
-            let parts: Vec<&str> = cookie_val.rsplitn(3, ':').collect();
-            let cookie_state = parts.get(2).copied().unwrap_or("");
-            let cookie_fingerprint = parts.get(1).copied().unwrap_or("");
-            if cookie_state != state {
-                false
-            } else {
-                // Verify fingerprint matches current request
-                use std::collections::hash_map::DefaultHasher;
-                use std::hash::{Hash, Hasher};
-                let mut h = DefaultHasher::new();
-                headers
-                    .get("x-forwarded-for")
-                    .or_else(|| headers.get("x-real-ip"))
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("unknown")
-                    .hash(&mut h);
-                headers
-                    .get(header::USER_AGENT)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("unknown")
-                    .hash(&mut h);
-                let current_fp = format!("{:x}", h.finish());
-                cookie_fingerprint == current_fp
+        Some(cookie_val) => match cookie_val.split_once(':') {
+            Some((cookie_state, cookie_fingerprint)) => {
+                if cookie_state != state {
+                    false
+                } else {
+                    // Verify fingerprint matches current request
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    let mut h = DefaultHasher::new();
+                    headers
+                        .get("x-forwarded-for")
+                        .or_else(|| headers.get("x-real-ip"))
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown")
+                        .hash(&mut h);
+                    headers
+                        .get(header::USER_AGENT)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown")
+                        .hash(&mut h);
+                    let current_fp = format!("{:x}", h.finish());
+                    cookie_fingerprint == current_fp
+                }
             }
-        }
+            None => false,
+        },
         None => false,
     };
     if !cookie_valid {
