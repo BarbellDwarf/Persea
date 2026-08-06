@@ -136,9 +136,11 @@ sudo systemctl enable --now persea
 
 ### Docker
 
+Images are published to the GitHub Container Registry:
+
 ```bash
-docker pull persea/persea:latest
-docker run -d -p 8089:8089 persea/persea:latest
+docker pull ghcr.io/barbelldwarf/persea:latest
+docker run -d -p 8089:8089 ghcr.io/barbelldwarf/persea:latest
 ```
 
 For VDI support, mount the Docker socket:
@@ -147,7 +149,7 @@ For VDI support, mount the Docker socket:
 docker run -d -p 8089:8089 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --group-add $(getent group docker | cut -d: -f3) \
-  persea/persea:latest
+  ghcr.io/barbelldwarf/persea:latest
 ```
 
 ### Other distributions

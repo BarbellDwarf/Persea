@@ -30,6 +30,23 @@ const CREDENTIAL_FIELDS: &[&str] = &[
     "spice_ca_cert",
 ];
 
+/// Resolve the AES-256-GCM encryption key hex string from the environment.
+/// `PERSEA_STORAGE_KEY` is the standard name (matches the runtime app);
+/// `ENCRYPTION_KEY` is a legacy fallback, read only when the primary var is
+/// unset (a deprecation notice is printed to stderr when it is used).
+fn resolve_enc_key_hex_from_env() -> Option<String> {
+    match std::env::var("PERSEA_STORAGE_KEY") {
+        Ok(k) if !k.is_empty() => Some(k),
+        _ => match std::env::var("ENCRYPTION_KEY") {
+            Ok(k) if !k.is_empty() => {
+                eprintln!("Warning: ENCRYPTION_KEY is deprecated; set PERSEA_STORAGE_KEY instead");
+                Some(k)
+            }
+            _ => None,
+        },
+    }
+}
+
 /// Run the `db-migrate-from-vault` subcommand.
 pub async fn cmd_db_migrate_from_vault(
     config: &Config,
@@ -43,18 +60,25 @@ pub async fn cmd_db_migrate_from_vault(
         std::process::exit(1);
     }
 
-    // Resolve encryption key from env var
-    let enc_key_hex = match std::env::var("ENCRYPTION_KEY") {
-        Ok(k) if !k.is_empty() => k,
-        _ => {
-            eprintln!("Error: ENCRYPTION_KEY env var required (64-char hex string)");
+    // Resolve encryption key from env var (PERSEA_STORAGE_KEY primary,
+    // ENCRYPTION_KEY as legacy fallback)
+    let enc_key_hex = match resolve_enc_key_hex_from_env() {
+        Some(k) => k,
+        None => {
+            eprintln!(
+                "Error: PERSEA_STORAGE_KEY env var required (64-char hex string); \
+                 ENCRYPTION_KEY is accepted as a legacy fallback"
+            );
             std::process::exit(1);
         }
     };
     let enc_key = match EncryptionKey::from_hex(&enc_key_hex) {
         Ok(k) => k,
         Err(e) => {
-            eprintln!("Error: invalid ENCRYPTION_KEY: {}", e);
+            eprintln!(
+                "Error: invalid PERSEA_STORAGE_KEY (or legacy ENCRYPTION_KEY): {}",
+                e
+            );
             std::process::exit(1);
         }
     };
@@ -623,4 +647,57 @@ fn insert_user_credentials(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Serialize env-var mutation across the tests in this module (the
+    /// process-wide environment is shared between parallel tests).
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn clear_enc_env() {
+        std::env::remove_var("PERSEA_STORAGE_KEY");
+        std::env::remove_var("ENCRYPTION_KEY");
+    }
+
+    #[test]
+    fn enc_key_prefers_persea_storage_key() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_enc_env();
+        std::env::set_var("PERSEA_STORAGE_KEY", "primary-key");
+        std::env::set_var("ENCRYPTION_KEY", "legacy-key");
+        assert_eq!(
+            resolve_enc_key_hex_from_env().as_deref(),
+            Some("primary-key")
+        );
+    }
+
+    #[test]
+    fn enc_key_falls_back_to_legacy_name() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_enc_env();
+        std::env::set_var("ENCRYPTION_KEY", "legacy-key");
+        assert_eq!(
+            resolve_enc_key_hex_from_env().as_deref(),
+            Some("legacy-key")
+        );
+    }
+
+    #[test]
+    fn enc_key_empty_vars_are_treated_as_unset() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_enc_env();
+        std::env::set_var("PERSEA_STORAGE_KEY", "");
+        std::env::set_var("ENCRYPTION_KEY", "");
+        assert_eq!(resolve_enc_key_hex_from_env(), None);
+    }
+
+    #[test]
+    fn enc_key_missing_returns_none() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        clear_enc_env();
+        assert_eq!(resolve_enc_key_hex_from_env(), None);
+    }
 }

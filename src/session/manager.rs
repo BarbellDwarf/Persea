@@ -24,6 +24,8 @@ pub struct SessionManager {
     /// Set to `true` when a shutdown signal is received. Prevents new session
     /// creation while allowing existing sessions to drain gracefully.
     pub(super) shutdown: Arc<AtomicBool>,
+    /// Effective recording directory, resolved once at construction.
+    pub(super) recording_dir: std::path::PathBuf,
     /// Notified when `shutdown` flips to `true` so background tasks can exit.
     pub(super) shutdown_notify: Arc<tokio::sync::Notify>,
 }
@@ -37,14 +39,17 @@ impl SessionManager {
 
     pub fn new(config: Config, guacd_tls: Option<TlsConnector>) -> Self {
         // Ensure recording directory exists with restrictive permissions
-        let rec_path = config.effective_recording_path();
-        if let Err(e) = std::fs::create_dir_all(rec_path) {
+        let recording_dir = config.effective_recording_path().into_owned();
+        if let Err(e) = std::fs::create_dir_all(&recording_dir) {
             tracing::warn!("Failed to create recording directory: {}", e);
         } else {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(rec_path, std::fs::Permissions::from_mode(0o750));
+                let _ = std::fs::set_permissions(
+                    &recording_dir,
+                    std::fs::Permissions::from_mode(0o750),
+                );
             }
         }
 
@@ -69,6 +74,7 @@ impl SessionManager {
             db: None,
             vdi_driver,
             shutdown: Arc::new(AtomicBool::new(false)),
+            recording_dir,
             shutdown_notify: Arc::new(tokio::sync::Notify::new()),
         }
     }
@@ -496,12 +502,12 @@ impl SessionManager {
     }
 
     pub fn recording_path(&self) -> &std::path::Path {
-        self.config.effective_recording_path()
+        &self.recording_dir
     }
 
     /// Path to the thumbnails directory (under recording_path).
     pub fn thumbnails_dir(&self) -> std::path::PathBuf {
-        self.config.effective_recording_path().join("thumbnails")
+        self.recording_dir.join("thumbnails")
     }
 
     /// Path to a specific session's thumbnail file.

@@ -1,5 +1,8 @@
 # Web Browser Sessions
 
+> **Audience:** admins enabling and securing web browser sessions (autofill, domain allowlists, login scripts).
+> **Next:** [Security](security.md#web-session-hardening) for hardening, or [Configuration](configuration.md#browser-session-settings) for the browser settings.
+
 Web browser sessions give users a full Chromium browser running on the server, streamed to their own browser via the Guacamole protocol. Each session spawns a headless Xvnc display with Chromium in kiosk mode. The user sees and interacts with a real browser without installing anything locally.
 
 This supports several use cases:

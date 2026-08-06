@@ -392,7 +392,7 @@ mod tests {
         let mut config = crate::config::Config::default();
         let tmp =
             std::env::temp_dir().join(format!("persea-sessmgr-test-{}", uuid::Uuid::new_v4()));
-        config.recording_path = tmp.clone();
+        config.recording_path = Some(tmp.clone());
         // xvnc/chromium paths are only stored, not exec'd — placeholders are fine.
         config.xvnc_path = "/bin/true".into();
         config.chromium_path = "/bin/true".into();

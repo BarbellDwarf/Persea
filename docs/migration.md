@@ -1,5 +1,8 @@
 # Migrating from Apache Guacamole
 
+> **Audience:** admins migrating from Apache Guacamole to persea, or moving persea connections between storage backends.
+> **Next:** [Configuration](configuration.md) for the `[vault]`, `[storage]`, and `[vault_shared]`/`[vault_local]` sections these commands rely on.
+
 persea can import connections from an Apache Guacamole MySQL/MariaDB database into its Vault-backed connections.
 
 ## Prerequisites
@@ -125,6 +128,78 @@ Once imported, connections appear in the connections UI. You can:
 - The import is additive: existing entries in the target folder are left untouched. If you re-run the import, entries with the same name will be updated.
 - Guacamole user/group permissions are not imported. Use persea's OIDC group mappings and folder `allowed_groups` instead.
 - Credentials (passwords, private keys) are imported into Vault, stored encrypted at rest and never touching disk.
+
+# Migrating from Vault to the database backend
+
+If you want to stop using Vault and store connections in the database instead
+(the `[storage]` backend, see [Configuration](configuration.md#storage-section)),
+the `db-migrate-from-vault` subcommand copies address-book entries out of Vault
+into the DB's `connection_groups` / `connections` tables. Credential fields are
+encrypted with AES-256-GCM on the way in; non-credential fields are stored as
+plain JSON params. Per-user credential variables (the `users/` subtree) are
+migrated too, with values encrypted.
+
+The command is idempotent: entries whose `(name, group_id)` already exist in
+the DB are skipped unless `--overwrite` is given. It exits non-zero if any
+entry failed to migrate.
+
+## Step 1: Preview
+
+```bash
+PERSEA_STORAGE_KEY=<64-char-hex-key> VAULT_SECRET_ID=... \
+persea --config /opt/persea/config.toml \
+  db-migrate-from-vault --scope shared --dry-run
+```
+
+The dry run prints every folder group, entry, and user credential set it would
+migrate, plus a summary line.
+
+## Step 2: Migrate
+
+```bash
+PERSEA_STORAGE_KEY=<64-char-hex-key> VAULT_SECRET_ID=... \
+persea --config /opt/persea/config.toml \
+  db-migrate-from-vault --scope shared
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--scope` | (required) | `shared` or `instance` |
+| `--overwrite` | off | Overwrite entries that already exist in the DB (default: skip existing) |
+| `--dry-run` | off | Preview without writing to the DB |
+| `--vault-delete` | off | Delete entries from Vault after a successful migration (not applicable to user credentials) |
+
+## Requirements
+
+- `[vault]` configured in `config.toml` (the source) and `VAULT_SECRET_ID` set
+- `PERSEA_STORAGE_KEY` set to the 64-character hex key that will encrypt the
+  DB credentials (`ENCRYPTION_KEY` is accepted as a legacy fallback name).
+  This must be the same key persea runs with afterwards, or it will not be able
+  to decrypt the credentials. Generate one with `openssl rand -hex 32`.
+
+## What gets encrypted
+
+`password`, `private_key`, `container_password`, `proxmox_token_secret`,
+`jump_password`, `jump_private_key`, and `spice_ca_cert` values are encrypted
+(`enc:v1:` prefix). Credential variable references (e.g. `$corp_password`, see
+[Credential Variables](credential-variables.md)) are **not** encrypted — they
+are kept as-is so they keep resolving after the migration.
+
+## Cut over
+
+Once the migration succeeds, run persea with the DB storage backend:
+
+```toml
+[storage]
+backend = "db"
+encryption_key = "<64-char-hex-key>"
+```
+
+(or `PERSEA_STORAGE_KEY` in the environment). The API serves Vault data when
+Vault is reachable and falls back to the DB, so keep `[vault]` configured until
+you have verified the DB entries, then remove it if you no longer need it.
 
 # Splitting to multiple Vaults (disaster recovery)
 
