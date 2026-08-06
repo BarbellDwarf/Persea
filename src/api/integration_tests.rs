@@ -18,6 +18,17 @@ fn test_db() -> Db {
     db::init_db(std::path::Path::new(":memory:")).expect("Failed to create test DB")
 }
 
+/// Whether a local guacd is listening on the default port (127.0.0.1:4822).
+/// Quick-connect tests that create real sessions need it; CI does not run
+/// guacd, so those tests skip there.
+fn guacd_reachable() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:4822".parse().unwrap(),
+        std::time::Duration::from_millis(300),
+    )
+    .is_ok()
+}
+
 fn insert_test_admin(db: &Db, name: &str) -> String {
     let key = format!("test-key-{}", name);
     let key_hash = {
@@ -1286,6 +1297,10 @@ async fn test_quick_connect_reads_credentials_from_db() {
 
 #[tokio::test]
 async fn test_quick_connect_reads_credentials_from_vault() {
+    if !guacd_reachable() {
+        eprintln!("skipping: no guacd on 127.0.0.1:4822");
+        return;
+    }
     let db = test_db();
     let key = insert_test_admin(&db, "admin");
     seed_ssh_entry(&db, "QC", "vaultcred");
