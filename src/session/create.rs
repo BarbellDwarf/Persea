@@ -439,6 +439,11 @@ impl SessionManager {
                 let pve_url = proxmox.and_then(|s| s.proxmox_url.clone()).ok_or_else(|| {
                     SessionError::ValidationError("Proxmox sessions require proxmox_url".into())
                 })?;
+
+                let (pve_host, pve_port) = parse_host_port(&pve_url, 8006)?;
+                check_allowed_network(&pve_host, pve_port, &self.config.web_allowed_networks)
+                    .await?;
+
                 let vmid = proxmox.and_then(|s| s.proxmox_vmid).unwrap_or(0);
                 if vmid == 0 {
                     return Err(SessionError::ValidationError(
