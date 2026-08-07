@@ -302,7 +302,7 @@ impl BrowserManager {
 
         // Per-session domain allowlist via --host-rules.
         // Maps all hosts to a non-routable address except the allowed ones.
-        // Always blocks internal/metadata IPs (localhost, 169.254.169.254)
+        // Always blocks internal/metadata IPs (localhost, 169.254.0.0/16)
         // even without an explicit allowlist.
         let host_rules_arg = {
             let mut rules = String::from("MAP * ~NOTFOUND");
@@ -650,123 +650,11 @@ fn encrypt_chromium_password(plaintext: &str) -> Result<Vec<u8>, String> {
 /// `logins` table and inserts encrypted credentials for each (origin_url,
 /// username, password) tuple.
 fn populate_login_data(
-    profile_dir: &Path,
-    credentials: &[(String, String, String)],
+    _profile_dir: &Path,
+    _credentials: &[(String, String, String)],
 ) -> Result<(), String> {
-    let default_dir = profile_dir.join("Default");
-    std::fs::create_dir_all(&default_dir).map_err(|e| format!("create Default dir: {}", e))?;
-
-    // Write Preferences to enable the password manager and autofill
-    let prefs = serde_json::json!({
-        "credentials_enable_service": true,
-        "credentials_enable_autosignin": true,
-        "profile": {
-            "password_manager_enabled": true
-        },
-        "autofill": {
-            "enabled": true
-        },
-        "password_manager": {
-            "saving_enabled": false
-        },
-        "download": {
-            "prompt_for_download": false
-        }
-    });
-    let prefs_path = default_dir.join("Preferences");
-    std::fs::write(&prefs_path, prefs.to_string())
-        .map_err(|e| format!("write Preferences: {}", e))?;
-
-    let db_path = default_dir.join("Login Data");
-    let conn =
-        rusqlite::Connection::open(&db_path).map_err(|e| format!("open Login Data: {}", e))?;
-
-    // Schema must match what Chromium expects exactly, including the meta table
-    // with version/last_compatible_version. Without this, Chromium crashes on startup.
-    // Schema sourced from Chromium 134 on Debian 13 (version 43).
-    conn.execute_batch(
-        "CREATE TABLE meta(key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY, value LONGVARCHAR);
-        INSERT INTO meta VALUES('mmap_status','-1');
-        INSERT INTO meta VALUES('version','43');
-        INSERT INTO meta VALUES('last_compatible_version','40');
-        CREATE TABLE logins (
-            origin_url VARCHAR NOT NULL,
-            action_url VARCHAR,
-            username_element VARCHAR,
-            username_value VARCHAR,
-            password_element VARCHAR,
-            password_value BLOB,
-            submit_element VARCHAR,
-            signon_realm VARCHAR NOT NULL,
-            date_created INTEGER NOT NULL,
-            blacklisted_by_user INTEGER NOT NULL,
-            scheme INTEGER NOT NULL,
-            password_type INTEGER,
-            times_used INTEGER,
-            form_data BLOB,
-            display_name VARCHAR,
-            icon_url VARCHAR,
-            federation_url VARCHAR,
-            skip_zero_click INTEGER,
-            generation_upload_status INTEGER,
-            possible_username_pairs BLOB,
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date_last_used INTEGER NOT NULL DEFAULT 0,
-            moving_blocked_for BLOB,
-            date_password_modified INTEGER NOT NULL DEFAULT 0,
-            sender_email VARCHAR,
-            sender_name VARCHAR,
-            date_received INTEGER,
-            sharing_notification_displayed INTEGER NOT NULL DEFAULT 0,
-            keychain_identifier BLOB,
-            sender_profile_image_url VARCHAR,
-            date_last_filled INTEGER NOT NULL DEFAULT 0,
-            actor_login_approved INTEGER NOT NULL DEFAULT 0,
-            UNIQUE (origin_url, username_element, username_value, password_element, signon_realm)
-        );
-        CREATE INDEX logins_signon ON logins (signon_realm);
-        CREATE TABLE sync_entities_metadata (storage_key INTEGER PRIMARY KEY AUTOINCREMENT, metadata VARCHAR NOT NULL);
-        CREATE TABLE sync_model_metadata (id INTEGER PRIMARY KEY AUTOINCREMENT, model_metadata VARCHAR NOT NULL);
-        CREATE TABLE insecure_credentials (parent_id INTEGER REFERENCES logins ON UPDATE CASCADE ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED, insecurity_type INTEGER NOT NULL, create_time INTEGER NOT NULL, is_muted INTEGER NOT NULL DEFAULT 0, trigger_notification_from_backend INTEGER NOT NULL DEFAULT 0, UNIQUE (parent_id, insecurity_type));
-        CREATE INDEX foreign_key_index ON insecure_credentials (parent_id);
-        CREATE TABLE password_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER NOT NULL REFERENCES logins ON UPDATE CASCADE ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED, key VARCHAR NOT NULL, value BLOB, date_created INTEGER NOT NULL, confidential INTEGER, UNIQUE (parent_id, key));
-        CREATE INDEX foreign_key_index_notes ON password_notes (parent_id);
-        CREATE TABLE stats (origin_domain VARCHAR NOT NULL, username_value VARCHAR, dismissal_count INTEGER, update_time INTEGER NOT NULL, UNIQUE(origin_domain, username_value));
-        CREATE INDEX stats_origin ON stats(origin_domain);",
-    )
-    .map_err(|e| format!("create Login Data schema: {}", e))?;
-
-    let now = chrono::Utc::now().timestamp_micros();
-
-    for (origin_url, username, password) in credentials {
-        let encrypted = encrypt_chromium_password(password)?;
-
-        // signon_realm is the origin with trailing slash (Chromium's format for HTML forms)
-        let signon_realm = match url::Url::parse(origin_url) {
-            Ok(u) => format!(
-                "{}://{}{}/",
-                u.scheme(),
-                u.host_str().unwrap_or(""),
-                u.port().map(|p| format!(":{}", p)).unwrap_or_default()
-            ),
-            Err(_) => format!("{}/", origin_url),
-        };
-
-        // Ensure origin_url has trailing slash to match Chromium's convention
-        let origin_with_slash = if origin_url.ends_with('/') {
-            origin_url.clone()
-        } else {
-            format!("{}/", origin_url)
-        };
-
-        conn.execute(
-            "INSERT INTO logins (origin_url, action_url, username_element, username_value, password_element, password_value, submit_element, signon_realm, date_created, blacklisted_by_user, scheme, password_type, times_used, skip_zero_click, date_last_used, date_password_modified)
-             VALUES (?1, '', '', ?2, '', ?3, '', ?4, ?5, 0, 0, 0, 1, 0, ?5, ?5)",
-            rusqlite::params![origin_with_slash, username, encrypted, signon_realm, now],
-        )
-        .map_err(|e| format!("insert login: {}", e))?;
-    }
-
+    // VDI sessions are ephemeral — don't populate Chromium's password store.
+    // Users enter credentials manually during the session.
     Ok(())
 }
 
@@ -864,7 +752,7 @@ mod tests {
     }
 
     #[test]
-    fn test_populate_login_data_creates_db() {
+    fn test_populate_login_data_noop() {
         let dir = std::env::temp_dir().join("persea-test-login-data");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -876,42 +764,9 @@ mod tests {
         )];
         populate_login_data(&dir, &creds).unwrap();
 
+        // VDI sessions are ephemeral — Login Data must NOT be created
         let db_path = dir.join("Default/Login Data");
-        assert!(db_path.exists(), "Login Data SQLite should be created");
-
-        // Verify the database is valid SQLite and has data
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM logins", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(count, 1);
-
-        let origin: String = conn
-            .query_row("SELECT origin_url FROM logins", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(origin, "https://example.com/");
-
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_populate_login_data_multiple_creds() {
-        let dir = std::env::temp_dir().join("persea-test-login-data-multi");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let creds = vec![
-            ("https://app.com".into(), "user1".into(), "pass1".into()),
-            ("https://idp.com".into(), "user2".into(), "pass2".into()),
-        ];
-        populate_login_data(&dir, &creds).unwrap();
-
-        let db_path = dir.join("Default/Login Data");
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM logins", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(count, 2);
+        assert!(!db_path.exists(), "Login Data SQLite should not be created for VDI sessions");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
