@@ -145,11 +145,20 @@
                         '<td class="px-4 py-3 text-sm text-gray-400">' + escapeHtml(String(duration)) + '</td>' +
                         '<td class="px-4 py-3 text-sm text-gray-500">' + escapeHtml(String(date)) + '</td>' +
                         '<td class="px-4 py-3 text-right">' +
-                            '<button onclick="playRecording(\'' + escapeHtml(name) + '\')" class="text-emerald-400 hover:text-emerald-300 text-sm mr-3">Play</button>' +
-                            '<button onclick="deleteRecording(\'' + escapeHtml(name) + '\')" class="text-red-400 hover:text-red-300 text-sm">Delete</button>' +
+                            '<button class="rec-play text-emerald-400 hover:text-emerald-300 text-sm mr-3" data-name="' + escapeAttr(name) + '">Play</button>' +
+                            '<button class="rec-delete text-red-400 hover:text-red-300 text-sm" data-name="' + escapeAttr(name) + '">Delete</button>' +
                         '</td>' +
                         '</tr>';
                 }).join('');
+
+                // Event delegation for play/delete buttons
+                list.addEventListener('click', function(ev) {
+                    var btn = ev.target.closest('.rec-play, .rec-delete');
+                    if (!btn) return;
+                    var name = btn.getAttribute('data-name');
+                    if (btn.classList.contains('rec-play')) playRecording(name);
+                    else if (btn.classList.contains('rec-delete')) deleteRecording(name);
+                });
             })
             .catch(function() {});
     }
