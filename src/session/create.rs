@@ -1502,7 +1502,7 @@ mod tests {
         // OIDC email username must reduce to a safe basename.
         let got = expand_typescript_name(
             "{connection}-{user}",
-            "alice@sol1.com.au",
+            "alice@example.com",
             "h",
             "../../etc/cron.d/evil",
             &ts_id(),
@@ -1510,7 +1510,7 @@ mod tests {
         );
         assert!(!got.contains('/'), "no path separators: {got}");
         assert!(!got.contains(".."), "no traversal: {got}");
-        assert_eq!(got, "etc-cron-d-evil-alice-sol1-com-au");
+        assert_eq!(got, "etc-cron-d-evil-alice-example-com");
     }
 
     #[test]

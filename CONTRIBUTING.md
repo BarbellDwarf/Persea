@@ -4,7 +4,7 @@
 
 ```bash
 # Clone the repo
-git clone https://github.com/BarbellDwarf/rustguac.git
+git clone https://github.com/BarbellDwarf/persea.git
 cd rustguac
 
 # Install dependencies and build guacd

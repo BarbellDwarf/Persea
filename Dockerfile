@@ -108,11 +108,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     cargo build --release
 
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY src/ src/
 COPY templates/ templates/
 COPY migrations/ migrations/
 COPY docs/ docs/
 COPY static/ static/
+COPY tailwind.config.js ./
+RUN npx --yes tailwindcss@3 -i static/css/input.css -o static/css/tailwind.min.css --minify
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

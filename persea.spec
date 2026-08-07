@@ -14,7 +14,7 @@ Version:        %{_version}
 Release:        1%{?dist}
 Summary:        Lightweight Rust replacement for Apache Guacamole client
 License:        Apache-2.0
-URL:            https://github.com/sol1/persea
+URL:            https://github.com/BarbellDwarf/persea
 
 BuildRequires:  systemd-rpm-macros
 

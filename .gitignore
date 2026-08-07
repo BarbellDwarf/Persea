@@ -52,6 +52,7 @@ rpm/staging/
 .claude/
 
 # Wayfinder - planning artifacts (local only)
+wayfinding/
 wayfinder/
 
 # Research (local only)

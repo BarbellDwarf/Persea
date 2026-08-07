@@ -324,7 +324,7 @@ Examples:
   sudo bash setup-xrdp-gfx.sh --desktop none     # No desktop (headless)
   bash setup-xrdp-gfx.sh --diagnose              # Troubleshoot (no root needed)
 
-For use with persea: https://github.com/sol1/persea
+For use with persea: https://github.com/BarbellDwarf/persea
 HELPEOF
     exit 0
 }

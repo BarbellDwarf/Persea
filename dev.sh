@@ -6,6 +6,7 @@
 #   ./dev.sh build-guacd    Build guacd from ../guacamole-server into .guacd-build/
 #   ./dev.sh start-guacd    Start guacd in foreground on localhost:4822
 #   ./dev.sh build           Build persea (cargo build)
+#   ./dev.sh tailwind        Build Tailwind CSS (input.css -> tailwind.min.css)
 #   ./dev.sh run             Build and run persea
 #   ./dev.sh start           Build guacd (if needed), build persea, start both
 #   ./dev.sh stop            Stop backgrounded guacd
@@ -199,6 +200,14 @@ cmd_build() {
     info "persea built."
 }
 
+#--- Build Tailwind CSS ---
+cmd_tailwind() {
+    info "Building Tailwind CSS..."
+    cd "$SCRIPT_DIR"
+    npx --yes tailwindcss@3 -i static/css/input.css -o static/css/tailwind.min.css --minify
+    info "Tailwind CSS built."
+}
+
 #--- Setup dev database with a dev admin ---
 cmd_setup_db() {
     local DB_PATH="${SCRIPT_DIR}/persea.db"
@@ -329,6 +338,7 @@ case "${1:-help}" in
     build-guacd)    cmd_build_guacd ;;
     start-guacd)    cmd_start_guacd ;;
     build)          cmd_build ;;
+    tailwind)       cmd_tailwind ;;
     run)            cmd_run ;;
     start)          cmd_start ;;
     stop)           cmd_stop ;;
@@ -343,6 +353,7 @@ case "${1:-help}" in
         echo "  build-guacd    Build guacd from ../guacamole-server into .guacd-build/"
         echo "  start-guacd    Start guacd in foreground (for debugging)"
         echo "  build          Build persea (cargo build)"
+        echo "  tailwind       Build Tailwind CSS (input.css -> tailwind.min.css)"
         echo "  run            Build and run persea only"
         echo "  start          Build everything, start guacd + persea together"
         echo "  stop           Stop backgrounded guacd"

@@ -2798,7 +2798,7 @@ mod tests {
             "10.0.0.1",
             Some(3389),
             "bench01",
-            "dave@sol1.com.au",
+            "dave@example.com",
             Some("shared/prod/rdp-host-1"),
             Some("prod"),
             Some("RDP Host 1"),
@@ -2811,7 +2811,7 @@ mod tests {
             "10.0.0.2",
             Some(22),
             "bench02",
-            "andy@sol1.com.au",
+            "andy@example.com",
             None,
             None,
             None,
@@ -2837,7 +2837,7 @@ mod tests {
             "h1",
             None,
             "",
-            "dave@sol1.com.au",
+            "dave@example.com",
             None,
             None,
             None,
@@ -2850,7 +2850,7 @@ mod tests {
             "h2",
             None,
             "",
-            "andy@sol1.com.au",
+            "andy@example.com",
             None,
             None,
             None,
@@ -2860,7 +2860,7 @@ mod tests {
         let (rows, total) =
             query_session_history(&db, Some("dave"), None, None, None, None, 100, 0).unwrap();
         assert_eq!(total, 1);
-        assert_eq!(rows[0]["created_by"], "dave@sol1.com.au");
+        assert_eq!(rows[0]["created_by"], "dave@example.com");
     }
 
     #[test]

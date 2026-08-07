@@ -121,6 +121,9 @@ build_guacd
 # ---------------------------------------------------------------------------
 # Step 3: Build persea
 # ---------------------------------------------------------------------------
+info "Building Tailwind CSS..."
+npx --yes tailwindcss@3 -i static/css/input.css -o static/css/tailwind.min.css --minify
+
 info "Building persea (cargo build --release)..."
 cd "$SCRIPT_DIR"
 cargo build --release
