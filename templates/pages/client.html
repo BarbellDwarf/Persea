@@ -475,6 +475,7 @@
 
         // ── Disconnect ──
         document.getElementById('btn-disconnect').addEventListener('click', function() {
+            if (!confirm('Disconnect from this session?')) return;
             userDisconnected = true;
             try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
             window.location.href = '/connections.html';
@@ -563,7 +564,7 @@
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 // Set protocol badge from session metadata
-                if (session && session.protocol) setProtocolBadge(session.protocol, session.address || session.address_book_folder || '');
+                if (session && (session.session_type || session.protocol)) setProtocolBadge(session.session_type || session.protocol, session.address || session.address_book_folder || '');
                 else if (entryName) setProtocolBadge('SSH', entryName);
                 return showBanner(session.banner);
             })
