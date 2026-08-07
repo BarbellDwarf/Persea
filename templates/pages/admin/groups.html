@@ -9,7 +9,7 @@
             <h1 class="text-2xl font-bold text-gray-100">Group Management</h1>
             <p class="text-sm text-gray-500 mt-1">Manage local groups and map auth-provider groups to them</p>
         </div>
-        <button onclick="openCreateModal()" class="btn btn-primary btn-sm">
+        <button data-action="open-create-modal" class="btn btn-primary btn-sm">
             + Create Group
         </button>
     </div>
@@ -57,7 +57,7 @@
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
-                <button type="button" onclick="closeCreateModal()" class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="button" data-action="close-create-modal" class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" id="btn-create-group" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Create</button>
             </div>
         </form>
@@ -81,7 +81,7 @@
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
-                <button type="button" onclick="closeEditModal()" class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="button" data-action="close-edit-modal" class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" id="btn-update-group" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Save</button>
             </div>
         </form>
@@ -97,7 +97,7 @@
         <label class="form-label">Add mapping</label>
         <div class="flex items-center gap-2 mb-4">
             <select id="mappings-select" class="form-input flex-1"></select>
-            <button onclick="addMapping()" class="btn btn-primary btn-sm whitespace-nowrap">Add</button>
+            <button data-action="add-mapping" class="btn btn-primary btn-sm whitespace-nowrap">Add</button>
         </div>
         <p id="mappings-elsewhere" class="text-xs text-gray-500 mb-3 hidden"></p>
 
@@ -106,7 +106,7 @@
         </ul>
 
         <div class="flex justify-end gap-3 mt-6">
-            <button type="button" onclick="closeMappingsModal()" class="btn btn-secondary btn-sm">Close</button>
+            <button type="button" data-action="close-mappings-modal" class="btn btn-secondary btn-sm">Close</button>
         </div>
     </div>
 </div>
@@ -121,8 +121,8 @@
             <code class="text-gray-300">allowed_groups</code> — the name still grants access by itself.
         </p>
         <div class="flex justify-end gap-3">
-            <button type="button" onclick="closeDeleteModal()" class="btn btn-secondary btn-sm">Cancel</button>
-            <button type="button" onclick="confirmDelete()" class="btn btn-danger btn-sm">Delete</button>
+            <button type="button" data-action="close-delete-modal" class="btn btn-secondary btn-sm">Cancel</button>
+            <button type="button" data-action="confirm-delete" class="btn btn-danger btn-sm">Delete</button>
         </div>
     </div>
 </div>
@@ -170,9 +170,9 @@ function renderGroupRow(g) {
         '<td class="px-4 py-3 text-sm">' + mapped + '</td>' +
         '<td class="px-4 py-3 text-sm text-gray-400">' + g.folder_count + '</td>' +
         '<td class="px-4 py-3 text-right text-sm whitespace-nowrap">' +
-            '<button onclick="openMappingsModal(' + g.id + ')" class="text-gray-400 hover:text-blue-400 mr-3">Mappings</button>' +
-            '<button onclick="openEditModal(' + g.id + ')" class="text-gray-400 hover:text-emerald-400 mr-3">Edit</button>' +
-            '<button onclick="openDeleteModal(' + g.id + ')" class="text-gray-400 hover:text-red-400">Delete</button>' +
+            '<button data-action="open-mappings-modal" data-id="' + g.id + '" class="text-gray-400 hover:text-blue-400 mr-3">Mappings</button>' +
+            '<button data-action="open-edit-modal" data-id="' + g.id + '" class="text-gray-400 hover:text-emerald-400 mr-3">Edit</button>' +
+            '<button data-action="open-delete-modal" data-id="' + g.id + '" class="text-gray-400 hover:text-red-400">Delete</button>' +
         '</td></tr>';
 }
 
@@ -298,7 +298,7 @@ window.openMappingsModal = function(id) {
                 list.innerHTML = mappings.map(function(m) {
                     return '<li class="flex items-center justify-between px-4 py-3 text-sm">' +
                         '<span class="text-gray-200">' + esc(m.provider_group) + '</span>' +
-                        '<button onclick="removeMapping(' + m.id + ')" class="text-xs text-red-400 hover:text-red-300">Remove</button>' +
+                        '<button data-action="remove-mapping" data-mapping-id="' + m.id + '" class="text-xs text-red-400 hover:text-red-300">Remove</button>' +
                     '</li>';
                 }).join('');
             }
@@ -359,6 +359,25 @@ window.removeMapping = function(mappingId) {
         })
         .catch(function(err) { showStatus(err.message, false); });
 };
+
+document.addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    var action = btn.getAttribute('data-action');
+    var id = btn.getAttribute('data-id');
+
+    if (action === 'open-create-modal') { openCreateModal(); }
+    else if (action === 'close-create-modal') { closeCreateModal(); }
+    else if (action === 'close-edit-modal') { closeEditModal(); }
+    else if (action === 'add-mapping') { addMapping(); }
+    else if (action === 'close-mappings-modal') { closeMappingsModal(); }
+    else if (action === 'close-delete-modal') { closeDeleteModal(); }
+    else if (action === 'confirm-delete') { confirmDelete(); }
+    else if (action === 'open-mappings-modal') { openMappingsModal(Number(id)); }
+    else if (action === 'open-edit-modal') { openEditModal(Number(id)); }
+    else if (action === 'open-delete-modal') { openDeleteModal(Number(id)); }
+    else if (action === 'remove-mapping') { removeMapping(Number(btn.getAttribute('data-mapping-id'))); }
+});
 
 loadGroups();
 </script>

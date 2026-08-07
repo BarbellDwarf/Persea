@@ -9,7 +9,7 @@
             <h1 class="text-2xl font-bold text-gray-100">Authentication Providers</h1>
             <p class="text-sm text-gray-500 mt-1">Configure and manage authentication backends</p>
         </div>
-        <button onclick="document.getElementById('add-provider-modal').classList.remove('hidden')"
+        <button data-action="open-add-modal"
                 class="btn btn-primary btn-sm">
             + Add Provider
         </button>
@@ -47,7 +47,7 @@
                 </div>
                 <div>
                     <label class="form-label">Type</label>
-                    <select name="type" id="new-provider-type" onchange="showProviderFields(this.value)"
+                    <select name="type" id="new-provider-type"
                             class="form-input">
                         <option value="ldap">LDAP / Active Directory</option>
                         <option value="saml">SAML 2.0</option>
@@ -147,7 +147,7 @@
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
-                <button type="button" onclick="document.getElementById('add-provider-modal').classList.add('hidden')"
+                <button type="button" data-action="close-add-modal"
                         class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Create</button>
             </div>
@@ -161,17 +161,17 @@
         <h2 id="provider-config-title" class="text-lg font-bold text-gray-100 mb-4">Configure Provider</h2>
         <div id="provider-config-body"></div>
         <div class="flex justify-end gap-3 mt-6">
-            <button type="button" onclick="document.getElementById('provider-config-modal').classList.add('hidden')"
+            <button type="button" data-action="close-config-modal"
                     class="btn btn-secondary btn-sm">Close</button>
-            <button onclick="testProvider()"
+            <button data-action="test-provider"
                     class="btn btn-sm" style="background:#2563eb;color:#fff">Test Connection</button>
-            <button onclick="saveProviderConfig()"
+            <button data-action="save-provider-config"
                     class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Save</button>
         </div>
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function showProviderFields(type) {
     ['ldap', 'saml', 'radius', 'database', 'totp', 'oidc'].forEach(function(t) {
         var el = document.getElementById(t + '-fields');
@@ -193,8 +193,8 @@ function providerTypeBadge(type) {
 
 function renderProviderRow(provider) {
     var statusToggle = provider.enabled
-        ? '<button onclick="toggleProvider(\'' + provider.id + '\', false)" class="text-emerald-400 hover:text-red-400">Enabled</button>'
-        : '<button onclick="toggleProvider(\'' + provider.id + '\', true)" class="text-gray-500 hover:text-emerald-400">Disabled</button>';
+        ? '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="false" class="text-emerald-400 hover:text-red-400">Enabled</button>'
+        : '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="true" class="text-gray-500 hover:text-emerald-400">Disabled</button>';
 
     return '<tr class="hover:bg-gray-800/50">' +
         '<td class="px-4 py-3 text-gray-600 cursor-grab">⠿</td>' +
@@ -203,11 +203,11 @@ function renderProviderRow(provider) {
         '<td class="px-4 py-3 text-sm">' + statusToggle + '</td>' +
         '<td class="px-4 py-3 text-sm text-gray-500">' + provider.position + '</td>' +
         '<td class="px-4 py-3 text-right text-sm">' +
-            '<button onclick="moveProvider(\'' + provider.id + '\', \'up\')" class="text-gray-400 hover:text-gray-200 mr-2" title="Move up">↑</button>' +
-            '<button onclick="moveProvider(\'' + provider.id + '\', \'down\')" class="text-gray-400 hover:text-gray-200 mr-2" title="Move down">↓</button>' +
-            '<button onclick="configureProvider(\'' + provider.id + '\')" class="text-gray-400 hover:text-emerald-400 mr-2">Configure</button>' +
-            '<button onclick="testProviderConnection(\'' + provider.id + '\')" class="text-gray-400 hover:text-blue-400 mr-2">Test</button>' +
-            '<button onclick="deleteProvider(\'' + provider.id + '\')" class="text-gray-400 hover:text-red-400">Delete</button>' +
+            '<button data-action="move-provider" data-id="' + provider.id + '" data-direction="up" class="text-gray-400 hover:text-gray-200 mr-2" title="Move up">↑</button>' +
+            '<button data-action="move-provider" data-id="' + provider.id + '" data-direction="down" class="text-gray-400 hover:text-gray-200 mr-2" title="Move down">↓</button>' +
+            '<button data-action="configure-provider" data-id="' + provider.id + '" class="text-gray-400 hover:text-emerald-400 mr-2">Configure</button>' +
+            '<button data-action="test-provider-connection" data-id="' + provider.id + '" class="text-gray-400 hover:text-blue-400 mr-2">Test</button>' +
+            '<button data-action="delete-provider" data-id="' + provider.id + '" class="text-gray-400 hover:text-red-400">Delete</button>' +
         '</td></tr>';
 }
 
@@ -409,6 +409,42 @@ function providerConfigForType(type, form) {
 }
 
 (function() {
+    var newTypeSelect = document.getElementById('new-provider-type');
+    if (newTypeSelect) {
+        newTypeSelect.addEventListener('change', function() {
+            showProviderFields(this.value);
+        });
+    }
+
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        var action = btn.getAttribute('data-action');
+        var id = btn.getAttribute('data-id');
+
+        if (action === 'open-add-modal') {
+            document.getElementById('add-provider-modal').classList.remove('hidden');
+        } else if (action === 'close-add-modal') {
+            document.getElementById('add-provider-modal').classList.add('hidden');
+        } else if (action === 'close-config-modal') {
+            document.getElementById('provider-config-modal').classList.add('hidden');
+        } else if (action === 'test-provider') {
+            testProvider();
+        } else if (action === 'save-provider-config') {
+            saveProviderConfig();
+        } else if (action === 'toggle-provider') {
+            toggleProvider(id, btn.getAttribute('data-enable') === 'true');
+        } else if (action === 'move-provider') {
+            moveProvider(id, btn.getAttribute('data-direction'));
+        } else if (action === 'configure-provider') {
+            configureProvider(id);
+        } else if (action === 'test-provider-connection') {
+            testProviderConnection(id);
+        } else if (action === 'delete-provider') {
+            deleteProvider(id);
+        }
+    });
+
     var form = document.getElementById('add-provider-form');
     if (form) {
         form.addEventListener('submit', function(evt) {
