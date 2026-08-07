@@ -654,6 +654,12 @@ impl SessionManager {
                 check_allowed_network(url_host, url_port, &self.config.web_allowed_networks)
                     .await?;
 
+                if url_host == "169.254.169.254" {
+                    return Err(SessionError::ValidationError(
+                        "access to cloud metadata endpoint (169.254.169.254) is blocked".into(),
+                    ));
+                }
+
                 tracing::info!(
                     session_id = %session_id,
                     url = %url,
