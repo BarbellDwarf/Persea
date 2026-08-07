@@ -1864,14 +1864,6 @@ async fn run_server(
     }
 
     // Branded HTML page routes (served from memory with site_title/logo baked in)
-    // Split into public (optional auth) and protected (required auth) groups.
-    let public_html_routes = Router::new()
-        .route("/docs.html", get(handlers::account::docs_page))
-        .route("/docs", get(handlers::account::docs_page))
-        .layer(middleware::from_fn(auth::optional_auth))
-        .layer(Extension(ws_ticket_store.clone()))
-        .layer(Extension(database.clone()));
-
     let protected_html_routes = Router::new()
         .route("/index.html", get(serve_branded_page))
         .route("/connections.html", get(handlers::pages::connections_page))
@@ -1913,11 +1905,13 @@ async fn run_server(
             "/admin/tunnels.html",
             get(handlers::pages::admin_tunnels_page),
         )
+        .route("/docs.html", get(handlers::account::docs_page))
+        .route("/docs", get(handlers::account::docs_page))
         .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));
 
-    let html_routes = public_html_routes.merge(protected_html_routes);
+    let html_routes = protected_html_routes;
 
     // Build full router (all Router<()> at this point)
     let mut app: Router<()> = Router::new()
@@ -1932,6 +1926,11 @@ async fn run_server(
         .merge(saml_routes)
         .merge(unauth_routes)
         .merge(html_routes);
+
+    // Logout route — always available (clears session, redirects to login)
+    let logout_route = Router::new()
+        .route("/auth/logout", get(oidc::logout))
+        .layer(Extension(database.clone()));
 
     // Add OIDC routes if configured (always rate-limited to prevent brute-force)
     if let Some(ref oidc_st) = oidc_state {
@@ -1950,12 +1949,10 @@ async fn run_server(
             .layer(Extension(totp_enforcement))
             .layer(GovernorLayer::new(auth_rate_conf));
 
-        let logout_route = Router::new()
-            .route("/auth/logout", get(oidc::logout))
-            .layer(Extension(database.clone()));
-
-        app = app.merge(oidc_routes).merge(logout_route);
+        app = app.merge(oidc_routes);
     }
+
+    app = app.merge(logout_route);
 
     // Add shared layers
     // Server HTTPS requires both cert_path and key_path in [tls]
