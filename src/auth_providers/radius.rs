@@ -229,7 +229,7 @@ fn verify_response_authenticator(
     let computed = hasher.finalize();
 
     // Compare against stored Response Authenticator (bytes 4..20)
-    computed[..] == response[4..20]
+    computed.as_slice().ct_eq(&response[4..20]).into()
 }
 
 /// Build an Access-Request packet.
