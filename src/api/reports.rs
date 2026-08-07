@@ -300,6 +300,28 @@ pub async fn report_summary(
     Ok(Json(summary))
 }
 
+#[derive(Deserialize)]
+pub struct ActivityQuery {
+    pub hours: Option<i32>,
+}
+
+pub async fn report_activity(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    axum::extract::Query(q): axum::extract::Query<ActivityQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("poweruser"))
+        .unwrap_or(false)
+    {
+        return Err(AppError::Forbidden("poweruser role required".into()));
+    }
+    let hours = q.hours.unwrap_or(24).max(1).min(168);
+    let rows = db::session_activity_by_hour(&database, hours)?;
+    Ok(Json(json!(rows)))
+}
+
 pub(crate) fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path) -> bool {
     if name.is_empty()
         || name == ".guac"

@@ -1842,21 +1842,53 @@ pub fn top_users(db: &Db, limit: u32) -> rusqlite::Result<Vec<serde_json::Value>
 /// Summary statistics.
 pub fn session_summary(db: &Db) -> rusqlite::Result<serde_json::Value> {
     let conn = db.lock().unwrap();
-    let mut stmt = conn.prepare(
-        "SELECT COUNT(*) AS total_sessions,
-                COALESCE(SUM(duration_secs), 0) AS total_secs,
-                COUNT(DISTINCT created_by) AS unique_users,
-                COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS active_now
-         FROM session_history",
+    let total_sessions: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM session_history",
+        [],
+        |row| row.get(0),
     )?;
-    stmt.query_row([], |row| {
-        Ok(serde_json::json!({
-            "total_sessions": row.get::<_, i64>(0)?,
-            "total_hours": row.get::<_, i64>(1)? as f64 / 3600.0,
-            "unique_users": row.get::<_, i64>(2)?,
-            "active_now": row.get::<_, i64>(3)?,
-        }))
-    })
+    let active_sessions: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM session_history WHERE status = 'active'",
+        [],
+        |row| row.get(0),
+    )?;
+    let total_users: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM users",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap_or(0);
+    let uptime_secs = crate::metrics::uptime_seconds();
+    Ok(serde_json::json!({
+        "total_sessions": total_sessions,
+        "active_sessions": active_sessions,
+        "total_users": total_users,
+        "uptime_secs": uptime_secs,
+    }))
+}
+
+/// Return session counts grouped by hour for the last N hours.
+pub fn session_activity_by_hour(db: &Db, hours: i32) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT strftime('%Y-%m-%d %H:00:00', started_at) AS hour,
+                COUNT(*) AS count
+         FROM session_history
+         WHERE started_at >= datetime('now', ?1)
+         GROUP BY hour
+         ORDER BY hour ASC",
+    )?;
+    let modifier = format!("-{} hours", hours);
+    let rows = stmt
+        .query_map(rusqlite::params![modifier], |row| {
+            Ok(serde_json::json!({
+                "hour": row.get::<_, String>(0)?,
+                "count": row.get::<_, i64>(1)?,
+            }))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
 }
 
 /// Clean up old session history entries (retain last N days). Returns rows deleted.

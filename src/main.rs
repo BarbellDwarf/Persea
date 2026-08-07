@@ -1515,6 +1515,7 @@ async fn run_server(
         )
         .route("/api/reports/top-users", get(api::report_top_users))
         .route("/api/reports/summary", get(api::report_summary))
+        .route("/api/reports/activity", get(api::report_activity))
         .route("/api/system/status", get(api::system_status))
         .route(
             "/api/system/settings",
@@ -1815,13 +1816,25 @@ async fn run_server(
         .layer(Extension(database.clone()))
         .layer(Extension(site_title.clone()));
 
-    // Auth page routes (login, MFA)
+    // Auth page routes (login, MFA) — login POST always rate-limited
+    let login_rate_conf = GovernorConfigBuilder::default()
+        .per_second(5)
+        .burst_size(10)
+        .key_extractor(SmartIpKeyExtractor)
+        .finish()
+        .expect("Failed to build login rate limit config");
+
+    let login_rate_limited = Router::new()
+        .route("/auth/login", post(handlers::auth::login_submit))
+        .with_state(manager.clone())
+        .layer(GovernorLayer::new(login_rate_conf));
+
     let auth_pages = Router::new()
         .route("/", get(handlers::auth::login_page))
-        .route("/auth/login", post(handlers::auth::login_submit))
         .route("/auth/mfa", get(handlers::auth::mfa_page))
         .route("/auth/mfa", post(handlers::auth::mfa_submit))
         .with_state(manager.clone())
+        .merge(login_rate_limited)
         .layer(csrf::CsrfLayer)
         .layer(Extension(database.clone()))
         .layer(Extension(oidc_enabled.clone()))

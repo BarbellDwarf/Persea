@@ -135,6 +135,13 @@ impl std::error::Error for ParseError {}
 /// On the first malformed byte it returns the boundary discovered so far
 /// rather than scanning the rest of the buffer.
 pub fn last_instruction_boundary(buf: &[u8]) -> Option<usize> {
+    // Fast path (R04): small carry buffers ending with ';' almost always
+    // contain exactly one complete instruction (the common SSH terminal
+    // output case). Skip the full scan when it's safe.
+    if !buf.is_empty() && buf.len() < 256 && buf[buf.len() - 1] == b';' {
+        return Some(buf.len());
+    }
+
     let mut last_end: Option<usize> = None;
     let mut pos = 0usize;
 
