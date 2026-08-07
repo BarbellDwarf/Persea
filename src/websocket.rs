@@ -494,7 +494,7 @@ async fn guacd_to_ws(
     server_disconnected: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
-    let mut carry: Vec<u8> = Vec::new();
+    let mut carry = bytes::BytesMut::new();
 
     loop {
         let n = guacd.read(&mut buf).await?;
@@ -514,8 +514,8 @@ async fn guacd_to_ws(
 
         // Flush up to the last complete instruction boundary in the carry.
         // Anything past that is held over for the next read.
-        let to_send_bytes: Vec<u8> = match last_instruction_boundary(&carry) {
-            Some(end) => carry.drain(..end).collect(),
+        let carry_data: bytes::BytesMut = match last_instruction_boundary(&carry) {
+            Some(end) => carry.split_to(end),
             None if carry.len() > MAX_GUACD_CARRY => {
                 tracing::warn!(
                     len = carry.len(),
@@ -530,7 +530,7 @@ async fn guacd_to_ws(
         // The boundary scanner only advances over valid UTF-8, so this
         // String::from_utf8 should never fail in practice; defensive in
         // case a force-flush above happened mid-multibyte char.
-        let text = String::from_utf8(to_send_bytes).map_err(
+        let text = String::from_utf8(carry_data.to_vec()).map_err(
             |e| -> Box<dyn std::error::Error + Send + Sync> {
                 format!("invalid UTF-8 from guacd: {}", e).into()
             },
