@@ -145,15 +145,15 @@ where
         Box::pin(async move {
             let mut resp = inner.call(req).await?;
 
-            // Set csrf_token cookie on responses that don't have one yet.
-            // Not HttpOnly: the double-submit pattern needs JS (htmx/fetch)
-            // to read the token and echo it back as X-CSRF-Token.
-            if !resp.headers().contains_key(header::SET_COOKIE) {
+            // Always set csrf_token cookie so the double-submit pattern works.
+            // Not HttpOnly: JS (htmx/fetch) needs to read it and echo it
+            // back as X-CSRF-Token.
+            {
                 let token = generate_token();
                 let secure = if is_https { "; Secure" } else { "" };
                 let cookie = format!("{}={}; Path=/; SameSite=Lax;{}", CSRF_COOKIE, token, secure);
                 resp.headers_mut()
-                    .insert(header::SET_COOKIE, cookie.parse().unwrap());
+                    .append(header::SET_COOKIE, cookie.parse().unwrap());
             }
             Ok(resp)
         })
