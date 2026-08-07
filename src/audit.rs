@@ -1,4 +1,24 @@
 //! Audit logging with SHA-256 hash chain for tamper evidence.
+//!
+//! # Tamper-Evidence, Not Tamper-Proof
+//!
+//! The hash chain makes tampering *detectable* but not *impossible*. An attacker
+//! with direct database-write access can delete or rewrite a range of rows and
+//! regenerate a valid chain from that point forward (each row stores only the
+//! previous hash, so a new anchor trivially chains). The chain therefore provides
+//! **tamper-evidence** — it lets honest parties detect that something was altered —
+//! but does **not** provide tamper-proofing.
+//!
+//! For enterprise deployments that require stronger guarantees, consider one or
+//! more of the following countermeasures:
+//!
+//! - **Periodic external anchoring** — after each rotation, publish a signed
+//!   timestamp of the latest `event_hash` to an external system (e.g. a
+//!   notarisation service, append-only log, or blockchain).
+//! - **Write-Once-Read-Many (WORM) storage** — replicate audit rows to
+//!   append-only storage that prevents in-place modification.
+//! - **Immutable replication** — stream audit events to a separate,
+//!   access-controlled replica as soon as they are written.
 
 use crate::db::Db;
 use chrono::{DateTime, Utc};
@@ -174,6 +194,14 @@ pub fn log_event(db: &Db, event: &mut AuditEvent) -> rusqlite::Result<i64> {
 /// Scans events from `from` (inclusive) to `to` (inclusive) timestamp. Pass `None` to scan from
 /// the beginning or to the end. Each event's `prev_hash` must match the preceding event's
 /// `event_hash`, and `event_hash` must recompute correctly.
+///
+/// **What this checks:** that consecutive events form a valid SHA-256 chain and that every
+/// event's hash matches its recomputed value.
+///
+/// **What this does NOT protect against:** an attacker with DB-write access who truncates the
+/// chain at a chosen point and appends freshly forged events — the new tail will verify
+/// correctly because it only chains against itself. For stronger guarantees, combine with
+/// external anchoring or WORM storage (see module docs).
 pub fn verify_chain(
     db: &Db,
     from: Option<&str>,
