@@ -137,7 +137,10 @@ impl IntoResponse for AppError {
             AppError::Pve(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Vsphere(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-            AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            AppError::Internal(msg) => {
+                tracing::error!(internal_error = %msg, "internal error (sanitized in response)");
+                (StatusCode::INTERNAL_SERVER_ERROR, "An internal error occurred".to_string())
+            }
         };
 
         tracing::error!(status = %status, error = %message, "request error");
