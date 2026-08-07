@@ -201,8 +201,8 @@ pub struct RecordingConfig {
     /// Delete oldest recordings when disk usage exceeds this percent. 0 = disabled.
     #[serde(default = "default_max_disk_percent")]
     pub max_disk_percent: u8,
-    /// Keep at most this many recordings globally. 0 = unlimited.
-    #[serde(default)]
+    /// Keep at most this many recordings globally. 0 = unlimited. Default: 1000.
+    #[serde(default = "default_max_recordings")]
     pub max_recordings: u32,
     /// How often (in seconds) to run the rotation check. Default: 300 (5 min).
     #[serde(default = "default_rotation_interval_secs")]
@@ -228,6 +228,10 @@ pub struct RecordingConfig {
     pub create_typescript_path: bool,
 }
 
+fn default_max_recordings() -> u32 {
+    1000
+}
+
 fn default_max_disk_percent() -> u8 {
     80
 }
@@ -242,7 +246,7 @@ impl Default for RecordingConfig {
             path: default_recording_path(),
             enabled: true,
             max_disk_percent: default_max_disk_percent(),
-            max_recordings: 0,
+            max_recordings: default_max_recordings(),
             rotation_interval_secs: default_rotation_interval_secs(),
             typescript_path: None,
             typescript_name: None,

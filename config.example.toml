@@ -275,7 +275,7 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # path = "./recordings"              # recording directory (default: "./recordings")
 # enabled = true                     # master switch (default: true)
 # max_disk_percent = 80              # delete oldest when disk usage exceeds % (0 = disable)
-# max_recordings = 0                 # global max recording count (0 = unlimited)
+# max_recordings = 1000              # global max recording count (0 = unlimited)
 # rotation_interval_secs = 300       # how often to check rotation (seconds, default: 300)
 
 # ─── VDI (Docker Container Sessions) ───────────────────────────────────────
