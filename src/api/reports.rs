@@ -92,6 +92,15 @@ pub async fn list_recordings(
                 if let Some(ref t) = sidecar.session_type {
                     rec["session_type"] = json!(t);
                 }
+                if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&sidecar.created_at) {
+                    if let Ok(modified) = meta.modified() {
+                        let mod_dt: chrono::DateTime<chrono::Utc> = modified.into();
+                        let dur = (mod_dt - created.with_timezone(&chrono::Utc)).num_seconds();
+                        if dur >= 0 {
+                            rec["duration_secs"] = json!(dur);
+                        }
+                    }
+                }
             }
             recordings.push(rec);
         }

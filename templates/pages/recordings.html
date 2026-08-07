@@ -117,12 +117,19 @@
                 }
                 empty.classList.add('hidden');
                 content.classList.remove('hidden');
+                function formatDuration(secs) {
+                    var s = Math.floor(secs);
+                    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+                    if (h > 0) return h + 'h ' + m + 'm';
+                    if (m > 0) return m + 'm ' + sec + 's';
+                    return sec + 's';
+                }
                 list.innerHTML = items.map(function(rec) {
                     var name = rec.name || rec.filename || 'Unknown';
-                    var protocol = (rec.protocol || '').toUpperCase();
+                    var protocol = (rec.session_type || rec.protocol || '').toUpperCase();
                     var user = rec.user || rec.created_by || '—';
-                    var duration = rec.duration || '—';
-                    var date = rec.date || rec.created_at || '—';
+                    var duration = rec.duration_secs != null ? formatDuration(rec.duration_secs) : '—';
+                    var date = (rec.modified || rec.created_at || '').replace('T', ' ').slice(0, 19) || '—';
                     var protoColors = {
                         SSH: 'bg-green-900/50 text-green-300 border-green-800',
                         RDP: 'bg-blue-900/50 text-blue-300 border-blue-800',
