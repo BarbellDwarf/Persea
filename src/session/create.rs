@@ -331,7 +331,7 @@ impl SessionManager {
                     remote_app_args: rdp.and_then(|s| s.remote_app_args.clone()),
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
-                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(false),
+                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(true),
                     enable_desktop_composition: rdp
                         .and_then(|s| s.enable_desktop_composition)
                         .unwrap_or(false),
@@ -341,7 +341,7 @@ impl SessionManager {
                         .and_then(|s| s.enable_full_window_drag)
                         .unwrap_or(false),
                     force_lossless: rdp.and_then(|s| s.force_lossless).unwrap_or(false),
-                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(false),
+                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(true),
                     secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                 }));
                 (
