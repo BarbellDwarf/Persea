@@ -116,8 +116,9 @@ pub async fn ws_handler(
             .into_response();
     }
 
-    // Check if this is an owner connection (session is Pending)
-    let is_owner = manager.is_session_pending(session_id).await;
+    // Check if this is an owner connection (session is Pending or Disconnected)
+    let is_owner = manager.is_session_pending(session_id).await
+        || manager.is_session_disconnected(session_id).await;
 
     if is_owner {
         // Owner path: require authenticated identity with operator+ role
@@ -171,6 +172,12 @@ async fn handle_ws(
     {
         let identity_str = identity_name.as_deref().unwrap_or("unknown");
         tracing::info!(session_id = %session_id, client_ip = %client_addr, identity = %identity_str, "Session owner connected");
+        (stream, cancel)
+    } else if let Some((stream, cancel)) =
+        manager.reconnect_session(session_id).await
+    {
+        let identity_str = identity_name.as_deref().unwrap_or("unknown");
+        tracing::info!(session_id = %session_id, client_ip = %client_addr, identity = %identity_str, "Session owner reconnected");
         (stream, cancel)
     } else {
         // Not pending — try to join an active session
@@ -366,13 +373,18 @@ async fn handle_ws(
     if mark_error {
         manager.error_session(session_id).await;
         status_str = "error";
+    } else if server_disconnected {
+        // Server-side end (user logout / crash) — terminal, cannot reconnect
+        manager.complete_session(session_id).await;
+        status_str = "completed";
     } else {
-        // Only mark completed if no more active connections
+        // Browser disconnected or network drop — session stays in manager
+        // for reconnection. Only set Disconnected if no more active connections.
         let info = manager.get_session(session_id).await;
         if let Some(info) = info {
             if info.active_connections == 0 {
-                manager.complete_session(session_id).await;
-                status_str = "completed";
+                manager.disconnect_session(session_id).await;
+                status_str = "disconnected";
             } else {
                 status_str = "active";
             }

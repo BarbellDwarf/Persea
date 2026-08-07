@@ -41,6 +41,15 @@
     <!-- Main content (hidden by default) -->
     <div id="main-content" class="hidden">
 
+        <!-- Recent sessions -->
+        <div id="recent-sessions" class="hidden" style="margin-bottom:24px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Recent</p>
+                <span id="recent-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
+            </div>
+            <div id="recent-list" style="display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+
         <!-- Active sessions bar -->
         <div id="active-sessions" class="hidden" style="margin-bottom:24px">
             <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Active Sessions</p>
@@ -393,6 +402,13 @@
     .vm-unknown { background:#9ca3af }
     .admin-only { display: none; }
     .admin-only.admin-visible { display: inline-flex; }
+    .recent-row { display:flex;align-items:center;padding:10px 12px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border);gap:12px;transition:all 0.15s }
+    .recent-row:hover { background:var(--bg-hover);border-color:var(--border-focus) }
+    .status-pill { padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid }
+    .status-active { background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3) }
+    .status-pending { background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3) }
+    .status-disconnected { background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3) }
+    .status-completed,.status-expired,.status-error { background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3) }
     .conn-sidebar {
         flex: 0 0 200px; min-width:0; max-height:80vh; overflow-y:auto;
         border-right:1px solid var(--border); padding-right:12px;
@@ -2078,6 +2094,44 @@
     document.getElementById('btn-vsphere-refresh').addEventListener('click', loadVSphere);
     loadVSphere();
 
+    // ── Recent sessions ──────────────────────────────────────────────
+    function loadRecentSessions() {
+        fetch('/api/sessions?limit=5', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(sessions) {
+                var list = document.getElementById('recent-list');
+                var section = document.getElementById('recent-sessions');
+                var countEl = document.getElementById('recent-count');
+                if (!sessions || sessions.length === 0) {
+                    section.classList.add('hidden');
+                    return;
+                }
+                section.classList.remove('hidden');
+                countEl.textContent = sessions.length;
+                var statusClass = {
+                    active: 'status-active', pending: 'status-pending',
+                    disconnected: 'status-disconnected'
+                };
+                list.innerHTML = sessions.map(function(s) {
+                    var proto = (s.session_type || '').toLowerCase();
+                    var target = s.url || s.hostname || '\u2014';
+                    var sc = statusClass[s.status] || 'status-completed';
+                    return '<div class="recent-row">'
+                        + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
+                        + '<div style="flex:1;min-width:0">'
+                        + '<div style="font-size:13px;color:white;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(s.entry_display_name || s.hostname || s.session_id) + '</div>'
+                        + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(target) + '</div>'
+                        + '</div>'
+                        + '<span class="status-pill ' + sc + '">' + escapeHtml((s.status || 'unknown').toUpperCase()) + '</span>'
+                        + '<button class="btn btn-primary btn-sm" onclick="window.open(\'/client/' + encodeURIComponent(s.session_id) + '\',\'_blank\')" style="width:auto">Reconnect</button>'
+                        + '</div>';
+                }).join('');
+            })
+            .catch(function() {
+                document.getElementById('recent-sessions').classList.add('hidden');
+            });
+    }
+
     // ── Address book init ────────────────────────────────────────────
     fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
         .then(function(res) { return res.ok ? res.json() : null; })
@@ -2085,6 +2139,7 @@
             if (me) isAdmin = me.role === 'admin';
             applyAdminVisibility();
             loadFolders();
+            loadRecentSessions();
         })
         .catch(function() { loadFolders(); });
 })();

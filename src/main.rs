@@ -1505,6 +1505,7 @@ async fn run_server(
             put(api::put_session_thumbnail).get(api::get_session_thumbnail),
         )
         .route("/api/sessions/{id}/shadow", post(api::shadow_session))
+        .route("/api/sessions/{id}/terminate", post(api::delete_session))
         .route(
             "/api/vdi/containers/{name}/thumbnail",
             get(api::get_vdi_container_thumbnail),
