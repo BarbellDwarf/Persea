@@ -48,6 +48,8 @@ pub enum CryptoError {
     InvalidKey(String),
     #[error("ciphertext format invalid: {0}")]
     InvalidCiphertext(String),
+    #[error("encryption failed: {0}")]
+    EncryptionFailed(String),
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
 }
@@ -104,6 +106,45 @@ pub fn decrypt_value(key: &EncryptionKey, encrypted: &str) -> Result<String, Cry
 
     String::from_utf8(plaintext)
         .map_err(|e| CryptoError::DecryptionFailed(format!("invalid UTF-8: {e}")))
+}
+
+/// Encrypt raw bytes using AES-256-GCM.
+///
+/// Returns `nonce (12 bytes) || ciphertext || tag (16 bytes)`.
+pub fn encrypt_bytes(key: &EncryptionKey, plaintext: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let cipher = Aes256Gcm::new(&key.key);
+
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    rand::fill(&mut nonce_bytes[..]);
+    let nonce = Nonce::try_from(nonce_bytes.as_slice()).expect("nonce length mismatch");
+
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext)
+        .map_err(|e| CryptoError::EncryptionFailed(e.to_string()))?;
+
+    let mut output = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    output.extend_from_slice(&nonce_bytes);
+    output.extend_from_slice(&ciphertext);
+    Ok(output)
+}
+
+/// Decrypt raw bytes encrypted with [`encrypt_bytes`].
+pub fn decrypt_bytes(key: &EncryptionKey, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if data.len() < NONCE_LEN + TAG_LEN {
+        return Err(CryptoError::DecryptionFailed(format!(
+            "data too short ({} bytes, need at least {})",
+            data.len(),
+            NONCE_LEN + TAG_LEN,
+        )));
+    }
+    let (nonce_bytes, ciphertext) = data.split_at(NONCE_LEN);
+    let nonce = Nonce::try_from(nonce_bytes)
+        .map_err(|_| CryptoError::InvalidCiphertext("nonce length mismatch".into()))?;
+
+    let cipher = Aes256Gcm::new(&key.key);
+    cipher
+        .decrypt(&nonce, ciphertext)
+        .map_err(|e| CryptoError::DecryptionFailed(e.to_string()))
 }
 
 /// Returns `true` if the value starts with the `enc:v1:` encryption prefix.
@@ -194,5 +235,55 @@ mod tests {
         let enc = encrypt_value(&key, &plaintext).unwrap();
         let dec = decrypt_value(&key, &enc).unwrap();
         assert_eq!(dec, plaintext);
+    }
+
+    #[test]
+    fn encrypt_decrypt_bytes_roundtrip() {
+        let key = test_key();
+        let plaintext = b"binary data \x00\x01\x02\xff";
+        let enc = encrypt_bytes(&key, plaintext).unwrap();
+        assert_ne!(enc, plaintext);
+        let dec = decrypt_bytes(&key, &enc).unwrap();
+        assert_eq!(dec, plaintext);
+    }
+
+    #[test]
+    fn encrypt_decrypt_bytes_empty() {
+        let key = test_key();
+        let enc = encrypt_bytes(&key, b"").unwrap();
+        let dec = decrypt_bytes(&key, &enc).unwrap();
+        assert!(dec.is_empty());
+    }
+
+    #[test]
+    fn encrypt_decrypt_bytes_different_nonces() {
+        let key = test_key();
+        let enc1 = encrypt_bytes(&key, b"same").unwrap();
+        let enc2 = encrypt_bytes(&key, b"same").unwrap();
+        assert_ne!(enc1, enc2);
+        assert_eq!(decrypt_bytes(&key, &enc1).unwrap(), b"same");
+        assert_eq!(decrypt_bytes(&key, &enc2).unwrap(), b"same");
+    }
+
+    #[test]
+    fn decrypt_bytes_wrong_key_fails() {
+        let key1 = EncryptionKey::from_hex(
+            "0000000000000000000000000000000000000000000000000000000000000001",
+        )
+        .unwrap();
+        let key2 = EncryptionKey::from_hex(
+            "0000000000000000000000000000000000000000000000000000000000000002",
+        )
+        .unwrap();
+        let enc = encrypt_bytes(&key1, b"secret").unwrap();
+        assert!(decrypt_bytes(&key2, &enc).is_err());
+    }
+
+    #[test]
+    fn decrypt_bytes_too_short() {
+        let key = test_key();
+        assert!(decrypt_bytes(&key, &[]).is_err());
+        assert!(decrypt_bytes(&key, &[0u8; 5]).is_err());
+        assert!(decrypt_bytes(&key, &[0u8; 27]).is_err());
     }
 }
