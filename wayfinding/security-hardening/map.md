@@ -13,22 +13,18 @@ Eliminate known vulnerabilities, close auth/session/crypto weaknesses, bring all
 
 ## Decisions so far
 
-- **CSP nonce wired** — Replaced `unsafe-inline` with per-request nonce in `script-src`. Nonce was already generated (`CspNonce` extension) but never used in the header. Implemented in `main.rs:744`.
-- **Proxmox URL validation** — Added `check_allowed_network` on `proxmox_url` host before calling PVE API, closing the SSRF gap.
-- **Login rate limiter** — Added a dedicated always-on rate limiter for `/auth/login` independent of the global `rate_limit` setting.
-- **CSRF cookie always set** — Removed the `contains_key` guard so the CSRF cookie is set even when other Set-Cookie headers are present.
-- **Error message sanitization** — `AppError::Internal` now returns a generic message to users; details logged server-side only.
-- **Cloud metadata blocklist** — Web sessions add `169.254.169.254/32` as an explicit deny alongside the CIDR allowlist check.
-- **H.264 + GFX defaults** — RDP sessions now default to H.264 and GFX enabled (previously both OFF), reducing per-frame latency 5-15ms.
-- **Async session DB insert** — `insert_session_history` wrapped in `spawn_blocking` to unblock session creation.
-- **BytesMut carry buffer** — Replaced `Vec<u8>` with `bytes::BytesMut` in the proxy hot path; eliminates one heap allocation per message.
-- **Dependency upgrades** — russh, aes-gcm, totp-rs, rusqlite all upgraded to patched/latest versions.
+- All 26 tickets implemented and verified. Each has a git commit on the 1.1.0 branch.
+- CSP nonce wired into all inline scripts across 18 template files + CSRF body fallback for remote devices.
+- Dark/light/auto mode toggle applies actual theme colors via CSS variables.
+- Admin settings: feature toggles for every protocol (RDP, SSH Tunnels, API Keys, Recordings, Web, VDI, Proxmox, VMware).
+- Connections page: sidebar folders, 320px detail panel, full-width entries, collapsible nav sidebar.
+- Recordings: CSP-compliant player (event delegation), protocol/duration/date fixes, verified with 1.2MB RDP recording.
+- Reports: Top Connections/Users rendered as proper tables, activity chart, CSV export.
+- Auth: all protected pages require login; docs protected; logout available for all auth methods.
 
 ## Not yet specified
 
-- OIDC state fingerprint → HMAC-SHA256 (planned, not yet ticketed)
-- Per-session concurrent viewer limits on share tokens (planned, not yet ticketed)
-- Plain-HTTP mode documentation and startup warning (planned, not yet ticketed)
+(none — all tickets resolved)
 
 ## Out of scope
 
