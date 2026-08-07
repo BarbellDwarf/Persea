@@ -92,6 +92,7 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
+            // ── User-facing errors: safe to include specific messages ──
             AppError::Session(msg) if msg.contains("not found") => {
                 (StatusCode::NOT_FOUND, self.to_string())
             }
@@ -101,9 +102,6 @@ impl IntoResponse for AppError {
             AppError::Session(msg) if msg.contains("not active") => {
                 (StatusCode::CONFLICT, self.to_string())
             }
-            AppError::Session(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-
-            AppError::Guacd(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
 
             AppError::Vault(msg) if msg.contains("not found") => {
                 (StatusCode::NOT_FOUND, self.to_string())
@@ -117,26 +115,61 @@ impl IntoResponse for AppError {
             AppError::Vault(msg) if msg.contains("invalid name") => {
                 (StatusCode::BAD_REQUEST, self.to_string())
             }
-            AppError::Vault(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
 
             AppError::Auth(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::Conflict(_) => (StatusCode::CONFLICT, self.to_string()),
             AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
-            AppError::Browser(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+
             AppError::Vdi(msg) if msg.contains("not enabled") => {
                 (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
             }
             AppError::Vdi(msg) if msg.contains("timeout") => {
                 (StatusCode::GATEWAY_TIMEOUT, self.to_string())
             }
-            AppError::Vdi(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Tunnel(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Protocol(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Drive(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            AppError::Pve(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Vsphere(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+
+            // ── Infrastructure errors: sanitize to avoid leaking paths / hostnames ──
+            AppError::Session(_) => {
+                tracing::error!(error = %self, "session error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "session error".to_string())
+            }
+            AppError::Guacd(_) => {
+                tracing::error!(error = %self, "guacd error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "guacd error".to_string())
+            }
+            AppError::Vault(_) => {
+                tracing::error!(error = %self, "vault error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "vault error".to_string())
+            }
+            AppError::Browser(_) => {
+                tracing::error!(error = %self, "browser error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "browser error".to_string())
+            }
+            AppError::Vdi(_) => {
+                tracing::error!(error = %self, "vdi error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "vdi error".to_string())
+            }
+            AppError::Tunnel(_) => {
+                tracing::error!(error = %self, "tunnel error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "tunnel error".to_string())
+            }
+            AppError::Protocol(_) => {
+                tracing::error!(error = %self, "protocol error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "protocol error".to_string())
+            }
+            AppError::Drive(_) => {
+                tracing::error!(error = %self, "drive error (sanitized in response)");
+                (StatusCode::INTERNAL_SERVER_ERROR, "drive error".to_string())
+            }
+            AppError::Pve(_) => {
+                tracing::error!(error = %self, "pve error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "pve error".to_string())
+            }
+            AppError::Vsphere(_) => {
+                tracing::error!(error = %self, "vsphere error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "vsphere error".to_string())
+            }
             AppError::Internal(msg) => {
                 tracing::error!(internal_error = %msg, "internal error (sanitized in response)");
                 (StatusCode::INTERNAL_SERVER_ERROR, "An internal error occurred".to_string())
