@@ -50,12 +50,19 @@
         <!-- Two-panel layout -->
         <div style="display:flex;gap:24px;align-items:flex-start" class="detail-panel-mobile-stack">
 
-            <!-- Left panel: Folder tree + entries -->
-            <div style="flex:7;min-width:0">
+            <!-- Left sidebar: Folder tree -->
+            <div class="conn-sidebar">
                 <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Folders</p>
                 <div id="folder-tree"></div>
+            </div>
 
-                <div id="entries-header" class="hidden" style="margin-top:24px;margin-bottom:16px">
+            <!-- Right: Entries / content area -->
+            <div class="conn-content">
+                <div id="no-folder-selected" style="text-align:center;padding:48px 0">
+                    <p style="color:var(--text-muted);font-size:14px">Select a folder from the sidebar</p>
+                </div>
+
+                <div id="entries-header" class="hidden" style="margin-bottom:16px">
                     <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
                         <h2 id="entries-title" style="font-size:16px;font-weight:600;color:white;margin:0"></h2>
                         <span id="entries-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
@@ -64,12 +71,10 @@
                         <button id="btn-new-entry" class="btn btn-primary btn-sm admin-only" style="width:auto">+ Add Entry</button>
                         <button id="btn-edit-entry" class="btn btn-secondary btn-sm admin-only" style="width:auto" disabled>Edit Entry</button>
                         <button id="btn-delete-entry" class="btn btn-danger btn-sm admin-only" style="width:auto" disabled>Delete Entry</button>
-                        <button id="btn-edit-folder" class="btn btn-secondary btn-sm admin-only" style="width:auto">Edit</button>
-                        <button id="btn-delete-folder" class="btn btn-danger btn-sm admin-only" style="width:auto">Delete</button>
                     </div>
                 </div>
                 <div id="entries-content">
-                    <p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">Select a folder to view entries.</p>
+                    <p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center"></p>
                 </div>
             </div>
 
@@ -388,6 +393,15 @@
     .vm-unknown { background:#9ca3af }
     .admin-only { display: none; }
     .admin-only.admin-visible { display: inline-flex; }
+    .conn-sidebar {
+        flex: 0 0 250px; min-width:0; max-height:80vh; overflow-y:auto;
+        border-right:1px solid var(--border); padding-right:16px;
+    }
+    .conn-content { flex:1; min-width:0; padding-left:24px; }
+    .folder-actions { display:none; gap:2px; margin-left:8px; flex-shrink:0; }
+    .folder-item:hover .folder-actions.is-admin { display:flex; }
+    .folder-actions svg { width:14px; height:14px; cursor:pointer; color:var(--text-muted); border-radius:4px; padding:2px; box-sizing:content-box; }
+    .folder-actions svg:hover { color:var(--text-primary); background:var(--bg-input); }
     .chip-picker {
         margin-top:8px; border:1px solid var(--border); border-radius:var(--radius);
         background:var(--bg-input); padding:8px; display:flex; flex-direction:column; gap:8px;
@@ -622,6 +636,10 @@
                 + '<span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg-input);color:var(--text-muted);margin-right:8px">' + escapeHtml(f.scope) + '</span>'
                 + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(folderLabel(f.path)) + '</span>'
                 + '<span style="font-size:11px;color:var(--text-muted);margin-left:8px">' + count + '</span>'
+                + '<span class="folder-actions admin-only is-admin" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '">'
+                + '<svg class="folder-edit-btn" viewBox="0 0 20 20" fill="currentColor" title="Edit folder"><path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/></svg>'
+                + '<svg class="folder-delete-btn" viewBox="0 0 20 20" fill="currentColor" title="Delete folder"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>'
+                + '</span>'
                 + '</div>';
             if (expanded) out += renderFolderLevel(visible, f.path, depth + 1);
         });
@@ -651,6 +669,29 @@
                 renderFolders();
             });
         });
+        tree.querySelectorAll('.folder-actions').forEach(function(el) {
+            el.addEventListener('click', function(ev) {
+                ev.stopPropagation();
+                var scope = el.getAttribute('data-scope');
+                var path = el.getAttribute('data-path');
+                var folder = folderMap.get(folderKey(scope, path));
+                if (!folder) return;
+                if (ev.target.closest('.folder-edit-btn')) {
+                    selectedFolder = folder;
+                    renderFolders();
+                    openEditFolder();
+                } else if (ev.target.closest('.folder-delete-btn')) {
+                    selectedFolder = folder;
+                    renderFolders();
+                    deleteFolder();
+                }
+            });
+        });
+    }
+    function syncPlaceholder() {
+        var ph = document.getElementById('no-folder-selected');
+        var hdr = document.getElementById('entries-header');
+        if (ph) ph.classList.toggle('hidden', !hdr.classList.contains('hidden') || !!searchQuery);
     }
     function selectFolder(f) {
         searchQuery = '';
@@ -665,6 +706,7 @@
             String((entriesByFolder.get(folderKey(f.scope, f.path)) || []).length);
         document.getElementById('entries-desc').textContent = f.description || '';
         renderEntries();
+        syncPlaceholder();
     }
     function clearEntrySelection() {
         selectedEntry = null;
@@ -736,6 +778,7 @@
             });
         });
         header.classList.remove('hidden');
+        syncPlaceholder();
         document.getElementById('entries-title').textContent = 'Search results';
         document.getElementById('entries-count').textContent = String(results.length);
         document.getElementById('entries-desc').textContent = 'matching "' + q + '"';
@@ -1198,7 +1241,8 @@
             selectedFolder = null;
             clearEntrySelection();
             document.getElementById('entries-header').classList.add('hidden');
-            document.getElementById('entries-content').innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">Select a folder to view entries.</p>';
+            document.getElementById('entries-content').innerHTML = '';
+            syncPlaceholder();
             loadFolders();
         }).catch(function(err) {
             if (err && err.message === 'redirect') return;
@@ -1907,6 +1951,11 @@
             if (isAdmin) els[i].classList.add('admin-visible');
             else els[i].classList.remove('admin-visible');
         }
+        var folderActions = document.querySelectorAll('.folder-actions');
+        for (var i = 0; i < folderActions.length; i++) {
+            if (isAdmin) folderActions[i].classList.add('is-admin');
+            else folderActions[i].classList.remove('is-admin');
+        }
         updateEntryActionButtons();
     }
     function onScopeChange() {
@@ -1915,7 +1964,8 @@
             selectedFolder = null;
             clearEntrySelection();
             document.getElementById('entries-header').classList.add('hidden');
-            document.getElementById('entries-content').innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">Select a folder to view entries.</p>';
+            document.getElementById('entries-content').innerHTML = '';
+            syncPlaceholder();
         }
         if (searchQuery) runSearch();
         else renderFolders();
@@ -1930,8 +1980,6 @@
     // ── Wire up ──────────────────────────────────────────────────────
     document.getElementById('btn-new-folder').addEventListener('click', openNewFolder);
     document.getElementById('btn-empty-create-folder').addEventListener('click', openNewFolder);
-    document.getElementById('btn-edit-folder').addEventListener('click', openEditFolder);
-    document.getElementById('btn-delete-folder').addEventListener('click', deleteFolder);
     document.getElementById('btn-new-entry').addEventListener('click', openNewEntry);
     document.getElementById('btn-edit-entry').addEventListener('click', openEditEntry);
     document.getElementById('btn-delete-entry').addEventListener('click', deleteEntry);
