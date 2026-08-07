@@ -375,6 +375,13 @@ async fn main() {
                     std::process::exit(1);
                 }
             }
+            // Warn when running without TLS — credentials travel unencrypted
+            if config.tls.is_none() && !config.listen_addr.contains("https") {
+                tracing::warn!(
+                    "Running without TLS — credentials and session tokens travel unencrypted. \
+                     Use [tls] or a reverse proxy for production."
+                );
+            }
             run_server(config, database, log_format, settings_baseline).await
         }
         Some(Command::CreateUser {
