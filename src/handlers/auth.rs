@@ -175,6 +175,21 @@ pub async fn login_submit(
 ) -> Response {
     let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
 
+    // Reject if too many recent failed attempts (brute-force lockout)
+    {
+        let db_lock = database.clone();
+        let username = form.username.clone();
+        let ip = client_ip.to_string();
+        if let Ok(true) = tokio::task::spawn_blocking(move || {
+            db::is_locked_out(&db_lock, &username, &ip)
+        })
+        .await
+        .unwrap_or(Ok(false))
+        {
+            return Redirect::to("/?error=account_locked").into_response();
+        }
+    }
+
     // Build auth request
     let auth_request = AuthRequest {
         client_ip,
@@ -287,6 +302,17 @@ pub async fn login_submit(
                 .await;
             }
 
+            // Clear previous failed-login lockout for this user+IP
+            {
+                let db_lock = database.clone();
+                let username = form.username.clone();
+                let ip = client_ip.to_string();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = db::record_successful_login(&db_lock, &username, &ip);
+                })
+                .await;
+            }
+
             // Optional login credential pass-through: store the login
             // username/password encrypted so connection entries without their
             // own credentials can reuse them ([auth] pass_login_credentials).
@@ -358,6 +384,18 @@ pub async fn login_submit(
                 })
                 .await;
             }
+
+            // Record failed attempt for brute-force lockout
+            {
+                let db_lock = database.clone();
+                let username = form.username.clone();
+                let ip = client_ip.to_string();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = db::record_failed_login_attempt(&db_lock, &username, &ip);
+                })
+                .await;
+            }
+
             Redirect::to("/?error=invalid_credentials").into_response()
         }
         crate::auth_provider::AuthResult::Redirect(url) => {
@@ -530,6 +568,16 @@ pub async fn mfa_submit(
     .unwrap_or_default();
 
     if !valid {
+        // Record failed MFA attempt for lockout tracking
+        {
+            let db_lock = database.clone();
+            let username = pending.user_email.clone();
+            let ip = client_ip.to_string();
+            let _ = tokio::task::spawn_blocking(move || {
+                let _ = db::record_failed_login_attempt(&db_lock, &username, &ip);
+            })
+            .await;
+        }
         return Redirect::to("/auth/mfa?error=invalid_code").into_response();
     }
 
