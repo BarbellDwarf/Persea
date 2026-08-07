@@ -1,20 +1,48 @@
 # Ticket: Connection reason field (admin-toggleable)
 
-wayfinder:grilling
+wayfinder:task
 Priority: P2
 
-## Question
+## Decision
 
-When connecting to a session, the user should be able to input a reason for the connection (e.g. "password rotation", "maintenance", "troubleshooting"). This reason is stored with the audit information and is admin-toggleable.
+Dropdown of common reasons + free-text field. Stored in `session_history.reason` column. Admin-toggleable: `[session] reason_required` setting.
 
-## Design questions
+## Design
 
-1. Where does the reason prompt appear — before the session starts (modal) or after (toolbar input)?
-2. Is it mandatory or optional? (Admin config: mandatory, optional, disabled)
-3. Where is the reason stored — session_history table (new column), audit_events, or a separate table?
-4. Who can see the reason — admins only, or the user themselves on their sessions page?
-5. Is the reason pre-filled from a dropdown of common reasons, or free text?
+### Common reasons (dropdown)
+- Maintenance
+- Password rotation
+- Troubleshooting
+- Incident response
+- Configuration change
+- Data migration
+- Performance testing
+- Security audit
+- Other (free text)
 
-## Deliverable
+### Fields
+- **Reason select**: dropdown with the above options
+- **Reason free text**: shown when "Other" is selected, or always available alongside the dropdown
+- The prompt appears BEFORE the session starts (a modal before the WebSocket connects)
+- Admin toggle: `[session] reason_required = false | optional | required`
+  - `false`: no prompt shown (default)
+  - `optional`: prompt shown but can be skipped
+  - `required`: must provide a reason before session starts
 
-A grilling session resolving these questions, with the chosen design spec.
+### Storage
+- New column: `session_history.connection_reason TEXT`
+- Also stored in audit_events (the connect event gets the reason in details)
+
+### UI
+- Modal with dropdown + text field + Submit/Cancel buttons
+- Shows when reason_required is enabled
+- Cancel goes back to Connections page
+- Submit proceeds with the session
+
+## Files to touch
+- `templates/pages/client.html` (reason modal + prompt logic)
+- `src/session/types.rs` (add reason to SessionInfo)
+- `src/session/create.rs` (store reason in session history)
+- `src/api/admin.rs` or `src/api/settings.rs` (reason_required setting)
+- `templates/pages/admin/settings.html` (admin toggle for reason_required)
+- `templates/pages/sessions.html` (display reason column)

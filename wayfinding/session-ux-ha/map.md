@@ -11,7 +11,9 @@ Fix remaining layout/theme issues, add session-switching and connection-reason f
 
 ## Decisions so far
 
-(none yet — all open)
+- **Session switching**: Combination — tab bar for quick switching + Ctrl+K overlay for power users. Two access paths to the same session list.
+- **Connection reason**: Dropdown of common reasons (Maintenance, Password rotation, Troubleshooting, etc.) plus free-text field. Stored in `session_history.reason` column. Admin-toggleable: `reason_required` setting (off / optional / required).
+- **Disconnect vs Logout**: Disconnect ends the active WebSocket but keeps the session record for reconnection. Logout terminates the session AND clears the record. Stored as distinct events in session_history.
 
 ## Not yet specified
 
