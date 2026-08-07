@@ -142,7 +142,7 @@ impl LdapProvider {
         conn: &mut LdapConn,
         username: &str,
     ) -> Result<(String, SearchEntry), String> {
-        let filter = self.config.user_search_filter.replace("{}", username);
+        let filter = self.config.user_search_filter.replace("{}", &ldap_escape(username));
         debug!(
             "LDAP user search: base={}, filter={}",
             self.config.user_search_base, filter
@@ -202,7 +202,7 @@ impl LdapProvider {
             None => return vec![],
         };
         let filter = match &self.config.group_search_filter {
-            Some(f) => f.replace("{}", user_dn),
+            Some(f) => f.replace("{}", &ldap_escape(user_dn)),
             None => return vec![],
         };
 
