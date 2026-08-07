@@ -1,6 +1,14 @@
 function applyThemeColors(colors) {
     var r = document.documentElement.style;
     for (var k in colors) r.setProperty('--' + k.replace(/_/g, '-'), colors[k]);
+    if (colors.bg) { r.setProperty('--bg-primary', colors.bg); r.setProperty('--bg-card', colors.bg); }
+    if (colors.surface) r.setProperty('--bg-secondary', colors.surface);
+    if (colors.input) r.setProperty('--bg-input', colors.input);
+    if (colors.bg && colors.surface) r.setProperty('--bg-hover', colors.surface);
+    if (colors.text) r.setProperty('--text-primary', colors.text);
+    if (colors.text_dim) r.setProperty('--text-secondary', colors.text_dim);
+    if (colors.accent) r.setProperty('--border-focus', colors.accent);
+    if (colors.accent_hover) r.setProperty('--accent-hover', colors.accent_hover);
     var s = document.getElementById('bg-pattern-style');
     if (!s) { s = document.createElement('style'); s.id = 'bg-pattern-style'; document.head.appendChild(s); }
     s.textContent = colors.bg_pattern && colors.bg_pattern !== 'none' ? 'body{background-image:' + colors.bg_pattern + ';background-attachment:fixed}' : '';
@@ -104,20 +112,17 @@ document.addEventListener('click', function() { var m = document.getElementById(
         var next = current === 'dark' ? 'light' : current === 'light' ? 'auto' : 'dark';
         localStorage.setItem('theme', next);
         applyClass(next);
-        // Apply the matching preset colors from the admin config
-        // so CSS variables reflect the mode
         var preset = _themePresets[_adminPreset] || {};
         if (next === 'dark' || next === 'auto') {
-            if (preset.bg_color) applyThemeColors(preset);
+            if (preset.bg) applyThemeColors(preset);
         } else if (next === 'light') {
-            // Light mode: invert key colors from the dark preset
-            if (preset.bg_color) {
+            if (preset.bg) {
                 var light = {};
                 for (var k in preset) light[k] = preset[k];
-                light.bg_color = '#f8fafc'; light.bg_pattern = 'none';
-                light.surface_color = '#fff'; light.input_color = '#f1f5f9';
-                light.text_color = '#1e293b'; light.text_muted = '#64748b';
-                light.text_dim = '#94a3b8'; light.border_color = '#e2e8f0';
+                light.bg = '#f8fafc'; light.bg_pattern = 'none';
+                light.surface = '#fff'; light.input = '#f1f5f9';
+                light.text = '#1e293b'; light.text_muted = '#64748b';
+                light.text_dim = '#94a3b8'; light.border = '#e2e8f0';
                 light.text_on_primary = '#fff'; light.btn_disabled = '#cbd5e1';
                 applyThemeColors(light);
             }
