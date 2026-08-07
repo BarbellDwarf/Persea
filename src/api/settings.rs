@@ -18,11 +18,6 @@ use std::net::SocketAddr;
 
 /// The full ordered set of keys this API manages. Order matters: it
 /// determines the JSON key order in GET/PUT responses.
-///
-/// Keys without a runtime effect are deliberately NOT managed here
-/// (`session_idle_timeout_secs`, `enable_browser_sessions`,
-/// `enable_proxmox`, `enable_vmware` have no Config equivalent and would
-/// silently lie in the UI).
 const SETTING_KEYS: &[&str] = &[
     "listen_addr",
     "guacd_addr",
@@ -31,6 +26,14 @@ const SETTING_KEYS: &[&str] = &[
     "session_max_duration_secs",
     "max_concurrent_sessions",
     "session_history_retention_days",
+    "enable_rdp",
+    "enable_ssh_tunnels",
+    "enable_api_keys",
+    "enable_recordings",
+    "enable_web_sessions",
+    "enable_spice",
+    "enable_proxmox",
+    "enable_vmware",
     "enable_vdi",
     "vault_enabled",
     "db_only_mode",
@@ -43,7 +46,19 @@ const DURATION_KEYS: &[&str] = &[
     "max_concurrent_sessions",
     "session_history_retention_days",
 ];
-const BOOL_KEYS: &[&str] = &["enable_vdi", "vault_enabled", "db_only_mode"];
+const BOOL_KEYS: &[&str] = &[
+    "enable_rdp",
+    "enable_ssh_tunnels",
+    "enable_api_keys",
+    "enable_recordings",
+    "enable_web_sessions",
+    "enable_spice",
+    "enable_proxmox",
+    "enable_vmware",
+    "enable_vdi",
+    "vault_enabled",
+    "db_only_mode",
+];
 
 /// Upper bounds for unbounded numeric settings (0 stays "unlimited" where
 /// the runtime treats it that way).
@@ -72,12 +87,18 @@ fn default_value(key: &str) -> Value {
         "session_idle_timeout_secs" => json!(1800u64),
         "max_concurrent_sessions" => json!(500u64),
         "session_history_retention_days" => json!(90u64),
-        "enable_browser_sessions" => json!(false),
-        "enable_proxmox" => json!(false),
-        "enable_vdi" => json!(false),
-        "enable_vmware" => json!(false),
+        "enable_rdp" => json!(true),
+        "enable_ssh_tunnels" => json!(true),
+        "enable_api_keys" => json!(true),
+        "enable_recordings" => json!(true),
+        "enable_web_sessions" => json!(true),
+        "enable_spice" => json!(true),
+        "enable_proxmox" => json!(true),
+        "enable_vmware" => json!(true),
+        "enable_vdi" => json!(true),
+        "enable_browser_sessions" => json!(true),
         "vault_enabled" => json!(false),
-        "db_only_mode" => json!(true), // DB-first storage is the default
+        "db_only_mode" => json!(true),
         _ => json!(null),
     }
 }

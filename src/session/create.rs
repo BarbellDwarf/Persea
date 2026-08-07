@@ -116,6 +116,8 @@ impl SessionManager {
         // proxy hops); merged into the session's tunnel list after the match.
         let mut proxmox_tunnels: Vec<tunnel::SshTunnel> = Vec::new();
 
+        let mut pending_net_check: Option<(String, u16, Vec<String>)> = None;
+
         let (
             mut conn_params,
             hostname,
@@ -134,7 +136,7 @@ impl SessionManager {
                 let port = req.port.unwrap_or(22);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.ssh_allowed_networks).await?;
+                pending_net_check = Some((hostname.clone(), port, self.config.ssh_allowed_networks.clone()));
 
                 tracing::info!(
                     session_id = %session_id,
@@ -255,7 +257,7 @@ impl SessionManager {
                 let port = req.port.unwrap_or(3389);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.rdp_allowed_networks).await?;
+                pending_net_check = Some((hostname.clone(), port, self.config.rdp_allowed_networks.clone()));
 
                 tracing::info!(
                     session_id = %session_id,
@@ -363,7 +365,7 @@ impl SessionManager {
                 let port = req.port.unwrap_or(5900);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.vnc_allowed_networks).await?;
+                pending_net_check = Some((hostname.clone(), port, self.config.vnc_allowed_networks.clone()));
 
                 tracing::info!(
                     session_id = %session_id,
@@ -1000,31 +1002,36 @@ impl SessionManager {
         let deferred = banner_override.is_some();
 
         let (guacd_stream, connection_id, deferred_params) = if deferred {
+            if let Some((h, p, nets)) = pending_net_check.take() {
+                check_allowed_network(&h, p, &nets).await?;
+            }
             tracing::info!(
                 session_id = %session_id,
                 "Deferring guacd connection (ephemeral keypair — waiting for user to add public key)"
             );
             (None, String::new(), Some(conn_params))
         } else {
-            // Connect to guacd and perform handshake
-            let handshake_result = guacd::connect_and_handshake(
-                &self.config.guacd_addr,
-                &conn_params,
-                self.guacd_tls.as_ref(),
-            )
-            .await;
+            let guacd_addr = self.config.guacd_addr.clone();
+            let guacd_tls = self.guacd_tls.clone();
 
-            // If handshake fails, clean up browser processes
-            let (stream, connection_id) = match handshake_result {
-                Ok(result) => result,
-                Err(e) => {
-                    if let Some(mut bs) = browser_session {
-                        self.browser_manager.kill(&mut bs).await;
+            // Parallelise DNS validation with guacd connect
+            let ((), (stream, connection_id)) = tokio::try_join!(
+                async {
+                    if let Some((h, p, nets)) = pending_net_check.take() {
+                        check_allowed_network(&h, p, &nets)
+                            .await
+                            .map_err(|e| e.to_string())
+                    } else {
+                        Ok(())
                     }
-                    tracing::error!(session_id = %session_id, error = %e, "Failed to connect to guacd");
-                    return Err(SessionError::GuacdConnection(e.to_string()));
+                },
+                async {
+                    guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
+                        .await
+                        .map_err(|e| e.to_string())
                 }
-            };
+            )
+            .map_err(|e| SessionError::GuacdConnection(e))?;
 
             tracing::info!(
                 session_id = %session_id,
