@@ -12,3 +12,7 @@ Upgrade totp-rs to >= 5.5.0 (or latest 5.x). Verify `cargo audit` clears. Run MF
 ## Deliverable
 
 Updated Cargo.lock. Zero totp-rs advisories. MFA tests pass.
+
+## Status
+
+Bundled into commit `0707435` (D02-D05). totp-rs 5.7.2 is already patched (RUSTSEC-2022-0018 fixed in ≥5.5.0). No action needed.

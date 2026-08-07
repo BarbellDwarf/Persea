@@ -12,3 +12,7 @@ Upgrade rusqlite incrementally. Fix compilation errors at each step. Run `cargo 
 ## Deliverable
 
 Updated Cargo.toml and Cargo.lock with rusqlite 0.35. All tests pass. Brief notes on breaking changes encountered.
+
+## Status
+
+rusqlite 0.32.1 is the latest 0.32.x. Upgrading to 0.35 requires a Cargo.toml constraint change (breaking API). Deferred to a separate effort — noted in commit `0707435`.
