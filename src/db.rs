@@ -1767,9 +1767,20 @@ pub fn stream_session_history_csv(
 }
 
 fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<()> {
-    if field.contains(',') || field.contains('"') || field.contains('\n') {
+    // OWASP CSV injection prevention: prefix formula-triggering characters
+    let safe_field = if let Some(first) = field.chars().next() {
+        if matches!(first, '=' | '+' | '-' | '@' | '\t' | '\r') {
+            format!("'{}", field)
+        } else {
+            field.to_string()
+        }
+    } else {
+        field.to_string()
+    };
+
+    if safe_field.contains(',') || safe_field.contains('"') || safe_field.contains('\n') || safe_field.contains('\r') {
         write!(w, "\"")?;
-        for ch in field.chars() {
+        for ch in safe_field.chars() {
             if ch == '"' {
                 write!(w, "\"\"")?;
             } else {
@@ -1778,7 +1789,7 @@ fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<
         }
         write!(w, "\"")?;
     } else {
-        write!(w, "{}", field)?;
+        write!(w, "{}", safe_field)?;
     }
     Ok(())
 }
