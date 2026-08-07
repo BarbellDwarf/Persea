@@ -438,6 +438,19 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );",
     )?;
 
+    // Migration: failed login attempt tracking (H07)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS failed_login_attempts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            username    TEXT NOT NULL,
+            ip_address  TEXT NOT NULL,
+            attempted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            success     BOOLEAN DEFAULT FALSE
+        );
+        CREATE INDEX IF NOT EXISTS idx_failed_login_username ON failed_login_attempts(username);
+        CREATE INDEX IF NOT EXISTS idx_failed_login_ip ON failed_login_attempts(ip_address);",
+    )?;
+
     let db = Arc::new(Mutex::new(conn));
 
     // Migration: RBAC tables (connection groups, user-group membership, permissions)
@@ -937,6 +950,51 @@ pub fn cleanup_expired_sessions(db: &Db) -> rusqlite::Result<usize> {
         "DELETE FROM auth_sessions WHERE expires_at <= datetime('now')",
         [],
     )
+}
+
+/// Record a failed login attempt (H07).
+pub fn record_failed_login_attempt(db: &Db, username: &str, ip: &str) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO failed_login_attempts (username, ip_address, success) VALUES (?1, ?2, FALSE)",
+        params![username, ip],
+    )?;
+    Ok(())
+}
+
+/// Record a successful login — marks recent failures for the same user+IP as success.
+pub fn record_successful_login(db: &Db, username: &str, ip: &str) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE failed_login_attempts SET success = TRUE
+         WHERE username = ?1 AND ip_address = ?2 AND success = FALSE",
+        params![username, ip],
+    )?;
+    Ok(())
+}
+
+/// Count failed login attempts for a user+IP within the given time window (seconds).
+pub fn count_recent_failures(
+    db: &Db,
+    username: &str,
+    ip: &str,
+    window_secs: u64,
+) -> rusqlite::Result<u32> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) FROM failed_login_attempts
+         WHERE username = ?1 AND ip_address = ?2 AND success = FALSE
+           AND attempted_at >= datetime('now', ?3)",
+    )?;
+    let window_param = format!("-{} seconds", window_secs);
+    let count: u32 = stmt.query_row(params![username, ip, window_param], |row| row.get(0))?;
+    Ok(count)
+}
+
+/// Check if a user+IP is locked out (>5 failures in the last 15 minutes).
+pub fn is_locked_out(db: &Db, username: &str, ip: &str) -> rusqlite::Result<bool> {
+    let failures = count_recent_failures(db, username, ip, 15 * 60)?;
+    Ok(failures > 5)
 }
 
 /// List all users.
