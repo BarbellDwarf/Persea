@@ -1118,7 +1118,7 @@ pub fn parse_saml_response(
     // 5. Validate audience restriction against verified element
     if config.strict_mode && !idp_cert_pem.is_empty() {
         let audiences = extract_audiences(assertion_xml);
-        if !audiences.is_empty() && !audiences.iter().any(|a| a == config.entity_id) {
+        if !audiences.is_empty() && !audiences.iter().any(|a| *a == config.entity_id) {
             return Err(format!(
                 "SP entity ID '{}' not found in Audience restriction",
                 config.entity_id
