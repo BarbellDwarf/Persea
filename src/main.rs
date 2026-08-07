@@ -1864,8 +1864,15 @@ async fn run_server(
     }
 
     // Branded HTML page routes (served from memory with site_title/logo baked in)
-    // Connections, sessions, and admin pages use templates for dynamic rendering
-    let html_routes = Router::new()
+    // Split into public (optional auth) and protected (required auth) groups.
+    let public_html_routes = Router::new()
+        .route("/docs.html", get(handlers::account::docs_page))
+        .route("/docs", get(handlers::account::docs_page))
+        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(ws_ticket_store.clone()))
+        .layer(Extension(database.clone()));
+
+    let protected_html_routes = Router::new()
         .route("/index.html", get(serve_branded_page))
         .route("/connections.html", get(handlers::pages::connections_page))
         // Legacy path — the page was renamed from Address Book → Connections.
@@ -1879,7 +1886,6 @@ async fn run_server(
         .route("/reports.html", get(handlers::pages::admin_reports_page))
         .route("/admin.html", get(handlers::pages::admin_users_page))
         .route("/tokens.html", get(handlers::account::tokens_page))
-        .route("/docs.html", get(handlers::account::docs_page))
         // Account pages (templates)
         .route(
             "/account/profile.html",
@@ -1887,7 +1893,6 @@ async fn run_server(
         )
         .route("/account/tokens.html", get(handlers::account::tokens_page))
         .route("/account/totp.html", get(handlers::account::totp_page))
-        .route("/docs", get(handlers::account::docs_page))
         // Admin sub-pages (templates)
         .route("/admin/users.html", get(handlers::pages::admin_users_page))
         .route("/admin/auth.html", get(handlers::pages::admin_auth_page))
@@ -1908,9 +1913,11 @@ async fn run_server(
             "/admin/tunnels.html",
             get(handlers::pages::admin_tunnels_page),
         )
-        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));
+
+    let html_routes = public_html_routes.merge(protected_html_routes);
 
     // Build full router (all Router<()> at this point)
     let mut app: Router<()> = Router::new()
