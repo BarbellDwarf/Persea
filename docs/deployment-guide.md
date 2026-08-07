@@ -401,3 +401,18 @@ Connections data lives in Vault (when `[storage] backend = "vault"`) or encrypte
 - [ ] Session recording enabled for audit compliance
 - [ ] `/opt/persea/env` has `chmod 600` permissions
 - [ ] Trusted proxies configured to match HAProxy IP
+
+## Audit Logging Limitations
+
+The audit log uses a SHA-256 hash chain for tamper evidence. This means:
+
+- **Tamper-evident, not tamper-proof**: An attacker with database write access can regenerate a valid chain from a tampering point by recomputing hashes forward.
+- **No external anchor**: The chain is self-contained — there's no external signature or timestamp authority.
+
+### Recommended compensating controls
+
+For enterprise deployments:
+- **External anchoring**: Periodically export chain head hashes and sign them with an external key, or ship to a separate system
+- **SIEM streaming**: Forward audit events to an external SIEM in real-time (before they're written to the local DB)
+- **WORM storage**: Write audit logs to write-once-read-many storage if available
+- **Database access controls**: Restrict who can write to the persea database
