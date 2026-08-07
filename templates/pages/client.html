@@ -386,6 +386,8 @@
         var reconnectAttempts = 0;
         var maxReconnectAttempts = 5;
         var reconnectDelays = [1000, 2000, 4000, 8000, 16000];
+        var reconnectTimer = null;
+        var lastSessionError = null;
 
         // ── Toolbar auto-hide ──
         var toolbarEl = document.getElementById('toolbar');
@@ -570,6 +572,9 @@
         }
 
         function attemptReconnect() {
+            // The tunnel close fires through both the tunnel and client state
+            // handlers — only ever schedule one reconnect at a time.
+            if (reconnectTimer) return;
             if (reconnectAttempts >= maxReconnectAttempts) {
                 document.getElementById('disconnected-title').textContent = 'Session Ended';
                 document.getElementById('disconnected-message').textContent = 'Connection lost after ' + maxReconnectAttempts + ' attempts.';
@@ -581,10 +586,49 @@
             statusEl.textContent = 'Reconnecting... (attempt ' + reconnectAttempts + '/' + maxReconnectAttempts + ')';
             statusEl.className = '';
             document.getElementById('disconnected-overlay').classList.remove('visible');
-            setTimeout(function() { connectWebSocket(urlTicket); }, delay);
+            reconnectTimer = setTimeout(function() {
+                reconnectTimer = null;
+                connectWebSocket(urlTicket);
+            }, delay);
+        }
+
+        // Distinguish "the session actually ended" (user typed exit, remote
+        // closed, auth failed) from "the connection dropped". Reconnecting
+        // into a dead session is pointless and confusing, so check the
+        // server-side session status before scheduling a reconnect.
+        function checkSessionEnded() {
+            var headers = {};
+            if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+            fetch('/api/sessions/' + sessionId, { headers: headers, credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(s) {
+                    if (!s) { attemptReconnect(); return; }
+                    if (s.status === 'completed' || s.status === 'error' || s.status === 'expired') {
+                        statusEl.textContent = 'Session ended';
+                        document.getElementById('disconnected-title').textContent = 'Session Ended';
+                        if (lastSessionError) {
+                            // Surface the specific reason from guacd (e.g.
+                            // "Authentication failure (invalid credentials?)")
+                            // no matter how the server classified the end.
+                            document.getElementById('disconnected-message').textContent =
+                                'The session ended: ' + lastSessionError;
+                        } else if (s.status === 'error') {
+                            document.getElementById('disconnected-message').textContent =
+                                'The session ended with an error. Check the connection details and try again.';
+                        } else {
+                            document.getElementById('disconnected-message').textContent =
+                                'The remote session has ended.';
+                        }
+                        document.getElementById('disconnected-overlay').className = 'visible';
+                    } else {
+                        attemptReconnect();
+                    }
+                })
+                .catch(function() { attemptReconnect(); });
         }
 
         function connectWebSocket(ticketParam) {
+            lastSessionError = null;
             var wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
             var wsUrl = wsProtocol + '//' + window.location.host + '/ws/' + sessionId;
             if (ticketParam) wsUrl += '?ticket=' + encodeURIComponent(ticketParam);
@@ -715,13 +759,14 @@
                             document.getElementById('disconnected-title').textContent = 'Session Ended';
                             document.getElementById('disconnected-message').textContent = 'The remote session has been disconnected.';
                             document.getElementById('disconnected-overlay').className = 'visible';
-                        } else { attemptReconnect(); }
+                        } else { checkSessionEnded(); }
                         if (rgFullscreenEl()) rgExitFullscreen();
                         break;
                 }
             };
 
             client.onerror = function(status) {
+                lastSessionError = (status && status.message) ? status.message : null;
                 statusEl.textContent = 'Error: ' + (status.message || 'Unknown error');
                 statusEl.className = '';
                 if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
@@ -736,7 +781,7 @@
             };
             tunnel.onstatechange = function(state) {
                 if (state === Guacamole.Tunnel.State.CLOSED) {
-                    if (!userDisconnected) attemptReconnect();
+                    if (!userDisconnected) checkSessionEnded();
                     else if (client.onerror) client.onerror({ code: 519, message: 'Connection lost' });
                 } else if (state === Guacamole.Tunnel.State.UNSTABLE) {
                     statusEl.textContent = 'Connection unstable...';

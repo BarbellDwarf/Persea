@@ -1604,6 +1604,14 @@ async fn run_server(
         .route("/api/me/credentials", get(api::get_my_credentials))
         .route("/api/me/credentials", put(api::put_my_credentials))
         .route(
+            "/api/me/preset-credentials",
+            get(api::get_my_preset_credentials),
+        )
+        .route(
+            "/api/me/preset-credentials",
+            put(api::put_my_preset_credentials),
+        )
+        .route(
             "/api/credential-variables",
             get(api::list_credential_variables),
         )

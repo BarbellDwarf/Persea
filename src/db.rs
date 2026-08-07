@@ -384,7 +384,21 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_ab_entries_folder ON address_book_entries(folder_id);
-        CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);",
+        CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);
+
+        CREATE TABLE IF NOT EXISTS user_preset_credentials (
+            user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            username    TEXT NOT NULL DEFAULT '',
+            password_enc TEXT NOT NULL DEFAULT '',
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS login_credentials (
+            user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            username    TEXT NOT NULL DEFAULT '',
+            password_enc TEXT NOT NULL DEFAULT '',
+            expires_at  TEXT NOT NULL
+        );",
     )?;
 
     // Folder-level ACLs (wayfinder ticket 027): columns added after the
@@ -777,6 +791,97 @@ pub fn get_user_auth_source(db: &Db, email: &str) -> rusqlite::Result<String> {
         params![email],
         |row| row.get(0),
     )
+}
+
+/// Per-user preset credentials (username + encrypted password) used as a
+/// fallback for address book entries without their own credentials.
+pub fn upsert_user_preset_credentials(
+    db: &Db,
+    user_id: i64,
+    username: &str,
+    password_enc: &str,
+) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO user_preset_credentials (user_id, username, password_enc, updated_at)
+         VALUES (?1, ?2, ?3, datetime('now'))
+         ON CONFLICT(user_id) DO UPDATE SET
+            username = excluded.username,
+            password_enc = excluded.password_enc,
+            updated_at = datetime('now')",
+        params![user_id, username, password_enc],
+    )?;
+    Ok(())
+}
+
+/// Fetch a user's preset credentials: (username, password_enc).
+pub fn get_user_preset_credentials(
+    db: &Db,
+    user_id: i64,
+) -> rusqlite::Result<Option<(String, String)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT username, password_enc FROM user_preset_credentials WHERE user_id = ?1")?;
+    let mut rows = stmt.query_map(params![user_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    match rows.next() {
+        Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
+}
+
+/// Remove a user's preset credentials.
+pub fn clear_user_preset_credentials(db: &Db, user_id: i64) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "DELETE FROM user_preset_credentials WHERE user_id = ?1",
+        params![user_id],
+    )?;
+    Ok(())
+}
+
+/// Store the credentials from a password-based login for pass-through reuse
+/// (config `[auth] pass_login_credentials`). Encrypted password, TTL-bounded.
+pub fn upsert_login_credentials(
+    db: &Db,
+    user_id: i64,
+    username: &str,
+    password_enc: &str,
+    expires_at: &str,
+) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO login_credentials (user_id, username, password_enc, expires_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(user_id) DO UPDATE SET
+            username = excluded.username,
+            password_enc = excluded.password_enc,
+            expires_at = excluded.expires_at",
+        params![user_id, username, password_enc, expires_at],
+    )?;
+    Ok(())
+}
+
+/// Fetch a user's stored login credentials: (username, password_enc, expires_at).
+pub fn get_login_credentials(db: &Db, user_id: i64) -> rusqlite::Result<Option<(String, String, String)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT username, password_enc, expires_at FROM login_credentials WHERE user_id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![user_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    match rows.next() {
+        Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
 }
 
 /// Validate an auth session token. Returns the user if valid and not expired/disabled.

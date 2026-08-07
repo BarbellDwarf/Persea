@@ -33,7 +33,7 @@ db_path = "./persea.db"
 
 # Title shown in the browser tab and page header.
 # Default: "persea"
-site_title = "persea"
+site_title = "Persea"
 
 # ─── Session Timeouts ─────────────────────────────────────────────────────────
 

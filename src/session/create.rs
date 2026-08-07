@@ -456,6 +456,16 @@ impl SessionManager {
                 let secret = proxmox
                     .and_then(|s| s.proxmox_token_secret.clone())
                     .unwrap_or_default();
+                if token_id.is_empty() {
+                    return Err(SessionError::ValidationError(
+                        "Proxmox API token ID is required (format user@realm!tokenid, e.g. root@pam!persea)".into(),
+                    ));
+                }
+                if secret.is_empty() {
+                    return Err(SessionError::ValidationError(
+                        "Proxmox API token secret is required".into(),
+                    ));
+                }
                 let api_token = if secret.is_empty() {
                     token_id
                 } else {
@@ -1294,6 +1304,12 @@ async fn check_allowed_network(
     port: u16,
     allowed: &[String],
 ) -> Result<(), SessionError> {
+    if host.contains("://") || host.starts_with("http") {
+        return Err(SessionError::ValidationError(
+            "hostname must be a host or IP address, not a URL (use a Web entry for browser sessions)".into(),
+        ));
+    }
+
     let networks: Vec<IpNetwork> = allowed
         .iter()
         .filter_map(|s| s.parse::<IpNetwork>().ok())

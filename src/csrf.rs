@@ -16,6 +16,27 @@ use tower::{Layer, Service};
 pub const CSRF_COOKIE: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 32;
 
+/// Header-only variant of the HTTPS check for handlers that extract
+/// `HeaderMap` instead of the full request.
+pub fn is_https_headers(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(',').next().unwrap_or("").trim() == "https")
+        .unwrap_or(false)
+}
+
+/// `"; Secure"` when the request arrived over HTTPS (or a proxy says so),
+/// empty otherwise. Set-Cookie builders use this so session cookies are not
+/// dropped by browsers when serving plain HTTP (e.g. LAN access without TLS).
+pub fn cookie_secure_attr(headers: &HeaderMap) -> &'static str {
+    if is_https_headers(headers) {
+        "; Secure"
+    } else {
+        ""
+    }
+}
+
 fn generate_token() -> String {
     use rand::RngExt;
     let mut buf = [0u8; CSRF_TOKEN_LEN];

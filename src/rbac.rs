@@ -305,30 +305,29 @@ pub fn check_connection_permission(
     // 2+3. Group permissions on the connection or ancestor groups via recursive CTE.
     // The CTE walks from the connection's group_id up through parent_id chain.
     // For each group in the chain, check if the user is a member and has the permission.
+    // (SQLite requires the recursive term to reference the CTE via JOIN, not
+    // via an IN-subquery — a subquery reference makes prepare fail with
+    // "circular reference", which turned every check into a silent deny.)
     let inherited: bool = conn.query_row(
         "WITH RECURSIVE group_ancestors(group_id) AS (
-            -- Base: connection's own group (looked up via a subquery or passed in)
-            -- We use rbac_permissions where object_type = 'connection' and object_id = ?2
-            -- to find group grants directly on this connection
+            -- Base: groups granted directly on this connection
             SELECT DISTINCT entity_id
             FROM rbac_permissions
             WHERE entity_type = 'group' AND object_type = 'connection'
               AND object_id = ?2 AND permission = ?3
             UNION
-            -- Also walk group-of-group permissions: groups granted on ancestor groups
-            SELECT DISTINCT p.entity_id
-            FROM rbac_permissions p
-            WHERE p.entity_type = 'group' AND p.object_type = 'connection_group'
-              AND p.object_id IN (
-                  SELECT group_id FROM group_ancestors
-              )
-              AND p.permission = ?3
-            UNION
             -- Walk ancestor groups via parent_id
             SELECT g.parent_id
             FROM rbac_groups g
-            INNER JOIN group_ancestors ga ON g.id = ga.group_id
+            JOIN group_ancestors ga ON g.id = ga.group_id
             WHERE g.parent_id IS NOT NULL
+            UNION
+            -- Groups granted on connection-group objects that are in the chain
+            SELECT DISTINCT p.entity_id
+            FROM rbac_permissions p
+            JOIN group_ancestors ga ON p.object_id = ga.group_id
+            WHERE p.entity_type = 'group' AND p.object_type = 'connection_group'
+              AND p.permission = ?3
         )
         SELECT EXISTS(
             SELECT 1

@@ -27,6 +27,7 @@ pub mod auth_providers;
 pub mod browser;
 pub mod config;
 pub mod crypto;
+pub mod csrf;
 pub mod csv_import;
 pub mod db;
 pub mod db_migrate;

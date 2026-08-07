@@ -52,14 +52,48 @@
             </div>
             <div id="player-display" class="flex-1 bg-black m-2 rounded overflow-auto" style="min-height:400px"></div>
             <div id="player-controls" class="flex items-center gap-3 px-4 py-3 border-t border-gray-800">
-                <button id="player-play" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-medium transition-colors">Play</button>
-                <button id="player-pause" class="hidden px-4 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded text-sm transition-colors">Pause</button>
-                <div class="flex-1"></div>
-                <span id="player-time" class="text-xs text-gray-500">0:00</span>
+                <button id="play-btn" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-medium transition-colors">Play</button>
+                <input type="range" id="seek-slider" min="0" max="1000" value="0" class="flex-1" style="accent-color:#10b981">
+                <span id="player-time" class="text-xs text-gray-500">0:00 / 0:00</span>
             </div>
         </div>
     </div>
 </div>
+
+<!-- Guacamole JS modules (playback) -->
+<script src="/guac/Namespace.js"></script>
+<script src="/guac/Client.js"></script>
+<script src="/guac/Display.js"></script>
+<script src="/guac/Event.js"></script>
+<script src="/guac/InputSink.js"></script>
+<script src="/guac/IntegerPool.js"></script>
+<script src="/guac/Keyboard.js"></script>
+<script src="/guac/KeyEventInterpreter.js"></script>
+<script src="/guac/Layer.js"></script>
+<script src="/guac/Mouse.js"></script>
+<script src="/guac/Parser.js"></script>
+<script src="/guac/Position.js"></script>
+<script src="/guac/Status.js"></script>
+<script src="/guac/Touch.js"></script>
+<script src="/guac/Tunnel.js"></script>
+<script src="/guac/UTF8Parser.js"></script>
+<script src="/guac/InputStream.js"></script>
+<script src="/guac/OutputStream.js"></script>
+<script src="/guac/StringReader.js"></script>
+<script src="/guac/StringWriter.js"></script>
+<script src="/guac/ArrayBufferReader.js"></script>
+<script src="/guac/ArrayBufferWriter.js"></script>
+<script src="/guac/BlobReader.js"></script>
+<script src="/guac/BlobWriter.js"></script>
+<script src="/guac/DataURIReader.js"></script>
+<script src="/guac/AudioContextFactory.js"></script>
+<script src="/guac/AudioPlayer.js"></script>
+<script src="/guac/AudioRecorder.js"></script>
+<script src="/guac/VideoPlayer.js"></script>
+<script src="/guac/JSONReader.js"></script>
+<script src="/guac/Object.js"></script>
+<script src="/guac/RawAudioFormat.js"></script>
+<script src="/guac/SessionRecording.js"></script>
 
 <script>
 (function() {
@@ -113,13 +147,90 @@
             .catch(function() {});
     }
 
+    // ── Player (Guacamole SessionRecording over StaticHTTPTunnel) ─────
+    var currentRecording = null;
+    var playerDisplayEl = document.getElementById('player-display');
+    var playBtn = document.getElementById('play-btn');
+    var seekSlider = document.getElementById('seek-slider');
+    var timeEl = document.getElementById('player-time');
+
+    function formatTime(millis) {
+        var s = Math.max(0, Math.floor((millis || 0) / 1000));
+        var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        var mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
+        return h > 0 ? h + ':' + mm + ':' + ss : mm + ':' + ss;
+    }
+
+    function closePlayer() {
+        if (currentRecording) {
+            try { currentRecording.pause(); } catch (e) {}
+            currentRecording = null;
+        }
+        playerDisplayEl.innerHTML = '';
+        document.getElementById('player-section').classList.add('hidden');
+        playBtn.textContent = 'Play';
+        seekSlider.value = 0;
+        timeEl.textContent = '0:00 / 0:00';
+    }
+
     window.playRecording = function(name) {
+        closePlayer();
+
+        document.getElementById('player-title').textContent = 'Playback: ' + name;
         var section = document.getElementById('player-section');
-        var title = document.getElementById('player-title');
-        var display = document.getElementById('player-display');
         section.classList.remove('hidden');
-        title.textContent = 'Playback: ' + name;
-        display.innerHTML = '<iframe src="/api/recordings/' + encodeURIComponent(name) + '/player" class="w-full h-full border-0" style="min-height:400px"></iframe>';
+
+        var tunnel = new Guacamole.StaticHTTPTunnel(
+            '/api/recordings/' + encodeURIComponent(name),
+            false,
+            apiHeaders()
+        );
+        var recording = new Guacamole.SessionRecording(tunnel);
+        currentRecording = recording;
+
+        var display = recording.getDisplay();
+        playerDisplayEl.appendChild(display.getElement());
+
+        function scaleRecordingDisplay() {
+            var w = display.getWidth();
+            var h = display.getHeight();
+            if (w > 0 && h > 0) {
+                var containerWidth = playerDisplayEl.clientWidth || 1080;
+                var scale = Math.min(containerWidth / w, 1);
+                display.scale(scale);
+            }
+        }
+        display.onresize = function() { scaleRecordingDisplay(); };
+
+        var duration = 0;
+        var currentPos = 0;
+        var seeking = false;
+
+        recording.onprogress = function(millis) {
+            duration = millis;
+            timeEl.textContent = formatTime(currentPos) + ' / ' + formatTime(duration);
+        };
+
+        recording.onplay = function() { playBtn.textContent = 'Pause'; };
+        recording.onpause = function() { playBtn.textContent = 'Play'; };
+        recording.onseek = function(position) {
+            currentPos = position;
+            if (!seeking && duration > 0) seekSlider.value = Math.round((position / duration) * 1000);
+            timeEl.textContent = formatTime(position) + ' / ' + formatTime(duration);
+        };
+
+        playBtn.onclick = function() {
+            if (recording.isPlaying()) recording.pause();
+            else recording.play();
+        };
+
+        seekSlider.addEventListener('mousedown', function() { seeking = true; });
+        seekSlider.addEventListener('mouseup', function() { seeking = false; });
+        seekSlider.addEventListener('input', function() {
+            if (duration > 0) recording.seek((seekSlider.value / 1000) * duration);
+        });
+
+        recording.connect();
     };
 
     window.deleteRecording = function(name) {
@@ -130,12 +241,9 @@
         }).then(function() { loadRecordings(); });
     };
 
-    document.getElementById('player-close')?.addEventListener('click', function() {
-        document.getElementById('player-section').classList.add('hidden');
-        document.getElementById('player-display').innerHTML = '';
-    });
+    document.getElementById('player-close').addEventListener('click', closePlayer);
 
-    searchInput?.addEventListener('input', function() {
+    searchInput.addEventListener('input', function() {
         clearTimeout(searchTimer);
         searchTimer = setTimeout(function() { loadRecordings(searchInput.value); }, 300);
     });

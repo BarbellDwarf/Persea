@@ -207,15 +207,16 @@ pub async fn login(
     };
     let cookie_value = format!("{}:{}", state_key, fingerprint);
 
+    let sec = crate::csrf::cookie_secure_attr(&headers);
     let state_cookie = format!(
-        "persea_oidc_state={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
-        cookie_value
+        "persea_oidc_state={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+        cookie_value, sec
     );
     // The provider name lives in its own cookie (names may contain colons,
     // which would be ambiguous inside the state cookie).
     let provider_cookie = format!(
-        "persea_oidc_provider={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
-        provider.name
+        "persea_oidc_provider={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+        provider.name, sec
     );
 
     let mut cookies = vec![
@@ -227,8 +228,8 @@ pub async fn login(
     if let Some(ref next) = params.next {
         if next.starts_with('/') && !next.starts_with("//") && !next.contains("://") {
             let next_cookie = format!(
-                "persea_next={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
-                next
+                "persea_next={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+                next, sec
             );
             cookies.push((header::SET_COOKIE, next_cookie));
         }
@@ -565,14 +566,19 @@ pub async fn callback(
 
         tracing::info!(email = %email, "OIDC login requires TOTP — redirecting to MFA");
 
+        let sec = crate::csrf::cookie_secure_attr(&headers);
         let mfa_cookie = format!(
-            "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
-            pending_token, ttl_secs
+            "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age={}",
+            pending_token, sec, ttl_secs
         );
-        let clear_state_cookie =
-            "persea_oidc_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
-        let clear_next_cookie =
-            "persea_next=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+        let clear_state_cookie = format!(
+            "persea_oidc_state=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+            sec
+        );
+        let clear_next_cookie = format!(
+            "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+            sec
+        );
 
         return (
             AppendHeaders([
@@ -627,14 +633,19 @@ pub async fn callback(
         .unwrap_or_else(|| "/addressbook.html".to_string());
 
     // Set session cookie and redirect; clear OIDC state and next cookies
+    let sec = crate::csrf::cookie_secure_attr(&headers);
     let session_cookie = format!(
-        "persea_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
-        session_token, ttl_secs
+        "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
+        session_token, sec, ttl_secs
     );
-    let clear_state_cookie =
-        "persea_oidc_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
-    let clear_next_cookie =
-        "persea_next=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+    let clear_state_cookie = format!(
+        "persea_oidc_state=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        sec
+    );
+    let clear_next_cookie = format!(
+        "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        sec
+    );
 
     (
         AppendHeaders([
@@ -659,8 +670,10 @@ pub async fn logout(
             tokio::task::spawn_blocking(move || db::delete_auth_session(&db_clone, &token)).await;
     }
 
-    let clear_cookie =
-        "persea_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+    let clear_cookie = format!(
+        "persea_session=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        crate::csrf::cookie_secure_attr(request.headers())
+    );
 
     (
         [(header::SET_COOKIE, clear_cookie)],

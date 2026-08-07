@@ -125,12 +125,20 @@
                 <label class="form-label" for="fm-desc">Description</label>
                 <input type="text" id="fm-desc" class="form-input" placeholder="e.g. Infrastructure servers" autocomplete="off">
             </div>
+            <div id="fm-parent-field">
+                <label class="form-label" for="fm-parent">Parent folder</label>
+                <select id="fm-parent" class="form-input">
+                    <option value="">(root)</option>
+                </select>
+                <p class="text-xs text-gray-500 mt-1">Create this folder inside another folder. Scope is inherited from the parent.</p>
+            </div>
             <div>
                 <label class="form-label" for="fm-scope">Scope</label>
                 <select id="fm-scope" class="form-input">
                     <option value="shared">shared (all instances)</option>
                     <option value="instance">instance (this server only)</option>
                 </select>
+                <p class="text-xs text-gray-500 mt-1">shared = visible on every Persea server in a fleet (a central address book). instance = only on this server. On a single server, either works — shared is the default.</p>
             </div>
             <div>
                 <label class="form-label">Allowed groups</label>
@@ -185,11 +193,12 @@
                     <option value="vdi">VDI (Docker)</option>
                     <option value="proxmox">Proxmox VE console</option>
                 </select>
+                <div id="em-type-help" class="text-xs text-gray-500 mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
             </div>
             <div>
                 <label class="form-label" for="em-hostname">Hostname</label>
                 <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
+                <p class="text-xs text-gray-500 mt-1">The server's IP or hostname — no http:// and no port here (port has its own field). Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
             </div>
             <div id="em-url-field" style="display:none">
                 <label class="form-label" for="em-url">URL</label>
@@ -205,31 +214,43 @@
                 <div>
                     <label class="form-label" for="em-proxmox-url">Proxmox API URL</label>
                     <input type="text" id="em-proxmox-url" class="form-input" placeholder="https://pve.example.com:8006" autocomplete="off">
+                    <p class="text-xs text-gray-500 mt-1">The address of your Proxmox web interface (the API is the same server, port 8006).</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-vmid">VM ID</label>
                     <input type="number" id="em-proxmox-vmid" class="form-input" min="100" max="999999" autocomplete="off">
+                    <p class="text-xs text-gray-500 mt-1">The numeric VM ID — shown in the PVE web UI next to the VM name (e.g. 105).</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-node">Node</label>
                     <input type="text" id="em-proxmox-node" class="form-input" placeholder="pve1" autocomplete="off">
+                    <p class="text-xs text-gray-500 mt-1">Optional — leave blank to auto-detect which node the VM runs on.</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-token-id">API token ID</label>
                     <input type="text" id="em-proxmox-token-id" class="form-input" placeholder="root@pam!persea" autocomplete="off">
+                    <p class="text-xs text-gray-500 mt-1">Format: user@realm!tokenname (e.g. root@pam!persea). Create it in PVE under Datacenter → Permissions → API Tokens.</p>
+                </div>
+                <div>
+                    <label class="form-label" for="em-proxmox-token-secret">API token secret</label>
+                    <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
+                    <p class="text-xs text-gray-500 mt-1">The UUID shown once when you created the token. The token needs Sys.Audit on / and VM.Audit + VM.Console on the VM (Datacenter → Permissions → Add).</p>
                 </div>
                 <label class="flex items-center gap-2 text-sm text-gray-300" style="margin-top:8px">
                     <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-gray-800 border-gray-700 text-emerald-500">
                     Verify TLS certificate
                 </label>
+                <p class="text-xs text-gray-500" style="margin-top:6px">Leave unchecked if PVE uses its default self-signed certificate.</p>
             </div>
             <div>
                 <label class="form-label" for="em-port">Port</label>
                 <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
+                <p class="text-xs text-gray-500 mt-1">Defaults are filled in for you: SSH 22, RDP 3389, VNC/SPICE 5900. Leave as-is unless the server listens elsewhere.</p>
             </div>
             <div>
                 <label class="form-label" for="em-username">Username</label>
                 <input type="text" id="em-username" class="form-input" autocomplete="off">
+                <p class="text-xs text-gray-500 mt-1">The account on the target server (e.g. root, Administrator, or DOMAIN\user for RDP). Leave blank to fall back to your preset (My Profile → My Credentials) or to be asked at connect time.</p>
             </div>
             <div>
                 <div style="display:flex;justify-content:space-between;align-items:center">
@@ -245,6 +266,14 @@
             <div>
                 <label class="form-label" for="em-private-key">Private key (PEM)</label>
                 <textarea id="em-private-key" class="form-input" rows="3" style="resize:vertical;font-family:var(--font-mono);font-size:13px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+                <p class="text-xs text-gray-500 mt-1">SSH only. Alternative to a password — paste the full key including the BEGIN/END lines. If both are set, the key is used.</p>
+            </div>
+            <div id="em-ignore-cert-field" style="display:none">
+                <label class="flex items-center gap-2 text-sm text-gray-300" style="cursor:pointer">
+                    <input type="checkbox" id="em-ignore-cert" class="rounded bg-gray-800 border-gray-700 text-emerald-500">
+                    Ignore TLS certificate errors
+                </label>
+                <p class="text-xs text-gray-500 mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
             </div>
             <div id="em-proxmox-secret-field" style="display:none">
                 <label class="form-label" for="em-proxmox-token-secret">Proxmox token secret</label>
@@ -267,12 +296,50 @@
                         <button type="button" class="btn btn-secondary btn-sm" id="em-groups-add" style="width:auto">Add</button>
                     </div>
                 </div>
+                <p class="text-xs text-gray-500 mt-1">Which groups may <em>see</em> this entry in the address book. Leave empty for admin-only. Connect permission is separate — grant it under "Connect permissions" below.</p>
+            </div>
+            <div id="em-rbac-field" style="display:none">
+                <label class="form-label">Connect permissions (RBAC)</label>
+                <p class="text-xs text-gray-500" style="margin:4px 0 8px">Who may connect to this entry. Denied by default unless granted here or inherited via connection groups (Admin → Groups).</p>
+                <div class="chip-picker">
+                    <div class="chip-list" id="em-rbac-chips"></div>
+                    <div class="chip-input-wrap">
+                        <div class="combo" id="em-rbac-combo">
+                            <input type="text" id="em-rbac-input" placeholder="Type or pick a group or user..." autocomplete="off" spellcheck="false">
+                            <div class="combo-menu" id="em-rbac-menu" role="listbox"></div>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="em-rbac-add" style="width:auto">Add</button>
+                    </div>
+                </div>
             </div>
             <div id="em-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
         </div>
         <div class="flex justify-end gap-3 mt-6">
             <button type="button" id="em-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
             <button type="button" id="em-save" class="btn btn-primary btn-sm" style="width:auto">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Connect credentials prompt modal -->
+<div id="prompt-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="prompt-modal-title">
+    <div class="card w-full max-w-sm">
+        <h2 id="prompt-modal-title" class="text-lg font-bold text-gray-100 mb-1">Enter credentials</h2>
+        <p class="text-xs text-gray-500 mb-4">This entry has no stored credentials. Use your own (e.g. a rotating password). You can save a preset under <strong>My Profile</strong> so you aren't asked each time.</p>
+        <div class="space-y-4">
+            <div>
+                <label class="form-label" for="pm-username">Username</label>
+                <input type="text" id="pm-username" class="form-input" autocomplete="off">
+            </div>
+            <div>
+                <label class="form-label" for="pm-password">Password</label>
+                <input type="password" id="pm-password" class="form-input" autocomplete="new-password">
+            </div>
+            <div id="pm-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+        </div>
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" id="pm-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
+            <button type="button" id="pm-connect" class="btn btn-primary btn-sm" style="width:auto">Connect</button>
         </div>
     </div>
 </div>
@@ -382,6 +449,11 @@
     var emComboActive = -1;
     var folderEditMode = null;
     var entryEditMode = null;
+    var expandedKeys = new Set();
+    var rbacGroups = null;
+    var rbacUsers = null;
+    var emRbac = [];
+    var emRbacOrig = [];
 
     function folderKey(scope, path) {
         return scope + '\u0000' + path;
@@ -457,6 +529,7 @@
                 });
                 folderMap = new Map();
                 folders.forEach(function(f) { folderMap.set(folderKey(f.scope, f.path), f); });
+                folders.forEach(function(f) { expandedKeys.add(folderKey(f.scope, f.path)); });
                 if (folders.length === 0) {
                     if (isAdmin) {
                         document.getElementById('main-content').classList.add('hidden');
@@ -513,6 +586,47 @@
         }
         return null;
     }
+    function folderChildren(visible, parentPath) {
+        if (!parentPath) return visible.filter(function(f) { return f.path.indexOf('/') === -1; });
+        var prefix = parentPath + '/';
+        return visible.filter(function(f) {
+            return f.path.startsWith(prefix) && f.path.slice(prefix.length).indexOf('/') === -1;
+        });
+    }
+    function folderLabel(path) {
+        var parts = String(path).split('/');
+        return parts[parts.length - 1];
+    }
+    function ensureExpanded(f) {
+        var parts = f.path.split('/');
+        var cur = '';
+        for (var i = 0; i < parts.length; i++) {
+            cur = cur ? cur + '/' + parts[i] : parts[i];
+            var m = folderMap.get(folderKey(f.scope, cur));
+            if (m) expandedKeys.add(folderKey(f.scope, cur));
+        }
+    }
+    function renderFolderLevel(visible, parentPath, depth) {
+        var kids = folderChildren(visible, parentPath);
+        var out = '';
+        kids.forEach(function(f) {
+            var key = folderKey(f.scope, f.path);
+            var count = (entriesByFolder.get(key) || []).length;
+            var active = selectedFolder && selectedFolder.scope === f.scope && selectedFolder.path === f.path ? ' active' : '';
+            var expanded = expandedKeys.has(key);
+            var chevron = f.has_children
+                ? '<span class="folder-chevron" data-key="' + escapeAttr(key) + '" title="' + (expanded ? 'Collapse' : 'Expand') + '" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex-shrink:0;color:var(--text-muted);font-size:10px;cursor:pointer;user-select:none">' + (expanded ? '\u25BE' : '\u25B8') + '</span>'
+                : '<span style="width:16px;flex-shrink:0"></span>';
+            out += '<div class="folder-item' + active + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '" style="padding-left:' + (12 + depth * 20) + 'px" title="' + escapeAttr(f.path) + '">'
+                + chevron
+                + '<span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg-input);color:var(--text-muted);margin-right:8px">' + escapeHtml(f.scope) + '</span>'
+                + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(folderLabel(f.path)) + '</span>'
+                + '<span style="font-size:11px;color:var(--text-muted);margin-left:8px">' + count + '</span>'
+                + '</div>';
+            if (expanded) out += renderFolderLevel(visible, f.path, depth + 1);
+        });
+        return out;
+    }
     function renderFolders() {
         var tree = document.getElementById('folder-tree');
         var scopeFilter = document.getElementById('scope-filter').value;
@@ -521,19 +635,20 @@
             tree.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders in this scope.</p>';
             return;
         }
-        tree.innerHTML = visible.map(function(f) {
-            var count = (entriesByFolder.get(folderKey(f.scope, f.path)) || []).length;
-            var active = selectedFolder && selectedFolder.scope === f.scope && selectedFolder.path === f.path ? ' active' : '';
-            return '<div class="folder-item' + active + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '">'
-                + '<span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg-input);color:var(--text-muted);margin-right:8px">' + escapeHtml(f.scope) + '</span>'
-                + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(f.name) + '</span>'
-                + '<span style="font-size:11px;color:var(--text-muted);margin-left:8px">' + count + '</span>'
-                + '</div>';
-        }).join('');
+        tree.innerHTML = renderFolderLevel(visible, null, 0);
         tree.querySelectorAll('.folder-item').forEach(function(el) {
-            el.addEventListener('click', function() {
+            el.addEventListener('click', function(ev) {
+                if (ev.target.closest('.folder-chevron')) return;
                 var f = folderMap.get(folderKey(el.getAttribute('data-scope'), el.getAttribute('data-path')));
                 if (f) selectFolder(f);
+            });
+        });
+        tree.querySelectorAll('.folder-chevron').forEach(function(el) {
+            el.addEventListener('click', function() {
+                var key = el.getAttribute('data-key');
+                if (expandedKeys.has(key)) expandedKeys.delete(key);
+                else expandedKeys.add(key);
+                renderFolders();
             });
         });
     }
@@ -541,6 +656,7 @@
         searchQuery = '';
         document.getElementById('connections-search').value = '';
         selectedFolder = f;
+        ensureExpanded(f);
         clearEntrySelection();
         renderFolders();
         document.getElementById('entries-header').classList.remove('hidden');
@@ -569,7 +685,7 @@
             });
             row.querySelector('.entry-connect').addEventListener('click', function() {
                 selectConnection(scope, path, name, row);
-                connectEntry(scope, path, name);
+                maybePromptConnect(scope, path, name);
             });
         });
     }
@@ -642,16 +758,21 @@
                 else if (selectedFolder) selectFolder(selectedFolder);
             });
     }
-    function connectEntry(scope, folder, entry) {
+    function connectEntry(scope, folder, entry, creds) {
         var btn = document.getElementById('detail-connect');
         var err = document.getElementById('detail-error');
         if (btn) { btn.disabled = true; btn.textContent = 'Connecting\u2026'; }
         if (err) err.classList.add('hidden');
+        var body = { width: window.innerWidth, height: window.innerHeight };
+        if (creds) {
+            if (creds.username) body.username = creds.username;
+            if (creds.password) body.password = creds.password;
+        }
         fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(entry) + '/connect', {
             method: 'POST',
             headers: apiHeaders(),
             credentials: 'same-origin',
-            body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+            body: JSON.stringify(body)
         })
             .then(function(r) {
                 return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
@@ -681,6 +802,28 @@
                 if (err) { err.textContent = e.message || 'Connection failed.'; err.classList.remove('hidden'); }
             });
     }
+    var promptTarget = null;
+    function openConnectPrompt(scope, folder, entry) {
+        promptTarget = { scope: scope, folder: folder, entry: entry };
+        document.getElementById('pm-username').value = '';
+        document.getElementById('pm-password').value = '';
+        document.getElementById('pm-error').textContent = '';
+        document.getElementById('pm-error').classList.add('hidden');
+        openModal('prompt-modal');
+        document.getElementById('pm-username').focus();
+    }
+    function maybePromptConnect(scope, folder, entry) {
+        var list = entriesByFolder.get(folderKey(scope, folder)) || [];
+        var e = findByName(list, entry);
+        if (e && e.has_credentials) { connectEntry(scope, folder, entry); return; }
+        fetch('/api/me/preset-credentials', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(p) {
+                if (p && (p.has_password || p.has_username)) { connectEntry(scope, folder, entry); return; }
+                openConnectPrompt(scope, folder, entry);
+            })
+            .catch(function() { connectEntry(scope, folder, entry); });
+    }
     function selectConnection(scope, folder, entry, el) {
         var rows = document.querySelectorAll('.entry-row.selected');
         for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
@@ -699,7 +842,7 @@
             badge.textContent = proto.toUpperCase();
             badge.className = 'px-2 py-0.5 text-xs font-medium rounded border ' + protoClass(proto);
             document.getElementById('detail-host').textContent = entryHost(e) || '\u2014';
-            document.getElementById('detail-connect').onclick = function() { connectEntry(scope, folder, entry); };
+            document.getElementById('detail-connect').onclick = function() { maybePromptConnect(scope, folder, entry); };
             var params = document.getElementById('detail-params');
             var fields = [['Port', e.port], ['Username', e.username], ['Domain', e.domain], ['Security', e.security], ['Recording', e.enable_recording ? 'On' : null]];
             params.innerHTML = fields.filter(function(f) { return f[1]; }).map(function(f) {
@@ -887,15 +1030,43 @@
     }
 
     // ── Folder modal ─────────────────────────────────────────────────
+    function populateFolderParents() {
+        var sel = document.getElementById('fm-parent');
+        sel.innerHTML = '<option value="">(root)</option>';
+        var sf = document.getElementById('scope-filter').value;
+        folders.forEach(function(f) {
+            if (sf && f.scope !== sf) return;
+            var opt = document.createElement('option');
+            opt.value = f.scope + '|' + f.path;
+            opt.textContent = f.path + (f.scope === 'instance' ? ' (instance)' : '');
+            sel.appendChild(opt);
+        });
+        if (selectedFolder) sel.value = selectedFolder.scope + '|' + selectedFolder.path;
+        updateFolderParentScope();
+    }
+    function updateFolderParentScope() {
+        var sel = document.getElementById('fm-parent');
+        var scopeEl = document.getElementById('fm-scope');
+        var v = sel.value;
+        if (v) {
+            scopeEl.value = v.split('|')[0];
+            scopeEl.disabled = true;
+        } else {
+            var scopeFilter = document.getElementById('scope-filter').value;
+            scopeEl.value = scopeFilter === 'instance' ? 'instance' : 'shared';
+            scopeEl.disabled = false;
+        }
+    }
     function openNewFolder() {
         folderEditMode = null;
         document.getElementById('folder-modal-title').textContent = 'New Folder';
         document.getElementById('fm-name').value = '';
         document.getElementById('fm-name').disabled = false;
         document.getElementById('fm-desc').value = '';
+        document.getElementById('fm-parent-field').style.display = '';
+        populateFolderParents();
         var scopeFilter = document.getElementById('scope-filter').value;
         document.getElementById('fm-scope').value = scopeFilter === 'instance' ? 'instance' : 'shared';
-        document.getElementById('fm-scope').disabled = false;
         document.getElementById('fm-inherit').checked = true;
         document.getElementById('fm-error').textContent = '';
         document.getElementById('fm-error').classList.add('hidden');
@@ -911,6 +1082,7 @@
         var reqId = ++folderEditReqId;
         folderEditMode = { scope: selectedFolder.scope, path: selectedFolder.path, name: selectedFolder.name };
         document.getElementById('folder-modal-title').textContent = 'Edit Folder: ' + selectedFolder.path;
+        document.getElementById('fm-parent-field').style.display = 'none';
         document.getElementById('fm-name').value = selectedFolder.name;
         document.getElementById('fm-name').disabled = true;
         document.getElementById('fm-desc').value = selectedFolder.description || '';
@@ -976,11 +1148,13 @@
                 body: JSON.stringify({ allowed_groups: groups, description: desc, inherit_from_parent: inherit })
             });
         } else {
+            var parentVal = document.getElementById('fm-parent').value;
+            var fullPath = parentVal ? parentVal.split('|')[1] + '/' + name : name;
             req = fetch('/api/addressbook/folders', {
                 method: 'POST',
                 headers: apiHeaders(),
                 credentials: 'same-origin',
-                body: JSON.stringify({ name: name, allowed_groups: groups, description: desc, scope: scope, inherit_from_parent: inherit })
+                body: JSON.stringify({ name: fullPath, allowed_groups: groups, description: desc, scope: scope, inherit_from_parent: inherit })
             });
         }
         req.then(function(res) {
@@ -989,7 +1163,8 @@
             if (!folderEditMode) {
                 var sf = document.getElementById('scope-filter').value;
                 if (!sf || sf === scope) {
-                    selectedFolder = { name: name, scope: scope, description: desc, path: name, has_children: false };
+                    selectedFolder = { name: name, scope: scope, description: desc, path: parentVal ? parentVal.split('|')[1] + '/' + name : name, has_children: false };
+                    ensureExpanded(selectedFolder);
                     clearEntrySelection();
                 }
             } else if (selectedFolder) {
@@ -1033,6 +1208,20 @@
 
     // ── Entry modal ──────────────────────────────────────────────────
     var entryTypeDefaults = { ssh: '22', rdp: '3389', vnc: '5900', spice: '5900' };
+    var entryTypeHelp = {
+        ssh: 'Opens a terminal to a Linux/Unix server. <strong>Hostname</strong>: the server IP (e.g. 192.168.50.11) — no http://. <strong>Username/Password</strong>: the login account on that server, or paste a <strong>private key</strong> and leave the password blank.',
+        rdp: 'Remote desktop to a Windows machine (or xrdp server). <strong>Hostname</strong>: its IP. <strong>Username</strong>: e.g. DOMAIN\\user. <strong>Password</strong>: the Windows account password.',
+        vnc: 'Connects to a VNC server — VM consoles, IPMI/KVM, or another desktop. <strong>Hostname</strong>: its IP. <strong>Password</strong>: the VNC password, if one is set.',
+        spice: 'Direct SPICE display for KVM/QEMU consoles. <strong>Hostname/Port</strong>: the SPICE endpoint. Usually only used via a Proxmox entry instead.',
+        web: 'Opens a headless Chromium browser session inside your browser. <strong>URL</strong>: the full address, e.g. https://192.168.50.11:8006. Optional <strong>Username/Password</strong> can be injected into the page with $RUSTGUAC_USERNAME / $RUSTGUAC_PASSWORD placeholders in the URL.',
+        vdi: 'Starts an ephemeral Docker desktop container for the user (requires VDI enabled on the server). <strong>Container image</strong>: any Docker image with an RDP server, e.g. myregistry/desktop:latest.',
+        proxmox: 'Streams a Proxmox VM console through the PVE API. <strong>API URL</strong>: https://&lt;pve-host&gt;:8006. <strong>VM ID</strong>: shown in the PVE UI next to the VM name. <strong>Token</strong>: create one in PVE under Datacenter → Permissions → API Tokens — ID format user@realm!tokenname, and grant it Sys.Audit on / plus VM.Audit and VM.Console on the VM. <strong>Node</strong> is auto-detected; leave blank.'
+    };
+    function updateTypeHelp() {
+        var type = document.getElementById('em-type').value;
+        var el = document.getElementById('em-type-help');
+        if (el) el.innerHTML = entryTypeHelp[type] || '';
+    }
     function updateEntryTypeFields() {
         var type = document.getElementById('em-type').value;
         document.getElementById('em-proxmox-secret-field').style.display = type === 'proxmox' ? '' : 'none';
@@ -1040,8 +1229,10 @@
         document.getElementById('em-url-field').style.display = type === 'web' ? '' : 'none';
         document.getElementById('em-container-field').style.display = type === 'vdi' ? '' : 'none';
         document.getElementById('em-proxmox-fields').style.display = type === 'proxmox' ? '' : 'none';
+        document.getElementById('em-ignore-cert-field').style.display = (type === 'rdp' || type === 'spice') ? '' : 'none';
         var portEl = document.getElementById('em-port');
         if (!portEl.value && entryTypeDefaults[type]) portEl.value = entryTypeDefaults[type];
+        updateTypeHelp();
     }
     function clearEntryFields() {
         var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id'];
@@ -1069,6 +1260,8 @@
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
+        document.getElementById('em-rbac-field').style.display = isAdmin ? '' : 'none';
+        resetEntryRbac();
         openModal('entry-modal');
     }
     function openEditEntry() {
@@ -1107,6 +1300,7 @@
         document.getElementById('em-proxmox-node').value = selectedEntry.proxmox_node || '';
         document.getElementById('em-proxmox-token-id').value = selectedEntry.proxmox_token_id || '';
         document.getElementById('em-proxmox-verify-tls').checked = !!selectedEntry.proxmox_verify_tls;
+        document.getElementById('em-ignore-cert').checked = !!selectedEntry.ignore_cert;
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
@@ -1115,6 +1309,11 @@
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
+        document.getElementById('em-rbac-field').style.display = isAdmin ? '' : 'none';
+        resetEntryRbac();
+        loadRbacRefs(function() {
+            loadEntryRbac();
+        });
         openModal('entry-modal');
     }
     var passwordClearArmed = false;
@@ -1173,6 +1372,11 @@
             errEl.classList.remove('hidden');
             return;
         }
+        if (hostname && hostname.indexOf('://') !== -1) {
+            errEl.textContent = 'Hostname must be a host or IP address (e.g. 192.168.50.11) — not a URL. Use type "Web" to open a browser session, or "Proxmox" for a VM console.';
+            errEl.classList.remove('hidden');
+            return;
+        }
         var entry = { type: type };
         if (displayName) entry.display_name = displayName;
         if (hostname) entry.hostname = hostname;
@@ -1184,6 +1388,9 @@
         else if (passwordClearArmed) entry.password = '';
         var privateKey = document.getElementById('em-private-key').value.trim();
         if (privateKey) entry.private_key = privateKey;
+        if (type === 'rdp' || type === 'spice') {
+            entry.ignore_cert = document.getElementById('em-ignore-cert').checked;
+        }
         var ts = document.getElementById('em-proxmox-token-secret').value.trim();
         if (ts) entry.proxmox_token_secret = ts;
         var cp = document.getElementById('em-container-password').value;
@@ -1209,17 +1416,24 @@
         if (type === 'proxmox') {
             var pveUrl = document.getElementById('em-proxmox-url').value.trim();
             var vmid = document.getElementById('em-proxmox-vmid').value.trim();
+            var tokenId = document.getElementById('em-proxmox-token-id').value.trim();
+            var tokenSecret = document.getElementById('em-proxmox-token-secret').value.trim();
             if (!pveUrl || !vmid) {
                 errEl.textContent = 'Proxmox API URL and VM ID are required.';
                 errEl.classList.remove('hidden');
                 return;
             }
+            if (!tokenId || !tokenSecret) {
+                errEl.textContent = 'Proxmox API token ID and token secret are required (create one in PVE: Datacenter → Permissions → API Tokens).';
+                errEl.classList.remove('hidden');
+                return;
+            }
             entry.proxmox_url = pveUrl;
             entry.proxmox_vmid = parseInt(vmid, 10);
+            entry.proxmox_token_id = tokenId;
+            entry.proxmox_token_secret = tokenSecret;
             var node = document.getElementById('em-proxmox-node').value.trim();
             if (node) entry.proxmox_node = node;
-            var tokenId = document.getElementById('em-proxmox-token-id').value.trim();
-            if (tokenId) entry.proxmox_token_id = tokenId;
             entry.proxmox_verify_tls = document.getElementById('em-proxmox-verify-tls').checked;
         }
         if (cp) entry.container_password = cp;
@@ -1252,8 +1466,16 @@
         req.then(function(res) {
             if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
             if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
-            closeModal('entry-modal');
-            reloadSelectedEntries();
+            var afterSave = function() {
+                closeModal('entry-modal');
+                reloadSelectedEntries();
+            };
+            if (!isAdmin) { afterSave(); return; }
+            return applyRbacDiffs(rbacConnId()).then(afterSave, function(grantErr) {
+                errEl.textContent = 'Entry saved, but permissions failed: ' + (grantErr && grantErr.message ? grantErr.message : 'unknown error');
+                errEl.classList.remove('hidden');
+                reloadSelectedEntries();
+            });
         }).catch(function(err) {
             if (err && err.message === 'redirect') return;
             errEl.textContent = err.message || 'Save failed.';
@@ -1432,6 +1654,196 @@
         reader.readAsText(file);
     }
 
+    // ── RBAC connect permissions (entry modal) ───────────────────────
+    function rbacConnId() {
+        var scope = entryEditMode ? entryEditMode.scope : selectedFolder.scope;
+        var folder = entryEditMode ? entryEditMode.folder : selectedFolder.path;
+        var name = entryEditMode ? entryEditMode.name : document.getElementById('em-name').value.trim();
+        return scope + '/' + folder + '/' + name;
+    }
+    function loadRbacRefs(cb) {
+        var need = [];
+        if (rbacGroups === null) need.push('groups');
+        if (rbacUsers === null) need.push('users');
+        if (!need.length) { if (cb) cb(); return; }
+        var pending = need.length;
+        var done = function() { if (--pending === 0 && cb) cb(); };
+        if (need.indexOf('groups') !== -1) {
+            fetch('/api/admin/rbac/groups', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(d) { rbacGroups = d || []; done(); })
+                .catch(function() { rbacGroups = []; done(); });
+        }
+        if (need.indexOf('users') !== -1) {
+            fetch('/api/users', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(d) { rbacUsers = d || []; done(); })
+                .catch(function() { rbacUsers = []; done(); });
+        }
+    }
+    function rbacLabelFor(type, id) {
+        if (type === 'group') {
+            var g = (rbacGroups || []).filter(function(x) { return String(x.id) === String(id); })[0];
+            return g ? g.name : ('group #' + id);
+        }
+        var u = (rbacUsers || []).filter(function(x) { return String(x.id) === String(id); })[0];
+        return u ? (u.name || u.email || ('user #' + id)) : ('user #' + id);
+    }
+    function loadEntryRbac() {
+        fetch('/api/admin/rbac/connections/' + encodeURIComponent(rbacConnId()) + '/permissions', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(perms) {
+                emRbac = (perms || []).map(function(p) {
+                    var type = p.entity_type === 'group' ? 'group' : 'user';
+                    return { type: type, id: p.entity_id, label: rbacLabelFor(type, p.entity_id) };
+                });
+                emRbacOrig = emRbac.map(function(x) { return JSON.stringify([x.type, x.id]); });
+                renderRbacChips();
+                populateRbacOptions();
+            })
+            .catch(function() { emRbac = []; emRbacOrig = []; renderRbacChips(); });
+    }
+    function resetEntryRbac() {
+        emRbac = [];
+        emRbacOrig = [];
+        renderRbacChips();
+        loadRbacRefs(function() { populateRbacOptions(); });
+    }
+    function renderRbacChips() {
+        var list = document.getElementById('em-rbac-chips');
+        list.innerHTML = '';
+        emRbac.forEach(function(g) {
+            var chip = document.createElement('span');
+            chip.className = 'chip';
+            chip.textContent = g.label + (g.type === 'group' ? ' (group)' : '');
+            var rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'chip-remove';
+            rm.textContent = '\u00D7';
+            rm.title = 'Remove grant';
+            rm.setAttribute('aria-label', 'Remove ' + g.label);
+            rm.addEventListener('click', function() {
+                var idx = emRbac.indexOf(g);
+                if (idx !== -1) emRbac.splice(idx, 1);
+                renderRbacChips();
+                populateRbacOptions();
+            });
+            chip.appendChild(rm);
+            list.appendChild(chip);
+        });
+    }
+    function rbacOptionsFiltered() {
+        var q = (document.getElementById('em-rbac-input').value || '').trim().toLowerCase();
+        var out = [];
+        (rbacGroups || []).forEach(function(g) {
+            if (!q || g.name.toLowerCase().indexOf(q) !== -1) out.push({ type: 'group', id: String(g.id), label: g.name });
+        });
+        (rbacUsers || []).forEach(function(u) {
+            var label = u.name || u.email;
+            if (label && (!q || label.toLowerCase().indexOf(q) !== -1)) out.push({ type: 'user', id: String(u.id), label: label });
+        });
+        return out.filter(function(o) {
+            return !emRbac.some(function(e) { return e.type === o.type && e.id === o.id; });
+        });
+    }
+    var rbacComboActive = -1;
+    function populateRbacOptions() {
+        var menu = document.getElementById('em-rbac-menu');
+        var opts = rbacOptionsFiltered();
+        menu.innerHTML = '';
+        rbacComboActive = opts.length > 0 ? 0 : -1;
+        var q = (document.getElementById('em-rbac-input').value || '').trim();
+        if (opts.length === 0 && !q) {
+            var empty = document.createElement('div');
+            empty.className = 'combo-item empty';
+            empty.textContent = (rbacGroups && rbacUsers && rbacGroups.length === 0 && rbacUsers.length === 0)
+                ? 'No groups or users yet — create groups under Admin → Groups.'
+                : 'All known groups and users already granted.';
+            menu.appendChild(empty);
+            return;
+        }
+        opts.forEach(function(o, i) {
+            var item = document.createElement('div');
+            item.className = 'combo-item' + (i === rbacComboActive ? ' active' : '');
+            item.setAttribute('role', 'option');
+            item.textContent = o.label + (o.type === 'group' ? ' (group)' : '');
+            item.addEventListener('mousedown', function(ev) {
+                ev.preventDefault();
+                pickRbac(o);
+            });
+            item.addEventListener('mouseenter', function() {
+                rbacComboActive = i;
+                updateRbacComboActive();
+            });
+            menu.appendChild(item);
+        });
+        if (q && !opts.length) {
+            var hint = document.createElement('div');
+            hint.className = 'combo-item empty';
+            hint.textContent = 'No group or user named "' + q + '" — create it under Admin first.';
+            menu.appendChild(hint);
+        }
+    }
+    function updateRbacComboActive() {
+        var items = document.querySelectorAll('#em-rbac-menu .combo-item');
+        for (var i = 0; i < items.length; i++) items[i].classList.toggle('active', i === rbacComboActive);
+    }
+    function pickRbac(o) {
+        if (!emRbac.some(function(e) { return e.type === o.type && e.id === o.id; })) emRbac.push({ type: o.type, id: o.id, label: o.label });
+        document.getElementById('em-rbac-input').value = '';
+        renderRbacChips();
+        populateRbacOptions();
+        document.getElementById('em-rbac-input').focus();
+    }
+    function addRbacFromInput() {
+        var raw = (document.getElementById('em-rbac-input').value || '').trim();
+        if (!raw) return;
+        var q = raw.toLowerCase();
+        var match = null;
+        (rbacGroups || []).forEach(function(g) {
+            if (!match && g.name.toLowerCase() === q) match = { type: 'group', id: String(g.id), label: g.name };
+        });
+        if (!match) (rbacUsers || []).forEach(function(u) {
+            var l = u.name || u.email;
+            if (!match && l && l.toLowerCase() === q) match = { type: 'user', id: String(u.id), label: l };
+        });
+        if (match) pickRbac(match);
+        else {
+            var errEl = document.getElementById('em-error');
+            errEl.textContent = '"' + raw + '" is not a known group or user. Groups are created under Admin → Groups.';
+            errEl.classList.remove('hidden');
+        }
+    }
+    function applyRbacDiffs(connId) {
+        var origKeys = emRbacOrig;
+        var nextKeys = emRbac.map(function(x) { return JSON.stringify([x.type, x.id]); });
+        var adds = emRbac.filter(function(e) { return origKeys.indexOf(JSON.stringify([e.type, e.id])) === -1; });
+        var removals = origKeys.filter(function(k) { return nextKeys.indexOf(k) === -1; });
+        var chain = Promise.resolve();
+        adds.forEach(function(a) {
+            chain = chain.then(function() {
+                return fetch('/api/admin/rbac/connections/' + encodeURIComponent(connId) + '/permissions', {
+                    method: 'POST',
+                    headers: apiHeaders(),
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ entity_id: (a.type === 'group' ? 'g:' : 'u:') + a.id, permission: 'connect' })
+                }).then(function(r) { if (!r.ok) throw new Error('Failed to grant ' + a.label + ': HTTP ' + r.status); });
+            });
+        });
+        removals.forEach(function(k) {
+            var parts = JSON.parse(k);
+            chain = chain.then(function() {
+                return fetch('/api/admin/rbac/connections/' + encodeURIComponent(connId) + '/permissions', {
+                    method: 'DELETE',
+                    headers: apiHeaders(),
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ entity_id: (parts[0] === 'group' ? 'g:' : 'u:') + parts[1], permission: 'connect' })
+                }).then(function(r) { if (!r.ok) throw new Error('Failed to revoke permission: HTTP ' + r.status); });
+            });
+        });
+        return chain;
+    }
+
     // ── Modal helpers ────────────────────────────────────────────────
     function openModal(id) {
         var el = document.getElementById(id);
@@ -1544,15 +1956,62 @@
     wireGroupCombo('em');
     document.getElementById('em-type').addEventListener('change', updateEntryTypeFields);
 
+    var rbacComboEl = document.getElementById('em-rbac-combo');
+    var rbacInputEl = document.getElementById('em-rbac-input');
+    document.getElementById('em-rbac-add').addEventListener('click', addRbacFromInput);
+    rbacInputEl.addEventListener('focus', function() {
+        rbacComboEl.classList.add('open');
+        populateRbacOptions();
+    });
+    rbacInputEl.addEventListener('input', function() { populateRbacOptions(); });
+    rbacInputEl.addEventListener('keydown', function(ev) {
+        var opts = rbacOptionsFiltered();
+        if (ev.key === 'ArrowDown') {
+            ev.preventDefault();
+            rbacComboEl.classList.add('open');
+            if (rbacComboActive < opts.length - 1) rbacComboActive++;
+            updateRbacComboActive();
+        } else if (ev.key === 'ArrowUp') {
+            ev.preventDefault();
+            if (rbacComboActive > 0) rbacComboActive--;
+            updateRbacComboActive();
+        } else if (ev.key === 'Enter') {
+            ev.preventDefault();
+            if (rbacInputEl.value.trim()) addRbacFromInput();
+            else if (rbacComboActive >= 0 && rbacComboActive < opts.length) pickRbac(opts[rbacComboActive]);
+        } else if (ev.key === 'Escape') {
+            rbacComboEl.classList.remove('open');
+            rbacInputEl.blur();
+        }
+    });
+    document.getElementById('fm-parent').addEventListener('change', updateFolderParentScope);
+
     document.getElementById('import-cancel').addEventListener('click', function() { closeModal('import-modal'); });
     document.getElementById('import-submit').addEventListener('click', runImport);
+
+    document.getElementById('pm-cancel').addEventListener('click', function() { closeModal('prompt-modal'); });
+    document.getElementById('pm-connect').addEventListener('click', function() {
+        if (!promptTarget) return;
+        var username = document.getElementById('pm-username').value.trim();
+        var password = document.getElementById('pm-password').value;
+        if (!username && !password) {
+            var perr = document.getElementById('pm-error');
+            perr.textContent = 'Enter at least a username or a password.';
+            perr.classList.remove('hidden');
+            return;
+        }
+        connectEntry(promptTarget.scope, promptTarget.folder, promptTarget.entry, { username: username, password: password });
+    });
+    document.getElementById('pm-password').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') document.getElementById('pm-connect').click();
+    });
 
     document.querySelectorAll('.modal-overlay').forEach(function(el) {
         el.addEventListener('click', function(e) { if (e.target === el) el.classList.add('hidden'); });
     });
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
-            ['folder-modal', 'entry-modal', 'import-modal'].forEach(function(id) {
+            ['folder-modal', 'entry-modal', 'import-modal', 'prompt-modal'].forEach(function(id) {
                 document.getElementById(id).classList.add('hidden');
             });
         }
@@ -1562,6 +2021,8 @@
             var combo = document.getElementById(prefix + '-groups-combo');
             if (combo && !combo.contains(ev.target)) closeCombo(prefix);
         });
+        var rbacCombo = document.getElementById('em-rbac-combo');
+        if (rbacCombo && !rbacCombo.contains(ev.target)) rbacCombo.classList.remove('open');
     });
 
     document.getElementById('connections-search').addEventListener('input', debounce(runSearch, 250));

@@ -337,6 +337,12 @@ pub struct AuthConfig {
     pub saml: Option<crate::auth_providers::saml::SamlConfig>,
     /// TOTP second-factor configuration.
     pub totp: Option<AuthTotpConfig>,
+    /// When true, the username/password from password-based logins (database,
+    /// LDAP, RADIUS, SAML) is stored encrypted and reused as fallback
+    /// credentials for connection entries that carry none of their own.
+    /// OIDC/SSO logins have no password to pass through. Off by default.
+    #[serde(default)]
+    pub pass_login_credentials: bool,
 }
 
 /// TOTP configuration for the auth chain (maps to `[auth.totp]` in TOML).
@@ -1260,7 +1266,7 @@ fn default_login_scripts_dir() -> String {
 }
 
 fn default_site_title() -> String {
-    "persea".into()
+    "Persea".into()
 }
 
 fn default_localhost_networks() -> Vec<String> {

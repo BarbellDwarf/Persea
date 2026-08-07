@@ -819,7 +819,7 @@ pub async fn ab_list_folders(
         db::list_ab_folders(&database, None).map_err(|e| AppError::Internal(e.to_string()))?;
     let user_groups = id.groups();
     let mut visible = Vec::new();
-    for folder in db_folders {
+    for folder in &db_folders {
         if id.has_role("admin")
             || folder_allowed_for_user(&database, &folder.scope, &folder.name, user_groups)
         {
@@ -828,7 +828,9 @@ pub async fn ab_list_folders(
                 "scope": folder.scope,
                 "description": folder.description,
                 "path": folder.name,
-                "has_children": None::<bool>,
+                "has_children": db_folders
+                    .iter()
+                    .any(|g| g.name.starts_with(&format!("{}/", folder.name))),
             }));
         }
     }
@@ -1117,7 +1119,7 @@ pub async fn ab_connect_entry(
             .unwrap_or(false);
             if !has_perm {
                 return Err(AppError::Forbidden(
-                    "No permission to connect to this resource".into(),
+                    "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.".into(),
                 ));
             }
         }
@@ -1159,6 +1161,83 @@ pub async fn ab_connect_entry(
             storage_key.as_ref().map(|Extension(k)| k),
             &mut ab_entry,
         )?;
+    }
+
+    // Per-user preset fallback: entries without their own password use the
+    // user's preset credentials (set on the profile page). This covers
+    // rotating-password setups where shared entry credentials are left blank.
+    if ab_entry.password.as_deref().map_or(true, |p| p.is_empty()) {
+        let user_email = match &id {
+            AuthIdentity::User { email, .. } => Some(email.clone()),
+            _ => None,
+        };
+        if let Some(email) = user_email {
+            if let Ok(user) = db::get_user_by_email(&database, &email) {
+                if let Ok(Some((preset_username, preset_password_enc))) =
+                    db::get_user_preset_credentials(&database, user.id)
+                {
+                    if !preset_password_enc.is_empty() {
+                        let key_hex = resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
+                        if !key_hex.is_empty() {
+                            if let Ok(key) = crate::crypto::EncryptionKey::from_hex(&key_hex) {
+                                if let Ok(pw) = crate::crypto::decrypt_value(&key, &preset_password_enc) {
+                                    if ab_entry.username.as_deref().map_or(true, |u| u.is_empty())
+                                        && !preset_username.is_empty()
+                                    {
+                                        ab_entry.username = Some(preset_username);
+                                    }
+                                    ab_entry.password = Some(pw);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Login credential pass-through: with [auth] pass_login_credentials the
+    // user's login password (LDAP/database/etc.) is reused for entries that
+    // carry no credentials. Applies only when the entry and the preset are
+    // both empty, and only within the login TTL.
+    if ab_entry.password.as_deref().map_or(true, |p| p.is_empty())
+        && manager
+            .config()
+            .auth
+            .as_ref()
+            .map(|a| a.pass_login_credentials)
+            .unwrap_or(false)
+    {
+        let user_email = match &id {
+            AuthIdentity::User { email, .. } => Some(email.clone()),
+            _ => None,
+        };
+        if let Some(email) = user_email {
+            if let Ok(user) = db::get_user_by_email(&database, &email) {
+                if let Ok(Some((login_username, login_password_enc, expires_at))) =
+                    db::get_login_credentials(&database, user.id)
+                {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    if expires_at > now && !login_password_enc.is_empty() {
+                        let key_hex = resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
+                        if !key_hex.is_empty() {
+                            if let Ok(key) = crate::crypto::EncryptionKey::from_hex(&key_hex) {
+                                if let Ok(pw) =
+                                    crate::crypto::decrypt_value(&key, &login_password_enc)
+                                {
+                                    if ab_entry.username.as_deref().map_or(true, |u| u.is_empty())
+                                        && !login_username.is_empty()
+                                    {
+                                        ab_entry.username = Some(login_username);
+                                    }
+                                    ab_entry.password = Some(pw);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
@@ -1602,6 +1681,20 @@ pub async fn ab_create_entry(
     // Metadata always lives in the DB.
     let folder_id = get_folder_id(&database, &scope, &folder)?;
 
+    // No encryption key in db mode means credentials would be silently
+    // dropped — fail loudly instead of pretending the password was saved.
+    // Checked BEFORE the row is inserted so a rejected create leaves no
+    // orphan entry behind.
+    if !vault_mode
+        && resolve_encryption_key(storage_key.as_ref().map(|k| &k.0)).is_empty()
+        && has_credential_fields(&req.entry)
+    {
+        return Err(AppError::Validation(
+            "no [storage].encryption_key / PERSEA_STORAGE_KEY configured —              credentials cannot be stored; set a key first"
+                .into(),
+        ));
+    }
+
     let config = build_protocol_config(&req.entry);
     let entry_id = db::create_ab_entry(
         &database,
@@ -1630,18 +1723,6 @@ pub async fn ab_create_entry(
             AppError::Internal(e.to_string())
         }
     })?;
-
-    // No encryption key in db mode means credentials would be silently
-    // dropped — fail loudly instead of pretending the password was saved.
-    if !vault_mode
-        && resolve_encryption_key(storage_key.as_ref().map(|k| &k.0)).is_empty()
-        && has_credential_fields(&req.entry)
-    {
-        return Err(AppError::Validation(
-            "no [storage].encryption_key / PERSEA_STORAGE_KEY configured —              credentials cannot be stored; set a key first"
-                .into(),
-        ));
-    }
 
     if vault_mode {
         // Credentials live in Vault: write the full entry (its metadata is

@@ -397,6 +397,98 @@ pub async fn put_my_credentials(
     Ok(Json(json!({"ok": true, "count": count})))
 }
 
+/// GET /api/me/preset-credentials
+///
+/// Per-user fallback credentials used by address book entries that carry no
+/// credentials of their own. Values are never returned — only presence flags
+/// (and the username, which is not secret).
+pub async fn get_my_preset_credentials(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let email = match identity {
+        Some(Extension(AuthIdentity::User { ref email, .. })) => email.clone(),
+        Some(Extension(AuthIdentity::ApiKey { .. })) => {
+            return Err(AppError::Auth(
+                "preset credentials require a user session".into(),
+            ))
+        }
+        _ => return Err(AppError::Auth("authentication required".into())),
+    };
+    let user = db::get_user_by_email(&database, &email)
+        .map_err(|_| AppError::NotFound("user not found".into()))?;
+    let (username, password_enc) =
+        db::get_user_preset_credentials(&database, user.id)?.unwrap_or_default();
+    Ok(Json(json!({
+        "username": username,
+        "has_username": !username.is_empty(),
+        "has_password": !password_enc.is_empty(),
+    })))
+}
+
+/// PUT /api/me/preset-credentials
+///
+/// Body: {"username": "...", "password": "..."}. An empty password keeps the
+/// stored one; both empty clears the preset entirely.
+pub async fn put_my_preset_credentials(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    storage_key: Option<Extension<StorageKey>>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let email = match identity {
+        Some(Extension(AuthIdentity::User { ref email, .. })) => email.clone(),
+        _ => return Err(AppError::Auth("authentication required".into())),
+    };
+    let user = db::get_user_by_email(&database, &email)
+        .map_err(|_| AppError::NotFound("user not found".into()))?;
+
+    let username = body
+        .get("username")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let password = body
+        .get("password")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    if username.is_empty() && password.is_empty() {
+        db::clear_user_preset_credentials(&database, user.id)?;
+        return Ok(Json(json!({"cleared": true})));
+    }
+
+    let mut password_enc = String::new();
+    if password.is_empty() {
+        // Keep the stored password when the field is left blank.
+        if let Some((_, enc)) = db::get_user_preset_credentials(&database, user.id)? {
+            password_enc = enc;
+        }
+    } else {
+        let key_hex = crate::api::address_book::resolve_encryption_key(
+            storage_key.as_ref().map(|Extension(k)| k),
+        );
+        if key_hex.is_empty() {
+            return Err(AppError::Validation(
+                "no [storage].encryption_key / PERSEA_STORAGE_KEY configured — cannot store credentials"
+                    .into(),
+            ));
+        }
+        let key = crate::crypto::EncryptionKey::from_hex(&key_hex)
+            .map_err(|e| AppError::Internal(format!("invalid encryption key: {e}")))?;
+        password_enc = crate::crypto::encrypt_value(&key, &password)
+            .map_err(|e| AppError::Internal(format!("encryption failed: {e}")))?;
+    }
+
+    db::upsert_user_preset_credentials(&database, user.id, &username, &password_enc)?;
+    Ok(Json(json!({
+        "saved": true,
+        "has_username": !username.is_empty(),
+        "has_password": !password_enc.is_empty(),
+    })))
+}
+
 pub async fn list_credential_variables(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
