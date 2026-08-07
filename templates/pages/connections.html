@@ -48,7 +48,7 @@
         </div>
 
         <!-- Two-panel layout -->
-        <div style="display:flex;gap:24px;align-items:flex-start" class="detail-panel-mobile-stack">
+        <div style="display:flex;gap:24px;align-items:flex-start;width:100%" class="detail-panel-mobile-stack">
 
             <!-- Left sidebar: Folder tree -->
             <div class="conn-sidebar">
@@ -79,7 +79,7 @@
             </div>
 
             <!-- Right panel: Connection details -->
-            <div id="detail-panel" class="hidden" style="flex:3;min-width:0">
+            <div id="detail-panel" class="hidden" style="flex:0 0 320px;min-width:0;max-height:calc(100vh - 120px);overflow-y:auto">
                 <div class="card" style="position:sticky;top:24px">
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
                         <h3 id="detail-name" style="font-size:16px;font-weight:600;color:white;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></h3>
