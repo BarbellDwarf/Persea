@@ -155,6 +155,11 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
+function esc(s) {
+    if (typeof escapeHtml === 'function') { return escapeHtml(s); }
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+}
+
 function editUserRole(email, currentRole) {
     document.getElementById('edit-role-email').value = email;
     document.getElementById('edit-role-value').value = currentRole;
@@ -175,7 +180,6 @@ function toggleUserStatus(email, currentStatus) {
         .then(function() { htmx.trigger('#user-table-body', 'load'); });
 }
 
-// Role badge colors
 function roleBadge(role) {
     var colors = {
         admin: 'bg-red-900/50 text-red-300 border-red-800',
@@ -183,7 +187,8 @@ function roleBadge(role) {
         operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
         viewer: 'bg-gray-800 text-gray-400 border-gray-700'
     };
-    return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[role] || colors.viewer) + '">' + role + '</span>';
+    var safeRole = esc(role || 'viewer');
+    return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[role] || colors.viewer) + '">' + safeRole + '</span>';
 }
 
 function renderUserRow(user) {
@@ -191,19 +196,38 @@ function renderUserRow(user) {
     var statusText = user.disabled ? 'Disabled' : 'Active';
     var toggleLabel = user.disabled ? 'Enable' : 'Disable';
     var toggleClass = user.disabled ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300';
+    var statusLower = statusText.toLowerCase();
+    var safeName = esc(user.name || '-');
+    var safeEmail = esc(user.email || '-');
+    var safeAuth = esc(user.auth_source || 'oidc');
+    var safeLogin = esc(user.last_login_at || 'never');
     return '<tr class="hover:bg-gray-800/50">' +
-        '<td class="px-4 py-3 text-sm text-gray-200">' + (user.name || '-') + '</td>' +
-        '<td class="px-4 py-3 text-sm text-gray-400">' + (user.email || '-') + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-200">' + safeName + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-400">' + safeEmail + '</td>' +
         '<td class="px-4 py-3">' + roleBadge(user.role) + '</td>' +
-        '<td class="px-4 py-3 text-sm text-gray-500">' + (user.auth_source || 'oidc') + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-500">' + safeAuth + '</td>' +
         '<td class="px-4 py-3 text-sm ' + statusClass + '">' + statusText + '</td>' +
-        '<td class="px-4 py-3 text-sm text-gray-500">' + (user.last_login_at || 'never') + '</td>' +
+        '<td class="px-4 py-3 text-sm text-gray-500">' + safeLogin + '</td>' +
         '<td class="px-4 py-3 text-right text-sm">' +
-            '<button onclick="editUserRole(\'' + user.email + '\',\'' + user.role + '\')" class="text-gray-400 hover:text-emerald-400 mr-3">Edit Role</button>' +
-            '<button onclick="toggleUserStatus(\'' + user.email + '\',\'' + statusText.toLowerCase() + '\')" class="' + toggleClass + ' mr-3">' + toggleLabel + '</button>' +
-            '<button onclick="deleteUser(\'' + user.email + '\')" class="text-gray-400 hover:text-red-400">Delete</button>' +
+            '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + esc(user.role || '') + '" class="text-gray-400 hover:text-emerald-400 mr-3">Edit Role</button>' +
+            '<button data-action="toggle-status" data-email="' + safeEmail + '" data-status="' + statusLower + '" class="' + toggleClass + ' mr-3">' + toggleLabel + '</button>' +
+            '<button data-action="delete-user" data-email="' + safeEmail + '" class="text-gray-400 hover:text-red-400">Delete</button>' +
         '</td></tr>';
 }
+
+document.getElementById('user-table-body').addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    var action = btn.getAttribute('data-action');
+    var email = btn.getAttribute('data-email');
+    if (action === 'edit-role') {
+        editUserRole(email, btn.getAttribute('data-role'));
+    } else if (action === 'toggle-status') {
+        toggleUserStatus(email, btn.getAttribute('data-status'));
+    } else if (action === 'delete-user') {
+        deleteUser(email);
+    }
+});
 </script>
 <script nonce="{{ csp_nonce }}">
 // Load users on page load
