@@ -188,6 +188,15 @@ body {
     flex-direction: column;
     flex: 1;
     min-width: 0;
+    transition: margin-left 0.2s ease;
+}
+
+.sidebar.collapsed ~ .main-area {
+    margin-left: 56px;
+}
+
+.sidebar.collapsed:hover ~ .main-area {
+    margin-left: 240px;
 }
 
 .header {
