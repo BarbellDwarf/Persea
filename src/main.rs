@@ -1217,7 +1217,6 @@ async fn run_server(
         // Disk-served HTML pages
         for name in &[
             "index.html",
-            "connections.html",
             "sessions.html",
             "recordings.html",
             "reports.html",
