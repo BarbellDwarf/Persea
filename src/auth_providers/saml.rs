@@ -1103,17 +1103,32 @@ pub fn parse_saml_response(
     let xml = String::from_utf8(xml_bytes)
         .map_err(|e| format!("SAMLResponse is not valid UTF-8: {e}"))?;
 
-    // 3. Parse XML to extract assertion data
-    let attrs = parse_assertion_xml(&xml)?;
+    // 3. Validate signature if in strict mode (obtains verified element)
+    let verified_element = if config.strict_mode && !idp_cert_pem.is_empty() {
+        Some(validate_response_signature(&xml, idp_cert_pem, request_id)?)
+    } else {
+        None
+    };
 
-    // 4. Validate signature if in strict mode
+    let assertion_xml = verified_element.as_deref().unwrap_or(&xml);
+
+    // 4. Parse attributes from verified element (not raw document)
+    let attrs = parse_assertion_xml(assertion_xml)?;
+
+    // 5. Validate audience restriction against verified element
     if config.strict_mode && !idp_cert_pem.is_empty() {
-        validate_response_signature(&xml, idp_cert_pem, request_id, &config.entity_id)?;
+        let audiences = extract_audiences(assertion_xml);
+        if !audiences.is_empty() && !audiences.iter().any(|a| a == config.entity_id) {
+            return Err(format!(
+                "SP entity ID '{}' not found in Audience restriction",
+                config.entity_id
+            ));
+        }
     }
 
-    // 5. Check time conditions if in strict mode
+    // 6. Check time conditions if in strict mode (against verified element)
     if config.strict_mode {
-        validate_time_conditions(&xml)?;
+        validate_time_conditions(assertion_xml)?;
     }
 
     Ok(attrs)
@@ -1231,13 +1246,15 @@ fn parse_assertion_xml(xml: &str) -> Result<SamlAttributes, String> {
 ///    signature-wrapping attacks where an attacker moves the signed
 ///    element and inserts a forged one).
 /// 3. InResponseTo matches the AuthnRequest ID we sent (when provided).
-/// 4. AudienceRestriction includes our SP entity ID.
+///
+/// Returns the verified assertion element (with signature removed) so
+/// downstream consumers can operate on trusted content rather than the
+/// raw document.
 fn validate_response_signature(
     xml: &str,
     idp_cert_pem: &str,
     request_id: Option<&str>,
-    sp_entity_id: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(true);
     let mut in_signature_value = false;
@@ -1396,15 +1413,7 @@ fn validate_response_signature(
         }
     }
 
-    // --- Audience restriction check ---
-    let audiences = extract_audiences(xml);
-    if !audiences.is_empty() && !audiences.iter().any(|a| a == sp_entity_id) {
-        return Err(format!(
-            "SP entity ID '{sp_entity_id}' not found in Audience restriction"
-        ));
-    }
-
-    Ok(())
+    Ok(element_xml)
 }
 
 /// Extract the Reference URI from a SignedInfo XML fragment.
