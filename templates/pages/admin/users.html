@@ -154,7 +154,7 @@
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function editUserRole(email, currentRole) {
     document.getElementById('edit-role-email').value = email;
     document.getElementById('edit-role-value').value = currentRole;
@@ -205,7 +205,7 @@ function renderUserRow(user) {
         '</td></tr>';
 }
 </script>
-<script>
+<script nonce="{{ csp_nonce }}">
 // Load users on page load
 (function() {
     fetch('/api/users', { headers: apiHeaders() })

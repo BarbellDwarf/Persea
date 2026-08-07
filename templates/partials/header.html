@@ -15,7 +15,7 @@
     </div>
 </header>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 document.getElementById('theme-toggle')?.addEventListener('click', function() {
     if (typeof toggleTheme === 'function') toggleTheme();
 });

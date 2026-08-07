@@ -22,13 +22,14 @@ fn is_admin(identity: &Option<Extension<AuthIdentity>>) -> bool {
 pub async fn connections_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = ConnectionsPageTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "connections".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -37,13 +38,14 @@ pub async fn connections_page(
 pub async fn sessions_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = SessionsPageTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "sessions".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -52,13 +54,14 @@ pub async fn sessions_page(
 pub async fn recordings_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = RecordingsPageTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "recordings".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -69,13 +72,14 @@ pub async fn recordings_page(
 pub async fn admin_users_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminUsersTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "users".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -84,13 +88,14 @@ pub async fn admin_users_page(
 pub async fn admin_auth_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminAuthTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "auth".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -99,13 +104,14 @@ pub async fn admin_auth_page(
 pub async fn admin_groups_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminGroupsTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "groups".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -114,13 +120,14 @@ pub async fn admin_groups_page(
 pub async fn admin_audit_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminAuditTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "audit".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -129,13 +136,14 @@ pub async fn admin_audit_page(
 pub async fn admin_settings_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminSettingsTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "settings".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -144,13 +152,14 @@ pub async fn admin_settings_page(
 pub async fn admin_reports_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminReportsTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "reports".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -159,13 +168,14 @@ pub async fn admin_reports_page(
 pub async fn admin_tunnels_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     let tmpl = AdminTunnelsTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "tunnels".to_string(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }

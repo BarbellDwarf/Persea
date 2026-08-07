@@ -104,7 +104,7 @@
             <button type="submit" class="btn btn-primary mt-6">Complete Setup</button>
         </form>
 
-        <script>
+        <script nonce="{{ csp_nonce }}">
         // CSRF: submit via fetch with the X-CSRF-Token header (same pattern as
         // the login form). The server responds with a redirect on success or
         // an error page; follow it.
@@ -132,7 +132,7 @@
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 document.getElementById('guacd_mode').addEventListener('change', function() {
     document.getElementById('guacd-addr-group').style.display = this.value === 'external' ? '' : 'none';
     document.getElementById('guacd-path-group').style.display = this.value === 'embedded' ? '' : 'none';

@@ -104,7 +104,7 @@ pub async fn login_page(
     Extension(database): Extension<Db>,
     Extension(oidc_enabled): Extension<OidcEnabled>,
     oidc_provider_names: Option<Extension<OidcProviderNames>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
     axum::extract::Query(query): axum::extract::Query<LoginQueryParams>,
 ) -> Response {
     // Redirect to setup wizard if no users exist (first run)
@@ -157,6 +157,7 @@ pub async fn login_page(
         saml_button_text: "Sign in with SSO".into(),
         oidc_providers: providers,
         error: query.error,
+        csp_nonce: nonce.0.clone(),
     };
 
     tmpl.into_response()

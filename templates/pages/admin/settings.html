@@ -295,7 +295,7 @@
 </div>
 
 <script src="https://unpkg.com/htmx.org@2.0.4/dist/ext/json-enc.js"></script>
-<script>
+<script nonce="{{ csp_nonce }}">
 function showError(message) {
     var feedback = document.getElementById('settings-feedback');
     feedback.innerHTML = '';

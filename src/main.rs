@@ -2181,10 +2181,12 @@ async fn serve_branded_page(
 /// Renders the new toolbar-based client template.
 async fn serve_client_page(
     Extension(site_title): Extension<SiteTitle>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let tmpl = templates::ClientTemplate {
         site_title: site_title.0.clone(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }

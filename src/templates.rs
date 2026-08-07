@@ -158,6 +158,7 @@ pub struct LoginTemplate {
     pub oidc_providers: Vec<String>,
     /// Error message from a failed login redirect (`/?error=...`).
     pub error: Option<String>,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for LoginTemplate {
@@ -174,6 +175,7 @@ pub struct AppLayoutTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl AppLayoutTemplate {
@@ -190,6 +192,7 @@ pub struct ConnectionsPageTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for ConnectionsPageTemplate {
@@ -205,6 +208,7 @@ pub struct SessionsPageTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for SessionsPageTemplate {
@@ -222,6 +226,7 @@ pub struct AdminUsersTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminUsersTemplate {
@@ -237,6 +242,7 @@ pub struct AdminAuthTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminAuthTemplate {
@@ -252,6 +258,7 @@ pub struct AdminGroupsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminGroupsTemplate {
@@ -267,6 +274,7 @@ pub struct AdminAuditTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminAuditTemplate {
@@ -282,6 +290,7 @@ pub struct AdminSettingsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminSettingsTemplate {
@@ -297,6 +306,7 @@ pub struct AdminReportsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminReportsTemplate {
@@ -312,6 +322,7 @@ pub struct AdminTunnelsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminTunnelsTemplate {
@@ -324,6 +335,7 @@ impl IntoResponse for AdminTunnelsTemplate {
 #[derive(Serialize)]
 pub struct ClientTemplate {
     pub site_title: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for ClientTemplate {
@@ -339,6 +351,7 @@ pub struct RecordingsPageTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for RecordingsPageTemplate {
@@ -354,6 +367,7 @@ pub struct ProfileTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for ProfileTemplate {
@@ -369,6 +383,7 @@ pub struct AccountTokensTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AccountTokensTemplate {
@@ -384,6 +399,7 @@ pub struct AccountTotpTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AccountTotpTemplate {
@@ -399,6 +415,7 @@ pub struct DocsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for DocsTemplate {
@@ -421,6 +438,7 @@ pub struct SetupTemplate {
     pub guacd_path: String,
     pub admin_email: String,
     pub admin_name: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for SetupTemplate {

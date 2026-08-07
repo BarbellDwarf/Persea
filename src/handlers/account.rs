@@ -18,13 +18,14 @@ fn is_admin(identity: &Option<Extension<AuthIdentity>>) -> bool {
 pub async fn profile_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     templates::ProfileTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "profile".to_string(),
+        csp_nonce: nonce.0,
     }
     .into_response()
 }
@@ -33,13 +34,14 @@ pub async fn profile_page(
 pub async fn tokens_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     templates::AccountTokensTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "tokens".to_string(),
+        csp_nonce: nonce.0,
     }
     .into_response()
 }
@@ -48,13 +50,14 @@ pub async fn tokens_page(
 pub async fn totp_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     templates::AccountTotpTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "totp".to_string(),
+        csp_nonce: nonce.0,
     }
     .into_response()
 }
@@ -63,13 +66,14 @@ pub async fn totp_page(
 pub async fn docs_page(
     Extension(site_title): Extension<SiteTitle>,
     identity: Option<Extension<AuthIdentity>>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     templates::DocsTemplate {
         site_title: site_title.0.clone(),
         logo_url: String::new(),
         is_admin: is_admin(&identity),
         active_page: "docs".to_string(),
+        csp_nonce: nonce.0,
     }
     .into_response()
 }

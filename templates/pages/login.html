@@ -75,7 +75,7 @@
             <button type="submit" class="btn btn-primary mt-4" id="login-submit">Sign In</button>
         </form>
 
-        <script>
+        <script nonce="{{ csp_nonce }}">
         // CSRF: set hidden input value from cookie as fallback, and send via header
         (function() {
             var csrf = readCookie('csrf_token');

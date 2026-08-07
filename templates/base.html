@@ -15,7 +15,7 @@
 
     <!-- Tailwind CSS v3 CDN with inline config -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script>
+    <script nonce="{{ csp_nonce }}">
     tailwind.config = {
         darkMode: 'class',
         theme: {
@@ -43,7 +43,7 @@
 
     <!-- htmx -->
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-    <script>
+    <script nonce="{{ csp_nonce }}">
     // Configure htmx to send API key + CSRF token on every request
     htmx.config.defaultHeaders = {
         'Authorization': 'Bearer ' + (sessionStorage.getItem('persea_api_key') || ''),
@@ -72,7 +72,7 @@
     <script src="/js/auth.js"></script>
 
     <!-- CSRF: patch fetch() so every XHR carries the X-CSRF-Token header -->
-    <script>
+    <script nonce="{{ csp_nonce }}">
     (function() {
         var origFetch = window.fetch;
         window.fetch = function(input, init) {
@@ -100,7 +100,7 @@
     </script>
 
     <!-- Theme detection -->
-    <script>
+    <script nonce="{{ csp_nonce }}">
     (function() {
         var s = localStorage.getItem('theme');
         var mq = window.matchMedia('(prefers-color-scheme: dark)');
@@ -131,6 +131,6 @@
     <!-- Shared JS utilities -->
     <script src="/js/theme.js"></script>
     <script src="/js/utils.js"></script>
-    <script>initTheme();</script>
+    <script nonce="{{ csp_nonce }}">initTheme();</script>
 </body>
 </html>
