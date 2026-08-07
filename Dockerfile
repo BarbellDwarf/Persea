@@ -273,11 +273,10 @@ DB_PATH="/opt/persea/data/persea.db"
 if [ ! -f "$DB_PATH" ]; then
     echo "First run detected — creating admin API key..."
     ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
-    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin 2>&1 | tee "$ADMIN_KEY_FILE"
+    touch "$ADMIN_KEY_FILE"
     chmod 600 "$ADMIN_KEY_FILE"
-    echo ""
-    echo "==> Admin API key saved to $ADMIN_KEY_FILE (chmod 600) <=="
-    echo ""
+    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin > "$ADMIN_KEY_FILE" 2>&1
+    echo "Admin API key written to $ADMIN_KEY_FILE (owner-read only)"
 fi
 
 # Print the running version on beta images (PERSEA_BETA=1 set at build time
