@@ -654,9 +654,17 @@ impl SessionManager {
                 check_allowed_network(url_host, url_port, &self.config.web_allowed_networks)
                     .await?;
 
-                if url_host == "169.254.169.254" {
+                if url_host == "169.254.169.254"
+                    || url_host
+                        .parse::<std::net::IpAddr>()
+                        .map_or(false, |ip| {
+                            "169.254.0.0/16"
+                                .parse::<ipnetwork::IpNetwork>()
+                                .map_or(false, |net| net.contains(ip))
+                        })
+                {
                     return Err(SessionError::ValidationError(
-                        "access to cloud metadata endpoint (169.254.169.254) is blocked".into(),
+                        "access to link-local / cloud metadata (169.254.0.0/16) is blocked".into(),
                     ));
                 }
 
