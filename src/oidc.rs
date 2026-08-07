@@ -188,22 +188,24 @@ pub async fn login(
 
     // Set state in a cookie so we can verify on callback, then redirect
     // Bind state to client fingerprint (IP + User-Agent) to prevent CSRF
+    // Using HMAC-SHA256 with state_key as the key for cryptographic integrity
     let fingerprint = {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        headers
+        use ring::hmac;
+        let key = hmac::Key::new(hmac::HMAC_SHA256, state_key.as_bytes());
+        let mut data = Vec::new();
+        let ip = headers
             .get("x-forwarded-for")
             .or_else(|| headers.get("x-real-ip"))
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown")
-            .hash(&mut h);
-        headers
+            .unwrap_or("unknown");
+        data.extend_from_slice(ip.as_bytes());
+        let ua = headers
             .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown")
-            .hash(&mut h);
-        format!("{:x}", h.finish())
+            .unwrap_or("unknown");
+        data.extend_from_slice(ua.as_bytes());
+        let tag = hmac::sign(&key, &data);
+        hex::encode(tag.as_ref())
     };
     let cookie_value = format!("{}:{}", state_key, fingerprint);
 
@@ -310,21 +312,22 @@ pub async fn callback(
                     false
                 } else {
                     // Verify fingerprint matches current request
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    let mut h = DefaultHasher::new();
-                    headers
+                    use ring::hmac;
+                    let key = hmac::Key::new(hmac::HMAC_SHA256, cookie_state.as_bytes());
+                    let mut data = Vec::new();
+                    let ip = headers
                         .get("x-forwarded-for")
                         .or_else(|| headers.get("x-real-ip"))
                         .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown")
-                        .hash(&mut h);
-                    headers
+                        .unwrap_or("unknown");
+                    data.extend_from_slice(ip.as_bytes());
+                    let ua = headers
                         .get(header::USER_AGENT)
                         .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown")
-                        .hash(&mut h);
-                    let current_fp = format!("{:x}", h.finish());
+                        .unwrap_or("unknown");
+                    data.extend_from_slice(ua.as_bytes());
+                    let tag = hmac::sign(&key, &data);
+                    let current_fp = hex::encode(tag.as_ref());
                     cookie_fingerprint == current_fp
                 }
             }
