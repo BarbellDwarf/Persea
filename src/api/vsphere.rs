@@ -33,8 +33,17 @@ pub async fn connect_vsphere(config: &VsphereConfig) -> VsphereState {
 /// `{"configured": false, "vms": []}` so the connections page can hide the
 /// section without triggering error-level logs on every load.
 pub async fn list_vms(
+    identity: Option<Extension<AuthIdentity>>,
     Extension(client): Extension<VsphereState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let id = identity
+        .as_ref()
+        .map(|Extension(id)| id)
+        .ok_or_else(|| AppError::Forbidden("login required".into()))?;
+    if !id.has_role("operator") {
+        return Err(AppError::Forbidden("operator role required".into()));
+    }
+
     let Some(client) = client else {
         return Ok(Json(json!({"configured": false, "vms": []})));
     };
@@ -62,10 +71,27 @@ pub async fn list_vms(
 ///
 /// Perform a power action on a VM. Body: `{ "action": "on|off|suspend|reset" }`
 pub async fn power_action(
+    identity: Option<Extension<AuthIdentity>>,
     Extension(client): Extension<VsphereState>,
     axum::extract::Path(vm_id): axum::extract::Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let id = identity
+        .as_ref()
+        .map(|Extension(id)| id)
+        .ok_or_else(|| AppError::Forbidden("login required".into()))?;
+    if !id.has_role("operator") {
+        return Err(AppError::Forbidden("operator role required".into()));
+    }
+
+    if vm_id.len() > 128
+        || !vm_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(AppError::Validation("invalid vm_id".into()));
+    }
+
     let Some(client) = client else {
         return Err(AppError::Vsphere(
             "vSphere not configured or unavailable".into(),
