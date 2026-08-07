@@ -1132,23 +1132,33 @@ impl SessionManager {
 
         crate::metrics::session_total_inc();
 
-        // Record in session history
+        // Record in session history (non-blocking)
         if let Some(ref db) = self.db {
+            let db = db.clone();
+            let session_id_str = session_id.to_string();
             let st = format!("{:?}", info.session_type).to_lowercase();
-            if let Err(e) = crate::db::insert_session_history(
-                db,
-                &session_id.to_string(),
-                &st,
-                &info.hostname,
-                None,
-                &info.username,
-                &info.created_by,
-                info.address_book_entry.as_deref(),
-                info.address_book_folder.as_deref(),
-                info.entry_display_name.as_deref(),
-            ) {
-                tracing::warn!(session_id = %session_id, error = %e, "Failed to record session history");
-            }
+            let hostname = info.hostname.clone();
+            let username = info.username.clone();
+            let created_by = info.created_by.clone();
+            let address_book_entry = info.address_book_entry.clone();
+            let address_book_folder = info.address_book_folder.clone();
+            let entry_display_name = info.entry_display_name.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::db::insert_session_history(
+                    &db,
+                    &session_id_str,
+                    &st,
+                    &hostname,
+                    None,
+                    &username,
+                    &created_by,
+                    address_book_entry.as_deref(),
+                    address_book_folder.as_deref(),
+                    entry_display_name.as_deref(),
+                )
+            })
+            .await
+            .ok();
         }
 
         // Spawn timeout task for pending sessions
