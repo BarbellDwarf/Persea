@@ -53,10 +53,7 @@
                         <th class="px-4 py-2 text-right">Sessions</th>
                     </tr>
                 </thead>
-                <tbody id="top-connections" class="divide-y divide-gray-800"
-                      hx-get="/api/reports/top-connections"
-                      hx-trigger="load"
-                      hx-swap="innerHTML">
+                <tbody id="top-connections" class="divide-y divide-gray-800">
                     <tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">Loading...</td></tr>
                 </tbody>
             </table>
@@ -73,10 +70,7 @@
                         <th class="px-4 py-2 text-right">Sessions</th>
                     </tr>
                 </thead>
-                <tbody id="top-users" class="divide-y divide-gray-800"
-                      hx-get="/api/reports/top-users"
-                      hx-trigger="load"
-                      hx-swap="innerHTML">
+                <tbody id="top-users" class="divide-y divide-gray-800">
                     <tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">Loading...</td></tr>
                 </tbody>
             </table>
@@ -132,15 +126,24 @@ function escapeHtml(s) {
 }
 
 function renderTopConnectionRow(conn) {
+    var name = conn.name || conn.address_book_entry || '';
+    var proto = (conn.session_type || '').toUpperCase();
+    var hours = conn.total_hours != null ? conn.total_hours.toFixed(1) : '0';
     return '<tr class="hover:bg-gray-800/50">' +
-        '<td class="px-4 py-2 text-sm text-gray-200">' + escapeHtml(conn.connection_name || '') + '</td>' +
-        '<td class="px-4 py-2 text-sm text-gray-400 text-right">' + conn.count + '</td></tr>';
+        '<td class="px-4 py-2 text-sm text-gray-200">' + escapeHtml(name) +
+        ' <span class="text-gray-500 text-xs">' + escapeHtml(conn.folder || '') + '</span></td>' +
+        '<td class="px-4 py-2 text-sm text-gray-400 text-right">' + (conn.session_count || 0) + '</td>' +
+        '<td class="px-4 py-2 text-xs text-gray-500 text-right">' + hours + 'h</td></tr>';
 }
 
 function renderTopUserRow(user) {
+    var last = user.last_session ? user.last_session.replace('T', ' ').slice(0, 19) : '—';
+    var hours = user.total_hours != null ? user.total_hours.toFixed(1) : '0';
     return '<tr class="hover:bg-gray-800/50">' +
-        '<td class="px-4 py-2 text-sm text-gray-200">' + escapeHtml(user.email || '') + '</td>' +
-        '<td class="px-4 py-2 text-sm text-gray-400 text-right">' + user.count + '</td></tr>';
+        '<td class="px-4 py-2 text-sm text-gray-200">' + escapeHtml(user.user || '') + '</td>' +
+        '<td class="px-4 py-2 text-sm text-gray-400 text-right">' + (user.session_count || 0) + '</td>' +
+        '<td class="px-4 py-2 text-xs text-gray-500 text-right">' + hours + 'h</td>' +
+        '<td class="px-4 py-2 text-xs text-gray-500 text-right">' + escapeHtml(last) + '</td></tr>';
 }
 
 function exportCSV() {
@@ -172,6 +175,26 @@ fetch('/api/reports/activity?hours=24').then(function(r) { return r.json(); }).t
             '<div class="text-xs text-gray-500 mt-1">' + hourLabel + '</div>' +
             '</div>';
     }).join('');
+});
+
+// Load top connections
+fetch('/api/reports/top-connections').then(function(r) { return r.json(); }).then(function(data) {
+    var tbody = document.getElementById('top-connections');
+    if (!Array.isArray(data) || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">No data yet</td></tr>';
+        return;
+    }
+    tbody.innerHTML = data.map(renderTopConnectionRow).join('');
+});
+
+// Load top users
+fetch('/api/reports/top-users').then(function(r) { return r.json(); }).then(function(data) {
+    var tbody = document.getElementById('top-users');
+    if (!Array.isArray(data) || data.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">No data yet</td></tr>';
+        return;
+    }
+    tbody.innerHTML = data.map(renderTopUserRow).join('');
 });
 
 // Load recent sessions
