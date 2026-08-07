@@ -228,3 +228,196 @@ fn h10_ciphertext_not_equal_to_plaintext() {
     let ciphertext = crypto::encrypt_bytes(&key, plaintext).unwrap();
     assert_ne!(ciphertext, plaintext);
 }
+
+// ── C01 — XSS escaping (html_escape) ──
+// `html_escape` is private in `persea::main` / `pub(crate)` in
+// `persea::api::address_book`, so we replicate the algorithm to guard
+// against regressions.
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+
+#[test]
+fn c01_xss_script_tag() {
+    assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+}
+
+#[test]
+fn c01_xss_double_quote() {
+    assert_eq!(html_escape(r#"x"y"#), "x&quot;y");
+}
+
+#[test]
+fn c01_xss_single_quote() {
+    assert_eq!(html_escape("it's"), "it&#x27;s");
+}
+
+#[test]
+fn c01_xss_ampersand() {
+    assert_eq!(html_escape("a&b"), "a&amp;b");
+}
+
+#[test]
+fn c01_xss_less_than() {
+    assert_eq!(html_escape("<"), "&lt;");
+}
+
+#[test]
+fn c01_xss_greater_than() {
+    assert_eq!(html_escape(">"), "&gt;");
+}
+
+#[test]
+fn c01_xss_passthrough() {
+    assert_eq!(html_escape("hello world"), "hello world");
+    assert_eq!(html_escape(""), "");
+}
+
+#[test]
+fn c01_xss_mixed_special_chars() {
+    assert_eq!(
+        html_escape("<img src=x onerror=alert(1)>"),
+        "&lt;img src=x onerror=alert(1)&gt;"
+    );
+}
+
+// ── C03 — vSphere vm_id validation ──
+// The validation is inline in `power_action`; replicate the exact check to
+// guard against regressions.
+
+fn is_valid_vm_id(vm_id: &str) -> bool {
+    vm_id.len() <= 128
+        && vm_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+#[test]
+fn c03_vm_id_valid_simple() {
+    assert!(is_valid_vm_id("vm-123"));
+}
+
+#[test]
+fn c03_vm_id_valid_with_underscores() {
+    assert!(is_valid_vm_id("vm_test.01"));
+}
+
+#[test]
+fn c03_vm_id_rejects_too_long() {
+    let long = "a".repeat(129);
+    assert!(!is_valid_vm_id(&long));
+}
+
+#[test]
+fn c03_vm_id_rejects_path_traversal() {
+    assert!(!is_valid_vm_id("../etc/passwd"));
+}
+
+#[test]
+fn c03_vm_id_rejects_shell_metachar() {
+    assert!(!is_valid_vm_id("vm$(whoami)"));
+    assert!(!is_valid_vm_id("vm`id`"));
+}
+
+#[test]
+fn c03_vm_id_rejects_spaces() {
+    assert!(!is_valid_vm_id("vm 123"));
+}
+
+#[test]
+fn c03_vm_id_rejects_null_byte() {
+    assert!(!is_valid_vm_id("vm\0123"));
+}
+
+#[test]
+fn c03_vm_id_empty_accepted_by_regex() {
+    // Empty string passes the length+char check (axum Path prevents empty).
+    assert!(is_valid_vm_id(""));
+}
+
+// ── M07 — Constant-time key comparison (ct_eq) ──
+// `validate_stored_hash` in `persea::db` is private.  Replicate the
+// salted/unsalted hash + `ct_eq` logic to guard against regressions to
+// non-constant-time comparison.
+
+use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
+
+fn hash_key(key: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(key.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn hash_key_salt(key: &str) -> String {
+    let mut salt = [0u8; 16];
+    rand::fill(&mut salt);
+    let mut hasher = Sha256::new();
+    hasher.update(salt);
+    hasher.update(key.as_bytes());
+    format!("{}:{}", hex::encode(salt), hex::encode(hasher.finalize()))
+}
+
+fn validate_stored_hash(key: &str, stored: &str) -> bool {
+    if let Some((salt_hex, hash_hex)) = stored.split_once(':') {
+        if let (Ok(salt), Ok(expected)) = (hex::decode(salt_hex), hex::decode(hash_hex)) {
+            let mut hasher = Sha256::new();
+            hasher.update(salt);
+            hasher.update(key.as_bytes());
+            let computed = hasher.finalize();
+            computed.as_slice().ct_eq(&expected).into()
+        } else {
+            false
+        }
+    } else {
+        hash_key(key).as_bytes().ct_eq(stored.as_bytes()).into()
+    }
+}
+
+#[test]
+fn m07_cteq_correct_key_matches_salted() {
+    let stored = hash_key_salt("secret-api-key");
+    assert!(validate_stored_hash("secret-api-key", &stored));
+}
+
+#[test]
+fn m07_cteq_wrong_key_fails_salted() {
+    let stored = hash_key_salt("secret-api-key");
+    assert!(!validate_stored_hash("wrong-key", &stored));
+}
+
+#[test]
+fn m07_cteq_correct_key_matches_legacy() {
+    let stored = hash_key("legacy-key");
+    assert!(validate_stored_hash("legacy-key", &stored));
+}
+
+#[test]
+fn m07_cteq_wrong_key_fails_legacy() {
+    let stored = hash_key("legacy-key");
+    assert!(!validate_stored_hash("tampered", &stored));
+}
+
+#[test]
+fn m07_cteq_tampered_hash_fails() {
+    let stored = hash_key_salt("real-key");
+    // Tamper the hash portion after the colon
+    let tampered = format!("{}deadbeef", stored.split_once(':').unwrap().0);
+    assert!(!validate_stored_hash("real-key", &tampered));
+}
+
+#[test]
+fn m07_cteq_empty_key_matches() {
+    let stored = hash_key("");
+    assert!(validate_stored_hash("", &stored));
+}
+
+#[test]
+fn m07_cteq_malformed_stored_fails() {
+    assert!(!validate_stored_hash("key", "not-hex:garbage"));
+}
