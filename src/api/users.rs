@@ -37,10 +37,11 @@ pub async fn list_users(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
-            return Err(AppError::Forbidden("admin role required".into()));
-        }
+    let id = identity.as_ref()
+        .map(|Extension(id)| id)
+        .ok_or(AppError::Forbidden("authentication required".into()))?;
+    if !id.has_role("admin") {
+        return Err(AppError::Forbidden("admin role required".into()));
     }
 
     let db_clone = database.clone();
@@ -55,10 +56,11 @@ pub async fn create_user(
     Extension(database): Extension<Db>,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
-            return Err(AppError::Forbidden("admin role required".into()));
-        }
+    let id = identity.as_ref()
+        .map(|Extension(id)| id)
+        .ok_or(AppError::Forbidden("authentication required".into()))?;
+    if !id.has_role("admin") {
+        return Err(AppError::Forbidden("admin role required".into()));
     }
 
     let role = body.role.unwrap_or_else(|| "viewer".to_string());
@@ -115,10 +117,11 @@ pub async fn set_user_role(
     Path(email): Path<String>,
     Json(req): Json<SetRoleRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
-            return Err(AppError::Forbidden("admin role required".into()));
-        }
+    let id = identity.as_ref()
+        .map(|Extension(id)| id)
+        .ok_or(AppError::Forbidden("authentication required".into()))?;
+    if !id.has_role("admin") {
+        return Err(AppError::Forbidden("admin role required".into()));
     }
 
     if !crate::auth::is_valid_role(&req.role) {
@@ -187,10 +190,11 @@ pub async fn delete_user(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
-            return Err(AppError::Forbidden("admin role required".into()));
-        }
+    let id = identity.as_ref()
+        .map(|Extension(id)| id)
+        .ok_or(AppError::Forbidden("authentication required".into()))?;
+    if !id.has_role("admin") {
+        return Err(AppError::Forbidden("admin role required".into()));
     }
 
     let db_clone = database.clone();

@@ -425,12 +425,11 @@ pub async fn delete_recording(
     identity: Option<Extension<AuthIdentity>>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
-            return Err(AppError::Forbidden(
-                "insufficient permissions — admin role required".into(),
-            ));
-        }
+    let id = identity.as_ref()
+        .map(|Extension(id)| id)
+        .ok_or(AppError::Forbidden("authentication required".into()))?;
+    if !id.has_role("admin") {
+        return Err(AppError::Forbidden("admin role required".into()));
     }
 
     if !is_safe_recording_name(&name, manager.recording_path()) {
