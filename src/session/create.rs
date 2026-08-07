@@ -452,7 +452,7 @@ impl SessionManager {
                         "Proxmox sessions require proxmox_vmid".into(),
                     ));
                 }
-                let verify_tls = proxmox.and_then(|s| s.proxmox_verify_tls).unwrap_or(false);
+                let verify_tls = proxmox.and_then(|s| s.proxmox_verify_tls).unwrap_or(true);
 
                 // Join the token id and secret into PVE's "id=secret" form. If
                 // the secret is empty, treat the id as already-joined (lenient:
