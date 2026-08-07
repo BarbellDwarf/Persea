@@ -752,7 +752,7 @@ async fn security_headers(
     );
     headers.insert(
         "Content-Security-Policy",
-        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'nonce-{nonce}'; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self'")
+        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self'")
             .parse()
             .unwrap(),
     );
@@ -1214,15 +1214,9 @@ async fn run_server(
         let logo = config.theme.as_ref().and_then(|t| t.logo_url.as_deref());
         let title = &config.site_title;
         let mut pages = std::collections::HashMap::new();
-        // Disk-served HTML pages
+        // Disk-served HTML pages (only index.html — all others use templates)
         for name in &[
             "index.html",
-            "sessions.html",
-            "recordings.html",
-            "reports.html",
-            "admin.html",
-            "tokens.html",
-            "docs.html",
         ] {
             let path = std::path::Path::new(&static_path).join(name);
             if let Ok(html) = std::fs::read_to_string(&path) {
