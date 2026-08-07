@@ -353,7 +353,8 @@ async fn main() {
             }
             // DB-first storage (ticket 026): credentials are encrypted at
             // rest in the DB — without a key they are stored/returned in
-            // plaintext. Warn loudly so operators notice.
+            // plaintext. Refuse to start so operators cannot accidentally
+            // run with plaintext credentials.
             if config
                 .storage
                 .as_ref()
@@ -362,8 +363,11 @@ async fn main() {
                 && config.storage_encryption_key().is_none()
             {
                 eprintln!(
-                    "WARNING: no [storage].encryption_key / PERSEA_STORAGE_KEY set —                      connection credentials stored in the DB will NOT be encrypted.                      Generate one with: openssl rand -hex 32"
+                    "FATAL: no [storage].encryption_key / PERSEA_STORAGE_KEY set — \
+                     connection credentials would be stored in plaintext. \
+                     Generate one with: openssl rand -hex 32"
                 );
+                std::process::exit(1);
             }
             // The credential encryption key is used in every DB-credential
             // request path; a malformed value would panic at runtime.
@@ -748,7 +752,7 @@ async fn security_headers(
     );
     headers.insert(
         "Content-Security-Policy",
-        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com")
+        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'nonce-{nonce}' https://fonts.googleapis.com; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com")
             .parse()
             .unwrap(),
     );
@@ -1834,13 +1838,13 @@ async fn run_server(
 
     let login_rate_limited = Router::new()
         .route("/auth/login", post(handlers::auth::login_submit))
+        .route("/auth/mfa", post(handlers::auth::mfa_submit))
         .with_state(manager.clone())
         .layer(GovernorLayer::new(login_rate_conf));
 
     let auth_pages = Router::new()
         .route("/", get(handlers::auth::login_page))
         .route("/auth/mfa", get(handlers::auth::mfa_page))
-        .route("/auth/mfa", post(handlers::auth::mfa_submit))
         .with_state(manager.clone())
         .merge(login_rate_limited)
         .layer(csrf::CsrfLayer)
