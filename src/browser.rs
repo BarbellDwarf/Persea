@@ -104,6 +104,16 @@ impl BrowserManager {
         autofill_credentials: Option<&[(String, String, String)]>,
         allowed_domains: Option<&[String]>,
     ) -> Result<BrowserSession, BrowserError> {
+        // Default-deny non-http(s) schemes
+        if let Ok(parsed) = url::Url::parse(url) {
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err(BrowserError::ChromiumSpawn(format!(
+                    "URL scheme '{}' is not allowed (only http/https)",
+                    parsed.scheme()
+                )));
+            }
+        }
+
         let display_num = self.display_allocator.allocate().ok_or_else(|| {
             tracing::error!(
                 "No X display numbers available (range {}–{})",
@@ -280,6 +290,8 @@ impl BrowserManager {
             "--disable-crash-reporter",
             "--no-default-browser-check",
             "--window-position=0,0",
+            // Disable autofill/credential storage for ephemeral VDI sessions (H09)
+            "--disable-autofill",
         ];
         // Owned strings that need to outlive the args slice
         chromium_args.push(&window_size);
@@ -290,25 +302,26 @@ impl BrowserManager {
 
         // Per-session domain allowlist via --host-rules.
         // Maps all hosts to a non-routable address except the allowed ones.
-        // Also adds --enable-automation to suppress the "unsupported flag" infobar.
-        let host_rules_arg = allowed_domains.and_then(|domains| {
-            if domains.is_empty() {
-                return None;
-            }
+        // Always blocks internal/metadata IPs (localhost, 169.254.169.254)
+        // even without an explicit allowlist.
+        let host_rules_arg = {
             let mut rules = String::from("MAP * ~NOTFOUND");
-            for domain in domains {
-                let d = domain.trim();
-                if d.is_empty() {
-                    continue;
-                }
-                rules.push_str(&format!(", EXCLUDE {}", d));
-                if !d.starts_with("*.") {
-                    rules.push_str(&format!(", EXCLUDE *.{}", d));
+            if let Some(domains) = allowed_domains {
+                for domain in domains {
+                    let d = domain.trim();
+                    if !d.is_empty() {
+                        rules.push_str(&format!(", EXCLUDE {}", d));
+                        if !d.starts_with("*.") {
+                            rules.push_str(&format!(", EXCLUDE *.{}", d));
+                        }
+                    }
                 }
             }
-            rules.push_str(", EXCLUDE localhost, EXCLUDE 127.0.0.1");
+            rules.push_str(
+                ", EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE 169.254.169.254",
+            );
             Some(format!("--host-rules={}", rules))
-        });
+        };
         if let Some(ref arg) = host_rules_arg {
             chromium_args.push(arg);
             // Suppress the "unsupported command-line flag" infobar.
@@ -317,9 +330,9 @@ impl BrowserManager {
             chromium_args.push("--enable-automation");
         }
 
-        // Add --no-sandbox when running as root (e.g. Docker containers).
-        // Chromium refuses to start as root without this flag. The container
-        // itself provides the security boundary in this case.
+        // Note: In Docker containers, the process runs as non-root (USER persea),
+        // so Chromium's sandbox is active. This --no-sandbox is only for local
+        // development when running as root.
         let no_sandbox;
         // SAFETY: geteuid() is a simple POSIX syscall that returns the
         // effective user ID of the calling process. It is always safe to
