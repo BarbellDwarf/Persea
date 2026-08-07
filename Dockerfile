@@ -214,9 +214,6 @@ RUN mkdir -p /etc/chromium/policies/managed && \
 # Create non-root user with a real home directory (Chromium crashpad needs it)
 RUN groupadd -r persea && useradd -r -g persea -m -d /home/persea -s /bin/sh persea
 
-# Generate self-signed cert for guacd TLS (internal loopback encryption)
-RUN /opt/persea/bin/persea generate-cert --hostname localhost --out-dir /opt/persea/tls
-
 # Default config template (copied to config.toml on first run if not mounted)
 RUN cat > /opt/persea/config.toml.default <<'EOF'
 listen_addr = "0.0.0.0:8089"
@@ -263,13 +260,23 @@ if [ ! -f "$CONFIG_PATH" ]; then
     cp /opt/persea/config.toml.default "$CONFIG_PATH"
 fi
 
+# Generate TLS cert at runtime if not already present (e.g. mounted)
+TLS_DIR="/opt/persea/tls"
+if [ ! -f "$TLS_DIR/cert.pem" ] || [ ! -f "$TLS_DIR/key.pem" ]; then
+    echo "No TLS cert found — generating self-signed certificate..."
+    /opt/persea/bin/persea generate-cert --hostname localhost --out-dir "$TLS_DIR"
+    echo "==> Generated self-signed TLS cert. Mount your own cert for production. <=="
+fi
+
 # Create admin API key on first run (if no DB exists yet)
 DB_PATH="/opt/persea/data/persea.db"
 if [ ! -f "$DB_PATH" ]; then
     echo "First run detected — creating admin API key..."
-    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin
+    ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
+    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin 2>&1 | tee "$ADMIN_KEY_FILE"
+    chmod 600 "$ADMIN_KEY_FILE"
     echo ""
-    echo "==> SAVE THE API KEY ABOVE — it is only shown once! <=="
+    echo "==> Admin API key saved to $ADMIN_KEY_FILE (chmod 600) <=="
     echo ""
 fi
 
