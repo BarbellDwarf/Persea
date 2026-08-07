@@ -43,8 +43,8 @@
 
     <!-- Player modal -->
     <div id="player-section" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
-        <div class="bg-gray-900 border border-gray-800 rounded-xl w-full max-w-6xl max-h-[90vh] flex flex-col">
-            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+        <div class="bg-gray-900 border border-gray-800 rounded-xl w-full max-w-7xl max-h-[90vh] flex flex-col">
+            <div id="player-header" class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
                 <span id="player-title" class="text-sm font-medium text-gray-300">Playback</span>
                 <button id="player-close" class="btn btn-sm text-gray-400 hover:text-gray-200 p-1" aria-label="Close player">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -53,12 +53,23 @@
             <div id="player-display" class="flex-1 bg-black m-2 rounded overflow-auto" style="min-height:400px"></div>
             <div id="player-controls" class="flex items-center gap-3 px-4 py-3 border-t border-gray-800">
                 <button id="play-btn" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-medium transition-colors">Play</button>
+                <button id="fullscreen-btn" class="p-1.5 text-gray-400 hover:text-gray-200 rounded transition-colors" title="Toggle fullscreen" aria-label="Toggle fullscreen">
+                    <svg id="fs-icon-enter" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+                    <svg id="fs-icon-exit" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4m0 0h4M4 4v4m16-4h-4m4 0v4M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+                </button>
                 <input type="range" id="seek-slider" min="0" max="1000" value="0" class="flex-1" style="accent-color:#10b981">
                 <span id="player-time" class="text-xs text-gray-500">0:00 / 0:00</span>
             </div>
         </div>
     </div>
 </div>
+
+<style>
+    .player-fullscreen { position: fixed; inset: 0; z-index: 9999; background: #000; }
+    .player-fullscreen #player-header { display: none; }
+    .player-fullscreen #player-display { margin: 0; border-radius: 0; min-height: 0; height: 100%; }
+    .player-fullscreen .player-controls { position: absolute; bottom: 0; left: 0; right: 0; }
+</style>
 
 <!-- Guacamole JS modules (playback) -->
 <script src="/guac/Namespace.js"></script>
@@ -182,12 +193,47 @@
             try { currentRecording.pause(); } catch (e) {}
             currentRecording = null;
         }
+        // Exit browser fullscreen if active
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+            var exit = document.exitFullscreen || document.webkitExitFullscreen;
+            if (exit) try { exit.call(document); } catch (e) {}
+        }
         playerDisplayEl.innerHTML = '';
         document.getElementById('player-section').classList.add('hidden');
+        document.getElementById('player-section').classList.remove('player-fullscreen');
+        fsEnterIcon.classList.remove('hidden');
+        fsExitIcon.classList.add('hidden');
         playBtn.textContent = 'Play';
         seekSlider.value = 0;
         timeEl.textContent = '0:00 / 0:00';
     }
+
+    // ── Fullscreen toggle ──
+    var fsEnterIcon = document.getElementById('fs-icon-enter');
+    var fsExitIcon = document.getElementById('fs-icon-exit');
+    var playerSection = document.getElementById('player-section');
+    var playerDisplayContainer = document.getElementById('player-display');
+
+    function updateFullscreenUI() {
+        var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+        var inFs = !!fsEl;
+        fsEnterIcon.classList.toggle('hidden', inFs);
+        fsExitIcon.classList.toggle('hidden', !inFs);
+        playerSection.classList.toggle('player-fullscreen', inFs);
+    }
+
+    document.getElementById('fullscreen-btn').addEventListener('click', function() {
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+            var exit = document.exitFullscreen || document.webkitExitFullscreen;
+            if (exit) exit.call(document);
+        } else {
+            var req = playerDisplayContainer.requestFullscreen || playerDisplayContainer.webkitRequestFullscreen;
+            if (req) req.call(playerDisplayContainer);
+        }
+    });
+
+    document.addEventListener('fullscreenchange', updateFullscreenUI);
+    document.addEventListener('webkitfullscreenchange', updateFullscreenUI);
 
     window.playRecording = function(name) {
         closePlayer();
