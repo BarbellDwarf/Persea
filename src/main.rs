@@ -752,7 +752,7 @@ async fn security_headers(
     );
     headers.insert(
         "Content-Security-Policy",
-        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'nonce-{nonce}' https://fonts.googleapis.com; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com")
+        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'nonce-{nonce}'; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self'")
             .parse()
             .unwrap(),
     );
