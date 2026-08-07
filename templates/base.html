@@ -103,8 +103,12 @@
     <script>
     (function() {
         var s = localStorage.getItem('theme');
-        var d = s || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
-        document.documentElement.className = d;
+        var mq = window.matchMedia('(prefers-color-scheme: dark)');
+        if (!s || s === 'auto') {
+            document.documentElement.classList.add(mq.matches ? 'dark' : 'light');
+        } else {
+            document.documentElement.classList.add(s);
+        }
     })();
     </script>
 
