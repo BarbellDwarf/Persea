@@ -722,10 +722,12 @@ pub async fn admin_list_user_tokens(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
-            return Err(AppError::Forbidden("admin role required".into()));
-        }
+    let id = identity
+        .as_ref()
+        .map(|Extension(id)| id)
+        .ok_or_else(|| AppError::Forbidden("authentication required".into()))?;
+    if !id.has_role("admin") {
+        return Err(AppError::Forbidden("admin role required".into()));
     }
 
     let db_clone = database.clone();
@@ -798,10 +800,12 @@ pub async fn admin_token_audit(
     Extension(database): Extension<Db>,
     Query(query): Query<AuditLogQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
-            return Err(AppError::Forbidden("admin role required".into()));
-        }
+    let id = identity
+        .as_ref()
+        .map(|Extension(id)| id)
+        .ok_or_else(|| AppError::Forbidden("authentication required".into()))?;
+    if !id.has_role("admin") {
+        return Err(AppError::Forbidden("admin role required".into()));
     }
 
     let limit = query.limit.unwrap_or(200).min(1000);
@@ -820,10 +824,12 @@ pub async fn admin_addressbook_audit(
     Extension(database): Extension<Db>,
     Query(query): Query<AuditLogQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if let Some(Extension(ref id)) = identity {
-        if !id.has_role("admin") {
-            return Err(AppError::Forbidden("admin role required".into()));
-        }
+    let id = identity
+        .as_ref()
+        .map(|Extension(id)| id)
+        .ok_or_else(|| AppError::Forbidden("authentication required".into()))?;
+    if !id.has_role("admin") {
+        return Err(AppError::Forbidden("admin role required".into()));
     }
 
     let limit = query.limit.unwrap_or(200).min(1000);
