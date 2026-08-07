@@ -415,6 +415,24 @@ async fn handle_ws(
         }
     }
 
+    // Encrypt recording at rest (file is closed after proxy_ws_guacd returns)
+    if is_recording_enabled && recording_path.exists() {
+        let rec_config = manager.recording_config();
+        let enc_key = manager.config().storage_encryption_key();
+        if crate::recording::should_encrypt_at_rest(&rec_config, enc_key.as_deref()) {
+            if let Some(ref key_hex) = enc_key {
+                if let Err(e) =
+                    crate::recording::encrypt_recording_file(&recording_path, key_hex)
+                {
+                    tracing::error!(
+                        session_id = %session_id, error = %e,
+                        "Failed to encrypt recording at rest"
+                    );
+                }
+            }
+        }
+    }
+
     // Record session end in history
     manager.end_session_history(
         session_id,

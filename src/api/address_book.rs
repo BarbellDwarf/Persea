@@ -547,10 +547,14 @@ fn apply_db_credentials(
         let decrypted = if !encryption_key.is_empty() {
             let key = crate::crypto::EncryptionKey::from_hex(&encryption_key)
                 .map_err(|e| AppError::Internal(format!("invalid encryption key: {e}")))?;
-            crate::crypto::decrypt_value(&key, &cred.credential_data)
-                .unwrap_or(cred.credential_data.clone())
+            crate::crypto::decrypt_value(&key, &cred.credential_data).map_err(|e| {
+                tracing::error!(entry_id, "failed to decrypt credential: {e}");
+                AppError::Internal("failed to decrypt credential — wrong key?".into())
+            })?
         } else {
-            cred.credential_data.clone()
+            return Err(AppError::Internal(
+                "Encryption key required but not configured. Set [storage].encryption_key.".into(),
+            ));
         };
         match cred.credential_type.as_str() {
             "password" => ab_entry.password = Some(decrypted),

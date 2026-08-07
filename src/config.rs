@@ -226,6 +226,10 @@ pub struct RecordingConfig {
     /// Ask guacd to create `typescript_path` if it doesn't already exist.
     #[serde(default)]
     pub create_typescript_path: bool,
+    /// Encrypt recording files at rest using the storage encryption key.
+    /// Default: true when `[storage].encryption_key` is set, false otherwise.
+    #[serde(default)]
+    pub encrypt_at_rest: Option<bool>,
 }
 
 fn default_max_recordings() -> u32 {
@@ -251,6 +255,7 @@ impl Default for RecordingConfig {
             typescript_path: None,
             typescript_name: None,
             create_typescript_path: false,
+            encrypt_at_rest: None,
         }
     }
 }

@@ -367,7 +367,40 @@ pub async fn serve_recording(
     }
 
     let path = manager.recording_path().join(&name);
+    let enc_path = path.with_extension("guac.enc");
 
+    // Prefer the encrypted file when it exists.
+    if enc_path.exists() {
+        let enc_key = manager
+            .config()
+            .storage_encryption_key()
+            .ok_or_else(|| {
+                AppError::Internal(
+                    "recording is encrypted but no encryption key is configured".into(),
+                )
+            })?;
+        let plaintext = tokio::task::spawn_blocking(move || {
+            crate::recording::decrypt_recording(&path, &enc_key)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("join error: {e}")))?
+        .map_err(|e| {
+            tracing::warn!(name = %name, error = %e, "Failed to decrypt recording");
+            AppError::Internal("failed to decrypt recording".into())
+        })?;
+
+        return Ok(axum::response::Response::builder()
+            .header("content-type", "application/octet-stream")
+            .header(
+                "content-disposition",
+                format!("inline; filename=\"{}\"", name),
+            )
+            .body(Body::from(plaintext))
+            .unwrap()
+            .into_response());
+    }
+
+    // Legacy unencrypted recording.
     let file = tokio::fs::File::open(&path).await.map_err(|e| {
         tracing::warn!(name = %name, error = %e, "Recording not found");
         AppError::Session("recording not found".into())
