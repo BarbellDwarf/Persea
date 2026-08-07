@@ -832,7 +832,7 @@
                     var e = findByName(list, entry);
                     var displayName = e ? (e.display_name || '') : '';
                     if (displayName) url += '?name=' + encodeURIComponent(displayName);
-                    window.location.href = url;
+                    window.open(url, '_blank');
                     return;
                 }
                 if (err) {

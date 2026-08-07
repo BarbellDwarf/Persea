@@ -149,7 +149,7 @@
             connectBtn.textContent = 'Connect';
             if (!res.ok && res.data.code === 401) { window.location.href = '/'; return; }
             if (res.ok && res.data.session_id) {
-                window.location.href = '/client/' + encodeURIComponent(res.data.session_id);
+                window.open('/client/' + encodeURIComponent(res.data.session_id), '_blank');
                 return;
             }
             showError(res.data.error || 'Failed to start session.');
