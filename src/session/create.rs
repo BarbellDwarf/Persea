@@ -997,6 +997,15 @@ impl SessionManager {
             browser_session = Some(browser);
         }
 
+        // Determine if drive/file transfer is available for this session.
+        // For SSH: guacd enables SFTP when enable_sftp is set.
+        // For RDP: guacd enables drive when session_drive_path is set.
+        let drive_enabled = match &conn_params {
+            guacd::ConnectionParams::Ssh(p) => p.enable_sftp,
+            guacd::ConnectionParams::Rdp(_) => session_drive_path.is_some(),
+            _ => false,
+        };
+
         let mut ssh_tunnels = ssh_tunnels.map(|(t, _)| t).unwrap_or_default();
         // Fold in any tunnels the Proxmox branch established in-branch.
         ssh_tunnels.append(&mut proxmox_tunnels);
@@ -1117,6 +1126,7 @@ impl SessionManager {
             browser_session,
             deferred_params,
             drive_path: session_drive_path,
+            drive_enabled,
             tunnels: ssh_tunnels,
             container_id,
             container_name,

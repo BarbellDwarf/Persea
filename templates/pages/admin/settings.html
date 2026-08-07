@@ -233,6 +233,19 @@
                     </div>
                 </label>
                 <input type="hidden" name="enable_vdi" id="enable_vdi-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-gray-200">File Transfer</span>
+                        <p class="text-xs text-gray-500">Upload and download files via RDP drive and SSH SFTP</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_file_transfer" name="enable_file_transfer"
+                               onchange="syncToggle('enable_file_transfer')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_file_transfer" id="enable_file_transfer-hidden" value="false">
             </div>
         </div>
 
@@ -347,7 +360,7 @@ function syncToggle(name) {
             var boxes = [
                 'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
                 'enable_recordings', 'enable_web_sessions', 'enable_spice',
-                'enable_proxmox', 'enable_vmware', 'enable_vdi',
+                'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_file_transfer',
                 'vault_enabled', 'db_only_mode'
             ];
             boxes.forEach(function(name) {

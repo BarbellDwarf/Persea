@@ -35,6 +35,7 @@ const SETTING_KEYS: &[&str] = &[
     "enable_proxmox",
     "enable_vmware",
     "enable_vdi",
+    "enable_file_transfer",
     "vault_enabled",
     "db_only_mode",
 ];
@@ -56,6 +57,7 @@ const BOOL_KEYS: &[&str] = &[
     "enable_proxmox",
     "enable_vmware",
     "enable_vdi",
+    "enable_file_transfer",
     "vault_enabled",
     "db_only_mode",
 ];
@@ -96,6 +98,7 @@ fn default_value(key: &str) -> Value {
         "enable_proxmox" => json!(true),
         "enable_vmware" => json!(true),
         "enable_vdi" => json!(true),
+        "enable_file_transfer" => json!(false),
         "enable_browser_sessions" => json!(true),
         "vault_enabled" => json!(false),
         "db_only_mode" => json!(true),
