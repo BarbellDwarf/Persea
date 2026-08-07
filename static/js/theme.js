@@ -104,5 +104,23 @@ document.addEventListener('click', function() { var m = document.getElementById(
         var next = current === 'dark' ? 'light' : current === 'light' ? 'auto' : 'dark';
         localStorage.setItem('theme', next);
         applyClass(next);
+        // Apply the matching preset colors from the admin config
+        // so CSS variables reflect the mode
+        var preset = _themePresets[_adminPreset] || {};
+        if (next === 'dark' || next === 'auto') {
+            if (preset.bg_color) applyThemeColors(preset);
+        } else if (next === 'light') {
+            // Light mode: invert key colors from the dark preset
+            if (preset.bg_color) {
+                var light = {};
+                for (var k in preset) light[k] = preset[k];
+                light.bg_color = '#f8fafc'; light.bg_pattern = 'none';
+                light.surface_color = '#fff'; light.input_color = '#f1f5f9';
+                light.text_color = '#1e293b'; light.text_muted = '#64748b';
+                light.text_dim = '#94a3b8'; light.border_color = '#e2e8f0';
+                light.text_on_primary = '#fff'; light.btn_disabled = '#cbd5e1';
+                applyThemeColors(light);
+            }
+        }
     };
 })();

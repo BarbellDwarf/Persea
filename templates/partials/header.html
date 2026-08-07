@@ -47,4 +47,18 @@ document.getElementById('theme-toggle')?.addEventListener('click', function() {
         });
     });
 })();
+
+// ── Sidebar collapse toggle ──
+(function() {
+    var btn = document.getElementById('sidebar-toggle');
+    var sidebar = document.getElementById('app-sidebar');
+    if (btn && sidebar) {
+        btn.addEventListener('click', function() {
+            sidebar.classList.toggle('collapsed');
+            var icon = btn.querySelector('svg');
+            if (icon) icon.style.transform = sidebar.classList.contains('collapsed') ? 'rotate(180deg)' : '';
+        });
+        if (window.innerWidth < 1400) sidebar.classList.add('collapsed');
+    }
+})();
 </script>
