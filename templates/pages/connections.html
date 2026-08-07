@@ -2071,7 +2071,18 @@
     });
 
     document.querySelectorAll('.modal-overlay').forEach(function(el) {
-        el.addEventListener('click', function(e) { if (e.target === el) el.classList.add('hidden'); });
+        var _dragStart = null;
+        el.addEventListener('mousedown', function(e) { _dragStart = { x: e.clientX, y: e.clientY, target: e.target }; });
+        el.addEventListener('click', function(e) {
+            if (e.target !== el) return;
+            if (_dragStart && _dragStart.target !== el) return;
+            if (_dragStart) {
+                var dx = Math.abs(e.clientX - _dragStart.x);
+                var dy = Math.abs(e.clientY - _dragStart.y);
+                if (dx > 5 || dy > 5) return;
+            }
+            el.classList.add('hidden');
+        });
     });
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
