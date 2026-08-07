@@ -90,6 +90,13 @@ impl SessionManager {
             );
         }
 
+        // Derive the known_hosts path for SSH trust-on-first-use persistence.
+        let known_hosts_path = self
+            .config
+            .db_path
+            .parent()
+            .map(|p| p.join("known_hosts"));
+
         // Resolve jump hosts (SSH tunnel chain) up-front: the Proxmox branch
         // needs them to tunnel its PVE API + SPICE-proxy connections in-branch,
         // and the generic tunnel setup after the match uses them for the other
@@ -487,7 +494,7 @@ impl SessionManager {
                 let (broker_base, broker_verify) = if !jump_hops.is_empty() {
                     let (api_host, api_port) = parse_host_port(&pve_url, 8006)?;
                     let (mut tuns, api_local) =
-                        tunnel::start_chain(&jump_hops, &api_host, api_port)
+                        tunnel::start_chain(&jump_hops, &api_host, api_port, known_hosts_path.clone())
                             .await
                             .map_err(|e| {
                                 SessionError::ValidationError(format!(
@@ -546,7 +553,7 @@ impl SessionManager {
                 if !jump_hops.is_empty() {
                     let (proxy_host, proxy_port) = parse_host_port(&cfg.proxy, 3128)?;
                     let (mut tuns, proxy_local) =
-                        tunnel::start_chain(&jump_hops, &proxy_host, proxy_port)
+                        tunnel::start_chain(&jump_hops, &proxy_host, proxy_port, known_hosts_path.clone())
                             .await
                             .map_err(|e| {
                                 SessionError::ValidationError(format!(
@@ -893,7 +900,7 @@ impl SessionManager {
                 }
             };
 
-            let (tunnels, final_addr) = tunnel::start_chain(&jump_hops, &target_host, target_port)
+            let (tunnels, final_addr) = tunnel::start_chain(&jump_hops, &target_host, target_port, known_hosts_path)
                 .await
                 .map_err(|e| SessionError::ValidationError(format!("SSH tunnel failed: {}", e)))?;
 

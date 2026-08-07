@@ -11,7 +11,9 @@ use russh::client;
 use russh::keys::key::PrivateKeyWithHashAlg;
 use russh::keys::{HashAlg, PublicKey};
 use serde::{Deserialize, Serialize};
+use std::io::{BufRead, BufReader, Write};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -83,6 +85,8 @@ pub struct TunnelConfig {
     /// Expected SSH server host key in OpenSSH format. If set, the connection
     /// is rejected when the server presents a different key.
     pub expected_host_key: Option<String>,
+    /// Path to the known_hosts file for trust-on-first-use persistence.
+    pub known_hosts_path: Option<PathBuf>,
 }
 
 /// Errors from tunnel setup.
@@ -115,6 +119,41 @@ pub fn fingerprint_openssh_key(openssh_key: &str) -> Result<String, String> {
     Ok(pubkey.fingerprint(HashAlg::Sha256).to_string())
 }
 
+/// Read the known_hosts file and return the pinned fingerprint for `host:port`,
+/// or `None` if the host is not yet pinned.
+fn read_known_hosts(path: &std::path::Path, host: &str, port: u16) -> Option<String> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return None,
+    };
+    let prefix = format!("{}:{}:", host, port);
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        if let Some(fp) = line.strip_prefix(&prefix) {
+            let fp = fp.trim().to_string();
+            if !fp.is_empty() {
+                return Some(fp);
+            }
+        }
+    }
+    None
+}
+
+/// Append a host:fingerprint entry to the known_hosts file.
+fn append_known_host(
+    path: &std::path::Path,
+    host: &str,
+    port: u16,
+    fingerprint: &str,
+) -> Result<(), String> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("failed to open known_hosts for writing: {}", e))?;
+    writeln!(file, "{}:{}:{}", host, port, fingerprint)
+        .map_err(|e| format!("failed to write known_hosts entry: {}", e))
+}
+
 /// SSH client handler that verifies the server's host key against an expected
 /// key stored in the address book. If no expected key is set (legacy entries),
 /// the connection is accepted with a warning log.
@@ -122,6 +161,7 @@ struct TunnelHandler {
     expected_key: Option<String>,
     hop_index: usize,
     jump_host: String,
+    known_hosts_path: Option<PathBuf>,
 }
 
 impl client::Handler for TunnelHandler {
@@ -134,36 +174,68 @@ impl client::Handler for TunnelHandler {
         let fingerprint = server_public_key.fingerprint(HashAlg::Sha256);
         let algorithm = server_public_key.algorithm();
 
-        let Some(ref expected) = self.expected_key else {
-            tracing::warn!(
-                hop = self.hop_index,
-                host = %self.jump_host,
-                fingerprint = %fingerprint,
-                algorithm = %algorithm,
-                "SSH host key not pinned — accepting on trust (TOFU). \
-                 Pin this key in the address book to prevent MITM attacks."
-            );
+        // Determine the key to verify against: explicit pin takes precedence,
+        // then check the on-disk known_hosts file.
+        let effective_key = if let Some(ref expected) = self.expected_key {
+            Some(expected.clone())
+        } else {
+            self.known_hosts_path.as_ref().and_then(|path| {
+                let (host, port) = if let Some(colon_pos) = self.jump_host.rfind(':') {
+                    let host = &self.jump_host[..colon_pos];
+                    let port: u16 = self.jump_host[colon_pos + 1..].parse().unwrap_or(22);
+                    (host, port)
+                } else {
+                    (self.jump_host.as_str(), 22u16)
+                };
+                read_known_hosts(path, host, port)
+            })
+        };
+
+        let Some(ref expected) = effective_key else {
+            // First use — no pin in address book or known_hosts.
+            // Auto-pin: persist the fingerprint for future verification.
+            if let Some(ref path) = self.known_hosts_path {
+                let (host, port) = if let Some(colon_pos) = self.jump_host.rfind(':') {
+                    let host = &self.jump_host[..colon_pos];
+                    let port: u16 = self.jump_host[colon_pos + 1..].parse().unwrap_or(22);
+                    (host, port)
+                } else {
+                    (self.jump_host.as_str(), 22u16)
+                };
+                match append_known_host(path, host, port, &fingerprint.to_string()) {
+                    Ok(()) => {
+                        tracing::info!(
+                            hop = self.hop_index,
+                            host = %self.jump_host,
+                            fingerprint = %fingerprint,
+                            algorithm = %algorithm,
+                            "SSH host key auto-pinned (TOFU) — stored in known_hosts"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            hop = self.hop_index,
+                            host = %self.jump_host,
+                            error = %e,
+                            "Failed to persist SSH host key — accepting on trust for this session"
+                        );
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    hop = self.hop_index,
+                    host = %self.jump_host,
+                    fingerprint = %fingerprint,
+                    algorithm = %algorithm,
+                    "SSH host key not pinned and no known_hosts path — accepting on trust (TOFU)"
+                );
+            }
             return Ok(true);
         };
 
-        // Parse the stored OpenSSH key and compare
-        let expected_pubkey = match russh::keys::parse_public_key_base64(
-            expected.split_whitespace().nth(1).unwrap_or(expected),
-        ) {
-            Ok(k) => k,
-            Err(e) => {
-                tracing::error!(
-                    hop = self.hop_index,
-                    host = %self.jump_host,
-                    error = %e,
-                    "Failed to parse stored host key — rejecting connection. \
-                     Re-verify the host key in the address book."
-                );
-                return Ok(false);
-            }
-        };
-
-        if *server_public_key == expected_pubkey {
+        // Parse the stored fingerprint and compare
+        let expected_str = expected.as_str();
+        if expected_str == fingerprint.to_string() {
             tracing::debug!(
                 hop = self.hop_index,
                 host = %self.jump_host,
@@ -172,11 +244,10 @@ impl client::Handler for TunnelHandler {
             );
             Ok(true)
         } else {
-            let expected_fp = expected_pubkey.fingerprint(HashAlg::Sha256);
             tracing::error!(
                 hop = self.hop_index,
                 host = %self.jump_host,
-                expected = %expected_fp,
+                expected = %expected_str,
                 actual = %fingerprint,
                 "SSH HOST KEY MISMATCH — possible MITM attack! \
                  Update the host key in the address book if the server was re-provisioned."
@@ -252,6 +323,7 @@ pub async fn start_chain(
     hops: &[JumpHost],
     target_host: &str,
     target_port: u16,
+    known_hosts_path: Option<PathBuf>,
 ) -> Result<(Vec<SshTunnel>, SocketAddr), TunnelError> {
     let mut tunnels: Vec<SshTunnel> = Vec::with_capacity(hops.len());
 
@@ -292,6 +364,7 @@ pub async fn start_chain(
             target_host: fwd_host,
             target_port: fwd_port,
             expected_host_key: hop.host_key.clone(),
+            known_hosts_path: known_hosts_path.clone(),
         };
 
         let tunnel = start(config, i).await?;
@@ -336,6 +409,7 @@ pub async fn start(config: TunnelConfig, hop_index: usize) -> Result<SshTunnel, 
         expected_key: config.expected_host_key,
         hop_index,
         jump_host: jump_addr.clone(),
+        known_hosts_path: config.known_hosts_path,
     };
 
     let mut handle = tokio::time::timeout(
@@ -636,6 +710,7 @@ mod tests {
             target_host: "192.168.1.100".into(),
             target_port: 3389,
             expected_host_key: None,
+            known_hosts_path: None,
         };
         assert_eq!(config.jump_host, "10.0.0.1");
         assert_eq!(config.target_port, 3389);
@@ -644,13 +719,11 @@ mod tests {
 
     #[test]
     fn tunnel_handler_with_no_expected_key_is_tofu() {
-        // TunnelHandler with None expected_key should accept (TOFU mode).
-        // We can't easily test check_server_key without a real PublicKey,
-        // but we verify the struct construction.
         let handler = TunnelHandler {
             expected_key: None,
             hop_index: 0,
             jump_host: "test.host".into(),
+            known_hosts_path: None,
         };
         assert!(handler.expected_key.is_none());
         assert_eq!(handler.hop_index, 0);
@@ -662,6 +735,7 @@ mod tests {
             expected_key: Some("ssh-ed25519 AAAA...".into()),
             hop_index: 1,
             jump_host: "bastion".into(),
+            known_hosts_path: None,
         };
         assert!(handler.expected_key.is_some());
         assert_eq!(handler.hop_index, 1);
