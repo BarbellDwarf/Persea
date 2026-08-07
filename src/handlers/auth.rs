@@ -549,6 +549,21 @@ pub async fn mfa_submit(
         }
     };
 
+    // Check lockout before attempting TOTP verification
+    {
+        let db_lock = database.clone();
+        let username = pending.user_email.clone();
+        let ip = client_ip.to_string();
+        if let Ok(true) = tokio::task::spawn_blocking(move || {
+            db::is_locked_out(&db_lock, &username, &ip)
+        })
+        .await
+        .unwrap_or(Ok(false))
+        {
+            return Redirect::to("/auth/mfa?error=account_locked").into_response();
+        }
+    }
+
     // Verify TOTP code
     let db_clone = database.clone();
     let user_id = pending.user_id;
