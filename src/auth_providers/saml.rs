@@ -166,9 +166,229 @@ fn local_name(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-/// Exclusive canonicalization (simplified for SAML AuthnRequests).
+/// Exclusive C14N canonicalization per W3C Recommendation for XML-DSig.
+///
+/// Produces a deterministic canonical form suitable for SAML signature
+/// verification. Handles: stripping XML declarations, removing comments,
+/// normalizing self-closing tags, attribute whitespace, alphabetical
+/// attribute sorting (by namespace URI then local name), and proper
+/// text/attribute value escaping.
 fn exclusive_canonicalize(xml: &str) -> String {
-    xml.to_string()
+    use quick_xml::events::Event;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    reader.config_mut().check_comments = false;
+
+    let mut out = String::with_capacity(xml.len());
+    let mut ns_stack: Vec<HashMap<String, String>> = Vec::new();
+    let mut attrs_in_scope: Vec<(String, String)> = Vec::new();
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Decl(_)) => continue,
+            Ok(Event::Comment(_)) => continue,
+            Ok(Event::Start(ref e)) => {
+                let local = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let parent_attrs = attrs_in_scope.clone();
+                let mut ns_map = ns_stack.last().cloned().unwrap_or_default();
+
+                let mut own_ns: Vec<(String, String)> = Vec::new();
+                for attr in e.attributes().flatten() {
+                    let k = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                    let mut v = String::from_utf8_lossy(&attr.value).to_string();
+                    if k.starts_with("xmlns") {
+                        let prefix = if k == "xmlns" { "" } else { &k[6..] };
+                        ns_map.insert(prefix.to_string(), v.clone());
+                        v = normalize_attr_whitespace(&v);
+                        own_ns.push((k, v));
+                    } else {
+                        v = normalize_attr_whitespace(&v);
+                        own_ns.push((k, v));
+                    }
+                }
+                ns_stack.push(ns_map);
+
+                attrs_in_scope = parent_attrs;
+                attrs_in_scope.extend(own_ns);
+                attrs_in_scope.sort_by(|a, b| sort_attr_cmp(&a.0, &b.0));
+
+                out.push('<');
+                out.push_str(&local);
+                for (k, v) in &attrs_in_scope {
+                    out.push(' ');
+                    out.push_str(k);
+                    out.push_str("=\"");
+                    out.push_str(&escape_attr_value(v));
+                    out.push('"');
+                }
+                out.push('>');
+            }
+            Ok(Event::Empty(ref e)) => {
+                let local = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let parent_attrs = attrs_in_scope.clone();
+                let mut ns_map = ns_stack.last().cloned().unwrap_or_default();
+
+                let mut own_ns: Vec<(String, String)> = Vec::new();
+                for attr in e.attributes().flatten() {
+                    let k = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                    let mut v = String::from_utf8_lossy(&attr.value).to_string();
+                    if k.starts_with("xmlns") {
+                        let prefix = if k == "xmlns" { "" } else { &k[6..] };
+                        ns_map.insert(prefix.to_string(), v.clone());
+                        v = normalize_attr_whitespace(&v);
+                        own_ns.push((k, v));
+                    } else {
+                        v = normalize_attr_whitespace(&v);
+                        own_ns.push((k, v));
+                    }
+                }
+                ns_stack.push(ns_map.clone());
+                ns_stack.push(ns_map);
+
+                attrs_in_scope = parent_attrs;
+                attrs_in_scope.extend(own_ns);
+                attrs_in_scope.sort_by(|a, b| sort_attr_cmp(&a.0, &b.0));
+
+                out.push('<');
+                out.push_str(&local);
+                for (k, v) in &attrs_in_scope {
+                    out.push(' ');
+                    out.push_str(k);
+                    out.push_str("=\"");
+                    out.push_str(&escape_attr_value(v));
+                    out.push('"');
+                }
+                out.push('>');
+                out.push_str("</");
+                out.push_str(&local);
+                out.push('>');
+            }
+            Ok(Event::End(ref e)) => {
+                let local = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if ns_stack.pop().is_some() {
+                    attrs_in_scope = ns_stack
+                        .last()
+                        .map(|m| {
+                            m.iter()
+                                .map(|(p, v)| {
+                                    if p.is_empty() {
+                                        ("xmlns".to_string(), v.clone())
+                                    } else {
+                                        (format!("xmlns:{p}"), v.clone())
+                                    }
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    attrs_in_scope.sort_by(|a, b| sort_attr_cmp(&a.0, &b.0));
+                }
+                out.push_str("</");
+                out.push_str(&local);
+                out.push('>');
+            }
+            Ok(Event::Text(ref e)) => {
+                let raw = String::from_utf8_lossy(e.as_ref());
+                out.push_str(&escape_text(&raw));
+            }
+            Ok(Event::CData(ref e)) => {
+                let raw = String::from_utf8_lossy(e.as_ref());
+                out.push_str(&escape_text(&raw));
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    out
+}
+
+/// Normalize attribute value whitespace per C14N: replace tabs, newlines,
+/// carriage returns with spaces, then collapse multiple spaces.
+fn normalize_attr_whitespace(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut prev_space = false;
+    for c in s.chars() {
+        match c {
+            '\t' | '\n' | '\r' => {
+                if !prev_space {
+                    result.push(' ');
+                    prev_space = true;
+                }
+            }
+            ' ' => {
+                if !prev_space {
+                    result.push(' ');
+                    prev_space = true;
+                }
+            }
+            _ => {
+                result.push(c);
+                prev_space = false;
+            }
+        }
+    }
+    result
+}
+
+/// Compare two attribute keys for sorting by (namespace URI, local name).
+fn sort_attr_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let (uri_a, local_a) = attr_sort_key(a);
+    let (uri_b, local_b) = attr_sort_key(b);
+    uri_a.cmp(&uri_b).then(local_a.cmp(&local_b))
+}
+
+/// Return (namespace_uri, local_name) for an attribute key for sorting.
+fn attr_sort_key(attr_key: &str) -> (String, String) {
+    if attr_key == "xmlns" {
+        (String::new(), String::new())
+    } else if let Some(local) = attr_key.strip_prefix("xmlns:") {
+        (String::new(), local.to_string())
+    } else if let Some((prefix, local)) = attr_key.split_once(':') {
+        let uri = match prefix {
+            "samlp" => "urn:oasis:names:tc:SAML:2.0:protocol",
+            "saml" => "urn:oasis:names:tc:SAML:2.0:assertion",
+            "md" => "urn:oasis:names:tc:SAML:2.0:metadata",
+            "ds" => "http://www.w3.org/2000/09/xmldsig#",
+            _ => prefix,
+        };
+        (uri.to_string(), local.to_string())
+    } else {
+        (String::new(), attr_key.to_string())
+    }
+}
+
+/// Escape text content for C14N output.
+fn escape_text(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => result.push_str("&amp;"),
+            '<' => result.push_str("&lt;"),
+            '>' => result.push_str("&gt;"),
+            _ => result.push(c),
+        }
+    }
+    result
+}
+
+/// Escape attribute value for C14N output.
+fn escape_attr_value(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => result.push_str("&amp;"),
+            '<' => result.push_str("&lt;"),
+            '>' => result.push_str("&gt;"),
+            '"' => result.push_str("&quot;"),
+            '\'' => result.push_str("&apos;"),
+            _ => result.push(c),
+        }
+    }
+    result
 }
 
 /// SHA-256 digest, base64-encoded.
@@ -744,9 +964,22 @@ fn validate_response_signature(xml: &str, idp_cert_pem: &str) -> Result<(), Stri
         return Err("No SignatureValue found in SAML response".to_string());
     }
 
-    let cert_der = parse_certificate_der(idp_cert_pem)?;
+    // Extract Reference URI from SignedInfo to prevent signature wrapping attacks.
     let signed_info_str =
         String::from_utf8(signed_info_buf).map_err(|e| format!("SignedInfo UTF-8 error: {e}"))?;
+    let reference_uri = extract_reference_uri(&signed_info_str)
+        .ok_or("No Reference URI found in SignedInfo")?;
+
+    // Extract Assertion ID and verify it matches the Reference URI.
+    let assertion_id = extract_assertion_id(xml)
+        .ok_or("No Assertion element with ID found in SAML response")?;
+    if reference_uri != assertion_id {
+        return Err(format!(
+            "Signature Reference URI '{reference_uri}' does not match Assertion ID '{assertion_id}'"
+        ));
+    }
+
+    let cert_der = parse_certificate_der(idp_cert_pem)?;
     let signed_info_canonical = exclusive_canonicalize(&signed_info_str);
 
     verify_rsa_sha256(
@@ -754,6 +987,63 @@ fn validate_response_signature(xml: &str, idp_cert_pem: &str) -> Result<(), Stri
         signed_info_canonical.as_bytes(),
         signature_value.trim(),
     )
+}
+
+/// Extract the Reference URI from a SignedInfo XML fragment.
+fn extract_reference_uri(signed_info: &str) -> Option<String> {
+    let mut reader = Reader::from_str(signed_info);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(ref e))
+            | Ok(quick_xml::events::Event::Empty(ref e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if local_name(&tag) == "Reference" {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"URI" {
+                            let uri = String::from_utf8_lossy(&attr.value).to_string();
+                            return Some(uri);
+                        }
+                    }
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    None
+}
+
+/// Extract the ID attribute from the Assertion element in a SAML response.
+fn extract_assertion_id(xml: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(ref e))
+            | Ok(quick_xml::events::Event::Empty(ref e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if local_name(&tag) == "Assertion" {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"ID" {
+                            return Some(String::from_utf8_lossy(&attr.value).to_string());
+                        }
+                    }
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    None
 }
 
 /// Validate time conditions in the SAML assertion.
