@@ -78,6 +78,15 @@ fn default_email_attr() -> String {
     "mail".into()
 }
 
+fn ldap_escape(input: &str) -> String {
+    input
+        .replace('\\', "\\5c")
+        .replace('*', "\\2a")
+        .replace('(', "\\28")
+        .replace(')', "\\29")
+        .replace('\0', "\\00")
+}
+
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
@@ -320,7 +329,7 @@ impl AuthProvider for LdapProvider {
         let mut conn = self.connect().ok()?;
         self.bind_service_account(&mut conn).ok()?;
 
-        let filter = &self.config.user_search_filter.replace("{}", subject);
+        let filter = &self.config.user_search_filter.replace("{}", &ldap_escape(subject));
         let search_result = conn
             .search(
                 subject,
@@ -364,12 +373,7 @@ mod tests {
         let toml_str = r#"
             url = "ldap://localhost:389"
             bind_dn = "cn=admin,dc=example,dc=com"
-            bind_password = "secret"
-            user_search_base = "ou=users,dc=example,dc=com"
-            user_search_filter = "(uid={})"
-        "#;
-        let config: LdapConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.url, "ldap://localhost:389");
+            bind_password = "s_eq!(config.url, "ldap://localhost:389");
         assert!(!config.tls_skip_verify);
         assert!(!config.starttls);
         assert_eq!(config.connect_timeout_secs, 10);
