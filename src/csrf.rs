@@ -1,9 +1,12 @@
-//! Double-submit cookie CSRF protection middleware.
-//!
-//! On state-changing methods (POST, PUT, DELETE, PATCH), the `X-CSRF-Token`
-//! request header must match the `csrf_token` cookie. GET/HEAD/OPTIONS are
-//! exempt. A random token cookie is set on every response that doesn't already
-//! carry one.
+/// Double-submit cookie CSRF protection middleware.
+///
+/// On state-changing methods (POST, PUT, DELETE, PATCH), the `X-CSRF-Token`
+/// request header must match the `csrf_token` cookie. GET/HEAD/OPTIONS are
+/// exempt. A random token cookie is set on every response.
+///
+/// Fallback: if the header is missing, the middleware peeks at form bodies
+/// for a `csrf_token` field. This handles cases where JavaScript cannot
+/// read the cookie (browser extensions, network timing, device quirks).
 
 use std::future::Future;
 use std::pin::Pin;
@@ -112,37 +115,75 @@ where
                 .map(|v| v.split(',').next().unwrap_or("").trim() == "https")
                 .unwrap_or(false);
 
-        // Check CSRF for state-changing methods
-        if is_state_changing(&method) {
-            let cookie_token = extract_cookie(req.headers(), CSRF_COOKIE);
-            let header_token = req
-                .headers()
-                .get("x-csrf-token")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
+        let mut inner = self.inner.clone();
+        Box::pin(async move {
+            // ── CSRF double-submit check ─────────────────────────────
+            // Check X-CSRF-Token header first. If header is missing,
+            // peek at form bodies (application/x-www-form-urlencoded)
+            // for a csrf_token field. This covers devices where JS
+            // cannot read the CSRF cookie.
+            let mut req = req;
+            if is_state_changing(&method) {
+                let cookie_token = extract_cookie(&req.headers(), CSRF_COOKIE);
+                let header_token = req
+                    .headers()
+                    .get("x-csrf-token")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
 
-            match (cookie_token, header_token) {
-                (Some(cookie), Some(header)) if cookie == header => {
-                    // Valid — proceed
-                }
-                _ => {
-                    return Box::pin(async {
+                let form_token = if header_token.is_none() {
+                    let ct = req
+                        .headers()
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+                    if ct.contains("application/x-www-form-urlencoded") {
+                        let (parts, body) = req.into_parts();
+                        let (bytes_result, token) = match axum::body::to_bytes(body, usize::MAX).await {
+                            Ok(bytes) => {
+                                let form = std::str::from_utf8(&bytes).unwrap_or("");
+                                let tok = form.split('&').find_map(|pair| {
+                                    let (k, v) = pair.split_once('=')?;
+                                    if k == CSRF_COOKIE {
+                                        Some(urlencoding::decode(v).unwrap_or_default().to_string())
+                                    } else {
+                                        None
+                                    }
+                                });
+                                (Some(bytes), tok)
+                            }
+                            Err(_) => (None, None),
+                        };
+                        // Always restore the request — either with original bytes or empty
+                        let body = match bytes_result {
+                            Some(b) => Body::from(b),
+                            None => Body::empty(),
+                        };
+                        req = Request::from_parts(parts, body);
+                        token
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let effective = header_token.or(form_token);
+                match (&cookie_token, &effective) {
+                    (Some(c), Some(h)) if c == h => { /* valid */ }
+                    _ => {
                         let body_text =
                             serde_json::json!({"error": "CSRF token missing or invalid"})
                                 .to_string();
-                        let resp = Response::builder()
+                        return Ok(Response::builder()
                             .status(StatusCode::FORBIDDEN)
                             .header(header::CONTENT_TYPE, "application/json")
                             .body(Body::from(body_text))
-                            .unwrap_or_else(|_| Response::new(Body::empty()));
-                        Ok(resp)
-                    });
+                            .unwrap_or_else(|_| Response::new(Body::empty())));
+                    }
                 }
             }
-        }
 
-        let mut inner = self.inner.clone();
-        Box::pin(async move {
             let mut resp = inner.call(req).await?;
 
             // Always set csrf_token cookie so the double-submit pattern works.

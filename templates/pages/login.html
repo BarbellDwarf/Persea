@@ -61,6 +61,7 @@
 
         <!-- Form -->
         <form method="POST" action="/auth/login" id="login-form">
+            <input type="hidden" name="csrf_token" value="">
             <div class="form-group">
                 <label class="form-label" for="username">Email</label>
                 <input type="text" id="username" name="username" autocomplete="username" required
@@ -75,9 +76,12 @@
         </form>
 
         <script>
-        // CSRF: the csrf_token cookie is readable by JS (not HttpOnly), so
-        // submit the login via fetch with the X-CSRF-Token header. The server
-        // always answers with a redirect; follow it to the final page.
+        // CSRF: set hidden input value from cookie as fallback, and send via header
+        (function() {
+            var csrf = readCookie('csrf_token');
+            var hiddenInput = document.querySelector('input[name="csrf_token"]');
+            if (hiddenInput && csrf) hiddenInput.value = csrf;
+        })();
         document.getElementById('login-form').addEventListener('submit', function(evt) {
             evt.preventDefault();
             var btn = document.getElementById('login-submit');
