@@ -492,6 +492,11 @@ pub struct Config {
     #[serde(default = "default_max_sessions_per_user")]
     pub max_sessions_per_user: usize,
 
+    /// Maximum concurrent viewers per session (share-token joins). Default: 10.
+    /// Set to 0 for unlimited. The owner connection is not counted.
+    #[serde(default = "default_max_viewers")]
+    pub max_viewers: u32,
+
     /// Seconds to keep completed/error/expired sessions in memory before cleanup.
     /// Default: 300 (5 minutes). The session history in SQLite is not affected.
     #[serde(default = "default_session_cleanup_delay_secs")]
@@ -1217,6 +1222,10 @@ fn default_max_sessions_per_user() -> usize {
     50
 }
 
+fn default_max_viewers() -> u32 {
+    10
+}
+
 fn default_session_cleanup_delay_secs() -> u64 {
     300 // 5 minutes
 }
@@ -1312,6 +1321,7 @@ impl Default for Config {
             session_history_retention_days: default_session_history_retention_days(),
             max_sessions: default_max_sessions(),
             max_sessions_per_user: default_max_sessions_per_user(),
+            max_viewers: default_max_viewers(),
             session_cleanup_delay_secs: default_session_cleanup_delay_secs(),
             shutdown_timeout_secs: default_shutdown_timeout_secs(),
             rate_limit: false,

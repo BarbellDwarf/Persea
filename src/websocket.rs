@@ -223,6 +223,28 @@ async fn handle_ws(
             }
         }
 
+        // Per-session concurrent viewer limit (H02).
+        // The owner connection is not counted (active_connections starts at 0
+        // for a Pending session).  max_viewers == 0 means unlimited.
+        {
+            let max_viewers = manager.config().max_viewers;
+            if max_viewers > 0 {
+                let session = manager.get_session(session_id).await;
+                if let Some(info) = session {
+                    if info.active_connections >= max_viewers {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            client_ip = %client_addr,
+                            active = info.active_connections,
+                            max = max_viewers,
+                            "Rejecting viewer: per-session concurrent viewer limit reached"
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+
         match manager.join_session(session_id).await {
             Ok((stream, cancel)) => {
                 tracing::info!(session_id = %session_id, client_ip = %client_addr, "Viewer connected via share token");
