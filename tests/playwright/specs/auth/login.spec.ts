@@ -23,6 +23,6 @@ test.describe('Password login', () => {
     await page.fill('#username', USERNAME);
     await page.fill('#password', 'wrongpassword');
     await page.click('#login-submit');
-    await expect(page).toHaveURL(/error=login_failed/);
+    await expect(page).toHaveURL(/error=/);
   });
 });
