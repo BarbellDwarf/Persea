@@ -440,8 +440,8 @@ pub struct ErrorPageTemplate {
 
 impl IntoResponse for ErrorPageTemplate {
     fn into_response(self) -> Response {
-        let status = StatusCode::from_u16(self.status_code)
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut response = render_template("pages/error.html", &self);
         *response.status_mut() = status;
         response

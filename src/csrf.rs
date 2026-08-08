@@ -207,8 +207,7 @@ where
             {
                 let token = incoming_cookie.unwrap_or_else(|| generate_token());
                 let secure = if is_https { " Secure" } else { "" };
-                let cookie =
-                    format!("{}={}; Path=/; SameSite=Lax;{}", CSRF_COOKIE, token, secure);
+                let cookie = format!("{}={}; Path=/; SameSite=Lax;{}", CSRF_COOKIE, token, secure);
                 resp.headers_mut()
                     .append(header::SET_COOKIE, cookie.parse().unwrap());
             }

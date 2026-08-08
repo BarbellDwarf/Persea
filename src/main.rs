@@ -2377,7 +2377,10 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("Not Found"), "expected styled page, got: {html}");
+        assert!(
+            html.contains("Not Found"),
+            "expected styled page, got: {html}"
+        );
         assert!(html.contains("missing resource"), "got: {html}");
         assert!(html.contains("app.css"), "page must load the design system");
 
@@ -2439,7 +2442,10 @@ mod tests {
             .await
             .unwrap();
         let html = String::from_utf8(body.to_vec()).unwrap();
-        assert!(html.contains("404"), "expected styled 404 page, got: {html}");
+        assert!(
+            html.contains("404"),
+            "expected styled 404 page, got: {html}"
+        );
 
         // Unknown API path → JSON.
         let resp = app

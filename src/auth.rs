@@ -6,10 +6,9 @@ use axum::{
     extract::{ConnectInfo, Request},
     http::{HeaderMap, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use ipnetwork::IpNetwork;
-use serde_json::json;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -248,21 +247,19 @@ pub async fn require_auth(
                     }
                     Err(_) => {
                         tracing::warn!(client_ip = %ip, "Authentication failed: invalid API key/token");
-                        return (
+                        return crate::error::AppError::error_response(
                             StatusCode::UNAUTHORIZED,
-                            axum::Json(json!({"error": "invalid API key or token"})),
-                        )
-                            .into_response();
+                            "invalid API key or token",
+                        );
                     }
                 }
             }
             Err(e) => {
                 tracing::warn!(client_ip = %ip, reason = %e, "Authentication failed");
-                return (
+                return crate::error::AppError::error_response(
                     StatusCode::FORBIDDEN,
-                    axum::Json(json!({"error": e.to_string()})),
-                )
-                    .into_response();
+                    e.to_string(),
+                );
             }
         }
     }
@@ -290,22 +287,20 @@ pub async fn require_auth(
             }
             Err(_) => {
                 tracing::warn!(client_ip = %ip, "Authentication failed: invalid session cookie");
-                (
+                crate::error::AppError::error_response(
                     StatusCode::UNAUTHORIZED,
-                    axum::Json(json!({"error": "invalid or expired session"})),
+                    "invalid or expired session",
                 )
-                    .into_response()
             }
         };
     }
 
     // Neither API key nor cookie
     tracing::warn!(client_ip = %ip, path = %path, "Authentication failed: no credentials");
-    (
+    crate::error::AppError::error_response(
         StatusCode::UNAUTHORIZED,
-        axum::Json(json!({"error": "authentication required — use API key or sign in via SSO"})),
+        "authentication required — use API key or sign in via SSO",
     )
-        .into_response()
 }
 
 /// Optional auth middleware — identical to `require_auth` but passes through
