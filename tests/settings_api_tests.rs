@@ -134,7 +134,7 @@ async fn get_settings_returns_defaults_when_empty() {
     assert_eq!(json["session_max_duration_secs"].as_u64(), Some(28800));
     assert_eq!(json["max_concurrent_sessions"].as_u64(), Some(500));
     assert_eq!(json["session_history_retention_days"].as_u64(), Some(90));
-    assert_eq!(json["enable_vdi"].as_bool(), Some(false));
+    assert_eq!(json["enable_vdi"].as_bool(), Some(true));
     assert_eq!(json["vault_enabled"].as_bool(), Some(false));
     assert_eq!(json["db_only_mode"].as_bool(), Some(true));
 }
@@ -223,7 +223,7 @@ async fn put_partial_object_only_updates_given_keys() {
     assert_eq!(json["listen_addr"].as_str().unwrap(), "0.0.0.0:7777");
     // Untouched keys keep their defaults.
     assert_eq!(json["session_max_duration_secs"].as_u64(), Some(28800));
-    assert_eq!(json["enable_vdi"].as_bool(), Some(false));
+    assert_eq!(json["enable_vdi"].as_bool(), Some(true));
 }
 
 // ── PUT validation ──
