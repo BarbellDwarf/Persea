@@ -379,7 +379,12 @@ mod tests {
         let toml_str = r#"
             url = "ldap://localhost:389"
             bind_dn = "cn=admin,dc=example,dc=com"
-            bind_password = "s_eq!(config.url, "ldap://localhost:389");
+            bind_password = "secret"
+            user_search_base = "ou=users,dc=example,dc=com"
+            user_search_filter = "(uid={})"
+        "#;
+        let config: LdapConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.url, "ldap://localhost:389");
         assert!(!config.tls_skip_verify);
         assert!(!config.starttls);
         assert_eq!(config.connect_timeout_secs, 10);
