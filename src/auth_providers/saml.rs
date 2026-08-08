@@ -492,10 +492,9 @@ fn extract_element_by_id(xml: &str, target_id: &str) -> Option<String> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 if !found {
-                    let has_target_id = e
-                        .attributes()
-                        .flatten()
-                        .any(|a| a.key.as_ref() == b"ID" && a.value.as_ref() == target_id.as_bytes());
+                    let has_target_id = e.attributes().flatten().any(|a| {
+                        a.key.as_ref() == b"ID" && a.value.as_ref() == target_id.as_bytes()
+                    });
                     if has_target_id {
                         found = true;
                         depth = 1;
@@ -560,10 +559,9 @@ fn extract_element_by_id(xml: &str, target_id: &str) -> Option<String> {
                     }
                     result.extend_from_slice(b"/>");
                 } else {
-                    let has_target_id = e
-                        .attributes()
-                        .flatten()
-                        .any(|a| a.key.as_ref() == b"ID" && a.value.as_ref() == target_id.as_bytes());
+                    let has_target_id = e.attributes().flatten().any(|a| {
+                        a.key.as_ref() == b"ID" && a.value.as_ref() == target_id.as_bytes()
+                    });
                     if has_target_id {
                         let mut elem = Vec::new();
                         elem.extend_from_slice(b"<");
@@ -1362,12 +1360,12 @@ fn validate_response_signature(
     // Extract Reference URI from SignedInfo to prevent signature wrapping attacks.
     let signed_info_str =
         String::from_utf8(signed_info_buf).map_err(|e| format!("SignedInfo UTF-8 error: {e}"))?;
-    let reference_uri = extract_reference_uri(&signed_info_str)
-        .ok_or("No Reference URI found in SignedInfo")?;
+    let reference_uri =
+        extract_reference_uri(&signed_info_str).ok_or("No Reference URI found in SignedInfo")?;
 
     // Extract Assertion ID and verify it matches the Reference URI.
-    let assertion_id = extract_assertion_id(xml)
-        .ok_or("No Assertion element with ID found in SAML response")?;
+    let assertion_id =
+        extract_assertion_id(xml).ok_or("No Assertion element with ID found in SAML response")?;
     if reference_uri != assertion_id {
         return Err(format!(
             "Signature Reference URI '{reference_uri}' does not match Assertion ID '{assertion_id}'"
@@ -1405,9 +1403,7 @@ fn validate_response_signature(
                 ));
             }
             None => {
-                return Err(
-                    "InResponseTo attribute missing from SAML response".to_string(),
-                );
+                return Err("InResponseTo attribute missing from SAML response".to_string());
             }
             _ => {}
         }

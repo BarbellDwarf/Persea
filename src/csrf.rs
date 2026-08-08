@@ -7,7 +7,6 @@
 /// Fallback: if the header is missing, the middleware peeks at form bodies
 /// for a `csrf_token` field. This handles cases where JavaScript cannot
 /// read the cookie (browser extensions, network timing, device quirks).
-
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -139,7 +138,9 @@ where
                         .unwrap_or("");
                     if ct.contains("application/x-www-form-urlencoded") {
                         let (parts, body) = req.into_parts();
-                        let (bytes_result, token) = match axum::body::to_bytes(body, usize::MAX).await {
+                        let (bytes_result, token) = match axum::body::to_bytes(body, usize::MAX)
+                            .await
+                        {
                             Ok(bytes) => {
                                 let form = std::str::from_utf8(&bytes).unwrap_or("");
                                 let tok = form.split('&').find_map(|pair| {

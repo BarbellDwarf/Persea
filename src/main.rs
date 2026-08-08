@@ -1215,9 +1215,7 @@ async fn run_server(
         let title = &config.site_title;
         let mut pages = std::collections::HashMap::new();
         // Disk-served HTML pages (only index.html — all others use templates)
-        for name in &[
-            "index.html",
-        ] {
+        for name in &["index.html"] {
             let path = std::path::Path::new(&static_path).join(name);
             if let Ok(html) = std::fs::read_to_string(&path) {
                 pages.insert(name.to_string(), rewrite_branding(&html, title, logo));

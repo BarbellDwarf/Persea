@@ -91,11 +91,7 @@ impl SessionManager {
         }
 
         // Derive the known_hosts path for SSH trust-on-first-use persistence.
-        let known_hosts_path = self
-            .config
-            .db_path
-            .parent()
-            .map(|p| p.join("known_hosts"));
+        let known_hosts_path = self.config.db_path.parent().map(|p| p.join("known_hosts"));
 
         // Resolve jump hosts (SSH tunnel chain) up-front: the Proxmox branch
         // needs them to tunnel its PVE API + SPICE-proxy connections in-branch,
@@ -143,7 +139,11 @@ impl SessionManager {
                 let port = req.port.unwrap_or(22);
                 let username = req.username.clone().unwrap_or_default();
 
-                pending_net_check = Some((hostname.clone(), port, self.config.ssh_allowed_networks.clone()));
+                pending_net_check = Some((
+                    hostname.clone(),
+                    port,
+                    self.config.ssh_allowed_networks.clone(),
+                ));
 
                 tracing::info!(
                     session_id = %session_id,
@@ -264,7 +264,11 @@ impl SessionManager {
                 let port = req.port.unwrap_or(3389);
                 let username = req.username.clone().unwrap_or_default();
 
-                pending_net_check = Some((hostname.clone(), port, self.config.rdp_allowed_networks.clone()));
+                pending_net_check = Some((
+                    hostname.clone(),
+                    port,
+                    self.config.rdp_allowed_networks.clone(),
+                ));
 
                 tracing::info!(
                     session_id = %session_id,
@@ -372,7 +376,11 @@ impl SessionManager {
                 let port = req.port.unwrap_or(5900);
                 let username = req.username.clone().unwrap_or_default();
 
-                pending_net_check = Some((hostname.clone(), port, self.config.vnc_allowed_networks.clone()));
+                pending_net_check = Some((
+                    hostname.clone(),
+                    port,
+                    self.config.vnc_allowed_networks.clone(),
+                ));
 
                 tracing::info!(
                     session_id = %session_id,
@@ -493,14 +501,16 @@ impl SessionManager {
                 // the transport). The SPICE server cert is still verified below.
                 let (broker_base, broker_verify) = if !jump_hops.is_empty() {
                     let (api_host, api_port) = parse_host_port(&pve_url, 8006)?;
-                    let (mut tuns, api_local) =
-                        tunnel::start_chain(&jump_hops, &api_host, api_port, known_hosts_path.clone())
-                            .await
-                            .map_err(|e| {
-                                SessionError::ValidationError(format!(
-                                    "Proxmox API tunnel failed: {e}"
-                                ))
-                            })?;
+                    let (mut tuns, api_local) = tunnel::start_chain(
+                        &jump_hops,
+                        &api_host,
+                        api_port,
+                        known_hosts_path.clone(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        SessionError::ValidationError(format!("Proxmox API tunnel failed: {e}"))
+                    })?;
                     proxmox_tunnels.append(&mut tuns);
                     tracing::info!(
                         session_id = %session_id,
@@ -552,14 +562,18 @@ impl SessionManager {
                 // SPICE server cert still verifies.
                 if !jump_hops.is_empty() {
                     let (proxy_host, proxy_port) = parse_host_port(&cfg.proxy, 3128)?;
-                    let (mut tuns, proxy_local) =
-                        tunnel::start_chain(&jump_hops, &proxy_host, proxy_port, known_hosts_path.clone())
-                            .await
-                            .map_err(|e| {
-                                SessionError::ValidationError(format!(
-                                    "Proxmox SPICE proxy tunnel failed: {e}"
-                                ))
-                            })?;
+                    let (mut tuns, proxy_local) = tunnel::start_chain(
+                        &jump_hops,
+                        &proxy_host,
+                        proxy_port,
+                        known_hosts_path.clone(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        SessionError::ValidationError(format!(
+                            "Proxmox SPICE proxy tunnel failed: {e}"
+                        ))
+                    })?;
                     proxmox_tunnels.append(&mut tuns);
                     tracing::info!(
                         session_id = %session_id,
@@ -662,13 +676,11 @@ impl SessionManager {
                     .await?;
 
                 if url_host == "169.254.169.254"
-                    || url_host
-                        .parse::<std::net::IpAddr>()
-                        .map_or(false, |ip| {
-                            "169.254.0.0/16"
-                                .parse::<ipnetwork::IpNetwork>()
-                                .map_or(false, |net| net.contains(ip))
-                        })
+                    || url_host.parse::<std::net::IpAddr>().map_or(false, |ip| {
+                        "169.254.0.0/16"
+                            .parse::<ipnetwork::IpNetwork>()
+                            .map_or(false, |net| net.contains(ip))
+                    })
                 {
                     return Err(SessionError::ValidationError(
                         "access to link-local / cloud metadata (169.254.0.0/16) is blocked".into(),
@@ -900,9 +912,12 @@ impl SessionManager {
                 }
             };
 
-            let (tunnels, final_addr) = tunnel::start_chain(&jump_hops, &target_host, target_port, known_hosts_path)
-                .await
-                .map_err(|e| SessionError::ValidationError(format!("SSH tunnel failed: {}", e)))?;
+            let (tunnels, final_addr) =
+                tunnel::start_chain(&jump_hops, &target_host, target_port, known_hosts_path)
+                    .await
+                    .map_err(|e| {
+                        SessionError::ValidationError(format!("SSH tunnel failed: {}", e))
+                    })?;
 
             if !is_web {
                 // Override connection params to point at the final tunnel endpoint

@@ -317,9 +317,7 @@ impl BrowserManager {
                     }
                 }
             }
-            rules.push_str(
-                ", EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE 169.254.169.254",
-            );
+            rules.push_str(", EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE 169.254.169.254");
             Some(format!("--host-rules={}", rules))
         };
         if let Some(ref arg) = host_rules_arg {
@@ -766,7 +764,10 @@ mod tests {
 
         // VDI sessions are ephemeral — Login Data must NOT be created
         let db_path = dir.join("Default/Login Data");
-        assert!(!db_path.exists(), "Login Data SQLite should not be created for VDI sessions");
+        assert!(
+            !db_path.exists(),
+            "Login Data SQLite should not be created for VDI sessions"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

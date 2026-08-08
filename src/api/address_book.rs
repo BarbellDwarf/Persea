@@ -1184,7 +1184,9 @@ pub async fn ab_connect_entry(
                         let key_hex = resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
                         if !key_hex.is_empty() {
                             if let Ok(key) = crate::crypto::EncryptionKey::from_hex(&key_hex) {
-                                if let Ok(pw) = crate::crypto::decrypt_value(&key, &preset_password_enc) {
+                                if let Ok(pw) =
+                                    crate::crypto::decrypt_value(&key, &preset_password_enc)
+                                {
                                     if ab_entry.username.as_deref().map_or(true, |u| u.is_empty())
                                         && !preset_username.is_empty()
                                     {

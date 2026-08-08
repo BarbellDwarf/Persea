@@ -371,14 +371,9 @@ pub async fn serve_recording(
 
     // Prefer the encrypted file when it exists.
     if enc_path.exists() {
-        let enc_key = manager
-            .config()
-            .storage_encryption_key()
-            .ok_or_else(|| {
-                AppError::Internal(
-                    "recording is encrypted but no encryption key is configured".into(),
-                )
-            })?;
+        let enc_key = manager.config().storage_encryption_key().ok_or_else(|| {
+            AppError::Internal("recording is encrypted but no encryption key is configured".into())
+        })?;
         let plaintext = tokio::task::spawn_blocking(move || {
             crate::recording::decrypt_recording(&path, &enc_key)
         })
@@ -425,7 +420,8 @@ pub async fn delete_recording(
     identity: Option<Extension<AuthIdentity>>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let id = identity.as_ref()
+    let id = identity
+        .as_ref()
         .map(|Extension(id)| id)
         .ok_or(AppError::Forbidden("authentication required".into()))?;
     if !id.has_role("admin") {

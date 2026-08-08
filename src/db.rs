@@ -878,7 +878,10 @@ pub fn upsert_login_credentials(
 }
 
 /// Fetch a user's stored login credentials: (username, password_enc, expires_at).
-pub fn get_login_credentials(db: &Db, user_id: i64) -> rusqlite::Result<Option<(String, String, String)>> {
+pub fn get_login_credentials(
+    db: &Db,
+    user_id: i64,
+) -> rusqlite::Result<Option<(String, String, String)>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
         "SELECT username, password_enc, expires_at FROM login_credentials WHERE user_id = ?1",
@@ -1836,7 +1839,11 @@ fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<
         field.to_string()
     };
 
-    if safe_field.contains(',') || safe_field.contains('"') || safe_field.contains('\n') || safe_field.contains('\r') {
+    if safe_field.contains(',')
+        || safe_field.contains('"')
+        || safe_field.contains('\n')
+        || safe_field.contains('\r')
+    {
         write!(w, "\"")?;
         for ch in safe_field.chars() {
             if ch == '"' {
@@ -1911,22 +1918,16 @@ pub fn top_users(db: &Db, limit: u32) -> rusqlite::Result<Vec<serde_json::Value>
 /// Summary statistics.
 pub fn session_summary(db: &Db) -> rusqlite::Result<serde_json::Value> {
     let conn = db.lock().unwrap();
-    let total_sessions: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM session_history",
-        [],
-        |row| row.get(0),
-    )?;
+    let total_sessions: i64 =
+        conn.query_row("SELECT COUNT(*) FROM session_history", [], |row| row.get(0))?;
     let active_sessions: i64 = conn.query_row(
         "SELECT COUNT(*) FROM session_history WHERE status = 'active'",
         [],
         |row| row.get(0),
     )?;
-    let total_users: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM users",
-        [],
-        |row| row.get(0),
-    )
-    .unwrap_or(0);
+    let total_users: i64 = conn
+        .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+        .unwrap_or(0);
     let uptime_secs = crate::metrics::uptime_seconds();
     Ok(serde_json::json!({
         "total_sessions": total_sessions,

@@ -604,11 +604,7 @@ fn r01_xsw_groups_attribute_not_overwritten() {
 
 use md5::Md5;
 
-fn verify_radius_response(
-    response: &[u8],
-    request_auth: &[u8; 16],
-    shared_secret: &[u8],
-) -> bool {
+fn verify_radius_response(response: &[u8], request_auth: &[u8; 16], shared_secret: &[u8]) -> bool {
     if response.len() < 20 {
         return false;
     }
@@ -621,12 +617,7 @@ fn verify_radius_response(
     computed.as_slice().ct_eq(&response[4..20]).into()
 }
 
-fn build_test_response(
-    code: u8,
-    id: u8,
-    request_auth: &[u8; 16],
-    shared_secret: &[u8],
-) -> Vec<u8> {
+fn build_test_response(code: u8, id: u8, request_auth: &[u8; 16], shared_secret: &[u8]) -> Vec<u8> {
     let length: u16 = 20; // 4-byte header + 16-byte Response Authenticator
     let mut hasher = Md5::new();
     hasher.update([code, id]);

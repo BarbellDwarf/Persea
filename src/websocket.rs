@@ -173,9 +173,7 @@ async fn handle_ws(
         let identity_str = identity_name.as_deref().unwrap_or("unknown");
         tracing::info!(session_id = %session_id, client_ip = %client_addr, identity = %identity_str, "Session owner connected");
         (stream, cancel)
-    } else if let Some((stream, cancel)) =
-        manager.reconnect_session(session_id).await
-    {
+    } else if let Some((stream, cancel)) = manager.reconnect_session(session_id).await {
         let identity_str = identity_name.as_deref().unwrap_or("unknown");
         tracing::info!(session_id = %session_id, client_ip = %client_addr, identity = %identity_str, "Session owner reconnected");
         (stream, cancel)
@@ -421,9 +419,7 @@ async fn handle_ws(
         let enc_key = manager.config().storage_encryption_key();
         if crate::recording::should_encrypt_at_rest(&rec_config, enc_key.as_deref()) {
             if let Some(ref key_hex) = enc_key {
-                if let Err(e) =
-                    crate::recording::encrypt_recording_file(&recording_path, key_hex)
-                {
+                if let Err(e) = crate::recording::encrypt_recording_file(&recording_path, key_hex) {
                     tracing::error!(
                         session_id = %session_id, error = %e,
                         "Failed to encrypt recording at rest"

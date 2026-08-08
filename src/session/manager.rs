@@ -350,10 +350,7 @@ impl SessionManager {
 
     /// Attempt to reconnect an owner to a disconnected session. Returns the
     /// guacd stream and cancellation token if the session has reconnect data.
-    pub async fn reconnect_session(
-        &self,
-        id: Uuid,
-    ) -> Option<(GuacdStream, CancellationToken)> {
+    pub async fn reconnect_session(&self, id: Uuid) -> Option<(GuacdStream, CancellationToken)> {
         let sessions = self.sessions.read().await;
         let session_arc = sessions.get(&id)?;
         let mut session = session_arc.lock().await;

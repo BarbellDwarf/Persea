@@ -172,7 +172,10 @@ impl IntoResponse for AppError {
             }
             AppError::Internal(msg) => {
                 tracing::error!(internal_error = %msg, "internal error (sanitized in response)");
-                (StatusCode::INTERNAL_SERVER_ERROR, "An internal error occurred".to_string())
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "An internal error occurred".to_string(),
+                )
             }
         };
 

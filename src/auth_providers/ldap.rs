@@ -142,7 +142,10 @@ impl LdapProvider {
         conn: &mut LdapConn,
         username: &str,
     ) -> Result<(String, SearchEntry), String> {
-        let filter = self.config.user_search_filter.replace("{}", &ldap_escape(username));
+        let filter = self
+            .config
+            .user_search_filter
+            .replace("{}", &ldap_escape(username));
         debug!(
             "LDAP user search: base={}, filter={}",
             self.config.user_search_base, filter
@@ -329,7 +332,10 @@ impl AuthProvider for LdapProvider {
         let mut conn = self.connect().ok()?;
         self.bind_service_account(&mut conn).ok()?;
 
-        let filter = &self.config.user_search_filter.replace("{}", &ldap_escape(subject));
+        let filter = &self
+            .config
+            .user_search_filter
+            .replace("{}", &ldap_escape(subject));
         let search_result = conn
             .search(
                 subject,

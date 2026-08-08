@@ -97,11 +97,7 @@ pub fn list_recordings_by_age(dir: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
 /// Read the sidecar `.meta` JSON for a `.guac` or `.guac.enc` file.
 pub fn read_meta(guac_path: &Path) -> Option<RecordingMeta> {
     // For `.guac.enc`, the stem is `foo.guac`; the meta lives alongside `foo.meta`.
-    let meta_path = if guac_path
-        .extension()
-        .and_then(|e| e.to_str())
-        == Some("enc")
-    {
+    let meta_path = if guac_path.extension().and_then(|e| e.to_str()) == Some("enc") {
         let stem = guac_path.file_stem().and_then(|s| s.to_str())?;
         // stem is "<session>.guac" → strip the ".guac" suffix to get the base name
         let base = stem.strip_suffix(".guac").unwrap_or(stem);

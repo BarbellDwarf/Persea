@@ -180,11 +180,10 @@ pub async fn login_submit(
         let db_lock = database.clone();
         let username = form.username.clone();
         let ip = client_ip.to_string();
-        if let Ok(true) = tokio::task::spawn_blocking(move || {
-            db::is_locked_out(&db_lock, &username, &ip)
-        })
-        .await
-        .unwrap_or(Ok(false))
+        if let Ok(true) =
+            tokio::task::spawn_blocking(move || db::is_locked_out(&db_lock, &username, &ip))
+                .await
+                .unwrap_or(Ok(false))
         {
             return Redirect::to("/?error=account_locked").into_response();
         }
@@ -554,11 +553,10 @@ pub async fn mfa_submit(
         let db_lock = database.clone();
         let username = pending.user_email.clone();
         let ip = client_ip.to_string();
-        if let Ok(true) = tokio::task::spawn_blocking(move || {
-            db::is_locked_out(&db_lock, &username, &ip)
-        })
-        .await
-        .unwrap_or(Ok(false))
+        if let Ok(true) =
+            tokio::task::spawn_blocking(move || db::is_locked_out(&db_lock, &username, &ip))
+                .await
+                .unwrap_or(Ok(false))
         {
             return Redirect::to("/auth/mfa?error=account_locked").into_response();
         }
