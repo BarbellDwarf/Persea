@@ -1961,10 +1961,18 @@ async fn run_server(
         }
     });
     let tls_enabled = TlsEnabled(server_tls.is_some());
+    // Unknown routes fall through to the static dir; missing files hand off
+    // to `not_found_handler`, which renders the styled error page. The
+    // fallback must be registered BEFORE the shared layers below so they
+    // also wrap it (Router::layer only covers already-registered routes).
+    let static_serve = ServeDir::new(&static_path)
+        .not_found_service(Router::new().fallback(not_found_handler).with_state(()));
     app = app
+        .fallback_service(static_serve)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(metrics::MetricsLayer)
         .layer(DefaultBodyLimit::max(64 * 1024)) // 64 KB max request body
+        .layer(middleware::from_fn(error_pages))
         .layer(middleware::from_fn(security_headers))
         .layer(Extension(tls_enabled))
         .layer(Extension(oidc_enabled))
@@ -1974,8 +1982,7 @@ async fn run_server(
         .layer(Extension(theme_data))
         .layer(Extension(trusted_proxies))
         .layer(Extension(branded_pages))
-        .layer(Extension(db_pool))
-        .fallback_service(ServeDir::new(&static_path));
+        .layer(Extension(db_pool));
 
     let scheme = if server_tls.is_some() {
         "https"
@@ -2152,6 +2159,45 @@ fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {
     Some(tokio_rustls::TlsConnector::from(Arc::new(tls_config)))
 }
 
+/// Error-page negotiation middleware: captures whether the request wants a
+/// styled HTML error page (browser) vs JSON (API client), plus the CSP
+/// nonce, so `AppError` responses and the 404 fallback can render the error
+/// template. Runs inside `security_headers`, which inserts the nonce into
+/// request extensions first.
+async fn error_pages(request: Request, next: middleware::Next) -> Response {
+    // /api/* always gets JSON errors; other paths get the styled page when
+    // the client accepts text/html (browsers).
+    let wants_html = !request.uri().path().starts_with("/api/")
+        && request
+            .headers()
+            .get(axum::http::header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.contains("text/html"))
+            .unwrap_or(false);
+    let csp_nonce = request
+        .extensions()
+        .get::<CspNonce>()
+        .map(|n| n.0.clone())
+        .unwrap_or_default();
+    crate::error::with_error_context(
+        crate::error::ErrorContext {
+            wants_html,
+            csp_nonce,
+        },
+        next.run(request),
+    )
+    .await
+}
+
+/// Fallback for unknown routes — renders the styled error page for browser
+/// requests, JSON for API paths.
+async fn not_found_handler() -> Response {
+    crate::error::AppError::error_response(
+        axum::http::StatusCode::NOT_FOUND,
+        "The page you requested could not be found",
+    )
+}
+
 /// Serve a branded HTML page from the pre-processed in-memory map.
 async fn serve_branded_page(
     Extension(pages): Extension<Arc<std::collections::HashMap<String, String>>>,
@@ -2295,5 +2341,118 @@ mod tests {
             saw_429,
             "no requests were throttled — rate-limit not applied"
         );
+    }
+
+    // ── Error-page negotiation (R18) ───────────────────────────────────
+
+    #[tokio::test]
+    async fn error_page_renders_html_for_browsers_and_json_for_api() {
+        use axum::{body::Body, http::Request, routing::get, Router};
+        use tower::ServiceExt;
+
+        async fn failing() -> Result<(), crate::error::AppError> {
+            Err(crate::error::AppError::NotFound("missing resource".into()))
+        }
+
+        let app = Router::new()
+            .route("/page.html", get(failing))
+            .route("/api/data", get(failing))
+            .layer(middleware::from_fn(error_pages));
+
+        // Browser request → styled HTML error page with the right status.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/page.html")
+                    .header("accept", "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("Not Found"), "expected styled page, got: {html}");
+        assert!(html.contains("missing resource"), "got: {html}");
+        assert!(html.contains("app.css"), "page must load the design system");
+
+        // API path → JSON even when the client accepts text/html.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/data")
+                    .header("accept", "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers()["content-type"],
+            "application/json",
+            "API errors must stay JSON"
+        );
+    }
+
+    #[tokio::test]
+    async fn not_found_fallback_renders_error_page() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "persea-notfound-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let app = Router::new()
+            .fallback_service(
+                ServeDir::new(&dir)
+                    .not_found_service(Router::new().fallback(not_found_handler).with_state(())),
+            )
+            .layer(middleware::from_fn(error_pages));
+
+        // Unknown page → styled 404.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/missing.html")
+                    .header("accept", "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(html.contains("404"), "expected styled 404 page, got: {html}");
+
+        // Unknown API path → JSON.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/nope")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.headers()["content-type"], "application/json");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

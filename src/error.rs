@@ -2,6 +2,36 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
+/// Per-request context for error rendering, captured by the error middleware
+/// (see `error_pages` in main.rs) so `AppError::into_response` can pick
+/// between the styled HTML error page and JSON without request access.
+#[derive(Clone, Debug)]
+pub struct ErrorContext {
+    /// Whether the client wants an HTML error page (browser) vs JSON (API).
+    pub wants_html: bool,
+    /// CSP nonce for the rendered page (empty when unavailable).
+    pub csp_nonce: String,
+}
+
+tokio::task_local! {
+    static ERROR_CONTEXT: ErrorContext;
+}
+
+/// Run `future` inside the given error context. Called by the error
+/// middleware; the context stays visible to every `IntoResponse` that runs
+/// inside the request, even across awaits.
+pub async fn with_error_context(
+    ctx: ErrorContext,
+    future: impl std::future::Future<Output = Response>,
+) -> Response {
+    ERROR_CONTEXT.scope(ctx, future).await
+}
+
+/// The error context for the current request, when the error middleware ran.
+fn current_error_context() -> Option<ErrorContext> {
+    ERROR_CONTEXT.try_with(|c| c.clone()).ok()
+}
+
 #[derive(Debug, thiserror::Error)]
 #[must_use]
 pub enum AppError {
@@ -56,6 +86,13 @@ pub enum AppError {
 
 impl AppError {
     fn status_for_response(status: StatusCode, message: &str) -> Response {
+        // Browser requests (Accept: text/html) get the styled error page;
+        // API and unknown clients keep the JSON error body.
+        if let Some(ctx) = current_error_context() {
+            if ctx.wants_html {
+                return crate::templates::render_error_page(status, message, &ctx.csp_nonce);
+            }
+        }
         let error_code = match status {
             StatusCode::NOT_FOUND => "NOT_FOUND",
             StatusCode::BAD_REQUEST => "VALIDATION_ERROR",

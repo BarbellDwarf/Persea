@@ -111,6 +111,11 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
         include_str!("../templates/pages/docs.html"),
     )
     .expect("Failed to register pages/docs.html");
+    env.add_template(
+        "pages/error.html",
+        include_str!("../templates/pages/error.html"),
+    )
+    .expect("Failed to register pages/error.html");
 
     Arc::new(env)
 });
@@ -422,6 +427,37 @@ impl IntoResponse for DocsTemplate {
     fn into_response(self) -> Response {
         render_template("pages/docs.html", &self)
     }
+}
+
+/// Styled error page template context.
+#[derive(Serialize)]
+pub struct ErrorPageTemplate {
+    pub status_code: u16,
+    pub title: String,
+    pub message: String,
+    pub csp_nonce: String,
+}
+
+impl IntoResponse for ErrorPageTemplate {
+    fn into_response(self) -> Response {
+        let status = StatusCode::from_u16(self.status_code)
+            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let mut response = render_template("pages/error.html", &self);
+        *response.status_mut() = status;
+        response
+    }
+}
+
+/// Render the styled error page for `status` with the given message.
+/// The page carries the HTTP status so it works as a fallback service too.
+pub fn render_error_page(status: StatusCode, message: &str, csp_nonce: &str) -> Response {
+    ErrorPageTemplate {
+        status_code: status.as_u16(),
+        title: status.canonical_reason().unwrap_or("Error").to_string(),
+        message: message.to_string(),
+        csp_nonce: csp_nonce.to_string(),
+    }
+    .into_response()
 }
 
 // Re-export old name for backward compatibility
