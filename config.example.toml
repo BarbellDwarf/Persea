@@ -12,10 +12,12 @@
 # Default: "127.0.0.1:8089" (loopback only — safe for development).
 # For production behind a reverse proxy, use "127.0.0.1:8089".
 # To listen on all interfaces: "0.0.0.0:443" (with TLS) or "0.0.0.0:8089".
+# Env: PERSEA_LISTEN_ADDR
 listen_addr = "127.0.0.1:8089"
 
 # Address of the guacd daemon (Guacamole protocol server).
 # Default: "127.0.0.1:4822"
+# Env: PERSEA_GUACD_ADDR
 guacd_addr = "127.0.0.1:4822"
 
 # Directory for session recording files (.guac format).
@@ -25,80 +27,97 @@ guacd_addr = "127.0.0.1:4822"
 
 # Directory containing static web files (HTML, JS, CSS).
 # Default: "./static"
+# Env: PERSEA_STATIC_PATH
 static_path = "./static"
 
 # Path to the SQLite database (admins, OIDC users, auth sessions).
 # Default: "./persea.db"
+# Env: PERSEA_DB_PATH
 db_path = "./persea.db"
 
 # Title shown in the browser tab and page header.
 # Default: "persea"
+# Env: PERSEA_SITE_TITLE
 site_title = "Persea"
 
 # ─── Session Timeouts ─────────────────────────────────────────────────────────
 
 # Seconds before a pending session expires (no WebSocket connection yet).
 # Default: 60
+# Env: PERSEA_SESSION_PENDING_TIMEOUT_SECS
 session_pending_timeout_secs = 60
 
 # Maximum duration for active sessions in seconds.
 # Sessions running longer than this are automatically terminated.
 # Default: 28800 (8 hours). Set to 0 to disable.
+# Env: PERSEA_SESSION_MAX_DURATION_SECS
 session_max_duration_secs = 28800
 
 # OIDC auth session TTL in seconds. After this period, users must
 # re-authenticate via their identity provider.
 # Default: 86400 (24 hours)
+# Env: PERSEA_AUTH_SESSION_TTL_SECS
 # auth_session_ttl_secs = 86400
 
 # ─── Session Limits ──────────────────────────────────────────────────────────
 
 # Maximum concurrent sessions (all types). Default: 500. Set to 0 for unlimited.
+# Env: PERSEA_MAX_SESSIONS
 # max_sessions = 500
 
 # Maximum concurrent sessions per user. Default: 50. Set to 0 for unlimited.
+# Env: PERSEA_MAX_SESSIONS_PER_USER
 # max_sessions_per_user = 50
 
 # Seconds to keep completed sessions in memory before cleanup.
 # Session history in SQLite is not affected. Default: 300 (5 minutes).
+# Env: PERSEA_SESSION_CLEANUP_DELAY_SECS
 # session_cleanup_delay_secs = 300
 
 # How many days to retain session history in the database. Default: 90.
 # Set to 0 to keep history forever.
+# Env: PERSEA_SESSION_HISTORY_RETENTION_DAYS
 # session_history_retention_days = 90
 
 # Enable API rate limiting. Default: false.
 # When behind a reverse proxy (HAProxy, nginx) or access gateway (KnockNoc),
 # rate limiting is typically handled upstream and not needed here.
+# Env: PERSEA_RATE_LIMIT
 # rate_limit = false
 
 # ─── Browser Sessions (Xvnc + Chromium) ──────────────────────────────────────
 
 # Path to the Xvnc binary (from tigervnc-standalone-server).
 # Default: "Xvnc"
+# Env: PERSEA_XVNC_PATH
 xvnc_path = "Xvnc"
 
 # Path to the Chromium binary.
 # Default: "chromium"
+# Env: PERSEA_CHROMIUM_PATH
 chromium_path = "chromium"
 
 # X display number range for Xvnc instances.
 # Each web browser session gets its own display (:100 = port 6100, etc.).
 # Default: 100–199 (up to 100 concurrent web sessions).
+# Env: PERSEA_DISPLAY_RANGE_START / PERSEA_DISPLAY_RANGE_END
 display_range_start = 100
 display_range_end = 199
 
 # Chrome DevTools Protocol port range for headless Chromium instances.
 # Default: 9200–9299.
+# Env: PERSEA_CDP_PORT_RANGE_START / PERSEA_CDP_PORT_RANGE_END
 # cdp_port_range_start = 9200
 # cdp_port_range_end = 9299
 
 # Timeout (seconds) for login scripts executed on SSH sessions.
 # Default: 120
+# Env: PERSEA_LOGIN_SCRIPT_TIMEOUT_SECS
 # login_script_timeout_secs = 120
 
 # Directory containing login scripts for SSH sessions.
 # Default: "/opt/persea/scripts"
+# Env: PERSEA_LOGIN_SCRIPTS_DIR
 # login_scripts_dir = "/opt/persea/scripts"
 
 # ─── Connection Allowlists (CIDR) ────────────────────────────────────────────
@@ -108,22 +127,27 @@ display_range_end = 199
 # Default for all three: ["127.0.0.0/8", "::1/128"] (localhost only).
 
 # SSH session targets
+# Env: PERSEA_SSH_ALLOWED_NETWORKS (use double underscore for nested values)
 ssh_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "192.168.0.0/16"]
 
 # When true, SSH sessions start under a tmux wrapper
 # (`tmux attach-session -d || tmux new-session`) instead of a plain shell.
 # On reconnect, `-d` kicks any stale client a dead connection left attached,
 # so the user never lands on a frozen tmux screen. Off by default.
+# Env: PERSEA_SSH_TMUX_DETACH
 # ssh_tmux_detach = false
 
 # RDP session targets
+# Env: PERSEA_RDP_ALLOWED_NETWORKS
 rdp_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "192.168.0.0/16"]
 
 # VNC session targets
+# Env: PERSEA_VNC_ALLOWED_NETWORKS
 # vnc_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "192.168.0.0/16"]
 
 # Web browser session URL hosts
 # Use ["0.0.0.0/0", "::/0"] to allow any host.
+# Env: PERSEA_WEB_ALLOWED_NETWORKS
 web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 
 # ─── Trusted Proxies ────────────────────────────────────────────────────────
@@ -132,12 +156,14 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # When a connection comes from a trusted proxy, the first IP in
 # X-Forwarded-For is used as the client IP in audit logs and rate limiting.
 # Default: [] (empty — always use socket address)
+# Env: PERSEA_TRUSTED_PROXIES
 
 # trusted_proxies = ["127.0.0.0/8", "::1/128"]
 
 # Default scope for new per-user credential variables when multiple Vault
 # backends are configured: "local" (default — stays on this instance) or
 # "shared" (propagates fleet-wide). Ignored with a single Vault.
+# Env: PERSEA_USER_CREDENTIALS_DEFAULT_SCOPE
 # user_credentials_default_scope = "local"
 
 # ─── TLS ──────────────────────────────────────────────────────────────────────

@@ -1305,6 +1305,47 @@ fn default_ssh_scrollback() -> u32 {
     10000
 }
 
+/// Generate default configuration as TOML string for the config crate's layered builder.
+fn default_toml() -> String {
+    let mut s = String::new();
+    s.push_str(&format!("listen_addr = \"{}\"\n", default_listen_addr()));
+    s.push_str(&format!("guacd_addr = \"{}\"\n", default_guacd_addr()));
+    s.push_str(&format!("static_path = \"{}\"\n", default_static_path().to_string_lossy()));
+    s.push_str(&format!("db_path = \"{}\"\n", default_db_path().to_string_lossy()));
+    s.push_str(&format!("session_pending_timeout_secs = {}\n", default_session_timeout_secs()));
+    s.push_str(&format!("session_max_duration_secs = {}\n", default_session_max_duration_secs()));
+    s.push_str(&format!("auth_session_ttl_secs = {}\n", default_auth_session_ttl_secs()));
+    s.push_str(&format!("session_history_retention_days = {}\n", default_session_history_retention_days()));
+    s.push_str(&format!("xvnc_path = \"{}\"\n", default_xvnc_path()));
+    s.push_str(&format!("chromium_path = \"{}\"\n", default_chromium_path()));
+    s.push_str(&format!("display_range_start = {}\n", default_display_range_start()));
+    s.push_str(&format!("display_range_end = {}\n", default_display_range_end()));
+    s.push_str(&format!("cdp_port_range_start = {}\n", default_cdp_port_range_start()));
+    s.push_str(&format!("cdp_port_range_end = {}\n", default_cdp_port_range_end()));
+    s.push_str(&format!("login_script_timeout_secs = {}\n", default_login_script_timeout_secs()));
+    s.push_str(&format!("login_scripts_dir = \"{}\"\n", default_login_scripts_dir()));
+    s.push_str(&format!("site_title = \"{}\"\n", default_site_title()));
+    s.push_str(&format!("ssh_scrollback = {}\n", default_ssh_scrollback()));
+    s.push_str(&format!("max_sessions = {}\n", default_max_sessions()));
+    s.push_str(&format!("max_sessions_per_user = {}\n", default_max_sessions_per_user()));
+    s.push_str(&format!("max_viewers = {}\n", default_max_viewers()));
+    s.push_str(&format!("session_cleanup_delay_secs = {}\n", default_session_cleanup_delay_secs()));
+    s.push_str(&format!("shutdown_timeout_secs = {}\n", default_shutdown_timeout_secs()));
+    s.push_str(&format!("rate_limit = {}\n", false));
+    s.push_str(&format!("user_credentials_default_scope = \"{}\"\n", default_user_credentials_scope()));
+    // Vec fields
+    s.push_str("ssh_allowed_networks = ");
+    s.push_str(&format!("{:?}\n", default_localhost_networks()));
+    s.push_str("rdp_allowed_networks = ");
+    s.push_str(&format!("{:?}\n", default_localhost_networks()));
+    s.push_str("vnc_allowed_networks = ");
+    s.push_str(&format!("{:?}\n", default_localhost_networks()));
+    s.push_str("web_allowed_networks = ");
+    s.push_str(&format!("{:?}\n", default_loopback_networks()));
+    s.push_str("trusted_proxies = []\n");
+    s
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -1376,11 +1417,6 @@ fn sanitize_cidr_list(proto: &str, list: &mut Vec<String>) {
 /// The toml crate's Display impl already includes a line:column snippet with a
 /// caret pointing at the broken token; we prepend the file path so the message
 /// is unambiguous when multiple paths are searched.
-fn load_from_file(path: &str) -> Result<Config, String> {
-    let contents = std::fs::read_to_string(path).map_err(|e| format!("  {}: {}", path, e))?;
-    toml::from_str::<Config>(&contents).map_err(|e| format!("{}", e))
-}
-
 impl Config {
     pub fn load(path: Option<&str>) -> Self {
         // Note: tracing is initialised later (in run_server), so config-load
@@ -1396,22 +1432,47 @@ impl Config {
             (None, false)
         };
 
-        let mut config = match path.as_deref() {
-            Some(p) => match load_from_file(p) {
+        // Layer 1: defaults from TOML
+        let mut builder = config::Config::builder()
+            .add_source(config::File::from_str(&default_toml(), config::FileFormat::Toml));
+
+        // Layer 2: config file (if exists)
+        if let Some(ref p) = path {
+            if std::path::Path::new(p).exists() {
+                builder = builder.add_source(config::File::new(p, config::FileFormat::Toml));
+            }
+        }
+
+        // Layer 3: environment variables (PERSEA_ prefix, nested via __)
+        builder = builder.add_source(
+            config::Environment::with_prefix("PERSEA")
+                .separator("__")
+                .prefix_separator("_"),
+        );
+
+        let mut config = match builder.build() {
+            Ok(raw) => match raw.try_deserialize::<Config>() {
                 Ok(c) => {
-                    eprintln!("[config] Loaded config from {}", p);
+                    if let Some(ref p) = path {
+                        eprintln!("[config] Loaded config from {}", p);
+                    } else {
+                        eprintln!("[config] No config file found; using built-in defaults + env vars");
+                    }
                     c
                 }
-                Err(msg) => {
-                    eprintln!("[config] ERROR: failed to load {}:\n{}", p, msg);
+                Err(e) => {
+                    eprintln!("[config] ERROR: failed to deserialize config:\n{}", e);
                     if required {
                         std::process::exit(1);
                     }
                     Self::default()
                 }
             },
-            None => {
-                eprintln!("[config] No config file found; using built-in defaults");
+            Err(e) => {
+                eprintln!("[config] ERROR: failed to build config:\n{}", e);
+                if required {
+                    std::process::exit(1);
+                }
                 Self::default()
             }
         };

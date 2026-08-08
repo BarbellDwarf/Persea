@@ -30,6 +30,7 @@ bytes = "1"
 
 # Config
 toml = "1"
+config = "0.14"
 
 # Crypto/random
 rand = "0.10"
