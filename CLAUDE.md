@@ -245,3 +245,17 @@ username = "administrator@vsphere.local"
 - `cargo test` — unit tests + integration tests (144+ tests)
 - `tests/auth_integration.rs` — auth flow integration tests
 - `tests/test_browser_session.sh` — browser session smoke test
+
+## Subagent Work Contract
+
+When dispatching implementation work to subagents, follow the contract in
+`docs/agents/subagent-contract.md`:
+
+- **Edits first, single verifier** — subagents edit + commit without
+  building; the dispatcher runs one verification pass (`cargo check` +
+  `cargo test` + `cargo fmt --check`) after all agents land.
+- **Disjoint files only** — no two agents touch the same file.
+- **Never `git reset`/`stash`/`checkout .`** in a parallel batch — it
+  destroys other agents' work.
+- **Never leave uncommitted work** — commit or `WIP:` before stopping.
+- **CI must be green** (`gh run list`) before moving on.
