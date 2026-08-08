@@ -2984,12 +2984,14 @@ mod tests {
         end_session_history(&db, "s1", "completed", 7200, None).unwrap();
         insert_session_history(&db, "s2", "ssh", "h", None, "", "bob", None, None, None).unwrap();
         // s2 still active
+        upsert_user(&db, "alice@co.com", "alice", None, "admin", &[]).unwrap();
+        upsert_user(&db, "bob@co.com", "bob", None, "viewer", &[]).unwrap();
 
         let summary = session_summary(&db).unwrap();
         assert_eq!(summary["total_sessions"], 2);
-        assert_eq!(summary["unique_users"], 2);
-        assert_eq!(summary["active_now"], 1);
-        assert_eq!(summary["total_hours"], 7200.0 / 3600.0);
+        assert_eq!(summary["total_users"], 2);
+        assert_eq!(summary["active_sessions"], 1);
+        assert_eq!(summary["uptime_secs"], crate::metrics::uptime_seconds());
     }
 
     #[test]
