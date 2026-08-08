@@ -28,5 +28,13 @@ export default defineConfig({
       name: 'Mobile Chrome',
       use: { ...devices['Pixel 7'] },
     },
+    ...(process.env.HTTPS_BASE_URL ? [{
+      name: 'Desktop Chrome (HTTPS)',
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: process.env.HTTPS_BASE_URL,
+        ignoreHTTPSErrors: true,
+      },
+    }] : []),
   ],
 });

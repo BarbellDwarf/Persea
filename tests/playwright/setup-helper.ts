@@ -1,12 +1,14 @@
 import { chromium } from 'playwright';
 
+const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
+
 async function main() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
   const page = await context.newPage();
 
   console.log('Navigating to setup page...');
-  await page.goto('http://localhost:8089/setup', { waitUntil: 'networkidle', timeout: 15000 });
+  await page.goto(`${BASE_URL}/setup`, { waitUntil: 'networkidle', timeout: 15000 });
   console.log('Setup page loaded. URL:', page.url());
 
   console.log('Filling in setup form...');
@@ -25,8 +27,11 @@ async function main() {
   await page.waitForURL(/(\?setup=complete|\/)/, { timeout: 10000 });
   console.log('Setup complete. URL:', page.url());
 
+  // Clear session cookie from setup so we exercise the real login form
+  await context.clearCookies();
+
   console.log('Logging in...');
-  await page.goto('http://localhost:8089/', { waitUntil: 'networkidle', timeout: 15000 });
+  await page.goto(`${BASE_URL}/`, { waitUntil: 'networkidle', timeout: 15000 });
 
   const currentUrl = page.url();
   console.log('Current URL after setup:', currentUrl);

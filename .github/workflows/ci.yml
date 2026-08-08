@@ -80,3 +80,84 @@ jobs:
           done
           kill $SERVER_PID 2>/dev/null
           [ "$READY" = "1" ] || { echo "server failed to become healthy" >&2; exit 1; }
+
+  # Playwright auth E2E — tests password login over HTTP and HTTPS
+  playwright-auth:
+    runs-on: ubuntu-latest
+    needs: [test, check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          rustflags: ""
+      - name: Build persea (release)
+        run: cargo build --release
+      - name: Generate self-signed cert
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj "/CN=localhost" \
+            -keyout /tmp/persea-test-key.pem \
+            -out /tmp/persea-test-cert.pem
+      - name: Install Playwright dependencies
+        run: npm ci
+        working-directory: tests/playwright
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+        working-directory: tests/playwright
+      - name: Start persea (HTTP)
+        run: |
+          ./target/release/persea --config /dev/null &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8089/api/health >/dev/null 2>&1; then
+              echo "server healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
+      - name: Seed admin user
+        run: npx tsx setup-helper.ts
+        working-directory: tests/playwright
+        env:
+          BASE_URL: http://localhost:8089
+      - name: Run login spec (HTTP)
+        run: npx playwright test specs/auth/login.spec.ts --project="Desktop Chrome"
+        working-directory: tests/playwright
+        env:
+          BASE_URL: http://localhost:8089
+      - name: Stop HTTP server
+        run: kill "$SERVER_PID" 2>/dev/null || true
+      - name: Start persea (HTTPS)
+        run: |
+          cat > /tmp/persea-test-config.toml <<EOF
+          [tls]
+          cert_path = "/tmp/persea-test-cert.pem"
+          key_path = "/tmp/persea-test-key.pem"
+          EOF
+          ./target/release/persea --config /tmp/persea-test-config.toml &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sfk https://localhost:8443/api/health >/dev/null 2>&1; then
+              echo "server healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
+      - name: Seed admin user (HTTPS)
+        run: npx tsx setup-helper.ts
+        working-directory: tests/playwright
+        env:
+          BASE_URL: https://localhost:8443
+      - name: Run login spec (HTTPS)
+        run: npx playwright test specs/auth/login.spec.ts --project="Desktop Chrome (HTTPS)"
+        working-directory: tests/playwright
+        env:
+          HTTPS_BASE_URL: https://localhost:8443
+      - name: Stop HTTPS server
+        run: kill "$SERVER_PID" 2>/dev/null || true
