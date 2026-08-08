@@ -1326,6 +1326,7 @@ fn default_toml() -> String {
     s.push_str(&format!("login_scripts_dir = \"{}\"\n", default_login_scripts_dir()));
     s.push_str(&format!("site_title = \"{}\"\n", default_site_title()));
     s.push_str(&format!("ssh_scrollback = {}\n", default_ssh_scrollback()));
+    s.push_str(&format!("ssh_tmux_detach = {}\n", default_false()));
     s.push_str(&format!("max_sessions = {}\n", default_max_sessions()));
     s.push_str(&format!("max_sessions_per_user = {}\n", default_max_sessions_per_user()));
     s.push_str(&format!("max_viewers = {}\n", default_max_viewers()));
@@ -1343,6 +1344,23 @@ fn default_toml() -> String {
     s.push_str("web_allowed_networks = ");
     s.push_str(&format!("{:?}\n", default_loopback_networks()));
     s.push_str("trusted_proxies = []\n");
+    // [recording] — materialised so the merged config carries the previous
+    // defaults (max_recordings=1000, max_disk_percent=80, enabled=true).
+    s.push_str("[recording]\n");
+    s.push_str(&format!(
+        "path = \"{}\"\n",
+        default_recording_path().to_string_lossy()
+    ));
+    s.push_str(&format!("enabled = {}\n", default_true()));
+    s.push_str(&format!("max_disk_percent = {}\n", default_max_disk_percent()));
+    s.push_str(&format!("max_recordings = {}\n", default_max_recordings()));
+    s.push_str(&format!(
+        "rotation_interval_secs = {}\n",
+        default_rotation_interval_secs()
+    ));
+    // [storage] — backend defaults to "db" when the section is absent.
+    s.push_str("[storage]\n");
+    s.push_str(&format!("backend = \"{}\"\n", default_storage_backend()));
     s
 }
 
@@ -1785,6 +1803,116 @@ mod tests {
         assert_eq!(default_display_range_end(), 199);
         assert_eq!(default_cdp_port_range_start(), 9200);
         assert_eq!(default_cdp_port_range_end(), 9299);
+    }
+
+    #[test]
+    fn test_load_without_file_matches_previous_defaults() {
+        // R19 regression: default_toml() must emit every section/key the
+        // previous hand-rolled defaults covered, so the config crate's
+        // layered merge (defaults → file → env) reproduces them exactly.
+        // Loading with an empty path exercises the defaults layer alone.
+        let loaded = Config::load(Some(""));
+        let prev = Config::default();
+
+        // Every top-level field must match the previous defaults.
+        assert_eq!(loaded.listen_addr, prev.listen_addr);
+        assert_eq!(loaded.guacd_addr, prev.guacd_addr);
+        assert_eq!(loaded.recording_path, prev.recording_path);
+        assert_eq!(loaded.static_path, prev.static_path);
+        assert_eq!(loaded.db_path, prev.db_path);
+        assert_eq!(
+            loaded.session_pending_timeout_secs,
+            prev.session_pending_timeout_secs
+        );
+        assert_eq!(
+            loaded.session_max_duration_secs,
+            prev.session_max_duration_secs
+        );
+        assert_eq!(loaded.auth_session_ttl_secs, prev.auth_session_ttl_secs);
+        assert_eq!(
+            loaded.session_history_retention_days,
+            prev.session_history_retention_days
+        );
+        assert_eq!(loaded.xvnc_path, prev.xvnc_path);
+        assert_eq!(loaded.chromium_path, prev.chromium_path);
+        assert_eq!(loaded.display_range_start, prev.display_range_start);
+        assert_eq!(loaded.display_range_end, prev.display_range_end);
+        assert_eq!(loaded.cdp_port_range_start, prev.cdp_port_range_start);
+        assert_eq!(loaded.cdp_port_range_end, prev.cdp_port_range_end);
+        assert_eq!(
+            loaded.login_script_timeout_secs,
+            prev.login_script_timeout_secs
+        );
+        assert_eq!(loaded.login_scripts_dir, prev.login_scripts_dir);
+        assert_eq!(loaded.site_title, prev.site_title);
+        assert_eq!(loaded.ssh_scrollback, prev.ssh_scrollback);
+        assert_eq!(loaded.ssh_tmux_detach, prev.ssh_tmux_detach);
+        assert_eq!(loaded.ssh_allowed_networks, prev.ssh_allowed_networks);
+        assert_eq!(loaded.rdp_allowed_networks, prev.rdp_allowed_networks);
+        assert_eq!(loaded.vnc_allowed_networks, prev.vnc_allowed_networks);
+        assert_eq!(loaded.web_allowed_networks, prev.web_allowed_networks);
+        assert_eq!(loaded.max_sessions, prev.max_sessions);
+        assert_eq!(loaded.max_sessions_per_user, prev.max_sessions_per_user);
+        assert_eq!(loaded.max_viewers, prev.max_viewers);
+        assert_eq!(
+            loaded.session_cleanup_delay_secs,
+            prev.session_cleanup_delay_secs
+        );
+        assert_eq!(loaded.shutdown_timeout_secs, prev.shutdown_timeout_secs);
+        assert_eq!(loaded.rate_limit, prev.rate_limit);
+        assert_eq!(loaded.trusted_proxies, prev.trusted_proxies);
+        assert_eq!(
+            loaded.user_credentials_default_scope,
+            prev.user_credentials_default_scope
+        );
+        assert_eq!(loaded.db_url, prev.db_url);
+
+        // Sections whose previous default was None must stay absent —
+        // emitting them would flip is_some()-based behaviour (TLS UI flag,
+        // auth-chain path, OIDC client_secret validation, Vault/drive flags).
+        assert!(loaded.tls.is_none());
+        assert!(loaded.auth.is_none());
+        assert!(loaded.oidc.is_none());
+        assert!(loaded.vault.is_none());
+        assert!(loaded.vault_shared.is_none());
+        assert!(loaded.vault_local.is_none());
+        assert!(loaded.drive.is_none());
+        assert!(loaded.theme.is_none());
+        assert!(loaded.vdi.is_none());
+        assert!(loaded.vsphere.is_none());
+        assert!(loaded.rdp.is_none());
+
+        // [recording] must be materialised with the previous defaults.
+        let rec = loaded
+            .recording
+            .as_ref()
+            .expect("[recording] defaults must be emitted");
+        assert_eq!(rec.max_recordings, 1000);
+        assert_eq!(rec.max_disk_percent, 80);
+        assert!(rec.enabled);
+        assert_eq!(rec.path, PathBuf::from("./recordings"));
+        assert_eq!(rec.rotation_interval_secs, 300);
+        assert!(rec.typescript_path.is_none());
+        assert!(rec.typescript_name.is_none());
+        assert!(!rec.create_typescript_path);
+        assert!(rec.encrypt_at_rest.is_none());
+
+        // [storage] must be materialised with the previous defaults.
+        let st = loaded
+            .storage
+            .as_ref()
+            .expect("[storage] defaults must be emitted");
+        assert_eq!(st.backend, "db");
+        assert!(st.encryption_key.is_none());
+
+        // Accessor-level equivalence with the previous effective defaults.
+        assert_eq!(loaded.recording_config().max_recordings, 1000);
+        assert!(loaded.recording_enabled());
+        assert!(loaded.db_storage_backend());
+        assert_eq!(
+            loaded.effective_recording_path(),
+            std::path::Path::new("./recordings")
+        );
     }
 
     #[test]
