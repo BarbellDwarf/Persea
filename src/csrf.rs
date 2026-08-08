@@ -332,7 +332,10 @@ mod tests {
             "persea_session=test123; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=86400",
             secure
         );
-        assert!(!cookie.contains(";;"), "double semicolons in cookie: {cookie}");
+        assert!(
+            !cookie.contains(";;"),
+            "double semicolons in cookie: {cookie}"
+        );
         assert!(
             cookie.contains("HttpOnly; Secure; SameSite=Lax"),
             "expected clean format: {cookie}"
@@ -346,7 +349,10 @@ mod tests {
             "persea_session=test123; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=86400",
             secure
         );
-        assert!(!cookie.contains(";;"), "double semicolons in cookie: {cookie}");
+        assert!(
+            !cookie.contains(";;"),
+            "double semicolons in cookie: {cookie}"
+        );
         assert!(
             cookie.contains("HttpOnly;SameSite=Lax"),
             "expected no-secure format: {cookie}"
