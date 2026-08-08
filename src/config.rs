@@ -1310,30 +1310,81 @@ fn default_toml() -> String {
     let mut s = String::new();
     s.push_str(&format!("listen_addr = \"{}\"\n", default_listen_addr()));
     s.push_str(&format!("guacd_addr = \"{}\"\n", default_guacd_addr()));
-    s.push_str(&format!("static_path = \"{}\"\n", default_static_path().to_string_lossy()));
-    s.push_str(&format!("db_path = \"{}\"\n", default_db_path().to_string_lossy()));
-    s.push_str(&format!("session_pending_timeout_secs = {}\n", default_session_timeout_secs()));
-    s.push_str(&format!("session_max_duration_secs = {}\n", default_session_max_duration_secs()));
-    s.push_str(&format!("auth_session_ttl_secs = {}\n", default_auth_session_ttl_secs()));
-    s.push_str(&format!("session_history_retention_days = {}\n", default_session_history_retention_days()));
+    s.push_str(&format!(
+        "static_path = \"{}\"\n",
+        default_static_path().to_string_lossy()
+    ));
+    s.push_str(&format!(
+        "db_path = \"{}\"\n",
+        default_db_path().to_string_lossy()
+    ));
+    s.push_str(&format!(
+        "session_pending_timeout_secs = {}\n",
+        default_session_timeout_secs()
+    ));
+    s.push_str(&format!(
+        "session_max_duration_secs = {}\n",
+        default_session_max_duration_secs()
+    ));
+    s.push_str(&format!(
+        "auth_session_ttl_secs = {}\n",
+        default_auth_session_ttl_secs()
+    ));
+    s.push_str(&format!(
+        "session_history_retention_days = {}\n",
+        default_session_history_retention_days()
+    ));
     s.push_str(&format!("xvnc_path = \"{}\"\n", default_xvnc_path()));
-    s.push_str(&format!("chromium_path = \"{}\"\n", default_chromium_path()));
-    s.push_str(&format!("display_range_start = {}\n", default_display_range_start()));
-    s.push_str(&format!("display_range_end = {}\n", default_display_range_end()));
-    s.push_str(&format!("cdp_port_range_start = {}\n", default_cdp_port_range_start()));
-    s.push_str(&format!("cdp_port_range_end = {}\n", default_cdp_port_range_end()));
-    s.push_str(&format!("login_script_timeout_secs = {}\n", default_login_script_timeout_secs()));
-    s.push_str(&format!("login_scripts_dir = \"{}\"\n", default_login_scripts_dir()));
+    s.push_str(&format!(
+        "chromium_path = \"{}\"\n",
+        default_chromium_path()
+    ));
+    s.push_str(&format!(
+        "display_range_start = {}\n",
+        default_display_range_start()
+    ));
+    s.push_str(&format!(
+        "display_range_end = {}\n",
+        default_display_range_end()
+    ));
+    s.push_str(&format!(
+        "cdp_port_range_start = {}\n",
+        default_cdp_port_range_start()
+    ));
+    s.push_str(&format!(
+        "cdp_port_range_end = {}\n",
+        default_cdp_port_range_end()
+    ));
+    s.push_str(&format!(
+        "login_script_timeout_secs = {}\n",
+        default_login_script_timeout_secs()
+    ));
+    s.push_str(&format!(
+        "login_scripts_dir = \"{}\"\n",
+        default_login_scripts_dir()
+    ));
     s.push_str(&format!("site_title = \"{}\"\n", default_site_title()));
     s.push_str(&format!("ssh_scrollback = {}\n", default_ssh_scrollback()));
     s.push_str(&format!("ssh_tmux_detach = {}\n", default_false()));
     s.push_str(&format!("max_sessions = {}\n", default_max_sessions()));
-    s.push_str(&format!("max_sessions_per_user = {}\n", default_max_sessions_per_user()));
+    s.push_str(&format!(
+        "max_sessions_per_user = {}\n",
+        default_max_sessions_per_user()
+    ));
     s.push_str(&format!("max_viewers = {}\n", default_max_viewers()));
-    s.push_str(&format!("session_cleanup_delay_secs = {}\n", default_session_cleanup_delay_secs()));
-    s.push_str(&format!("shutdown_timeout_secs = {}\n", default_shutdown_timeout_secs()));
+    s.push_str(&format!(
+        "session_cleanup_delay_secs = {}\n",
+        default_session_cleanup_delay_secs()
+    ));
+    s.push_str(&format!(
+        "shutdown_timeout_secs = {}\n",
+        default_shutdown_timeout_secs()
+    ));
     s.push_str(&format!("rate_limit = {}\n", false));
-    s.push_str(&format!("user_credentials_default_scope = \"{}\"\n", default_user_credentials_scope()));
+    s.push_str(&format!(
+        "user_credentials_default_scope = \"{}\"\n",
+        default_user_credentials_scope()
+    ));
     // Vec fields
     s.push_str("ssh_allowed_networks = ");
     s.push_str(&format!("{:?}\n", default_localhost_networks()));
@@ -1352,7 +1403,10 @@ fn default_toml() -> String {
         default_recording_path().to_string_lossy()
     ));
     s.push_str(&format!("enabled = {}\n", default_true()));
-    s.push_str(&format!("max_disk_percent = {}\n", default_max_disk_percent()));
+    s.push_str(&format!(
+        "max_disk_percent = {}\n",
+        default_max_disk_percent()
+    ));
     s.push_str(&format!("max_recordings = {}\n", default_max_recordings()));
     s.push_str(&format!(
         "rotation_interval_secs = {}\n",
@@ -1451,14 +1505,17 @@ impl Config {
         };
 
         // Layer 1: defaults from TOML
-        let mut builder = config::Config::builder()
-            .add_source(config::File::from_str(&default_toml(), config::FileFormat::Toml));
+        let mut builder = config::Config::builder().add_source(config::File::from_str(
+            &default_toml(),
+            config::FileFormat::Toml,
+        ));
 
-        // Layer 2: config file (if exists)
+        // Layer 2: config file (if exists). `required(false)` so a missing
+        // or unreadable file (e.g. /dev/null in CI) falls back to defaults
+        // instead of failing the whole build.
         if let Some(ref p) = path {
-            if std::path::Path::new(p).exists() {
-                builder = builder.add_source(config::File::new(p, config::FileFormat::Toml));
-            }
+            builder =
+                builder.add_source(config::File::new(p, config::FileFormat::Toml).required(false));
         }
 
         // Layer 3: environment variables (PERSEA_ prefix, nested via __)
@@ -1474,7 +1531,9 @@ impl Config {
                     if let Some(ref p) = path {
                         eprintln!("[config] Loaded config from {}", p);
                     } else {
-                        eprintln!("[config] No config file found; using built-in defaults + env vars");
+                        eprintln!(
+                            "[config] No config file found; using built-in defaults + env vars"
+                        );
                     }
                     c
                 }
