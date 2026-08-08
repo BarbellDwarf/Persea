@@ -107,6 +107,11 @@
     <!-- Shared JS utilities -->
     <script src="/js/theme.js"></script>
     <script src="/js/utils.js"></script>
-    <script nonce="{{ csp_nonce }}">initTheme();</script>
+    <script nonce="{{ csp_nonce }}">
+    fetch('/api/auth/status', { credentials: 'same-origin' })
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) { if (d && d.theme) initTheme(d.theme); })
+        .catch(function() {});
+    </script>
 </body>
 </html>
