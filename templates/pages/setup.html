@@ -118,11 +118,10 @@
                 headers: csrf ? { 'X-CSRF-Token': csrf } : {},
                 body: new URLSearchParams(new FormData(evt.target)),
                 credentials: 'same-origin',
-                redirect: 'manual'
+                redirect: 'follow'
             }).then(function(resp) {
-                if (resp.status === 303) {
-                    var loc = resp.headers.get('location') || '/';
-                    location.href = loc;
+                if (resp.redirected) {
+                    location.href = resp.url;
                 } else if (resp.ok) {
                     location.href = '/';
                 } else {
