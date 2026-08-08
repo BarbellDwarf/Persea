@@ -673,9 +673,10 @@ pub async fn logout(
             tokio::task::spawn_blocking(move || db::delete_auth_session(&db_clone, &token)).await;
     }
 
+    let secure = crate::csrf::cookie_secure_attr(request.headers());
     let clear_cookie = format!(
         "persea_session=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
-        crate::csrf::cookie_secure_attr(request.headers())
+        if secure.is_empty() { "" } else { "Secure; " }
     );
 
     (

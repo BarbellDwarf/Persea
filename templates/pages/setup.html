@@ -118,11 +118,16 @@
                 headers: csrf ? { 'X-CSRF-Token': csrf } : {},
                 body: new URLSearchParams(new FormData(evt.target)),
                 credentials: 'same-origin',
-                redirect: 'follow'
+                redirect: 'manual'
             }).then(function(resp) {
-                if (resp.redirected) { location.href = resp.url; }
-                else if (resp.ok) { location.href = '/'; }
-                else { location.href = '/setup?error=failed'; }
+                if (resp.status === 303) {
+                    var loc = resp.headers.get('location') || '/';
+                    location.href = loc;
+                } else if (resp.ok) {
+                    location.href = '/';
+                } else {
+                    location.href = '/setup?error=failed';
+                }
             }).catch(function() {
                 btn.disabled = false;
                 location.href = '/setup?error=network_error';

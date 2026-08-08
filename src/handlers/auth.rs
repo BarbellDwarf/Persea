@@ -637,15 +637,16 @@ pub async fn mfa_submit(
         .await;
     }
 
+    let secure = crate::csrf::cookie_secure_attr(&headers);
     let session_cookie = format!(
         "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
         session_token,
-        crate::csrf::cookie_secure_attr(&headers),
+        if secure.is_empty() { "" } else { "Secure; " },
         ttl_secs
     );
     let clear_mfa_cookie = format!(
         "persea_mfa_pending=; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age=0",
-        crate::csrf::cookie_secure_attr(&headers)
+        if secure.is_empty() { "" } else { "Secure; " }
     );
 
     (
