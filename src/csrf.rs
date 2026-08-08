@@ -122,8 +122,13 @@ where
             // for a csrf_token field. This covers devices where JS
             // cannot read the CSRF cookie.
             let mut req = req;
+            // Capture the incoming CSRF cookie before `req` is moved into
+            // the inner service.  Used both for the double-submit check
+            // (state-changing methods) and to re-set the cookie on the
+            // response without generating a fresh token each time.
+            let incoming_cookie = extract_cookie(&req.headers(), CSRF_COOKIE);
+
             if is_state_changing(&method) {
-                let cookie_token = extract_cookie(&req.headers(), CSRF_COOKIE);
                 let header_token = req
                     .headers()
                     .get("x-csrf-token")
@@ -170,9 +175,15 @@ where
                 };
 
                 let effective = header_token.or(form_token);
-                match (&cookie_token, &effective) {
+                match (&incoming_cookie, &effective) {
                     (Some(c), Some(h)) if c == h => { /* valid */ }
                     _ => {
+                        tracing::warn!(
+                            expected = %incoming_cookie.as_deref().unwrap_or("none"),
+                            received = %effective.as_deref().unwrap_or("none"),
+                            path = %req.uri().path(),
+                            "CSRF token mismatch"
+                        );
                         let body_text =
                             serde_json::json!({"error": "CSRF token missing or invalid"})
                                 .to_string();
@@ -187,11 +198,14 @@ where
 
             let mut resp = inner.call(req).await?;
 
-            // Always set csrf_token cookie so the double-submit pattern works.
-            // Not HttpOnly: JS (htmx/fetch) needs to read it and echo it
-            // back as X-CSRF-Token.
+            // Reuse the incoming cookie token if present; only generate a
+            // fresh one when the request had none (first visit / expired).
+            // Generating a new token on *every* response caused race
+            // conditions: concurrent AJAX calls would each receive a new
+            // token, and whichever Set-Cookie arrived last "won", leaving
+            // earlier callers with a stale cookie value.
             {
-                let token = generate_token();
+                let token = incoming_cookie.unwrap_or_else(|| generate_token());
                 let secure = if is_https { "; Secure" } else { "" };
                 let cookie = format!("{}={}; Path=/; SameSite=Lax;{}", CSRF_COOKIE, token, secure);
                 resp.headers_mut()
