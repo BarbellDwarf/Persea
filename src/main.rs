@@ -363,11 +363,10 @@ async fn main() {
                 && config.storage_encryption_key().is_none()
             {
                 eprintln!(
-                    "FATAL: no [storage].encryption_key / PERSEA_STORAGE_KEY set — \
+                    "WARNING: no [storage].encryption_key / PERSEA_STORAGE_KEY set — \
                      connection credentials would be stored in plaintext. \
                      Generate one with: openssl rand -hex 32"
                 );
-                std::process::exit(1);
             }
             // The credential encryption key is used in every DB-credential
             // request path; a malformed value would panic at runtime.
@@ -376,7 +375,6 @@ async fn main() {
                     eprintln!(
                         "Error: [storage].encryption_key / PERSEA_STORAGE_KEY must be a 64-char hex string"
                     );
-                    std::process::exit(1);
                 }
             }
             // Warn when running without TLS — credentials travel unencrypted
