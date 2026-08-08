@@ -2261,6 +2261,7 @@ fn rewrite_branding(html: &str, site_title: &str, logo_url: Option<&str>) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
 
     #[test]
     fn test_rewrite_branding_title() {
