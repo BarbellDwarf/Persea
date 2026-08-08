@@ -211,13 +211,13 @@ pub async fn login(
 
     let sec = crate::csrf::cookie_secure_attr(&headers);
     let state_cookie = format!(
-        "persea_oidc_state={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+        "persea_oidc_state={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=600",
         cookie_value, sec
     );
     // The provider name lives in its own cookie (names may contain colons,
     // which would be ambiguous inside the state cookie).
     let provider_cookie = format!(
-        "persea_oidc_provider={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+        "persea_oidc_provider={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=600",
         provider.name, sec
     );
 
@@ -230,7 +230,7 @@ pub async fn login(
     if let Some(ref next) = params.next {
         if next.starts_with('/') && !next.starts_with("//") && !next.contains("://") {
             let next_cookie = format!(
-                "persea_next={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+                "persea_next={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=600",
                 next, sec
             );
             cookies.push((header::SET_COOKIE, next_cookie));
@@ -571,15 +571,15 @@ pub async fn callback(
 
         let sec = crate::csrf::cookie_secure_attr(&headers);
         let mfa_cookie = format!(
-            "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age={}",
+            "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{}SameSite=Lax; Max-Age={}",
             pending_token, sec, ttl_secs
         );
         let clear_state_cookie = format!(
-            "persea_oidc_state=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+            "persea_oidc_state=; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=0",
             sec
         );
         let clear_next_cookie = format!(
-            "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+            "persea_next=; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=0",
             sec
         );
 
@@ -638,15 +638,15 @@ pub async fn callback(
     // Set session cookie and redirect; clear OIDC state and next cookies
     let sec = crate::csrf::cookie_secure_attr(&headers);
     let session_cookie = format!(
-        "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
+        "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
         session_token, sec, ttl_secs
     );
     let clear_state_cookie = format!(
-        "persea_oidc_state=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        "persea_oidc_state=; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=0",
         sec
     );
     let clear_next_cookie = format!(
-        "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        "persea_next=; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=0",
         sec
     );
 
@@ -675,7 +675,7 @@ pub async fn logout(
 
     let secure = crate::csrf::cookie_secure_attr(request.headers());
     let clear_cookie = format!(
-        "persea_session=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        "persea_session=; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=0",
         if secure.is_empty() { "" } else { "Secure; " }
     );
 

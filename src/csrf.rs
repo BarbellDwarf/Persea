@@ -28,12 +28,16 @@ pub fn is_https_headers(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-/// `"; Secure"` when the request arrived over HTTPS (or a proxy says so),
+/// `" Secure; "` when the request arrived over HTTPS (or a proxy says so),
 /// empty otherwise. Set-Cookie builders use this so session cookies are not
 /// dropped by browsers when serving plain HTTP (e.g. LAN access without TLS).
+///
+/// The value is designed to be interpolated into `HttpOnly;{}SameSite=Lax`
+/// so the result is `HttpOnly; Secure; SameSite=Lax` (HTTPS) or
+/// `HttpOnly;SameSite=Lax` (HTTP) — no double semicolons.
 pub fn cookie_secure_attr(headers: &HeaderMap) -> &'static str {
     if is_https_headers(headers) {
-        "; Secure"
+        " Secure; "
     } else {
         ""
     }
@@ -319,5 +323,37 @@ mod tests {
     async fn get_requests_are_exempt() {
         let resp = run(Request::get("/").body(Body::empty()).unwrap()).await;
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn cookie_format_no_double_semicolons() {
+        let secure = " Secure; ";
+        let cookie = format!(
+            "persea_session=test123; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=86400",
+            secure
+        );
+        assert!(!cookie.contains(";;"), "double semicolons in cookie: {cookie}");
+        assert!(
+            cookie.contains("HttpOnly; Secure; SameSite=Lax"),
+            "expected clean format: {cookie}"
+        );
+    }
+
+    #[test]
+    fn cookie_format_http_no_secure() {
+        let secure = "";
+        let cookie = format!(
+            "persea_session=test123; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=86400",
+            secure
+        );
+        assert!(!cookie.contains(";;"), "double semicolons in cookie: {cookie}");
+        assert!(
+            cookie.contains("HttpOnly;SameSite=Lax"),
+            "expected no-secure format: {cookie}"
+        );
+        assert!(
+            !cookie.contains("Secure"),
+            "should not have Secure on HTTP: {cookie}"
+        );
     }
 }

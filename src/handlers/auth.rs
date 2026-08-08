@@ -75,7 +75,7 @@ async fn redirect_to_mfa(db: &Db, user: &db::User, ttl_secs: u64, headers: &Head
     };
 
     let mfa_cookie = format!(
-        "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age={}",
+        "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{}SameSite=Lax; Max-Age={}",
         pending_token,
         crate::csrf::cookie_secure_attr(headers),
         ttl_secs
@@ -348,7 +348,7 @@ pub async fn login_submit(
             }
 
             let session_cookie = format!(
-                "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
+                "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
                 session_token,
                 crate::csrf::cookie_secure_attr(&headers),
                 ttl_secs
@@ -639,13 +639,13 @@ pub async fn mfa_submit(
 
     let secure = crate::csrf::cookie_secure_attr(&headers);
     let session_cookie = format!(
-        "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
+        "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
         session_token,
         if secure.is_empty() { "" } else { "Secure; " },
         ttl_secs
     );
     let clear_mfa_cookie = format!(
-        "persea_mfa_pending=; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        "persea_mfa_pending=; Path=/auth/mfa; HttpOnly;{}SameSite=Lax; Max-Age=0",
         if secure.is_empty() { "" } else { "Secure; " }
     );
 
