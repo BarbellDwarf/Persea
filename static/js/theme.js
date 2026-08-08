@@ -20,8 +20,9 @@ function initTheme(t) {
     if (!t) return;
     _themePresets = t.presets || {};
     _adminPreset = t.admin_preset || 'aurora';
-    var u = localStorage.getItem('persea_theme'), active = u && _themePresets[u] ? u : _adminPreset, colors = (active === _adminPreset) ? t.admin_colors : _themePresets[active];
-    if (colors) applyThemeColors(colors);
+    var userTheme = localStorage.getItem('persea_theme');
+    var active = userTheme && _themePresets[userTheme] ? userTheme : null;
+    if (active) applyThemeColors(_themePresets[active]);
     if (t.logo_url) { var l = document.getElementById('site-logo'); if (l) { if (l.src !== t.logo_url && !l.src.endsWith(t.logo_url)) l.src = t.logo_url; l.style.display = ''; } }
     var menu = document.getElementById('um-theme-list');
     if (menu) {
