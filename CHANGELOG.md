@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-08-08
+
+### Added
+
+- **Session Management**
+  - Disconnect vs Logout split: disconnect keeps session for reconnection, logout terminates
+  - Recent connections section on Connections page
+  - Sessions open in new browser tabs instead of navigating away
+  - File transfer for RDP and SSH sessions (admin-toggleable)
+  - Connection reason field (dropdown + free text, admin-toggleable)
+  - Session toolbar fixes: protocol badge reads actual session type, disconnect confirmation
+
+- **Security Hardening**
+  - Three comprehensive security audits with 23+ findings remediated
+  - SAML XML-DSig: real Exclusive C14N, digest verification, InResponseTo + Audience checks
+  - SSH Trust-On-First-Use: auto-pin first use, verify subsequent, persistent known_hosts
+  - CSRF double-submit protection on all requests
+  - WebSocket Origin validation and connection rate limiting
+  - Per-session concurrent viewer limits
+  - Login rate limiting (always-on, independent of global rate_limit)
+  - Failed login attempt tracking with progressive lockout
+  - MFA lockout bypass fixed — TOTP verification now checks lockout state
+
+- **Admin Features**
+  - Admin settings page with feature toggles for every protocol (RDP, SSH, Web, VDI, Proxmox, VMware)
+  - Auth provider management API (OIDC/LDAP/SAML/RADIUS/database)
+  - Group management with folder permission counts
+  - CSV connection import with downloadable template
+
+- **UI/UX**
+  - Dark/Light/Auto theme toggle with OS preference detection
+  - Connections page redesigned with sidebar folders and detail panel
+  - Recordings fullscreen playback with larger player
+  - Admin pages: Auth Providers, Groups, Reports buttons wired and functional
+
+- **Infrastructure**
+  - High availability architecture documented
+  - CSP nonce wired into all inline scripts
+  - Docker: TLS cert generated at runtime, admin key saved to file (chmod 600)
+  - 50+ regression tests for security findings
+
+### Fixed
+
+- **Critical Security**
+  - Stored XSS in admin Users page — all user data now escaped
+  - vSphere power_action had no role check + unsanitized vm_id — now requires operator role + charset validation
+  - Token admin endpoints (list/audit) were fail-open — now fail-closed
+  - MFA brute-force — lockout check added before TOTP verification
+  - RADIUS response authenticator comparison now uses constant-time equality
+  - LDAP filter injection — escape applied at all 3 interpolation sites
+
+- **High Security**
+  - CSP `style-src` now allows inline styles (enterprise-standard, `unsafe-inline` for styles only)
+  - 6 static pages migrated to templates (sessions, recordings, admin, tokens, reports, docs)
+  - Connections page served from template instead of broken static file
+  - Proxmox TLS verification defaults to true
+  - Browser network allowlist defaults to loopback-only
+  - Failed login lockout wired into auth handlers
+  - Chromium Login Data store no longer populated in VDI sessions
+  - Error responses sanitized to prevent information leakage
+  - Admin API key no longer printed to stdout in Docker
+
+- **UI Fixes**
+  - Dark mode toggle now properly applies theme colors for each mode
+  - Sidebar minimize button functional
+  - Connections page gap between sidebar and content eliminated
+  - Session toolbar protocol badge reads actual session type
+  - Modal drag-to-select no longer closes the modal and loses form progress
+  - Auth Providers, Groups, Reports admin pages buttons wired correctly
+
+- **Tests**
+  - `config_defaults` LDAP test restored (was corrupted by M01)
+  - `session_summary` test assertions updated to match current function
+  - `boundary_partial` protocol test fixed (fast-path false positive removed)
+  - `settings_api_tests` updated for current `enable_vdi` default
+
+### Changed
+
+- Connection credentials encryption now enforced (warns loudly if no key set)
+- Recording retention defaults to 1000 (was unlimited)
+- Error responses return generic messages, full details logged server-side
+- Browser sessions block `file://` and metadata IP ranges by default
+- Admin settings feature toggles default: VDI enabled, file transfer disabled
+
+### Security
+
+See `docs/high-availability.md` for architecture details and
+`wayfinder/security-audit-round3/` for the full audit trail.
+
+
 ## [1.0.3] - 2026-08-06
 
 ### Added
