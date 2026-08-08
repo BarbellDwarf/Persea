@@ -1,4 +1,4 @@
-# CLAUDE.md — Project state for persea
+# AGENTS.md — Project state for persea
 
 ## What this project is
 
@@ -15,8 +15,9 @@ persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. I
 
 ### Core
 - `src/main.rs` — entry point, CLI (clap), server setup, route wiring
-- `src/config.rs` — TOML config loading with defaults, AuthConfig struct
-- `src/error.rs` — unified AppError enum with HTTP status mapping
+- `src/config.rs` — config loading via the `config` crate (layered: defaults → TOML file → `PERSEA_` env vars)
+- `src/error.rs` — unified AppError enum with HTTP status mapping, HTML/JSON error rendering split
+- `src/templates.rs` — minijinja template rendering, error page template
 
 ### Auth system
 - `src/auth.rs` — API key auth middleware (SHA-256, IP allowlists, expiry), role system, session cookie validation
@@ -32,6 +33,7 @@ persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. I
 - `src/password.rs` — Argon2id hashing/verification (OWASP params)
 - `src/totp.rs` — TOTP management (enrollment, QR codes, verification, recovery codes)
 - `src/crypto.rs` — AES-256-GCM credential encryption
+- `src/csrf.rs` — CSRF double-submit middleware, cookie helpers
 
 ### Database
 - `src/db.rs` — SQLite admin database (rusqlite), user/session/token/audit tables
@@ -45,6 +47,8 @@ persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. I
   - `users.rs` — user listing, role management, session management
   - `admin.rs` — system status, group mappings, token audit
   - `reports.rs` — session analytics, CSV export
+  - `tokens.rs` — API token management
+  - `settings.rs` — system settings GET/PUT
 - `src/handlers/` — Page handlers and new API endpoints:
   - `auth.rs` — login, MFA, SAML ACS/metadata handlers
   - `pages.rs` — connections, sessions, recordings page handlers
@@ -61,7 +65,7 @@ persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. I
 ### Enterprise features
 - `src/audit.rs` — SHA-256 hash chain audit logging, tamper evidence
 - `src/rbac.rs` — RBAC: system permissions + connection-level object permissions, recursive group CTE
-- `src/db_migrate.rs` — Vault→DB migration tool (661 lines, BFS walk, encrypted credentials)
+- `src/db_migrate.rs` — Vault→DB migration tool (BFS walk, encrypted credentials)
 
 ### Protocol
 - `src/guacd.rs` — TCP connection to guacd, Guacamole protocol handshake
@@ -73,14 +77,15 @@ persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. I
 - `src/vsphere.rs` — VMware vSphere REST API (VM inventory, OS detection, RDP/SSH routing)
 
 ### UI
-- `templates/` — 19 HTML templates (minijinja + htmx + Tailwind CSS):
+- `templates/` — HTML templates (minijinja + htmx + Tailwind CSS):
   - `base.html`, `layouts/app.html` — base layout with sidebar
   - `partials/sidebar.html`, `partials/header.html` — navigation components
-  - `pages/login.html` — auth form + SSO buttons
-  - `pages/connections.html` — 70/30 split folder tree + details
+  - `pages/login.html` — auth form + SSO buttons (uses `redirect: 'manual'` + `location.href` — do NOT change back to `redirect: 'follow'`, it breaks session cookies in Chrome)
+  - `pages/connections.html` — folder tree + details panel
   - `pages/sessions.html` — active sessions table with auto-refresh
   - `pages/recordings.html` — recording playback
   - `pages/client.html` — Guacamole client with auto-hide toolbar
+  - `pages/error.html` — styled error page (404/401/403/500)
   - `pages/admin/` — users, auth providers, audit, settings, reports, tunnels
   - `pages/account/` — profile, tokens, TOTP enrollment
   - `pages/docs.html` — documentation viewer
@@ -93,14 +98,34 @@ persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. I
 - `src/tunnel.rs` — SSH tunnel (russh)
 - `src/recording.rs` — recording rotation
 - `src/metrics.rs` — Prometheus metrics
-- `src/templates.rs` — minijinja template rendering
 - `dev.sh` — development script
 - `install.sh` — bare-metal Debian 13 installer
 - `Dockerfile` — multi-stage build
 
 ## Configuration
 
-TOML config file. Key settings: `listen_addr`, `guacd_addr`, `db_url` (for MySQL/PostgreSQL), `recording_path`, `static_path`.
+Config is loaded via the `config` crate with three layers (highest wins):
+1. **Built-in defaults** (in `src/config.rs` `default_toml()`)
+2. **TOML file** (`--config config.toml`, or `/opt/persea/config.toml` in Docker)
+3. **Environment variables** — `PERSEA_` prefix, nested keys via `__`
+
+### Environment variables
+
+Every config option can be set via env var. Examples:
+
+| Config key | Env var | Default |
+|------------|---------|---------|
+| `listen_addr` | `PERSEA_LISTEN_ADDR` | `127.0.0.1:8089` |
+| `guacd_addr` | `PERSEA_GUACD_ADDR` | `127.0.0.1:4822` |
+| `db_path` | `PERSEA_DB_PATH` | `./persea.db` |
+| `site_title` | `PERSEA_SITE_TITLE` | `persea` |
+| `session_max_duration_secs` | `PERSEA_SESSION_MAX_DURATION_SECS` | `28800` |
+| `storage.encryption_key` | `PERSEA_STORAGE__ENCRYPTION_KEY` | unset |
+| `storage.backend` | `PERSEA_STORAGE__BACKEND` | `db` |
+| `recording.max_recordings` | `PERSEA_RECORDING__MAX_RECORDINGS` | `1000` |
+| `tls.cert_path` | `PERSEA_TLS__CERT_PATH` | unset |
+
+Full reference: `docs/deployment-guide.md` → "Environment Variables" section.
 
 ### Database backends
 
@@ -226,12 +251,14 @@ username = "administrator@vsphere.local"
 - **RBAC**: System + object permissions, recursive group inheritance
 - **TLS hot-reload**: File watcher (inotify/kqueue) + SIGHUP + admin UI upload
 - **Multi-DB**: MySQL, PostgreSQL, SQLite via SQLx enum dispatch
+- **Security hardening**: 3 full security audits remediated (see `wayfinder/security-audit-round3/` for the audit trail)
 
 ## Deployment
 
 - **Bare metal**: `sudo ./install.sh` on Debian 13
 - **Docker**: `docker build -t persea .`
 - **First run**: Setup wizard at `/setup` auto-detects environment
+- **Beta image**: `gh workflow run beta.yml --ref <branch>` → `ghcr.io/<repo>:beta`
 
 ## Build notes
 
@@ -242,9 +269,45 @@ username = "administrator@vsphere.local"
 
 ## Testing
 
-- `cargo test` — unit tests + integration tests (144+ tests)
+- `cargo test` — unit tests + integration tests (1200+ tests across lib + integration binaries)
+- `tests/security_regression.rs` — security regression tests (XSS, LDAP, CSV, lockout, SAML, RADIUS)
+- `tests/api_handler_tests.rs` — API handler integration tests
 - `tests/auth_integration.rs` — auth flow integration tests
+- `tests/playwright/` — Playwright E2E tests (54+ tests, Desktop + Mobile Chrome)
 - `tests/test_browser_session.sh` — browser session smoke test
+- **CI** (`.github/workflows/ci.yml`): check, fmt, clippy, test, audit, integration — all must pass
+
+## Rules for agents
+
+### Git discipline
+
+- **Never run `git reset`, `git checkout .`, or `git stash`** — these destroy parallel work. If the tree has unexpected changes, leave them alone and work around them.
+- **Never leave uncommitted work** — commit or `WIP:` before stopping.
+- **Commit messages**: Conventional Commits (`fix:`, `feat:`, `docs:`, `style:`, `test:`).
+- **Push after commit** — the branch is shared.
+
+### Verification
+
+- **`cargo check` is NOT enough** — it doesn't compile test code or check formatting. Always run `cargo test` and `cargo fmt --check` too.
+- **CI must be green** (`gh run list`) before moving on.
+- **Tests are guardrails** — if your change breaks a test, your change is wrong. Fix your change, not the test (unless the test is genuinely stale — then note it and ask).
+
+### Security
+
+- **Never introduce XSS** — escape all user data in templates (use `escapeHtml`/`escapeAttr` from `static/js/utils.js`).
+- **Never log secrets** — API keys, passwords, tokens stay out of logs.
+- **Fail closed** — role checks must reject when identity is `None` (`.ok_or(Forbidden)?` pattern).
+- **Constant-time comparisons** — use `subtle::ConstantTimeEq` for secrets.
+- **CSRF** — all state-changing requests need the `X-CSRF-Token` header or form field.
+- **CSP** — inline scripts need `nonce="{{ csp_nonce }}"`; inline styles are allowed (`style-src 'unsafe-inline'` is intentional for enterprise compatibility).
+
+### Known pitfalls (do not reintroduce)
+
+- **Login page JS**: uses `redirect: 'manual'` + `location.href` — `redirect: 'follow'` breaks session cookies in Chrome (fetch drops freshly-set cookies on redirect).
+- **Cookie format**: `HttpOnly; Secure; SameSite=Lax` — never `HttpOnly;; Secure SameSite` (double semicolon breaks parsing).
+- **Config defaults**: `default_toml()` in `src/config.rs` must emit ALL sections — missing sections silently reset defaults (e.g. `max_recordings` → 0).
+- **Theme**: `initTheme()` only applies a preset when the user explicitly chose one (`localStorage.persea_theme`) — otherwise app.css defaults (green) show.
+- **Static pages**: pages are served from templates, NOT `static/*.html` — the static files are legacy and must not be re-added to the disk-served list in `main.rs`.
 
 ## Subagent Work Contract
 
@@ -259,3 +322,10 @@ When dispatching implementation work to subagents, follow the contract in
   destroys other agents' work.
 - **Never leave uncommitted work** — commit or `WIP:` before stopping.
 - **CI must be green** (`gh run list`) before moving on.
+
+## Wayfinder planning
+
+- `wayfinder/` — planning artifacts (gitignored, local only — do NOT commit)
+- `wayfinder/security-audit-round3/` — current security audit tickets (R01-R20)
+- Tickets are numbered per round: R01-R13 (round 3 security), R14-R20 (config, login, error pages, process)
+- Each ticket: `wayfinder:task`, priority, phase, finding, fix, files, deliverable
