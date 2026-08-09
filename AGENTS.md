@@ -80,7 +80,7 @@ persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. I
 - `templates/` — HTML templates (minijinja + htmx + Tailwind CSS):
   - `base.html`, `layouts/app.html` — base layout with sidebar
   - `partials/sidebar.html`, `partials/header.html` — navigation components
-  - `pages/login.html` — auth form + SSO buttons (uses `redirect: 'manual'` + `location.href` — do NOT change back to `redirect: 'follow'`, it breaks session cookies in Chrome)
+  - `pages/login.html` — auth form + SSO buttons (uses `redirect: 'follow'` + `resp.redirected` + `resp.url` for full error specificity)
   - `pages/connections.html` — folder tree + details panel
   - `pages/sessions.html` — active sessions table with auto-refresh
   - `pages/recordings.html` — recording playback
@@ -303,7 +303,7 @@ username = "administrator@vsphere.local"
 
 ### Known pitfalls (do not reintroduce)
 
-- **Login page JS**: uses `redirect: 'manual'` + `location.href` — `redirect: 'follow'` breaks session cookies in Chrome (fetch drops freshly-set cookies on redirect).
+- **Login page JS**: uses `redirect: 'follow'` + `resp.redirected` + `resp.url` — full error specificity from the final URL. The server returns 303 redirects for success/MFA/errors, and the JS follows them.
 - **Cookie format**: `HttpOnly; Secure; SameSite=Lax` — never `HttpOnly;; Secure SameSite` (double semicolon breaks parsing).
 - **Config defaults**: `default_toml()` in `src/config.rs` must emit ALL sections — missing sections silently reset defaults (e.g. `max_recordings` → 0).
 - **Theme**: `initTheme()` only applies a preset when the user explicitly chose one (`localStorage.persea_theme`) — otherwise app.css defaults (green) show.
