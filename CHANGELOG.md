@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-08-08
+## [1.1.0] - 2026-08-09
 
 ### Added
 
@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Session toolbar fixes: protocol badge reads actual session type, disconnect confirmation
 
 - **Security Hardening**
-  - Three comprehensive security audits with 23+ findings remediated
+  - Three comprehensive security audits with 30+ findings remediated
   - SAML XML-DSig: real Exclusive C14N, digest verification, InResponseTo + Audience checks
   - SSH Trust-On-First-Use: auto-pin first use, verify subsequent, persistent known_hosts
   - CSRF double-submit protection on all requests
@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Login rate limiting (always-on, independent of global rate_limit)
   - Failed login attempt tracking with progressive lockout
   - MFA lockout bypass fixed — TOTP verification now checks lockout state
+  - Cookie format: all 15 Set-Cookie sites emit correct `HttpOnly; Secure; SameSite=Lax` (was double-semicolon on 10 sites)
 
 - **Admin Features**
   - Admin settings page with feature toggles for every protocol (RDP, SSH, Web, VDI, Proxmox, VMware)
@@ -38,15 +39,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **UI/UX**
   - Dark/Light/Auto theme toggle with OS preference detection
+  - Theme presets (aurora, nord, jaguar, etc.) selectable from Profile → Appearance
   - Connections page redesigned with sidebar folders and detail panel
   - Recordings fullscreen playback with larger player
   - Admin pages: Auth Providers, Groups, Reports buttons wired and functional
+  - Styled error pages (404/401/403/500) with professional design
+  - Login/setup error messages: human-readable with warning icon and polished alert styling
+
+- **Configuration**
+  - Migrated to `config` crate with layered loading: defaults → TOML file → `PERSEA_` env vars
+  - Every config option settable via environment variable (`PERSEA_` prefix, nested via `__`)
+  - Full reference in `docs/deployment-guide.md` and `config.example.toml`
 
 - **Infrastructure**
   - High availability architecture documented
   - CSP nonce wired into all inline scripts
   - Docker: TLS cert generated at runtime, admin key saved to file (chmod 600)
   - 50+ regression tests for security findings
+  - Password-login Playwright E2E test (HTTP + HTTPS with self-signed certs)
+  - CI: `playwright-auth` job runs auth E2E over both HTTP and HTTPS
+  - `AGENTS.md` replaces `CLAUDE.md` as the canonical agent instruction file
+  - Subagent work contract: edits-first, single-verifier model for parallel implementation
 
 ### Fixed
 
@@ -68,6 +81,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Chromium Login Data store no longer populated in VDI sessions
   - Error responses sanitized to prevent information leakage
   - Admin API key no longer printed to stdout in Docker
+
+- **Login Flow**
+  - Login JS reverted to `redirect: 'follow'` + `resp.redirected` + `resp.url` — full error specificity from final URL (was broken by R17's `redirect: 'manual'` which produces opaque responses with status 0)
+  - Setup page login flow fixed (same pattern)
+
+- **Theme Toggle**
+  - Toggle persists across page refresh (localStorage + CSS class restoration)
+  - Toggle shows Persea green (#10b981), not aurora cyan (#22d3ee)
+  - Toggle uses user's selected preset, not admin default
+  - Color presets moved from emoji button in header to Profile → Appearance section
+  - "default" preset option clears stale state and restores CSS green defaults
+  - Login page has "Reset theme" link for stuck users
+
+- **Error Display**
+  - Login page shows human-readable messages ("Invalid email or password") instead of raw codes ("invalid_credentials")
+  - MFA page handles `account_locked` with specific message (was falling through to generic)
+  - Alert styling polished: left accent border, warning icon, 14px font, flex layout
+
+- **htmx Crash**
+  - base.html htmx config script moved from `<head>` to end of `<body>` — fixes `document.body` TypeError on every page load
 
 - **UI Fixes**
   - Dark mode toggle now properly applies theme colors for each mode
