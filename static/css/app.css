@@ -398,7 +398,7 @@ body {
 .card-title {
     font-size: 16px;
     font-weight: 600;
-    color: white;
+    color: var(--text-primary);
 }
 
 /* ── Tables ──────────────────────────────────────────────── */
