@@ -153,11 +153,11 @@ jobs:
         run: npx tsx setup-helper.ts
         working-directory: tests/playwright
         env:
-          BASE_URL: https://localhost:8443
+          BASE_URL: https://localhost:8089
       - name: Run login spec (HTTPS)
         run: npx playwright test specs/auth/login.spec.ts --project="Desktop Chrome (HTTPS)"
         working-directory: tests/playwright
         env:
-          HTTPS_BASE_URL: https://localhost:8443
+          HTTPS_BASE_URL: https://localhost:8089
       - name: Stop HTTPS server
         run: kill "$SERVER_PID" 2>/dev/null || true
