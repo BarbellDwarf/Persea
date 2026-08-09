@@ -27,6 +27,33 @@ function initTheme(t) {
     var menu = document.getElementById('um-theme-list');
     if (menu) {
         menu.innerHTML = '';
+        // "Default" option — clears preset, restores CSS green defaults
+        var defItem = document.createElement('div');
+        defItem.className = 'um-item' + (!active ? ' active' : '');
+        var defSw = document.createElement('span');
+        defSw.className = 'um-swatch';
+        defSw.style.background = 'linear-gradient(135deg, #059669 50%, #10b981 50%)';
+        defItem.appendChild(defSw);
+        var defInfo = document.createElement('div');
+        defInfo.className = 'um-theme-info';
+        var defNm = document.createElement('span');
+        defNm.className = 'um-theme-name';
+        defNm.textContent = 'default';
+        defInfo.appendChild(defNm);
+        var defDesc = document.createElement('span');
+        defDesc.className = 'um-theme-desc';
+        defDesc.textContent = 'Persea green — the original';
+        defInfo.appendChild(defDesc);
+        defItem.appendChild(defInfo);
+        defItem.addEventListener('click', function() {
+            localStorage.removeItem('persea_theme');
+            localStorage.removeItem('persea_theme_colors');
+            document.documentElement.style.cssText = '';
+            menu.querySelectorAll('.um-item').forEach(function(el) { el.classList.remove('active'); });
+            defItem.classList.add('active');
+            document.getElementById('user-menu').style.display = 'none';
+        });
+        menu.appendChild(defItem);
         Object.keys(_themePresets).forEach(function(name) {
             var item = document.createElement('div');
             item.className = 'um-item' + (name === active ? ' active' : '');
