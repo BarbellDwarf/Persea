@@ -77,6 +77,8 @@ body {
 .sidebar.collapsed .nav-section-label { opacity: 0; width: 0; overflow: hidden; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
 .sidebar.collapsed .sidebar-logo { justify-content: center; padding: 0; gap: 0; }
+.sidebar.collapsed .sidebar-logo-icon { margin: 0 auto; }
+.sidebar.collapsed .sidebar-toggle { display: none; }
 .sidebar.collapsed .sidebar-logo-text { width: 0; }
 
 /* Hover-expanded: show text, restore layout */
@@ -117,7 +119,7 @@ body {
 
 .sidebar-nav {
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;
     padding: 12px;
 }
 
