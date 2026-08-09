@@ -425,6 +425,9 @@ pub async fn mfa_page(Query(params): Query<MfaQueryParams>) -> Response {
         Some("invalid_code") => {
             r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">Invalid verification code. Please try again.</p>"#
         }
+        Some("account_locked") => {
+            r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">Account temporarily locked due to too many failed attempts. Please try again later.</p>"#
+        }
         Some(_) => {
             r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">An error occurred. Please try again.</p>"#
         }
