@@ -62,6 +62,36 @@
         </form>
     </div>
 
+    <!-- Appearance -->
+    <div class="card mb-6">
+        <h2 class="text-lg font-semibold text-gray-100 mb-4">Appearance</h2>
+        <div class="space-y-5">
+            <!-- Mode -->
+            <div>
+                <label class="form-label">Mode</label>
+                <div class="flex gap-3" id="appearance-mode">
+                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                        <input type="radio" name="theme-mode" value="light" class="accent-emerald-500">
+                        <span class="text-sm text-gray-300">Light</span>
+                    </label>
+                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                        <input type="radio" name="theme-mode" value="dark" class="accent-emerald-500">
+                        <span class="text-sm text-gray-300">Dark</span>
+                    </label>
+                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                        <input type="radio" name="theme-mode" value="auto" class="accent-emerald-500">
+                        <span class="text-sm text-gray-300">Auto</span>
+                    </label>
+                </div>
+            </div>
+            <!-- Color Accent -->
+            <div>
+                <label class="form-label">Color Accent</label>
+                <div id="um-theme-list" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- My Credentials (preset fallback for entries without credentials) -->
     <div class="card mb-6">
         <h2 class="text-lg font-semibold text-gray-100 mb-1">My Credentials</h2>
@@ -121,6 +151,27 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
+    // ── Appearance: mode radio buttons ──
+    (function() {
+        var currentMode = localStorage.getItem('theme') || 'auto';
+        var radios = document.querySelectorAll('input[name="theme-mode"]');
+        radios.forEach(function(r) {
+            if (r.value === currentMode) r.checked = true;
+            r.addEventListener('change', function() {
+                var mode = this.value;
+                localStorage.setItem('theme', mode);
+                var root = document.documentElement;
+                root.classList.remove('dark', 'light');
+                if (mode === 'auto') {
+                    var mq = window.matchMedia('(prefers-color-scheme: dark)');
+                    root.classList.add(mq.matches ? 'dark' : 'light');
+                } else {
+                    root.classList.add(mode);
+                }
+            });
+        });
+    })();
+
     document.addEventListener('DOMContentLoaded', function() {
         // Load current user info
         if (typeof apiHeaders === 'undefined') { console.error('apiHeaders not defined'); return; }
