@@ -4,7 +4,7 @@
 <div class="max-w-7xl mx-auto">
     <div class="flex items-center justify-between mb-6">
         <div>
-            <h1 class="text-2xl font-bold text-gray-100">Sessions</h1>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)]">Sessions</h1>
             <p class="text-sm text-muted mt-1"><span id="session-counts"></span></p>
         </div>
         <div class="flex items-center gap-3">
@@ -206,11 +206,11 @@
             }
             return '<tr>'
                 + '<td><span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml(proto.toUpperCase()) + '</span></td>'
-                + '<td class="text-sm text-gray-300">' + escapeHtml(s.created_by || '') + '</td>'
-                + '<td class="text-sm text-gray-300">' + escapeHtml(proto) + '</td>'
-                + '<td class="text-sm text-gray-300">' + escapeHtml(target) + (s.entry_display_name ? ' <span class="text-gray-500">\u00B7 ' + escapeHtml(s.entry_display_name) + '</span>' : '') + '</td>'
+                + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(s.created_by || '') + '</td>'
+                + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(proto) + '</td>'
+                + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(target) + (s.entry_display_name ? ' <span class="text-[var(--text-muted)]">\u00B7 ' + escapeHtml(s.entry_display_name) + '</span>' : '') + '</td>'
                 + '<td>' + statusPill(s.status) + '</td>'
-                + '<td class="text-sm text-gray-400">' + durationStr(s.created_at) + '</td>'
+                + '<td class="text-sm text-[var(--text-muted)]">' + durationStr(s.created_at) + '</td>'
                 + '<td class="text-sm">' + actions + '</td>'
                 + '</tr>';
         }).join('');

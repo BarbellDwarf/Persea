@@ -7,7 +7,7 @@
     <!-- Top bar -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
         <div>
-            <h1 style="font-size:22px;font-weight:600;color:white;margin:0">Connections</h1>
+            <h1 style="font-size:22px;font-weight:600;color:var(--text-primary);margin:0">Connections</h1>
             <p style="font-size:13px;color:var(--text-muted);margin-top:4px">Manage your server address book</p>
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -73,7 +73,7 @@
 
                 <div id="entries-header" class="hidden" style="margin-bottom:16px">
                     <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-                        <h2 id="entries-title" style="font-size:16px;font-weight:600;color:white;margin:0"></h2>
+                        <h2 id="entries-title" style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0"></h2>
                         <span id="entries-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
                         <span id="entries-desc" style="font-size:13px;color:var(--text-muted);font-style:italic"></span>
                         <div style="flex:1"></div>
@@ -91,7 +91,7 @@
             <div id="detail-panel" class="hidden" style="flex:0 0 320px;min-width:0;max-height:calc(100vh - 120px);overflow-y:auto">
                 <div class="card" style="position:sticky;top:24px">
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-                        <h3 id="detail-name" style="font-size:16px;font-weight:600;color:white;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></h3>
+                        <h3 id="detail-name" style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></h3>
                         <span id="detail-protocol" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid"></span>
                     </div>
                     <div id="detail-host" style="font-size:13px;color:var(--text-secondary);margin-bottom:16px"></div>
@@ -114,7 +114,7 @@
     <!-- vSphere virtual machines (hidden when vSphere is not configured) -->
     <div id="vsphere-section" class="hidden" style="max-width:1200px;margin:36px auto 0;padding-top:28px;border-top:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-            <h2 style="font-size:16px;font-weight:600;color:white;margin:0">vSphere Virtual Machines</h2>
+            <h2 style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0">vSphere Virtual Machines</h2>
             <span id="vsphere-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
             <div style="flex:1"></div>
             <button id="btn-vsphere-refresh" class="btn btn-secondary btn-sm">Refresh</button>
@@ -128,12 +128,12 @@
 <!-- Folder create/edit modal -->
 <div id="folder-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
     <div class="card w-full max-w-md" style="max-height:90vh;overflow-y:auto">
-        <h2 id="folder-modal-title" class="text-lg font-bold text-gray-100 mb-4">New Folder</h2>
+        <h2 id="folder-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">New Folder</h2>
         <div class="space-y-4">
             <div>
                 <label class="form-label" for="fm-name">Name</label>
                 <input type="text" id="fm-name" class="form-input" placeholder="e.g. infra-servers" pattern="[a-zA-Z0-9_.-]+" maxlength="64" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores, dots only.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Alphanumeric, hyphens, underscores, dots only.</p>
             </div>
             <div>
                 <label class="form-label" for="fm-desc">Description</label>
@@ -144,7 +144,7 @@
                 <select id="fm-parent" class="form-input">
                     <option value="">(root)</option>
                 </select>
-                <p class="text-xs text-gray-500 mt-1">Create this folder inside another folder. Scope is inherited from the parent.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Create this folder inside another folder. Scope is inherited from the parent.</p>
             </div>
             <div>
                 <label class="form-label" for="fm-scope">Scope</label>
@@ -152,7 +152,7 @@
                     <option value="shared">shared (all instances)</option>
                     <option value="instance">instance (this server only)</option>
                 </select>
-                <p class="text-xs text-gray-500 mt-1">shared = visible on every Persea server in a fleet (a central address book). instance = only on this server. On a single server, either works — shared is the default.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">shared = visible on every Persea server in a fleet (a central address book). instance = only on this server. On a single server, either works — shared is the default.</p>
             </div>
             <div>
                 <label class="form-label">Allowed groups</label>
@@ -166,13 +166,13 @@
                         <button type="button" class="btn btn-secondary btn-sm" id="fm-groups-add" style="width:auto">Add</button>
                     </div>
                 </div>
-                <p class="text-xs text-gray-500 mt-1">OIDC groups that can see this folder. Leave empty for admin-only access.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">OIDC groups that can see this folder. Leave empty for admin-only access.</p>
             </div>
-            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer" style="cursor:pointer">
-                <input type="checkbox" id="fm-inherit" class="rounded bg-gray-800 border-gray-700 text-emerald-500">
+            <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)] cursor-pointer" style="cursor:pointer">
+                <input type="checkbox" id="fm-inherit" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
                 Inherit permissions from parent folder
             </label>
-            <p class="text-xs text-gray-500">When ticked, access falls back to the parent folder's groups when this folder's own list doesn't grant access.</p>
+            <p class="text-xs text-[var(--text-muted)]">When ticked, access falls back to the parent folder's groups when this folder's own list doesn't grant access.</p>
             <div id="fm-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
         </div>
         <div class="flex justify-end gap-3 mt-6">
@@ -185,12 +185,12 @@
 <!-- Entry create/edit modal -->
 <div id="entry-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title">
     <div class="card w-full max-w-md" style="max-height:90vh;overflow-y:auto">
-        <h2 id="entry-modal-title" class="text-lg font-bold text-gray-100 mb-4">New Entry</h2>
+        <h2 id="entry-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">New Entry</h2>
         <div class="space-y-4">
             <div>
                 <label class="form-label" for="em-name">Name</label>
                 <input type="text" id="em-name" class="form-input" placeholder="e.g. web-server-01" pattern="[a-zA-Z0-9_.-]+" maxlength="64" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores, dots. Used as the Vault key.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Alphanumeric, hyphens, underscores, dots. Used as the Vault key.</p>
             </div>
             <div>
                 <label class="form-label" for="em-display-name">Display name</label>
@@ -207,64 +207,64 @@
                     <option value="vdi">VDI (Docker)</option>
                     <option value="proxmox">Proxmox VE console</option>
                 </select>
-                <div id="em-type-help" class="text-xs text-gray-500 mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
+                <div id="em-type-help" class="text-xs text-[var(--text-muted)] mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
             </div>
             <div>
                 <label class="form-label" for="em-hostname">Hostname</label>
                 <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">The server's IP or hostname — no http:// and no port here (port has its own field). Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">The server's IP or hostname — no http:// and no port here (port has its own field). Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
             </div>
             <div id="em-url-field" style="display:none">
                 <label class="form-label" for="em-url">URL</label>
                 <input type="text" id="em-url" class="form-input" placeholder="https://10.0.1.5:8080" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Required for Web entries — the browser session opens this URL.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Required for Web entries — the browser session opens this URL.</p>
             </div>
             <div id="em-container-field" style="display:none">
                 <label class="form-label" for="em-container-image">Container image</label>
                 <input type="text" id="em-container-image" class="form-input" placeholder="registry.example.com/desktop:latest" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Required for VDI entries — the Docker image to run.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Required for VDI entries — the Docker image to run.</p>
             </div>
             <div id="em-proxmox-fields" style="display:none">
                 <div>
                     <label class="form-label" for="em-proxmox-url">Proxmox API URL</label>
                     <input type="text" id="em-proxmox-url" class="form-input" placeholder="https://pve.example.com:8006" autocomplete="off">
-                    <p class="text-xs text-gray-500 mt-1">The address of your Proxmox web interface (the API is the same server, port 8006).</p>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">The address of your Proxmox web interface (the API is the same server, port 8006).</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-vmid">VM ID</label>
                     <input type="number" id="em-proxmox-vmid" class="form-input" min="100" max="999999" autocomplete="off">
-                    <p class="text-xs text-gray-500 mt-1">The numeric VM ID — shown in the PVE web UI next to the VM name (e.g. 105).</p>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">The numeric VM ID — shown in the PVE web UI next to the VM name (e.g. 105).</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-node">Node</label>
                     <input type="text" id="em-proxmox-node" class="form-input" placeholder="pve1" autocomplete="off">
-                    <p class="text-xs text-gray-500 mt-1">Optional — leave blank to auto-detect which node the VM runs on.</p>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">Optional — leave blank to auto-detect which node the VM runs on.</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-token-id">API token ID</label>
                     <input type="text" id="em-proxmox-token-id" class="form-input" placeholder="root@pam!persea" autocomplete="off">
-                    <p class="text-xs text-gray-500 mt-1">Format: user@realm!tokenname (e.g. root@pam!persea). Create it in PVE under Datacenter → Permissions → API Tokens.</p>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">Format: user@realm!tokenname (e.g. root@pam!persea). Create it in PVE under Datacenter → Permissions → API Tokens.</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-token-secret">API token secret</label>
                     <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
-                    <p class="text-xs text-gray-500 mt-1">The UUID shown once when you created the token. The token needs Sys.Audit on / and VM.Audit + VM.Console on the VM (Datacenter → Permissions → Add).</p>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">The UUID shown once when you created the token. The token needs Sys.Audit on / and VM.Audit + VM.Console on the VM (Datacenter → Permissions → Add).</p>
                 </div>
-                <label class="flex items-center gap-2 text-sm text-gray-300" style="margin-top:8px">
-                    <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-gray-800 border-gray-700 text-emerald-500">
+                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="margin-top:8px">
+                    <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
                     Verify TLS certificate
                 </label>
-                <p class="text-xs text-gray-500" style="margin-top:6px">Leave unchecked if PVE uses its default self-signed certificate.</p>
+                <p class="text-xs text-[var(--text-muted)]" style="margin-top:6px">Leave unchecked if PVE uses its default self-signed certificate.</p>
             </div>
             <div>
                 <label class="form-label" for="em-port">Port</label>
                 <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Defaults are filled in for you: SSH 22, RDP 3389, VNC/SPICE 5900. Leave as-is unless the server listens elsewhere.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Defaults are filled in for you: SSH 22, RDP 3389, VNC/SPICE 5900. Leave as-is unless the server listens elsewhere.</p>
             </div>
             <div>
                 <label class="form-label" for="em-username">Username</label>
                 <input type="text" id="em-username" class="form-input" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">The account on the target server (e.g. root, Administrator, or DOMAIN\user for RDP). Leave blank to fall back to your preset (My Profile → My Credentials) or to be asked at connect time.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">The account on the target server (e.g. root, Administrator, or DOMAIN\user for RDP). Leave blank to fall back to your preset (My Profile → My Credentials) or to be asked at connect time.</p>
             </div>
             <div>
                 <div style="display:flex;justify-content:space-between;align-items:center">
@@ -275,19 +275,19 @@
                     </div>
                 </div>
                 <input type="password" id="em-password" class="form-input" autocomplete="new-password">
-                <p class="text-xs text-gray-500 mt-1" id="em-password-hint">Saving with an empty password field keeps the stored value.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1" id="em-password-hint">Saving with an empty password field keeps the stored value.</p>
             </div>
             <div>
                 <label class="form-label" for="em-private-key">Private key (PEM)</label>
                 <textarea id="em-private-key" class="form-input" rows="3" style="resize:vertical;font-family:var(--font-mono);font-size:13px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-                <p class="text-xs text-gray-500 mt-1">SSH only. Alternative to a password — paste the full key including the BEGIN/END lines. If both are set, the key is used.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">SSH only. Alternative to a password — paste the full key including the BEGIN/END lines. If both are set, the key is used.</p>
             </div>
             <div id="em-ignore-cert-field" style="display:none">
-                <label class="flex items-center gap-2 text-sm text-gray-300" style="cursor:pointer">
-                    <input type="checkbox" id="em-ignore-cert" class="rounded bg-gray-800 border-gray-700 text-emerald-500">
+                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                    <input type="checkbox" id="em-ignore-cert" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
                     Ignore TLS certificate errors
                 </label>
-                <p class="text-xs text-gray-500 mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
             </div>
             <div id="em-proxmox-secret-field" style="display:none">
                 <label class="form-label" for="em-proxmox-token-secret">Proxmox token secret</label>
@@ -296,7 +296,7 @@
             <div id="em-container-password-field" style="display:none">
                 <label class="form-label" for="em-container-password">Container password</label>
                 <input type="password" id="em-container-password" class="form-input" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
-                <p class="text-xs text-gray-500 mt-1">Only for VDI images with a baked-in account. Leave blank to keep the stored value when editing.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Only for VDI images with a baked-in account. Leave blank to keep the stored value when editing.</p>
             </div>
             <div>
                 <label class="form-label">Allowed groups</label>
@@ -310,11 +310,11 @@
                         <button type="button" class="btn btn-secondary btn-sm" id="em-groups-add" style="width:auto">Add</button>
                     </div>
                 </div>
-                <p class="text-xs text-gray-500 mt-1">Which groups may <em>see</em> this entry in the address book. Leave empty for admin-only. Connect permission is separate — grant it under "Connect permissions" below.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Which groups may <em>see</em> this entry in the address book. Leave empty for admin-only. Connect permission is separate — grant it under "Connect permissions" below.</p>
             </div>
             <div id="em-rbac-field" style="display:none">
                 <label class="form-label">Connect permissions (RBAC)</label>
-                <p class="text-xs text-gray-500" style="margin:4px 0 8px">Who may connect to this entry. Denied by default unless granted here or inherited via connection groups (Admin → Groups).</p>
+                <p class="text-xs text-[var(--text-muted)]" style="margin:4px 0 8px">Who may connect to this entry. Denied by default unless granted here or inherited via connection groups (Admin → Groups).</p>
                 <div class="chip-picker">
                     <div class="chip-list" id="em-rbac-chips"></div>
                     <div class="chip-input-wrap">
@@ -338,8 +338,8 @@
 <!-- Connect credentials prompt modal -->
 <div id="prompt-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="prompt-modal-title">
     <div class="card w-full max-w-sm">
-        <h2 id="prompt-modal-title" class="text-lg font-bold text-gray-100 mb-1">Enter credentials</h2>
-        <p class="text-xs text-gray-500 mb-4">This entry has no stored credentials. Use your own (e.g. a rotating password). You can save a preset under <strong>My Profile</strong> so you aren't asked each time.</p>
+        <h2 id="prompt-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-1">Enter credentials</h2>
+        <p class="text-xs text-[var(--text-muted)] mb-4">This entry has no stored credentials. Use your own (e.g. a rotating password). You can save a preset under <strong>My Profile</strong> so you aren't asked each time.</p>
         <div class="space-y-4">
             <div>
                 <label class="form-label" for="pm-username">Username</label>
@@ -361,12 +361,12 @@
 <!-- Import CSV modal -->
 <div id="import-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
     <div class="card w-full max-w-md">
-        <h2 id="import-modal-title" class="text-lg font-bold text-gray-100 mb-4">Import Connections (CSV)</h2>
+        <h2 id="import-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Import Connections (CSV)</h2>
         <div class="space-y-4">
             <div>
                 <label class="form-label" for="import-file">CSV file</label>
                 <input type="file" id="import-file" accept=".csv,text/csv" class="form-input">
-                <p class="text-xs text-gray-500 mt-1">Columns: name, protocol, hostname, port, username, password, folder, display_name, allowed_groups. Quoted fields with commas are supported.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Columns: name, protocol, hostname, port, username, password, folder, display_name, allowed_groups. Quoted fields with commas are supported.</p>
             </div>
             <div>
                 <a href="/api/addressbook/import-template" class="text-sm text-emerald-400 hover:text-emerald-300">Download CSV template</a>
@@ -390,7 +390,7 @@
     .proto-proxmox { background: rgba(99,102,241,0.15); color: #818cf8; border-color: rgba(99,102,241,0.3); }
     .proto-vdi { background: rgba(236,72,153,0.15); color: #f472b6; border-color: rgba(236,72,153,0.3); }
     .folder-item { display:flex;align-items:center;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--text-secondary);cursor:pointer;transition:all 0.15s }
-    .folder-item:hover { background:var(--bg-hover);color:white }
+    .folder-item:hover { background:var(--bg-hover);color:var(--text-primary) }
     .folder-item.active { background:rgba(16,185,129,0.1);color:#34d399 }
     .entry-row { display:flex;align-items:center;padding:10px 12px;border-radius:8px;cursor:pointer;transition:all 0.15s }
     .entry-row:hover { background:var(--bg-hover) }
@@ -754,7 +754,7 @@
         return '<div class="entry-row' + selected + '" data-scope="' + escapeAttr(scope) + '" data-path="' + escapeAttr(path) + '" data-name="' + escapeAttr(e.name) + '" style="display:flex;align-items:center;gap:12px">'
             + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
             + '<div style="flex:1;min-width:0">'
-            + '<div style="font-size:13px;color:white;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(e.display_name || e.name) + '</div>'
+            + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(e.display_name || e.name) + '</div>'
             + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(entryHost(e) || '\u2014') + (folderName ? ' <span style="color:var(--text-muted)">\u00B7 ' + escapeHtml(folderName) + '</span>' : '') + '</div>'
             + '</div>'
             + '<button class="btn btn-primary btn-sm entry-connect" style="width:auto">Connect</button>'
@@ -1949,7 +1949,7 @@
             return '<div class="card" style="padding:14px 16px">'
                 + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
                 + '<span class="vm-state ' + vmStateClass(vm.power_state) + '"></span>'
-                + '<strong style="font-size:14px;color:white;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(vm.name) + '</strong>'
+                + '<strong style="font-size:14px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(vm.name) + '</strong>'
                 + '<span class="proto-vmware" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + proto + '</span>'
                 + '</div>'
                 + '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px"><span style="color:var(--text-muted)">Guest OS</span><span style="color:var(--text-secondary);max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(vm.guest_os || 'Unknown') + '</span></div>'
@@ -2130,7 +2130,7 @@
                     return '<div class="recent-row">'
                         + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
                         + '<div style="flex:1;min-width:0">'
-                        + '<div style="font-size:13px;color:white;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(s.entry_display_name || s.hostname || s.session_id) + '</div>'
+                        + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(s.entry_display_name || s.hostname || s.session_id) + '</div>'
                         + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(target) + '</div>'
                         + '</div>'
                         + '<span class="status-pill ' + sc + '">' + escapeHtml((s.status || 'unknown').toUpperCase()) + '</span>'

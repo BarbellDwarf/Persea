@@ -6,85 +6,85 @@
 <div class="max-w-7xl mx-auto">
     <div class="flex items-center justify-between mb-6">
         <div>
-            <h1 class="text-2xl font-bold text-gray-100">Reports</h1>
-            <p class="text-sm text-gray-500 mt-1">Session statistics and usage analytics</p>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)]">Reports</h1>
+            <p class="text-sm text-[var(--text-muted)] mt-1">Session statistics and usage analytics</p>
         </div>
-        <button data-action="export-csv" class="px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm font-medium transition-colors border border-gray-700">
+        <button data-action="export-csv" class="px-4 py-2 bg-[var(--bg-card)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] rounded-lg text-sm font-medium transition-colors border border-[var(--border)]">
             Export CSV
         </button>
     </div>
 
     <!-- Summary Cards -->
     <div class="grid grid-cols-4 gap-4 mb-6">
-        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <div class="text-sm text-gray-500 mb-1">Total Sessions</div>
-            <div id="stat-total-sessions" class="text-3xl font-bold text-gray-100">—</div>
+        <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
+            <div class="text-sm text-[var(--text-muted)] mb-1">Total Sessions</div>
+            <div id="stat-total-sessions" class="text-3xl font-bold text-[var(--text-primary)]">—</div>
         </div>
-        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <div class="text-sm text-gray-500 mb-1">Active Sessions</div>
+        <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
+            <div class="text-sm text-[var(--text-muted)] mb-1">Active Sessions</div>
             <div id="stat-active-sessions" class="text-3xl font-bold text-emerald-400">—</div>
         </div>
-        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <div class="text-sm text-gray-500 mb-1">Total Users</div>
-            <div id="stat-total-users" class="text-3xl font-bold text-gray-100">—</div>
+        <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
+            <div class="text-sm text-[var(--text-muted)] mb-1">Total Users</div>
+            <div id="stat-total-users" class="text-3xl font-bold text-[var(--text-primary)]">—</div>
         </div>
-        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
-            <div class="text-sm text-gray-500 mb-1">Uptime</div>
-            <div id="stat-uptime" class="text-3xl font-bold text-gray-100">—</div>
+        <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-5">
+            <div class="text-sm text-[var(--text-muted)] mb-1">Uptime</div>
+            <div id="stat-uptime" class="text-3xl font-bold text-[var(--text-primary)]">—</div>
         </div>
     </div>
 
     <!-- Session Activity Chart -->
-    <div class="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
-        <h2 class="text-lg font-semibold text-gray-100 mb-4">Session Activity (24h)</h2>
-        <div id="chart-area" class="flex items-end gap-1 h-48 border border-gray-800 rounded-lg bg-gray-800/30 p-4 overflow-x-auto"></div>
+    <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-6 mb-6">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Session Activity (24h)</h2>
+        <div id="chart-area" class="flex items-end gap-1 h-48 border border-[var(--border)] rounded-lg bg-[var(--bg-card)]/30 p-4 overflow-x-auto"></div>
     </div>
 
     <!-- Top Connections & Top Users -->
     <div class="grid grid-cols-2 gap-6 mb-6">
-        <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden table-wrapper">
-            <div class="px-4 py-3 border-b border-gray-800">
-                <h2 class="text-sm font-semibold text-gray-300">Top Connections</h2>
+        <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl overflow-hidden table-wrapper">
+            <div class="px-4 py-3 border-b border-[var(--border)]">
+                <h2 class="text-sm font-semibold text-[var(--text-secondary)]">Top Connections</h2>
             </div>
             <table class="w-full">
                 <thead>
-                    <tr class="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
+                    <tr class="text-left text-xs text-[var(--text-muted)] uppercase tracking-wider border-b border-[var(--border)]">
                         <th class="px-4 py-2">Connection</th>
                         <th class="px-4 py-2 text-right">Sessions</th>
                     </tr>
                 </thead>
-                <tbody id="top-connections" class="divide-y divide-gray-800">
-                    <tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">Loading...</td></tr>
+                <tbody id="top-connections" class="divide-y divide-[var(--border)]">
+                    <tr><td colspan="2" class="px-4 py-6 text-center text-[var(--text-muted)] text-sm">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
 
-        <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden table-wrapper">
-            <div class="px-4 py-3 border-b border-gray-800">
-                <h2 class="text-sm font-semibold text-gray-300">Top Users</h2>
+        <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl overflow-hidden table-wrapper">
+            <div class="px-4 py-3 border-b border-[var(--border)]">
+                <h2 class="text-sm font-semibold text-[var(--text-secondary)]">Top Users</h2>
             </div>
             <table class="w-full">
                 <thead>
-                    <tr class="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
+                    <tr class="text-left text-xs text-[var(--text-muted)] uppercase tracking-wider border-b border-[var(--border)]">
                         <th class="px-4 py-2">User</th>
                         <th class="px-4 py-2 text-right">Sessions</th>
                     </tr>
                 </thead>
-                <tbody id="top-users" class="divide-y divide-gray-800">
-                    <tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">Loading...</td></tr>
+                <tbody id="top-users" class="divide-y divide-[var(--border)]">
+                    <tr><td colspan="2" class="px-4 py-6 text-center text-[var(--text-muted)] text-sm">Loading...</td></tr>
                 </tbody>
             </table>
         </div>
     </div>
 
     <!-- Recent Sessions -->
-    <div class="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden table-wrapper">
-        <div class="px-4 py-3 border-b border-gray-800">
-            <h2 class="text-sm font-semibold text-gray-300">Recent Sessions</h2>
+    <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl overflow-hidden table-wrapper">
+        <div class="px-4 py-3 border-b border-[var(--border)]">
+            <h2 class="text-sm font-semibold text-[var(--text-secondary)]">Recent Sessions</h2>
         </div>
         <table class="w-full">
             <thead>
-                <tr class="text-left text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800">
+                <tr class="text-left text-xs text-[var(--text-muted)] uppercase tracking-wider border-b border-[var(--border)]">
                     <th class="px-4 py-2">Protocol</th>
                     <th class="px-4 py-2">User</th>
                     <th class="px-4 py-2">Target</th>
@@ -92,8 +92,8 @@
                     <th class="px-4 py-2 text-right">Started</th>
                 </tr>
             </thead>
-            <tbody id="recent-sessions" class="divide-y divide-gray-800">
-                <tr><td colspan="5" class="px-4 py-6 text-center text-gray-500 text-sm">Loading...</td></tr>
+            <tbody id="recent-sessions" class="divide-y divide-[var(--border)]">
+                <tr><td colspan="5" class="px-4 py-6 text-center text-[var(--text-muted)] text-sm">Loading...</td></tr>
             </tbody>
         </table>
     </div>
@@ -135,21 +135,21 @@ function renderTopConnectionRow(conn) {
     var name = conn.name || conn.address_book_entry || '';
     var proto = (conn.session_type || '').toUpperCase();
     var hours = conn.total_hours != null ? conn.total_hours.toFixed(1) : '0';
-    return '<tr class="hover:bg-gray-800/50">' +
-        '<td class="px-4 py-2 text-sm text-gray-200">' + escapeHtml(name) +
-        ' <span class="text-gray-500 text-xs">' + escapeHtml(conn.folder || '') + '</span></td>' +
-        '<td class="px-4 py-2 text-sm text-gray-400 text-right">' + (conn.session_count || 0) + '</td>' +
-        '<td class="px-4 py-2 text-xs text-gray-500 text-right">' + hours + 'h</td></tr>';
+    return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
+        '<td class="px-4 py-2 text-sm text-[var(--text-primary)]">' + escapeHtml(name) +
+        ' <span class="text-[var(--text-muted)] text-xs">' + escapeHtml(conn.folder || '') + '</span></td>' +
+        '<td class="px-4 py-2 text-sm text-[var(--text-muted)] text-right">' + (conn.session_count || 0) + '</td>' +
+        '<td class="px-4 py-2 text-xs text-[var(--text-muted)] text-right">' + hours + 'h</td></tr>';
 }
 
 function renderTopUserRow(user) {
     var last = user.last_session ? user.last_session.replace('T', ' ').slice(0, 19) : '—';
     var hours = user.total_hours != null ? user.total_hours.toFixed(1) : '0';
-    return '<tr class="hover:bg-gray-800/50">' +
-        '<td class="px-4 py-2 text-sm text-gray-200">' + escapeHtml(user.user || '') + '</td>' +
-        '<td class="px-4 py-2 text-sm text-gray-400 text-right">' + (user.session_count || 0) + '</td>' +
-        '<td class="px-4 py-2 text-xs text-gray-500 text-right">' + hours + 'h</td>' +
-        '<td class="px-4 py-2 text-xs text-gray-500 text-right">' + escapeHtml(last) + '</td></tr>';
+    return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
+        '<td class="px-4 py-2 text-sm text-[var(--text-primary)]">' + escapeHtml(user.user || '') + '</td>' +
+        '<td class="px-4 py-2 text-sm text-[var(--text-muted)] text-right">' + (user.session_count || 0) + '</td>' +
+        '<td class="px-4 py-2 text-xs text-[var(--text-muted)] text-right">' + hours + 'h</td>' +
+        '<td class="px-4 py-2 text-xs text-[var(--text-muted)] text-right">' + escapeHtml(last) + '</td></tr>';
 }
 
 function exportCSV() {
@@ -168,7 +168,7 @@ fetch('/api/reports/summary').then(function(r) { return r.json(); }).then(functi
 fetch('/api/reports/activity?hours=24').then(function(r) { return r.json(); }).then(function(data) {
     var area = document.getElementById('chart-area');
     if (!Array.isArray(data) || data.length === 0) {
-        area.innerHTML = '<p class="text-gray-600 text-sm w-full text-center">No activity in the last 24 hours</p>';
+        area.innerHTML = '<p class="text-[var(--text-muted)] text-sm w-full text-center">No activity in the last 24 hours</p>';
         return;
     }
     var maxCount = Math.max.apply(null, data.map(function(d) { return d.count; }));
@@ -178,7 +178,7 @@ fetch('/api/reports/activity?hours=24').then(function(r) { return r.json(); }).t
         var hourLabel = d.hour.slice(11, 16);
         return '<div class="flex flex-col items-center flex-1 min-w-8" title="' + d.hour + ': ' + d.count + ' sessions">' +
             '<div class="w-full bg-emerald-600 rounded-t" style="height:' + pct + '%; min-height:2px"></div>' +
-            '<div class="text-xs text-gray-500 mt-1">' + hourLabel + '</div>' +
+            '<div class="text-xs text-[var(--text-muted)] mt-1">' + hourLabel + '</div>' +
             '</div>';
     }).join('');
 });
@@ -187,7 +187,7 @@ fetch('/api/reports/activity?hours=24').then(function(r) { return r.json(); }).t
 fetch('/api/reports/top-connections').then(function(r) { return r.json(); }).then(function(data) {
     var tbody = document.getElementById('top-connections');
     if (!Array.isArray(data) || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">No data yet</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="2" class="px-4 py-6 text-center text-[var(--text-muted)] text-sm">No data yet</td></tr>';
         return;
     }
     tbody.innerHTML = data.map(renderTopConnectionRow).join('');
@@ -197,7 +197,7 @@ fetch('/api/reports/top-connections').then(function(r) { return r.json(); }).the
 fetch('/api/reports/top-users').then(function(r) { return r.json(); }).then(function(data) {
     var tbody = document.getElementById('top-users');
     if (!Array.isArray(data) || data.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="2" class="px-4 py-6 text-center text-gray-500 text-sm">No data yet</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="2" class="px-4 py-6 text-center text-[var(--text-muted)] text-sm">No data yet</td></tr>';
         return;
     }
     tbody.innerHTML = data.map(renderTopUserRow).join('');
@@ -208,7 +208,7 @@ fetch('/api/reports/sessions?limit=20').then(function(r) { return r.json(); }).t
     var tbody = document.getElementById('recent-sessions');
     var sessions = data.sessions || [];
     if (sessions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-gray-500 text-sm">No sessions recorded</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-[var(--text-muted)] text-sm">No sessions recorded</td></tr>';
         return;
     }
     tbody.innerHTML = sessions.map(function(s) {
@@ -223,13 +223,13 @@ fetch('/api/reports/sessions?limit=20').then(function(r) { return r.json(); }).t
             VNC: 'bg-orange-900/50 text-orange-300 border-orange-800',
             SPICE: 'bg-purple-900/50 text-purple-300 border-purple-800',
         };
-        var colorClass = protoColors[proto] || 'bg-gray-800 text-gray-400 border-gray-700';
-        return '<tr class="hover:bg-gray-800/50">' +
+        var colorClass = protoColors[proto] || 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]';
+        return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
             '<td class="px-4 py-2"><span class="px-2 py-0.5 text-xs font-medium rounded border ' + colorClass + '">' + escapeHtml(proto) + '</span></td>' +
-            '<td class="px-4 py-2 text-sm text-gray-300">' + escapeHtml(user) + '</td>' +
-            '<td class="px-4 py-2 text-sm text-gray-400">' + escapeHtml(target) + '</td>' +
-            '<td class="px-4 py-2 text-sm text-gray-400 text-right">' + escapeHtml(duration) + '</td>' +
-            '<td class="px-4 py-2 text-sm text-gray-500 text-right">' + escapeHtml(started) + '</td>' +
+            '<td class="px-4 py-2 text-sm text-[var(--text-secondary)]">' + escapeHtml(user) + '</td>' +
+            '<td class="px-4 py-2 text-sm text-[var(--text-muted)]">' + escapeHtml(target) + '</td>' +
+            '<td class="px-4 py-2 text-sm text-[var(--text-muted)] text-right">' + escapeHtml(duration) + '</td>' +
+            '<td class="px-4 py-2 text-sm text-[var(--text-muted)] text-right">' + escapeHtml(started) + '</td>' +
             '</tr>';
     }).join('');
 });

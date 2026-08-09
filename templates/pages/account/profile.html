@@ -5,13 +5,13 @@
 {% block content %}
 <div class="max-w-2xl mx-auto">
     <div class="mb-8">
-        <h1 class="text-2xl font-bold text-gray-100">Profile</h1>
-        <p class="text-sm text-gray-500 mt-1">Manage your account settings</p>
+        <h1 class="text-2xl font-bold text-[var(--text-primary)]">Profile</h1>
+        <p class="text-sm text-[var(--text-muted)] mt-1">Manage your account settings</p>
     </div>
 
     <!-- Profile Card -->
     <div class="card mb-6">
-        <h2 class="text-lg font-semibold text-gray-100 mb-4">Account Information</h2>
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Account Information</h2>
         <form id="profile-form" class="space-y-5">
             <!-- Display Name -->
             <div>
@@ -26,7 +26,7 @@
                 <label for="email" class="form-label">Email</label>
                 <input type="email" id="email" name="email" readonly
                     class="form-input" style="opacity:0.5;cursor:not-allowed">
-                <p class="text-xs text-gray-600 mt-1">Managed by your identity provider</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Managed by your identity provider</p>
             </div>
 
             <!-- Auth Source -->
@@ -48,7 +48,7 @@
             <!-- Member Since -->
             <div>
                 <label class="form-label">Member Since</label>
-                <p id="member-since" class="text-sm text-gray-300">Loading...</p>
+                <p id="member-since" class="text-sm text-[var(--text-secondary)]">Loading...</p>
             </div>
 
             <!-- Save Button -->
@@ -57,30 +57,30 @@
                     class="btn btn-primary btn-sm">
                     Save Changes
                 </button>
-                <span id="save-status" class="ml-3 text-sm text-gray-500 hidden"></span>
+                <span id="save-status" class="ml-3 text-sm text-[var(--text-muted)] hidden"></span>
             </div>
         </form>
     </div>
 
     <!-- Appearance -->
     <div class="card mb-6">
-        <h2 class="text-lg font-semibold text-gray-100 mb-4">Appearance</h2>
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Appearance</h2>
         <div class="space-y-5">
             <!-- Mode -->
             <div>
                 <label class="form-label">Mode</label>
                 <div class="flex gap-3" id="appearance-mode">
-                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
                         <input type="radio" name="theme-mode" value="light" class="accent-emerald-500">
-                        <span class="text-sm text-gray-300">Light</span>
+                        <span class="text-sm text-[var(--text-secondary)]">Light</span>
                     </label>
-                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
                         <input type="radio" name="theme-mode" value="dark" class="accent-emerald-500">
-                        <span class="text-sm text-gray-300">Dark</span>
+                        <span class="text-sm text-[var(--text-secondary)]">Dark</span>
                     </label>
-                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-700 cursor-pointer hover:border-gray-500 transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
                         <input type="radio" name="theme-mode" value="auto" class="accent-emerald-500">
-                        <span class="text-sm text-gray-300">Auto</span>
+                        <span class="text-sm text-[var(--text-secondary)]">Auto</span>
                     </label>
                 </div>
             </div>
@@ -94,8 +94,8 @@
 
     <!-- My Credentials (preset fallback for entries without credentials) -->
     <div class="card mb-6">
-        <h2 class="text-lg font-semibold text-gray-100 mb-1">My Credentials</h2>
-        <p class="text-xs text-gray-500 mb-4">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-1">My Credentials</h2>
+        <p class="text-xs text-[var(--text-muted)] mb-4">
             Used when a connection entry has no credentials of its own (e.g. rotating passwords — leave
             entry credentials blank and set yours here). If you have none set, you'll be asked for
             credentials when you connect. Stored encrypted, never shown back to you.
@@ -108,7 +108,7 @@
             <div>
                 <label for="creds-password" class="form-label">Password</label>
                 <input type="password" id="creds-password" class="form-input" autocomplete="new-password" placeholder="Leave blank to keep the stored password">
-                <p class="text-xs text-gray-600 mt-1" id="creds-status-line"></p>
+                <p class="text-xs text-[var(--text-muted)] mt-1" id="creds-status-line"></p>
             </div>
             <div class="flex items-center gap-3 pt-1">
                 <button type="submit" id="creds-save" class="btn btn-primary btn-sm">Save Credentials</button>
@@ -120,31 +120,31 @@
 
     <!-- Quick Links -->
     <div class="card">
-        <h2 class="text-lg font-semibold text-gray-100 mb-4">Security</h2>
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Security</h2>
         <div class="space-y-3">
-            <a href="/account/totp.html" class="flex items-center justify-between p-3 bg-gray-800 rounded-lg hover:bg-gray-750 transition-colors group">
+            <a href="/account/totp.html" class="flex items-center justify-between p-3 bg-[var(--bg-card)] rounded-lg hover:bg-[var(--bg-hover)] transition-colors group">
                 <div class="flex items-center gap-3">
                     <div class="w-10 h-10 rounded-lg bg-purple-900/50 border border-purple-800 flex items-center justify-center">
                         <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-gray-200 group-hover:text-white">Two-Factor Authentication</p>
-                        <p class="text-xs text-gray-500" id="totp-status-text">Loading...</p>
+                        <p class="text-sm font-medium text-[var(--text-primary)] group-hover:text-[var(--text-primary)]">Two-Factor Authentication</p>
+                        <p class="text-xs text-[var(--text-muted)]" id="totp-status-text">Loading...</p>
                     </div>
                 </div>
-                <svg class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <svg class="w-5 h-5 text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
             </a>
-            <a href="/account/tokens.html" class="flex items-center justify-between p-3 bg-gray-800 rounded-lg hover:bg-gray-750 transition-colors group">
+            <a href="/account/tokens.html" class="flex items-center justify-between p-3 bg-[var(--bg-card)] rounded-lg hover:bg-[var(--bg-hover)] transition-colors group">
                 <div class="flex items-center gap-3">
                     <div class="w-10 h-10 rounded-lg bg-amber-900/50 border border-amber-800 flex items-center justify-center">
                         <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
                     </div>
                     <div>
-                        <p class="text-sm font-medium text-gray-200 group-hover:text-white">API Tokens</p>
-                        <p class="text-xs text-gray-500">Manage your personal API tokens</p>
+                        <p class="text-sm font-medium text-[var(--text-primary)] group-hover:text-[var(--text-primary)]">API Tokens</p>
+                        <p class="text-xs text-[var(--text-muted)]">Manage your personal API tokens</p>
                     </div>
                 </div>
-                <svg class="w-5 h-5 text-gray-500 group-hover:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                <svg class="w-5 h-5 text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
             </a>
         </div>
     </div>
@@ -229,7 +229,7 @@
         var credsStatus = document.getElementById('creds-status');
         function credsMsg(text, ok) {
             credsStatus.textContent = text;
-            credsStatus.className = 'text-sm ' + (ok === false ? 'text-red-400' : (ok === true ? 'text-emerald-400' : 'text-gray-500'));
+            credsStatus.className = 'text-sm ' + (ok === false ? 'text-red-400' : (ok === true ? 'text-emerald-400' : 'text-[var(--text-muted)]'));
             credsStatus.classList.remove('hidden');
             setTimeout(function() { credsStatus.classList.add('hidden'); }, 4000);
         }
