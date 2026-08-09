@@ -136,6 +136,7 @@ jobs:
         run: |
           cat > /tmp/persea-test-config.toml <<EOF
           listen_addr = "127.0.0.1:8443"
+          db_path = "/tmp/persea-test-https.db"
           [tls]
           cert_path = "/tmp/persea-test-cert.pem"
           key_path = "/tmp/persea-test-key.pem"

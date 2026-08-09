@@ -12,21 +12,26 @@ async function main() {
   await page.goto(`${BASE_URL}/setup`, { waitUntil: 'networkidle', timeout: 15000 });
   console.log('Setup page loaded. URL:', page.url());
 
-  console.log('Filling in setup form...');
-  await page.fill('#admin_email', 'admin@local.test');
-  await page.fill('#admin_name', 'Administrator');
-  await page.fill('#admin_password', 'AdminPass123!');
+  // If redirected away from /setup, setup is already complete — skip to login
+  if (!page.url().includes('/setup')) {
+    console.log('Setup already complete, skipping to login');
+  } else {
+    console.log('Filling in setup form...');
+    await page.fill('#admin_email', 'admin@local.test');
+    await page.fill('#admin_name', 'Administrator');
+    await page.fill('#admin_password', 'AdminPass123!');
 
-  const listenAddr = await page.inputValue('#listen_addr');
-  const dbPath = await page.inputValue('#db_path');
-  console.log('listen_addr:', listenAddr);
-  console.log('db_path:', dbPath);
+    const listenAddr = await page.inputValue('#listen_addr');
+    const dbPath = await page.inputValue('#db_path');
+    console.log('listen_addr:', listenAddr);
+    console.log('db_path:', dbPath);
 
-  console.log('Submitting setup form...');
-  await page.click('button[type="submit"]');
+    console.log('Submitting setup form...');
+    await page.click('button[type="submit"]');
 
-  await page.waitForURL(/(\?setup=complete|\/)/, { timeout: 10000 });
-  console.log('Setup complete. URL:', page.url());
+    await page.waitForURL(/(\?setup=complete|\/)/, { timeout: 10000 });
+    console.log('Setup complete. URL:', page.url());
+  }
 
   // Clear session cookie from setup so we exercise the real login form
   await context.clearCookies();
