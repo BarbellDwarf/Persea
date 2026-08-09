@@ -100,11 +100,15 @@ document.addEventListener('click', function() { var m = document.getElementById(
 
     applyClass(theme);
 
-    var savedColors = localStorage.getItem('persea_theme_colors');
-    if (savedColors) {
-        try {
-            applyThemeColors(JSON.parse(savedColors));
-        } catch(e) {}
+    // Restore color overrides only if the user has an active preset
+    var userPreset = localStorage.getItem('persea_theme');
+    if (userPreset) {
+        var savedColors = localStorage.getItem('persea_theme_colors');
+        if (savedColors) {
+            try {
+                applyThemeColors(JSON.parse(savedColors));
+            } catch(e) {}
+        }
     }
 
     if (stored === 'auto' || !stored) {
@@ -120,11 +124,12 @@ document.addEventListener('click', function() { var m = document.getElementById(
         var next = current === 'dark' ? 'light' : current === 'light' ? 'auto' : 'dark';
         localStorage.setItem('theme', next);
         applyClass(next);
-        var preset = _themePresets[_adminPreset] || {};
-        if (next === 'dark' || next === 'auto') {
-            if (preset.bg) applyThemeColors(preset);
-        } else if (next === 'light') {
-            if (preset.bg) {
+        var userPreset = localStorage.getItem('persea_theme');
+        var preset = (userPreset && _themePresets[userPreset]) ? _themePresets[userPreset] : null;
+        if (preset && preset.bg) {
+            if (next === 'dark' || next === 'auto') {
+                applyThemeColors(preset);
+            } else if (next === 'light') {
                 var light = {};
                 for (var k in preset) light[k] = preset[k];
                 light.bg = '#f8fafc'; light.bg_pattern = 'none';
@@ -134,6 +139,10 @@ document.addEventListener('click', function() { var m = document.getElementById(
                 light.text_on_primary = '#fff'; light.btn_disabled = '#cbd5e1';
                 applyThemeColors(light);
             }
+        } else {
+            // No preset — clear stale color overrides so CSS rules handle it
+            localStorage.removeItem('persea_theme_colors');
+            document.documentElement.style.cssText = '';
         }
     };
 })();
