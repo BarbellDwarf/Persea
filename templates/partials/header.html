@@ -11,6 +11,11 @@
         <button id="theme-toggle" class="btn btn-sm" style="padding:6px 10px;display:flex;align-items:center;gap:4px" title="Theme: Auto (click to cycle)">
             <span class="theme-label">🖥</span>
         </button>
+        <button id="user-menu-btn" class="btn btn-sm" style="padding:6px 8px;font-size:14px" title="Color presets">🎨</button>
+        <div id="user-menu" style="display:none;position:absolute;right:60px;top:40px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:8px;min-width:200px;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.3)">
+            <div style="font-size:11px;color:var(--text-muted);padding:4px 8px;margin-bottom:4px">Color Preset</div>
+            <div id="um-theme-list"></div>
+        </div>
         <a href="/auth/logout" class="btn btn-sm btn-danger" style="padding:6px 12px;font-size:12px">Logout</a>
     </div>
 </header>

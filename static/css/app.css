@@ -815,3 +815,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .toc-link { display: block; padding: 4px 12px; font-size: 13px; color: var(--text-secondary); text-decoration: none; border-left: 2px solid transparent; transition: all 0.15s; }
 .toc-link:hover { color: var(--text-primary); border-left-color: var(--border); }
 .toc-link.active { color: var(--accent); border-left-color: var(--accent); }
+
+/* ── Color preset menu ──────────────────────────────────── */
+.um-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text-secondary); transition: background 0.15s; }
+.um-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.um-item.active { background: rgba(16,185,129,0.1); color: var(--accent); }
+.um-swatch { width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0; border: 2px solid var(--border); }
+.um-item.active .um-swatch { border-color: var(--accent); }
+.um-theme-info { display: flex; flex-direction: column; gap: 1px; }
+.um-theme-name { font-weight: 500; text-transform: capitalize; }
+.um-theme-desc { font-size: 11px; color: var(--text-muted); }
