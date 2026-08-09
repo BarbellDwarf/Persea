@@ -15,6 +15,24 @@ use crate::templates::LoginPageTemplate;
 use crate::totp::TotpEnforcement;
 use crate::CspNonce;
 
+/// Returns true if the account/IP is locked out. Fails closed on DB error.
+async fn check_lockout(database: &Db, username: &str, ip: &str) -> bool {
+    let db = database.clone();
+    let user = username.to_string();
+    let addr = ip.to_string();
+    match tokio::task::spawn_blocking(move || db::is_locked_out(&db, &user, &addr)).await {
+        Ok(Ok(locked)) => locked,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, username, ip, "lockout check failed — failing closed");
+            true // treat as locked out
+        }
+        Err(join_err) => {
+            tracing::warn!(error = %join_err, username, ip, "lockout task panicked — failing closed");
+            true
+        }
+    }
+}
+
 /// Check if TOTP enforcement requires MFA for this user.
 /// Returns true if TOTP is mandatory and the user has it enrolled.
 async fn check_totp_enforcement(
@@ -176,17 +194,8 @@ pub async fn login_submit(
     let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
 
     // Reject if too many recent failed attempts (brute-force lockout)
-    {
-        let db_lock = database.clone();
-        let username = form.username.clone();
-        let ip = client_ip.to_string();
-        if let Ok(true) =
-            tokio::task::spawn_blocking(move || db::is_locked_out(&db_lock, &username, &ip))
-                .await
-                .unwrap_or(Ok(false))
-        {
-            return Redirect::to("/?error=account_locked").into_response();
-        }
+    if check_lockout(&database, &form.username, &client_ip.to_string()).await {
+        return Redirect::to("/?error=account_locked").into_response();
     }
 
     // Build auth request
@@ -307,7 +316,9 @@ pub async fn login_submit(
                 let username = form.username.clone();
                 let ip = client_ip.to_string();
                 let _ = tokio::task::spawn_blocking(move || {
-                    let _ = db::record_successful_login(&db_lock, &username, &ip);
+                    if let Err(e) = db::record_successful_login(&db_lock, &username, &ip) {
+                        tracing::warn!(error = %e, "failed to record successful login");
+                    }
                 })
                 .await;
             }
@@ -390,7 +401,9 @@ pub async fn login_submit(
                 let username = form.username.clone();
                 let ip = client_ip.to_string();
                 let _ = tokio::task::spawn_blocking(move || {
-                    let _ = db::record_failed_login_attempt(&db_lock, &username, &ip);
+                    if let Err(e) = db::record_failed_login_attempt(&db_lock, &username, &ip) {
+                        tracing::warn!(error = %e, "failed to record failed login attempt");
+                    }
                 })
                 .await;
             }
@@ -552,17 +565,8 @@ pub async fn mfa_submit(
     };
 
     // Check lockout before attempting TOTP verification
-    {
-        let db_lock = database.clone();
-        let username = pending.user_email.clone();
-        let ip = client_ip.to_string();
-        if let Ok(true) =
-            tokio::task::spawn_blocking(move || db::is_locked_out(&db_lock, &username, &ip))
-                .await
-                .unwrap_or(Ok(false))
-        {
-            return Redirect::to("/auth/mfa?error=account_locked").into_response();
-        }
+    if check_lockout(&database, &pending.user_email, &client_ip.to_string()).await {
+        return Redirect::to("/auth/mfa?error=account_locked").into_response();
     }
 
     // Verify TOTP code
@@ -590,7 +594,9 @@ pub async fn mfa_submit(
             let username = pending.user_email.clone();
             let ip = client_ip.to_string();
             let _ = tokio::task::spawn_blocking(move || {
-                let _ = db::record_failed_login_attempt(&db_lock, &username, &ip);
+                if let Err(e) = db::record_failed_login_attempt(&db_lock, &username, &ip) {
+                    tracing::warn!(error = %e, "failed to record failed login attempt");
+                }
             })
             .await;
         }
