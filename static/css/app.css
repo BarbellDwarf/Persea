@@ -60,16 +60,31 @@ body {
     display: flex;
     flex-direction: column;
     z-index: 40;
-    transition: transform 0.2s ease;
+    transition: width 0.2s ease;
+    overflow: hidden;
 }
 .sidebar.collapsed {
-    width: 56px;
+    width: 48px;
 }
+.sidebar.collapsed:hover {
+    width: 240px;
+    box-shadow: 4px 0 12px rgba(0,0,0,0.15);
+}
+
+/* Collapsed: hide text, center icons */
+.sidebar.collapsed .nav-text,
 .sidebar.collapsed .sidebar-logo-text,
-.sidebar.collapsed .nav-item span:not(.sidebar-logo-icon),
-.sidebar.collapsed .nav-section-label { display: none; }
+.sidebar.collapsed .nav-section-label { opacity: 0; width: 0; overflow: hidden; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
-.sidebar.collapsed .sidebar-logo { justify-content: center; padding: 0; }
+.sidebar.collapsed .sidebar-logo { justify-content: center; padding: 0; gap: 0; }
+.sidebar.collapsed .sidebar-logo-text { width: 0; }
+
+/* Hover-expanded: show text, restore layout */
+.sidebar.collapsed:hover .nav-text { opacity: 1; width: auto; }
+.sidebar.collapsed:hover .sidebar-logo-text { opacity: 1; width: auto; }
+.sidebar.collapsed:hover .nav-section-label { opacity: 1; width: auto; }
+.sidebar.collapsed:hover .nav-item { justify-content: flex-start; padding: 8px 12px; gap: 10px; }
+.sidebar.collapsed:hover .sidebar-logo { justify-content: flex-start; padding: 0 16px; gap: 12px; }
 
 .sidebar-logo {
     height: 56px;
@@ -149,6 +164,10 @@ body {
     flex-shrink: 0;
     opacity: 0.7;
 }
+.nav-text {
+    transition: opacity 0.15s ease, width 0.15s ease;
+    white-space: nowrap;
+}
 
 .nav-item.active svg { opacity: 1; }
 
@@ -156,6 +175,9 @@ body {
     border-top: 1px solid var(--border);
     padding: 12px;
 }
+.sidebar.collapsed .sidebar-user-info { justify-content: center; padding: 8px 0; }
+.sidebar.collapsed .sidebar-user-info > span,
+.sidebar.collapsed .sidebar-user-role { display: none; }
 
 .sidebar-user-info {
     display: flex;
@@ -199,7 +221,7 @@ body {
 }
 
 .sidebar.collapsed ~ .main-area {
-    margin-left: 56px;
+    margin-left: 48px;
 }
 
 .sidebar.collapsed:hover ~ .main-area {
