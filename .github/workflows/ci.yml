@@ -142,7 +142,7 @@ jobs:
           ./target/release/persea --config /tmp/persea-test-config.toml &
           SERVER_PID=$!
           for i in $(seq 1 30); do
-            if curl -sfk https://localhost:8443/api/health >/dev/null 2>&1; then
+            if curl -sfk https://localhost:8089/api/health >/dev/null 2>&1; then
               echo "server healthy after ${i}s"
               break
             fi

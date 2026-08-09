@@ -4,7 +4,8 @@ const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
 
 async function main() {
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext();
+  const ignoreHTTPS = BASE_URL.startsWith('https');
+  const context = await browser.newContext({ ignoreHTTPSErrors: ignoreHTTPS });
   const page = await context.newPage();
 
   console.log('Navigating to setup page...');
