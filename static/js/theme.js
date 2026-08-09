@@ -100,6 +100,13 @@ document.addEventListener('click', function() { var m = document.getElementById(
 
     applyClass(theme);
 
+    var savedColors = localStorage.getItem('persea_theme_colors');
+    if (savedColors) {
+        try {
+            applyThemeColors(JSON.parse(savedColors));
+        } catch(e) {}
+    }
+
     if (stored === 'auto' || !stored) {
         mq.addEventListener('change', function() {
             if ((localStorage.getItem('theme') || 'auto') === 'auto') {
