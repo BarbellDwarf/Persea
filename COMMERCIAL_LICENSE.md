@@ -12,6 +12,8 @@ persea is available under a dual-license model:
 
 2. **Commercial License** — For organizations that need to modify persea without open-sourcing their changes. This is a paid license with terms negotiated per engagement.
 
+persea also ships in two versions: a free, self-hosted edition that runs without a license key, and an **Enterprise** edition whose features (SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, high availability / clustering) are unlocked by a commercial license key (`PSEA-<base64>`). See [docs/licensing.md](docs/licensing.md) for the two-version model, the 30-day evaluation period, and how to install a license key.
+
 ## When You Need a Commercial License
 
 You need a Commercial License if:
