@@ -96,15 +96,17 @@ ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
-COPY license-gen/ license-gen/
 COPY keys/ keys/
+
+# Create dummy sources so cargo can resolve all [[bin]] targets during the
+# dependency-cache build.  These are overwritten by the real COPYs below.
+RUN mkdir -p src license-gen && echo 'fn main() {}' > src/main.rs && echo 'fn main() {}' > license-gen/main.rs
 
 # Compile all dependencies once with a dummy main so the dependency layer is
 # only rebuilt when Cargo.toml/Cargo.lock change, not on every source edit.
 # The registry/git/target cache mounts persist between builds (exported to
 # GHCR via the workflow's type=gha cache), so the second build below is
 # incremental: only crates touched by the new sources recompile.
-RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
