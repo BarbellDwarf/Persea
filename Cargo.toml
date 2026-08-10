@@ -112,7 +112,7 @@ serde_urlencoded = "0.7"
 thiserror = "2"
 
 # Templates
-minijinja = "1"
+minijinja = "2"
 
 # Auth provider architecture
 async-trait = "0.1"
