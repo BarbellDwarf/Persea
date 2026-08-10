@@ -125,7 +125,7 @@ flate2 = "1"
 ldap3 = { version = "0.12", default-features = false, features = ["sync", "tls-rustls-ring"] }
 
 # TOTP MFA
-totp-rs = { version = "5", features = ["otpauth", "qr", "gen_secret"] }
+totp-rs = { version = "6", features = ["otpauth", "qr", "gen_secret"] }
 
 # Password hashing (Argon2id)
 argon2 = "0.5"
