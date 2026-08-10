@@ -2,20 +2,23 @@
 //!
 //! License format: `PSEA-<base64url JSON>` where the JSON payload contains
 //! a signature, customer name, expiry date, and enabled feature flags.
-//! HMAC-SHA256 is used for offline validation (the signing key can be swapped
-//! for a full PKI setup later).
+//!
+//! Signatures are Ed25519 (asymmetric): the vendor signs license keys with a
+//! private key that never ships, and this binary verifies them with the
+//! public key embedded from `keys/license_public_key`. That file is in
+//! OpenSSH public key format (`ssh-ed25519 <base64> <comment>`, as produced
+//! by `ssh-keygen -t ed25519`); only the public half is committed. The
+//! signature covers the canonical string `customer\nexpiry\nfeatures.join(",")`.
 
 use chrono::{DateTime, Utc};
-use hmac::{Hmac, KeyInit, Mac};
+use ring::signature::{UnparsedPublicKey, ED25519};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
-use std::sync::RwLock;
+use std::sync::{OnceLock, RwLock};
 
-type HmacSha256 = Hmac<Sha256>;
-
-/// HMAC signing key for license validation.
-/// In production this would be a public key; for now it's a hardcoded test key.
-const LICENSE_HMAC_KEY: &[u8] = b"persea-license-hmac-test-key-2024";
+/// Embedded Ed25519 public key (OpenSSH format) used to verify license
+/// signatures. Generated with `ssh-keygen -t ed25519`; only the public half
+/// ships in the binary — the private key never leaves the vendor's machine.
+const LICENSE_PUBLIC_KEY: &[u8] = include_bytes!("../keys/license_public_key");
 
 /// 30-day evaluation period in seconds.
 const EVAL_PERIOD_SECS: i64 = 30 * 24 * 3600;
@@ -53,7 +56,7 @@ pub const ALL_FEATURES: &[&str] = &[
 /// Deserialized license key payload (the JSON inside the base64 encoding).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LicensePayload {
-    /// HMAC-SHA256 signature of the remaining fields.
+    /// Ed25519 signature of the remaining fields.
     pub signature: String,
     /// Customer or organization name.
     pub customer: String,
@@ -109,6 +112,14 @@ pub enum LicenseError {
 /// Returns the parsed [`LicenseKey`] on success, or a [`LicenseError`]
 /// describing what went wrong.
 pub fn validate_license(key: &str) -> Result<LicenseKey, LicenseError> {
+    validate_license_with_key(key, license_public_key_bytes())
+}
+
+/// Validate a license key against a specific Ed25519 public key.
+///
+/// Used by [`validate_license`] with the embedded production key; tests use
+/// it with a throwaway test keypair.
+fn validate_license_with_key(key: &str, public_key: &[u8]) -> Result<LicenseKey, LicenseError> {
     let raw = key
         .strip_prefix("PSEA-")
         .ok_or(LicenseError::InvalidFormat)?;
@@ -120,7 +131,7 @@ pub fn validate_license(key: &str) -> Result<LicenseKey, LicenseError> {
     let payload: LicensePayload = serde_json::from_str(&payload_json)
         .map_err(|e| LicenseError::InvalidPayload(e.to_string()))?;
 
-    verify_signature(&payload)?;
+    verify_signature(&payload, public_key)?;
 
     if Utc::now() > payload.expiry {
         return Err(LicenseError::Expired {
@@ -165,6 +176,11 @@ struct LicenseManagerInner {
 impl LicenseManager {
     /// Create a new manager with an optional pre-loaded license key.
     pub fn new(license_key: Option<&str>) -> Self {
+        Self::new_with_public_key(license_key, license_public_key_bytes())
+    }
+
+    /// Create a manager that verifies against a specific public key (tests).
+    fn new_with_public_key(license_key: Option<&str>, public_key: &[u8]) -> Self {
         let manager = Self {
             inner: RwLock::new(LicenseManagerInner {
                 license: None,
@@ -174,7 +190,7 @@ impl LicenseManager {
         };
 
         if let Some(key) = license_key {
-            if let Err(e) = manager.set_key(key) {
+            if let Err(e) = manager.set_key_with_public_key(key, public_key) {
                 tracing::warn!(error = %e, "invalid license key in config");
             }
         } else {
@@ -186,7 +202,12 @@ impl LicenseManager {
 
     /// Validate and set a new license key. Returns `Ok(())` on success.
     pub fn set_key(&self, key: &str) -> Result<(), LicenseError> {
-        let license = validate_license(key)?;
+        self.set_key_with_public_key(key, license_public_key_bytes())
+    }
+
+    /// Set a license key verified against a specific public key (tests).
+    fn set_key_with_public_key(&self, key: &str, public_key: &[u8]) -> Result<(), LicenseError> {
+        let license = validate_license_with_key(key, public_key)?;
         let mut inner = self.inner.write().unwrap();
         inner.license = Some(license);
         inner.raw_key = Some(key.to_string());
@@ -300,32 +321,38 @@ fn eval_seconds_remaining() -> i64 {
 
 // ── Internal helpers ──
 
-/// Compute HMAC-SHA256 signature of the payload data (everything except `signature`).
-fn compute_signature(payload: &LicensePayload) -> String {
-    let mut mac =
-        HmacSha256::new_from_slice(LICENSE_HMAC_KEY).expect("HMAC accepts any key length");
-
-    let signable = format!(
+/// The canonical string a license signature covers.
+fn signable_string(payload: &LicensePayload) -> String {
+    format!(
         "{}\n{}\n{}",
         payload.customer,
         payload.expiry.to_rfc3339(),
         payload.features.join(",")
-    );
-    mac.update(signable.as_bytes());
-    let result = mac.finalize();
-    base64url_encode(&result.into_bytes())
+    )
 }
 
-/// Verify the HMAC signature in a license payload.
-fn verify_signature(payload: &LicensePayload) -> Result<(), LicenseError> {
-    let expected = compute_signature(payload);
-    use subtle::ConstantTimeEq;
-    let a = expected.as_bytes();
-    let b = payload.signature.as_bytes();
-    if a.len() != b.len() || a.ct_ne(b).into() {
-        return Err(LicenseError::InvalidSignature);
-    }
-    Ok(())
+/// Verify the Ed25519 signature in a license payload against a public key.
+fn verify_signature(payload: &LicensePayload, public_key: &[u8]) -> Result<(), LicenseError> {
+    let sig_bytes =
+        decode_base64url(&payload.signature).map_err(|_| LicenseError::InvalidSignature)?;
+    UnparsedPublicKey::new(&ED25519, public_key)
+        .verify(signable_string(payload).as_bytes(), &sig_bytes)
+        .map_err(|_| LicenseError::InvalidSignature)
+}
+
+/// The embedded Ed25519 public key, parsed once on first use.
+fn license_public_key_bytes() -> &'static [u8; 32] {
+    static KEY: OnceLock<[u8; 32]> = OnceLock::new();
+    KEY.get_or_init(|| {
+        let text =
+            std::str::from_utf8(LICENSE_PUBLIC_KEY).expect("license public key file is UTF-8");
+        let pk = ssh_key::PublicKey::from_openssh(text)
+            .expect("license public key file is a valid OpenSSH public key");
+        match pk.key_data() {
+            ssh_key::public::KeyData::Ed25519(ed) => *ed.as_ref(),
+            _ => panic!("license public key file is not an Ed25519 key"),
+        }
+    })
 }
 
 /// Encode bytes to URL-safe base64 (no padding).
@@ -342,36 +369,70 @@ fn decode_base64url(input: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Create a signed license key string from raw fields (for testing / admin UI).
-pub fn create_license_key(customer: &str, expiry: DateTime<Utc>, features: Vec<String>) -> String {
-    let payload = LicensePayload {
-        signature: String::new(), // placeholder
-        customer: customer.to_string(),
-        expiry,
-        features,
-    };
-    let sig = compute_signature(&payload);
-    let payload = LicensePayload {
-        signature: sig,
-        ..payload
-    };
-    let json = serde_json::to_string(&payload).expect("license payload serializes");
-    format!("PSEA-{}", base64url_encode(json.as_bytes()))
-}
-
 // ── Tests ──
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ring::rand::SecureRandom;
+    use ring::signature::Ed25519KeyPair;
+
+    /// Generate a throwaway Ed25519 keypair for tests (never the production key).
+    fn test_keypair() -> Ed25519KeyPair {
+        let rng = ring::rand::SystemRandom::new();
+        let mut seed = [0u8; 32];
+        rng.fill(&mut seed).expect("system rng fills seed");
+        Ed25519KeyPair::from_seed_unchecked(&seed).expect("valid Ed25519 seed")
+    }
+
+    /// Sign a payload with a test keypair, returning the base64url signature.
+    fn sign_payload(payload: &LicensePayload, keypair: &Ed25519KeyPair) -> String {
+        let sig = keypair.sign(signable_string(payload).as_bytes());
+        base64url_encode(sig.as_ref())
+    }
+
+    /// Build a signed license key string using a test keypair.
+    fn create_test_license_key(
+        keypair: &Ed25519KeyPair,
+        customer: &str,
+        expiry: DateTime<Utc>,
+        features: Vec<String>,
+    ) -> String {
+        let payload = LicensePayload {
+            signature: String::new(), // placeholder
+            customer: customer.to_string(),
+            expiry,
+            features,
+        };
+        let sig = sign_payload(&payload, keypair);
+        let payload = LicensePayload {
+            signature: sig,
+            ..payload
+        };
+        let json = serde_json::to_string(&payload).expect("license payload serializes");
+        format!("PSEA-{}", base64url_encode(json.as_bytes()))
+    }
+
+    #[test]
+    fn test_committed_public_key_parses() {
+        let text = std::str::from_utf8(LICENSE_PUBLIC_KEY).expect("key file is UTF-8");
+        let pk = ssh_key::PublicKey::from_openssh(text).expect("key parses as OpenSSH");
+        let ed = match pk.key_data() {
+            ssh_key::public::KeyData::Ed25519(ed) => ed,
+            _ => panic!("committed key is not Ed25519"),
+        };
+        assert_eq!(ed.as_ref().len(), 32);
+    }
 
     #[test]
     fn test_create_and_validate_roundtrip() {
+        let keypair = test_keypair();
         let expiry = Utc::now() + chrono::Duration::days(365);
         let features = vec![FEAT_SAML.to_string(), FEAT_RBAC.to_string()];
-        let key = create_license_key("Test Corp", expiry, features.clone());
+        let key = create_test_license_key(&keypair, "Test Corp", expiry, features.clone());
 
-        let lic = validate_license(&key).expect("valid key should validate");
+        let lic = validate_license_with_key(&key, keypair.public_key().as_ref())
+            .expect("valid key should validate");
         assert_eq!(lic.customer_name, "Test Corp");
         assert_eq!(lic.features, features);
     }
@@ -393,39 +454,60 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_rejects_bad_signature() {
-        let expiry = Utc::now() + chrono::Duration::days(365);
-        let features = vec![FEAT_SAML.to_string()];
-        let key = create_license_key("Test", expiry, features);
+    fn test_validate_rejects_tampered_signature() {
+        let keypair = test_keypair();
+        let key = create_test_license_key(
+            &keypair,
+            "Test",
+            Utc::now() + chrono::Duration::days(365),
+            vec![FEAT_SAML.to_string()],
+        );
 
-        // Tamper with one character in the signature portion
-        let mut chars: Vec<char> = key.chars().collect();
-        // Find a signature character (near the end) and flip it
-        for c in chars.iter_mut().rev().take(5) {
+        // Flip a character in the signature (keep it valid base64url)
+        let raw = key.strip_prefix("PSEA-").unwrap();
+        let mut payload: LicensePayload =
+            serde_json::from_slice(&decode_base64url(raw).unwrap()).unwrap();
+        let mut sig: Vec<char> = payload.signature.chars().collect();
+        for c in sig.iter_mut() {
             if *c != 'A' {
                 *c = 'A';
                 break;
             }
         }
-        let tampered: String = chars.into_iter().collect();
-        let result = validate_license(&tampered);
-        assert!(
-            matches!(
-                result,
-                Err(LicenseError::InvalidSignature) | Err(LicenseError::InvalidPayload(_))
-            ),
-            "expected signature or payload error, got: {:?}",
-            result
+        payload.signature = sig.into_iter().collect();
+        let json = serde_json::to_string(&payload).unwrap();
+        let tampered = format!("PSEA-{}", base64url_encode(json.as_bytes()));
+
+        let result = validate_license_with_key(&tampered, keypair.public_key().as_ref());
+        assert!(matches!(result, Err(LicenseError::InvalidSignature)));
+    }
+
+    #[test]
+    fn test_validate_rejects_wrong_key() {
+        let signer = test_keypair();
+        let other = test_keypair();
+        let key = create_test_license_key(
+            &signer,
+            "Test",
+            Utc::now() + chrono::Duration::days(365),
+            vec![FEAT_SAML.to_string()],
         );
+
+        let result = validate_license_with_key(&key, other.public_key().as_ref());
+        assert!(matches!(result, Err(LicenseError::InvalidSignature)));
     }
 
     #[test]
     fn test_expired_license() {
-        let expiry = Utc::now() - chrono::Duration::days(1);
-        let features = vec![FEAT_SAML.to_string()];
-        let key = create_license_key("Expired Co", expiry, features);
+        let keypair = test_keypair();
+        let key = create_test_license_key(
+            &keypair,
+            "Expired Co",
+            Utc::now() - chrono::Duration::days(1),
+            vec![FEAT_SAML.to_string()],
+        );
 
-        let result = validate_license(&key);
+        let result = validate_license_with_key(&key, keypair.public_key().as_ref());
         assert!(matches!(result, Err(LicenseError::Expired { .. })));
     }
 
@@ -471,11 +553,15 @@ mod tests {
 
     #[test]
     fn test_license_manager_with_valid_key() {
-        let expiry = Utc::now() + chrono::Duration::days(365);
-        let features = vec![FEAT_SAML.to_string()];
-        let key = create_license_key("Test", expiry, features);
+        let keypair = test_keypair();
+        let key = create_test_license_key(
+            &keypair,
+            "Test",
+            Utc::now() + chrono::Duration::days(365),
+            vec![FEAT_SAML.to_string()],
+        );
 
-        let mgr = LicenseManager::new(Some(&key));
+        let mgr = LicenseManager::new_with_public_key(Some(&key), keypair.public_key().as_ref());
         assert_eq!(mgr.status(), LicenseStatus::Valid);
         assert!(mgr.has_feature(FEAT_SAML));
         assert!(!mgr.has_feature(FEAT_RBAC));
@@ -484,11 +570,15 @@ mod tests {
 
     #[test]
     fn test_license_manager_clear() {
-        let expiry = Utc::now() + chrono::Duration::days(365);
-        let features = vec![FEAT_SAML.to_string()];
-        let key = create_license_key("Test", expiry, features);
+        let keypair = test_keypair();
+        let key = create_test_license_key(
+            &keypair,
+            "Test",
+            Utc::now() + chrono::Duration::days(365),
+            vec![FEAT_SAML.to_string()],
+        );
 
-        let mgr = LicenseManager::new(Some(&key));
+        let mgr = LicenseManager::new_with_public_key(Some(&key), keypair.public_key().as_ref());
         assert_eq!(mgr.status(), LicenseStatus::Valid);
         mgr.clear();
         assert_ne!(mgr.status(), LicenseStatus::Valid);
@@ -505,8 +595,13 @@ mod tests {
 
     #[test]
     fn test_create_license_key_format() {
-        let expiry = Utc::now() + chrono::Duration::days(365);
-        let key = create_license_key("Acme", expiry, vec![]);
+        let keypair = test_keypair();
+        let key = create_test_license_key(
+            &keypair,
+            "Acme",
+            Utc::now() + chrono::Duration::days(365),
+            vec![],
+        );
         assert!(key.starts_with("PSEA-"));
         // Key should be reasonably long (JSON payload + signature)
         assert!(key.len() > 50);
