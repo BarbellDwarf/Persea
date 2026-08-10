@@ -383,20 +383,14 @@ pub async fn upload_logo(
             {
                 file_data.extend_from_slice(&chunk);
                 if file_data.len() > max_size {
-                    return Err(AppError::Validation(
-                        "file exceeds 2 MB limit".into(),
-                    ));
+                    return Err(AppError::Validation("file exceeds 2 MB limit".into()));
                 }
             }
         }
     }
 
     let fname = filename.ok_or_else(|| AppError::Validation("no file provided".into()))?;
-    let ext = fname
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_lowercase();
+    let ext = fname.rsplit('.').next().unwrap_or("").to_lowercase();
     if !allowed_exts.contains(&ext.as_str()) {
         return Err(AppError::Validation(format!(
             "unsupported file type '.{ext}'; allowed: {}",
