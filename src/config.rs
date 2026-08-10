@@ -565,6 +565,12 @@ pub struct Config {
     /// made available via Extension. The existing rusqlite `Db` continues
     /// to work alongside it.
     pub db_url: Option<String>,
+
+    /// Commercial license key (format: `PSEA-<base64>`).
+    /// When absent, enterprise features are available during the 30-day
+    /// evaluation period.
+    #[serde(default)]
+    pub license_key: Option<String>,
     /// Storage backend for the address book (connections, credentials).
     /// When `backend = "db"` (default), the DB stores folder/entry metadata
     /// and encrypted credentials. When `backend = "vault"`, metadata stays
@@ -1467,6 +1473,7 @@ impl Default for Config {
             rdp: None,
             db_url: None,
             storage: None,
+            license_key: None,
         }
     }
 }

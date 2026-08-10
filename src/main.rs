@@ -27,6 +27,7 @@ mod error;
 mod guacd;
 mod handlers;
 mod import;
+mod license;
 mod metrics;
 mod migrate;
 mod oidc;
