@@ -746,16 +746,15 @@ pub async fn saml_acs(
             // Look up the user by email/subject
             let db_clone = database.clone();
             let email = subject.clone();
-            let user = match tokio::task::spawn_blocking(move || {
-                db::get_user_by_email(&db_clone, &email)
-            })
-            .await
-            {
-                Ok(Ok(user)) => user,
-                _ => {
-                    return Redirect::to("/?error=user_lookup_failed").into_response();
-                }
-            };
+            let user =
+                match tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &email))
+                    .await
+                {
+                    Ok(Ok(user)) => user,
+                    _ => {
+                        return Redirect::to("/?error=user_lookup_failed").into_response();
+                    }
+                };
 
             if user.disabled {
                 return Redirect::to("/?error=account_disabled").into_response();
