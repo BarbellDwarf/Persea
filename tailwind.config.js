@@ -1,5 +1,5 @@
 module.exports = {
-  content: ["static/**/*.html"],
+  content: ["templates/**/*.html", "static/js/**/*.js"],
   safelist: ['grid-cols-1', 'grid-cols-3'],
   darkMode: "class",
   theme: {

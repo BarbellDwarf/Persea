@@ -824,8 +824,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .-translate-y-1\/2 { transform: translateY(-50%); }
 .tracking-\[0\.3em\] { letter-spacing: 0.3em; }
 .text-\[8px\] { font-size: 8px; }
-.lg\:block { display: block !important; }
-.lg\:grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
 
 /* ── Session Type Badges ─────────────────────────────────── */
 .badge-ssh { background: rgba(16,185,129,0.12); color: #34d399; }
