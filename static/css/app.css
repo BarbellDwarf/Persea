@@ -87,6 +87,7 @@ body {
 .sidebar.collapsed:hover .nav-section-label { opacity: 1; width: auto; }
 .sidebar.collapsed:hover .nav-item { justify-content: flex-start; padding: 8px 12px; gap: 10px; }
 .sidebar.collapsed:hover .sidebar-logo { justify-content: flex-start; padding: 0 16px; gap: 12px; }
+.sidebar.collapsed:hover .sidebar-toggle { display: inline-flex; }
 
 .sidebar-logo {
     height: 56px;
@@ -115,6 +116,17 @@ body {
     font-size: 14px;
     font-weight: 600;
     color: var(--text-primary);
+}
+
+.sidebar-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 6px;
+    color: var(--text-muted);
 }
 
 .sidebar-nav {
