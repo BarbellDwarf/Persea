@@ -8,19 +8,50 @@
 /// for a `csrf_token` field. This handles cases where JavaScript cannot
 /// read the cookie (browser extensions, network timing, device quirks).
 use std::future::Future;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{header, HeaderMap, Method, Request, Response, StatusCode};
 use tower::{Layer, Service};
+
+use crate::auth::TrustedProxies;
 
 pub const CSRF_COOKIE: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 32;
 
-/// Header-only variant of the HTTPS check for handlers that extract
-/// `HeaderMap` instead of the full request.
-pub fn is_https_headers(headers: &HeaderMap) -> bool {
+/// Whether Persea terminates TLS itself (set at startup from the server
+/// config). The process runs exactly one listener mode, so this is a
+/// reliable, non-spoofable signal for direct (no-proxy) deployments.
+#[derive(Clone)]
+pub struct TlsEnabled(pub bool);
+
+/// Is the connection HTTPS? True when Persea terminated TLS itself, or when
+/// a trusted proxy reports `X-Forwarded-Proto: https`. The proxy header is
+/// only honoured when the immediate peer is in `trusted_proxies` — matching
+/// the gate `client_ip()` applies to `X-Forwarded-For`.
+pub fn is_https(
+    headers: &HeaderMap,
+    tls_enabled: bool,
+    trusted_proxies: Option<&TrustedProxies>,
+    peer_ip: Option<IpAddr>,
+) -> bool {
+    if tls_enabled {
+        return true;
+    }
+    let peer_trusted = match (trusted_proxies, peer_ip) {
+        (Some(proxies), Some(ip)) => proxies.0.iter().any(|cidr| {
+            cidr.parse::<ipnetwork::IpNetwork>()
+                .map(|net| net.contains(ip))
+                .unwrap_or(false)
+        }),
+        _ => false,
+    };
+    if !peer_trusted {
+        return false;
+    }
     headers
         .get("x-forwarded-proto")
         .and_then(|v| v.to_str().ok())
@@ -28,15 +59,37 @@ pub fn is_https_headers(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
-/// `" Secure; "` when the request arrived over HTTPS (or a proxy says so),
-/// empty otherwise. Set-Cookie builders use this so session cookies are not
-/// dropped by browsers when serving plain HTTP (e.g. LAN access without TLS).
+/// `is_https` for code that holds the full request: reads `TlsEnabled`,
+/// `TrustedProxies`, and `ConnectInfo` from the request extensions.
+pub fn is_https_request(req: &Request<Body>) -> bool {
+    let tls_enabled = req
+        .extensions()
+        .get::<TlsEnabled>()
+        .map(|t| t.0)
+        .unwrap_or(false);
+    let trusted_proxies = req.extensions().get::<TrustedProxies>();
+    let peer_ip = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    is_https(req.headers(), tls_enabled, trusted_proxies, peer_ip)
+}
+
+/// `" Secure; "` when the request arrived over HTTPS (Persea's own TLS or a
+/// trusted proxy), empty otherwise. Set-Cookie builders use this so session
+/// cookies are not dropped by browsers when serving plain HTTP (e.g. LAN
+/// access without TLS).
 ///
 /// The value is designed to be interpolated into `HttpOnly;{}SameSite=Lax`
 /// so the result is `HttpOnly; Secure; SameSite=Lax` (HTTPS) or
 /// `HttpOnly;SameSite=Lax` (HTTP) — no double semicolons.
-pub fn cookie_secure_attr(headers: &HeaderMap) -> &'static str {
-    if is_https_headers(headers) {
+pub fn cookie_secure_attr(
+    headers: &HeaderMap,
+    tls_enabled: bool,
+    trusted_proxies: Option<&TrustedProxies>,
+    peer_ip: Option<IpAddr>,
+) -> &'static str {
+    if is_https(headers, tls_enabled, trusted_proxies, peer_ip) {
         " Secure; "
     } else {
         ""
@@ -104,19 +157,9 @@ where
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let method = req.method().clone();
-        // Secure cookie attribute only over HTTPS. Hyper sets the URI scheme
-        // on TLS connections; behind a reverse proxy, honour X-Forwarded-Proto.
-        let is_https = req
-            .uri()
-            .scheme()
-            .map(|s| s.as_str() == "https")
-            .unwrap_or(false)
-            || req
-                .headers()
-                .get("x-forwarded-proto")
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.split(',').next().unwrap_or("").trim() == "https")
-                .unwrap_or(false);
+        // Secure cookie attribute only over HTTPS: Persea's own TLS, or a
+        // trusted proxy's X-Forwarded-Proto (gated on the peer address).
+        let is_https = is_https_request(&req);
 
         let mut inner = self.inner.clone();
         Box::pin(async move {
@@ -271,8 +314,28 @@ mod tests {
 
     #[tokio::test]
     async fn secure_flag_set_over_https_scheme() {
+        let mut req = Request::builder()
+            .uri("https://persea.test/")
+            .body(Body::empty())
+            .unwrap();
+        // Persea's own TLS termination is the HTTPS signal (the URI scheme
+        // alone is client-supplied and not trusted).
+        req.extensions_mut().insert(TlsEnabled(true));
+        let resp = run(req).await;
+        let set_cookie = resp
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.contains("Secure"), "got {set_cookie}");
+    }
+
+    #[tokio::test]
+    async fn secure_flag_not_set_without_tls_or_trusted_proxy() {
         let resp = run(Request::builder()
             .uri("https://persea.test/")
+            .header("x-forwarded-proto", "https")
             .body(Body::empty())
             .unwrap())
         .await;
@@ -282,7 +345,10 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert!(set_cookie.contains("Secure"), "got {set_cookie}");
+        assert!(
+            !set_cookie.contains("Secure"),
+            "client-supplied X-Forwarded-Proto must not set Secure: {set_cookie}"
+        );
     }
 
     #[tokio::test]

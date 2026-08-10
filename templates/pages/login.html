@@ -112,7 +112,7 @@
                 credentials: 'same-origin',
                 redirect: 'follow'
             }).then(function(resp) {
-                if (resp.redirected) {
+                if (resp.redirected && resp.ok) {
                     location.href = resp.url;
                 } else if (resp.ok) {
                     location.href = '/';

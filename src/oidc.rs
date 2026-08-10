@@ -1,11 +1,12 @@
 //! OIDC authentication — login, callback, logout handlers.
 
-use crate::auth::extract_cookie;
+use crate::auth::{extract_cookie, TrustedProxies};
 use crate::config::OidcConfig;
+use crate::csrf::TlsEnabled;
 use crate::db::{self, Db};
 use crate::totp::TotpEnforcement;
 use axum::{
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{header, StatusCode},
     response::{AppendHeaders, IntoResponse, Redirect, Response},
     Extension,
@@ -18,6 +19,7 @@ use openidconnect::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -148,6 +150,9 @@ pub struct LoginParams {
 /// GET /auth/login — redirect user to OIDC provider.
 pub async fn login(
     State(registry): State<std::sync::Arc<OidcRegistry>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(trusted_proxies): Extension<TrustedProxies>,
+    Extension(tls_enabled): Extension<TlsEnabled>,
     Query(params): Query<LoginParams>,
     headers: axum::http::HeaderMap,
 ) -> Response {
@@ -209,7 +214,12 @@ pub async fn login(
     };
     let cookie_value = format!("{}:{}", state_key, fingerprint);
 
-    let sec = crate::csrf::cookie_secure_attr(&headers);
+    let sec = crate::csrf::cookie_secure_attr(
+        &headers,
+        tls_enabled.0,
+        Some(&trusted_proxies),
+        Some(addr.ip()),
+    );
     let state_cookie = format!(
         "persea_oidc_state={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=600",
         cookie_value, sec
@@ -255,8 +265,11 @@ pub struct CallbackParams {
 /// GET /auth/callback — exchange code for tokens, create session.
 pub async fn callback(
     State(registry): State<std::sync::Arc<OidcRegistry>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Extension(database): Extension<Db>,
     Extension(totp_enforcement): Extension<TotpEnforcement>,
+    Extension(trusted_proxies): Extension<TrustedProxies>,
+    Extension(tls_enabled): Extension<TlsEnabled>,
     headers: axum::http::HeaderMap,
     Query(params): Query<CallbackParams>,
 ) -> Response {
@@ -569,7 +582,12 @@ pub async fn callback(
 
         tracing::info!(email = %email, "OIDC login requires TOTP — redirecting to MFA");
 
-        let sec = crate::csrf::cookie_secure_attr(&headers);
+        let sec = crate::csrf::cookie_secure_attr(
+            &headers,
+            tls_enabled.0,
+            Some(&trusted_proxies),
+            Some(addr.ip()),
+        );
         let mfa_cookie = format!(
             "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{}SameSite=Lax; Max-Age={}",
             pending_token, sec, ttl_secs
@@ -636,7 +654,12 @@ pub async fn callback(
         .unwrap_or_else(|| "/addressbook.html".to_string());
 
     // Set session cookie and redirect; clear OIDC state and next cookies
-    let sec = crate::csrf::cookie_secure_attr(&headers);
+    let sec = crate::csrf::cookie_secure_attr(
+        &headers,
+        tls_enabled.0,
+        Some(&trusted_proxies),
+        Some(addr.ip()),
+    );
     let session_cookie = format!(
         "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
         session_token, sec, ttl_secs
@@ -673,10 +696,10 @@ pub async fn logout(
             tokio::task::spawn_blocking(move || db::delete_auth_session(&db_clone, &token)).await;
     }
 
-    let secure = crate::csrf::cookie_secure_attr(request.headers());
+    let secure = crate::csrf::is_https_request(&request);
     let clear_cookie = format!(
         "persea_session=; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=0",
-        if secure.is_empty() { "" } else { "Secure; " }
+        if secure { " Secure; " } else { "" }
     );
 
     (

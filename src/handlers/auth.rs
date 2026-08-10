@@ -10,6 +10,7 @@ use crate::audit;
 use crate::auth::{client_ip, extract_cookie, TrustedProxies};
 use crate::auth_chain::AuthChain;
 use crate::auth_provider::AuthRequest;
+use crate::csrf::TlsEnabled;
 use crate::db::{self, Db};
 use crate::templates::LoginPageTemplate;
 use crate::totp::TotpEnforcement;
@@ -65,7 +66,15 @@ async fn check_totp_enforcement(
 
 /// Create a pending MFA record and redirect to the MFA page.
 /// Returns the response with the MFA pending cookie set.
-async fn redirect_to_mfa(db: &Db, user: &db::User, ttl_secs: u64, headers: &HeaderMap) -> Response {
+async fn redirect_to_mfa(
+    db: &Db,
+    user: &db::User,
+    ttl_secs: u64,
+    headers: &HeaderMap,
+    tls_enabled: bool,
+    trusted_proxies: Option<&TrustedProxies>,
+    peer_ip: Option<std::net::IpAddr>,
+) -> Response {
     let db_clone = db.clone();
     let user_id = user.id;
     let email = user.email.clone();
@@ -95,7 +104,7 @@ async fn redirect_to_mfa(db: &Db, user: &db::User, ttl_secs: u64, headers: &Head
     let mfa_cookie = format!(
         "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{}SameSite=Lax; Max-Age={}",
         pending_token,
-        crate::csrf::cookie_secure_attr(headers),
+        crate::csrf::cookie_secure_attr(headers, tls_enabled, trusted_proxies, peer_ip),
         ttl_secs
     );
 
@@ -187,6 +196,7 @@ pub async fn login_submit(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Extension(database): Extension<Db>,
     Extension(trusted_proxies): Extension<TrustedProxies>,
+    Extension(tls_enabled): Extension<TlsEnabled>,
     Extension(auth_chain): Extension<Arc<AuthChain>>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<LoginFormData>,
@@ -269,7 +279,16 @@ pub async fn login_submit(
             if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
             {
                 let ttl_secs = 300; // 5 minutes for MFA pending
-                return redirect_to_mfa(&database, &user, ttl_secs, &headers).await;
+                return redirect_to_mfa(
+                    &database,
+                    &user,
+                    ttl_secs,
+                    &headers,
+                    tls_enabled.0,
+                    Some(&trusted_proxies),
+                    Some(addr.ip()),
+                )
+                .await;
             }
 
             // Create auth session
@@ -361,7 +380,12 @@ pub async fn login_submit(
             let session_cookie = format!(
                 "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
                 session_token,
-                crate::csrf::cookie_secure_attr(&headers),
+                crate::csrf::cookie_secure_attr(
+                    &headers,
+                    tls_enabled.0,
+                    Some(&trusted_proxies),
+                    Some(addr.ip())
+                ),
                 ttl_secs
             );
 
@@ -534,6 +558,7 @@ pub async fn mfa_submit(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Extension(database): Extension<Db>,
     Extension(trusted_proxies): Extension<TrustedProxies>,
+    Extension(tls_enabled): Extension<TlsEnabled>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<MfaFormData>,
 ) -> Response {
@@ -646,7 +671,12 @@ pub async fn mfa_submit(
         .await;
     }
 
-    let secure = crate::csrf::cookie_secure_attr(&headers);
+    let secure = crate::csrf::cookie_secure_attr(
+        &headers,
+        tls_enabled.0,
+        Some(&trusted_proxies),
+        Some(addr.ip()),
+    );
     let session_cookie = format!(
         "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
         session_token,
@@ -690,6 +720,7 @@ pub async fn saml_acs(
     Extension(auth_chain): Extension<Arc<AuthChain>>,
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(totp_enforcement): Extension<TotpEnforcement>,
+    Extension(tls_enabled): Extension<TlsEnabled>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<SamlAcsForm>,
 ) -> Response {
@@ -765,7 +796,16 @@ pub async fn saml_acs(
             if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
             {
                 let ttl_secs = 300; // 5 minutes for MFA pending
-                return redirect_to_mfa(&database, &user, ttl_secs, &headers).await;
+                return redirect_to_mfa(
+                    &database,
+                    &user,
+                    ttl_secs,
+                    &headers,
+                    tls_enabled.0,
+                    Some(&trusted_proxies),
+                    Some(addr.ip()),
+                )
+                .await;
             }
 
             // Create auth session
@@ -815,7 +855,12 @@ pub async fn saml_acs(
             let session_cookie = format!(
                 "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
                 session_token,
-                crate::csrf::cookie_secure_attr(&headers),
+                crate::csrf::cookie_secure_attr(
+                    &headers,
+                    tls_enabled.0,
+                    Some(&trusted_proxies),
+                    Some(addr.ip())
+                ),
                 ttl_secs
             );
 

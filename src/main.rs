@@ -718,8 +718,7 @@ fn cmd_delete_user(database: &Db, email: &str) {
 }
 
 /// Whether TLS is enabled (used by security headers middleware).
-#[derive(Clone)]
-struct TlsEnabled(bool);
+use crate::csrf::TlsEnabled;
 
 async fn security_headers(
     tls: Extension<TlsEnabled>,
