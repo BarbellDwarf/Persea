@@ -36,8 +36,8 @@
     </div>
 
     <p class="text-xs text-[var(--text-muted)] mt-3">
-        Folder access grants reference group names as plain strings. Renaming or deleting a group does
-        not rewrite folder <code>allowed_groups</code> — delete only removes the group's provider-group mappings.
+        Renaming or deleting a group won't automatically update folders that already
+        reference it — you'll need to update folder access manually afterward.
     </p>
 </div>
 
@@ -116,9 +116,9 @@
     <div class="card w-full max-w-sm">
         <h2 id="delete-group-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Delete Group</h2>
         <p class="text-sm text-[var(--text-muted)] mb-4">
-            Group <span id="delete-group-name" class="text-[var(--text-primary)]"></span> and its provider-group mappings
-            will be removed. Folders that reference this group name keep it in their
-            <code class="text-[var(--text-secondary)]">allowed_groups</code> — the name still grants access by itself.
+            Group <span id="delete-group-name" class="text-[var(--text-primary)]"></span> and its auth-provider mappings
+            will be removed. Folders that already reference this group name will keep it — the name
+            still grants access on its own, so update folder access if needed.
         </p>
         <div class="flex justify-end gap-3">
             <button type="button" data-action="close-delete-modal" class="btn btn-secondary btn-sm">Cancel</button>
