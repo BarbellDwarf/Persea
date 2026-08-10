@@ -170,6 +170,29 @@ document.addEventListener('click', function() { var m = document.getElementById(
             // No preset — clear stale color overrides so CSS rules handle it
             localStorage.removeItem('persea_theme_colors');
             document.documentElement.style.cssText = '';
+            // No user preset — apply built-in dark/light palette so toggle has visual effect
+            if (!localStorage.getItem('persea_theme')) {
+                var darkPalette = {
+                    bg: '#0a0f1a', surface: '#111827', input: '#1e293b',
+                    text: '#f1f5f9', text_muted: '#94a3b8', text_dim: '#64748b',
+                    border: '#2a3548', accent: '#10b981', accent_hover: '#059669',
+                    primary: '#10b981', primary_hover: '#059669',
+                    bg_pattern: 'none'
+                };
+                var lightPalette = {
+                    bg: '#f8fafc', surface: '#ffffff', input: '#f1f5f9',
+                    text: '#1e293b', text_muted: '#64748b', text_dim: '#94a3b8',
+                    border: '#e2e8f0', accent: '#10b981', accent_hover: '#059669',
+                    primary: '#10b981', primary_hover: '#059669',
+                    bg_pattern: 'none'
+                };
+                var resolved = next === 'auto' ? (mq.matches ? 'dark' : 'light') : next;
+                if (resolved === 'dark') {
+                    applyThemeColors(darkPalette);
+                } else if (resolved === 'light') {
+                    applyThemeColors(lightPalette);
+                }
+            }
         }
     };
 })();
