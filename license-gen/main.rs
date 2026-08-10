@@ -19,7 +19,7 @@
 
 use chrono::{DateTime, NaiveDate, Utc};
 use clap::{Parser, Subcommand};
-use persea::license::{base64url_encode, signable_string, ALL_FEATURES, LicensePayload};
+use persea::license::{base64url_encode, signable_string, LicensePayload, ALL_FEATURES};
 use ring::rand::SecureRandom;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use ssh_key::private::KeypairData;
