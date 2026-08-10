@@ -283,27 +283,77 @@ pub async fn me(
                 AuthIdentity::ApiKey(name) => name.clone(),
                 AuthIdentity::User { email, .. } => email.clone(),
             };
-            // Look up the user's actual auth_source from the database
             let db_clone = database.clone();
             let email_clone = email.clone();
+            let user_result = tokio::task::spawn_blocking(move || {
+                db::get_user_by_email(&db_clone, &email_clone).ok()
+            })
+            .await
+            .unwrap_or(None);
+            let auth_source_clone = database.clone();
+            let email_clone2 = email.clone();
             let auth_source = tokio::task::spawn_blocking(move || {
-                db::get_user_auth_source(&db_clone, &email_clone)
+                db::get_user_auth_source(&auth_source_clone, &email_clone2)
             })
             .await
             .unwrap_or(Ok("unknown".to_string()))
             .unwrap_or_else(|_| "unknown".to_string());
+            let name = user_result
+                .as_ref()
+                .map(|u| u.name.clone())
+                .unwrap_or_else(|| id.display_name().to_string());
+            let created_at = user_result.as_ref().map(|u| u.created_at.clone());
             Ok(Json(json!({
-                "name": id.display_name(),
+                "name": name,
                 "email": email,
                 "role": id.role(),
                 "groups": id.groups(),
                 "auth_source": auth_source,
                 "vault_enabled": vault_available,
                 "vault_configured": vault_configured.0,
+                "created_at": created_at,
             })))
         }
         None => Err(AppError::Auth("not authenticated".into())),
     }
+}
+
+#[derive(Deserialize)]
+pub struct UpdateMeRequest {
+    pub name: String,
+}
+
+pub async fn update_me(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Json(body): Json<UpdateMeRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let email = match identity {
+        Some(Extension(AuthIdentity::User { ref email, .. })) => email.clone(),
+        _ => return Err(AppError::Auth("OIDC authentication required".into())),
+    };
+
+    let db_clone = database.clone();
+    let email_clone = email.clone();
+    let name = body.name.clone();
+    let updated = tokio::task::spawn_blocking(move || db::update_user_name(&db_clone, &email_clone, &name))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    if !updated {
+        return Err(AppError::Session("user not found".into()));
+    }
+
+    let db_clone2 = database.clone();
+    let user = tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone2, &email))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(|_| AppError::Session("user not found".into()))?;
+
+    Ok(Json(json!({
+        "name": user.name,
+        "email": user.email,
+        "created_at": user.created_at,
+    })))
 }
 
 pub async fn disable_user(

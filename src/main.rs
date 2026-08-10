@@ -1598,7 +1598,7 @@ async fn run_server(
             "/api/admin/group-mappings/{id}",
             delete(api::delete_group_mapping),
         )
-        .route("/api/me", get(api::me))
+        .route("/api/me", get(api::me).put(api::update_me))
         // User API token self-service
         .route("/api/me/tokens", get(api::list_my_tokens))
         .route("/api/me/tokens", post(api::create_my_token))

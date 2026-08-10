@@ -116,22 +116,24 @@ document.addEventListener('click', function() { var m = document.getElementById(
         updateToggleLabel();
     }
 
+    var _svgMonitor = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>';
+    var _svgSun = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>';
+    var _svgMoon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>';
+
     function updateToggleLabel() {
         var btn = document.getElementById('theme-toggle');
         if (!btn) return;
         var labels = { dark: 'Dark', light: 'Light', auto: 'Auto' };
-        var icons = { dark: '☾', light: '☀', auto: '🖥' };
+        var svgs = { dark: _svgMoon, light: _svgSun, auto: _svgMonitor };
         var current = localStorage.getItem('theme') || 'auto';
         btn.title = 'Theme: ' + (labels[current] || current) + ' (click to cycle)';
-        var svg = btn.querySelector('svg');
-        if (svg) svg.style.display = 'none';
-        var span = btn.querySelector('.theme-label');
-        if (span) {
-            span.textContent = icons[current] || '🖥';
+        var icon = btn.querySelector('.theme-icon');
+        if (icon) {
+            icon.innerHTML = svgs[current] || _svgMonitor;
         } else {
             var s = document.createElement('span');
-            s.className = 'theme-label';
-            s.textContent = icons[current] || '🖥';
+            s.className = 'theme-icon';
+            s.innerHTML = svgs[current] || _svgMonitor;
             btn.appendChild(s);
         }
     }

@@ -1034,6 +1034,16 @@ pub fn set_user_role(db: &Db, email: &str, role: &str) -> rusqlite::Result<bool>
     Ok(changed > 0)
 }
 
+/// Update a user's display name by email.
+pub fn update_user_name(db: &Db, email: &str, name: &str) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE users SET name = ?1 WHERE email = ?2",
+        params![name, email],
+    )?;
+    Ok(changed > 0)
+}
+
 /// Disable a user by email.
 pub fn disable_user(db: &Db, email: &str) -> rusqlite::Result<bool> {
     let conn = db.lock().unwrap();

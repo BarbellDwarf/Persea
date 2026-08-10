@@ -80,9 +80,10 @@ pub struct TrustedProxies(pub Vec<String>);
 pub enum AuthIdentity {
     /// API key admin — always full admin access.
     ApiKey(String),
-    /// OIDC user with email, role, and group memberships.
+    /// OIDC user with email, display name, role, and group memberships.
     User {
         email: String,
+        name: String,
         role: String,
         groups: Vec<String>,
     },
@@ -92,7 +93,13 @@ impl AuthIdentity {
     pub fn display_name(&self) -> &str {
         match self {
             AuthIdentity::ApiKey(name) => name,
-            AuthIdentity::User { email, .. } => email,
+            AuthIdentity::User { email, name, .. } => {
+                if name.is_empty() {
+                    email
+                } else {
+                    name
+                }
+            }
         }
     }
 
@@ -240,6 +247,7 @@ pub async fn require_auth(
                         let mut request = request;
                         request.extensions_mut().insert(AuthIdentity::User {
                             email: user.email,
+                            name: user.name,
                             role: effective_role,
                             groups,
                         });
@@ -280,6 +288,7 @@ pub async fn require_auth(
                 let mut request = request;
                 request.extensions_mut().insert(AuthIdentity::User {
                     email: user.email,
+                    name: user.name,
                     role: user.role,
                     groups,
                 });
@@ -380,6 +389,7 @@ pub async fn optional_auth(
                 let mut request = request;
                 request.extensions_mut().insert(AuthIdentity::User {
                     email: user.email,
+                    name: user.name,
                     role: user.role,
                     groups,
                 });
@@ -488,6 +498,7 @@ mod tests {
 
         let viewer = AuthIdentity::User {
             email: "test@test.com".into(),
+            name: "Test User".into(),
             role: "viewer".into(),
             groups: vec![],
         };
