@@ -57,19 +57,19 @@ fn totp_enrollment_and_verify() {
         0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x21, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x01,
         0x23, 0x45, 0x67, 0x89, 0xab,
     ];
-    let secret = Secret::from_bytes(&secret_bytes);
+    let secret = Secret::new(secret_bytes.into_boxed_slice());
     let totp_gen = Builder::new()
         .with_algorithm(Algorithm::SHA1)
         .with_digits(6)
         .with_skew(1)
         .with_step_duration(30)
         .with_secret(secret)
-        .with_issuer(Some("persea".into()))
-        .with_account_name("user@example.com".into())
+        .with_issuer(Some("persea".to_string()))
+        .with_account_name("user@example.com".to_string())
         .build()
         .unwrap();
 
-    let code = totp_gen.generate_current().unwrap();
+    let code = format!("{}", totp_gen.generate_current());
     // Verify using totp_gen directly (not verify_code which has base32 roundtrip issues)
     assert!(totp_gen.check_current(&code).is_some());
     // Wrong code should fail
