@@ -18,17 +18,9 @@
     <!-- Filters -->
     <div class="flex items-center gap-4 mb-4">
         <input type="text" id="user-search" placeholder="Search by name or email..."
-               hx-get="/api/users"
-               hx-trigger="keyup changed delay:300ms"
-               hx-target="#user-table-body"
-               hx-include="[name='role_filter'],[name='status_filter']"
                name="q"
                class="form-input flex-1">
         <select id="role-filter" name="role_filter"
-                hx-get="/api/users"
-                hx-trigger="change"
-                hx-target="#user-table-body"
-                hx-include="[name='q'],[name='status_filter']"
                 class="form-input">
             <option value="">All Roles</option>
             <option value="admin">Admin</option>
@@ -37,10 +29,6 @@
             <option value="viewer">Viewer</option>
         </select>
         <select id="status-filter" name="status_filter"
-                hx-get="/api/users"
-                hx-trigger="change"
-                hx-target="#user-table-body"
-                hx-include="[name='q'],[name='role_filter']"
                 class="form-input">
             <option value="">All Status</option>
             <option value="active">Active</option>
@@ -80,10 +68,7 @@
 <div id="add-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="add-user-title">
     <div class="card w-full max-w-md">
         <h2 id="add-user-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Add User</h2>
-        <form hx-post="/api/users"
-              hx-target="#user-table-body"
-              hx-swap="innerHTML"
-              hx-on::after-request="document.getElementById('add-user-modal').classList.add('hidden')">
+        <form id="add-user-form">
             <div class="space-y-4">
                 <div>
                     <label class="form-label">Name</label>
@@ -92,6 +77,10 @@
                 <div>
                     <label class="form-label">Email</label>
                     <input type="email" name="email" required class="form-input">
+                </div>
+                <div>
+                    <label class="form-label">Password</label>
+                    <input type="password" name="password" required class="form-input" minlength="8">
                 </div>
                 <div>
                     <label class="form-label">Role</label>
@@ -116,8 +105,7 @@
 <div id="edit-role-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="edit-role-title">
     <div class="card w-full max-w-sm">
         <h2 id="edit-role-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Change Role</h2>
-        <form hx-target="#user-table-body" hx-swap="innerHTML"
-              hx-on::after-request="document.getElementById('edit-role-modal').classList.add('hidden')">
+        <form id="edit-role-form">
             <input type="hidden" name="email" id="edit-role-email">
             <div class="mb-4">
                 <label class="form-label">New Role</label>
@@ -142,9 +130,8 @@
     <div class="card w-full max-w-sm">
         <h2 id="delete-user-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Delete User</h2>
         <p class="text-sm text-[var(--text-muted)] mb-4">This action cannot be undone. User <span id="delete-user-name" class="text-[var(--text-primary)]"></span> will be permanently removed.</p>
-        <form hx-delete="" id="delete-user-form"
-              hx-target="#user-table-body" hx-swap="innerHTML"
-              hx-on::after-request="document.getElementById('delete-user-modal').classList.add('hidden')">
+        <form id="delete-user-form">
+            <input type="hidden" name="email" id="delete-user-email">
             <div class="flex justify-end gap-3">
                 <button type="button" onclick="document.getElementById('delete-user-modal').classList.add('hidden')"
                         class="btn btn-secondary btn-sm">Cancel</button>
@@ -155,6 +142,8 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
+var _allUsers = [];
+
 function esc(s) {
     if (typeof escapeHtml === 'function') { return escapeHtml(s); }
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
@@ -168,7 +157,7 @@ function editUserRole(email, currentRole) {
 
 function deleteUser(email) {
     document.getElementById('delete-user-name').textContent = email;
-    document.getElementById('delete-user-form').setAttribute('hx-delete', '/api/users/' + encodeURIComponent(email));
+    document.getElementById('delete-user-email').value = email;
     document.getElementById('delete-user-modal').classList.remove('hidden');
 }
 
@@ -176,8 +165,8 @@ function toggleUserStatus(email, currentStatus) {
     var endpoint = currentStatus === 'active'
         ? '/api/users/' + encodeURIComponent(email) + '/disable'
         : '/api/users/' + encodeURIComponent(email) + '/enable';
-    fetch(endpoint, { method: 'POST' })
-        .then(function() { htmx.trigger('#user-table-body', 'load'); });
+    fetch(endpoint, { method: 'POST', headers: apiHeaders() })
+        .then(function() { loadUsers(); });
 }
 
 function roleBadge(role) {
@@ -215,6 +204,45 @@ function renderUserRow(user) {
         '</td></tr>';
 }
 
+function getFilteredUsers() {
+    var query = (document.getElementById('user-search').value || '').toLowerCase();
+    var roleFilter = document.getElementById('role-filter').value;
+    var statusFilter = document.getElementById('status-filter').value;
+    return _allUsers.filter(function(u) {
+        if (query && (u.name || '').toLowerCase().indexOf(query) === -1 && (u.email || '').toLowerCase().indexOf(query) === -1) return false;
+        if (roleFilter && u.role !== roleFilter) return false;
+        if (statusFilter === 'active' && u.disabled) return false;
+        if (statusFilter === 'disabled' && !u.disabled) return false;
+        return true;
+    });
+}
+
+function renderUsers() {
+    var tbody = document.getElementById('user-table-body');
+    var filtered = getFilteredUsers();
+    if (!filtered.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">No users found</td></tr>';
+    } else {
+        tbody.innerHTML = filtered.map(renderUserRow).join('');
+    }
+    var countEl = document.getElementById('user-count');
+    if (countEl) countEl.textContent = filtered.length + ' user' + (filtered.length !== 1 ? 's' : '');
+}
+
+function loadUsers() {
+    var tbody = document.getElementById('user-table-body');
+    tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">Loading users...</td></tr>';
+    fetch('/api/users', { headers: apiHeaders(), credentials: 'same-origin' })
+        .then(function(r) { return r.ok ? r.json() : []; })
+        .then(function(users) {
+            _allUsers = users || [];
+            renderUsers();
+        })
+        .catch(function() {
+            tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load users</td></tr>';
+        });
+}
+
 document.getElementById('user-table-body').addEventListener('click', function(e) {
     var btn = e.target.closest('[data-action]');
     if (!btn) return;
@@ -228,24 +256,72 @@ document.getElementById('user-table-body').addEventListener('click', function(e)
         deleteUser(email);
     }
 });
-</script>
-<script nonce="{{ csp_nonce }}">
-// Load users on page load
-(function() {
-    fetch('/api/users', { headers: apiHeaders() })
-        .then(function(r) { return r.ok ? r.json() : []; })
-        .then(function(users) {
-            var tbody = document.getElementById('user-table-body');
-            if (!users.length) {
-                tbody.innerHTML = '<tr><td colspan="7" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">No users found</td></tr>';
-                return;
-            }
-            tbody.innerHTML = users.map(renderUserRow).join('');
-        })
-        .catch(function() {
-            document.getElementById('user-table-body').innerHTML =
-                '<tr><td colspan="7" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load users</td></tr>';
-        });
-})();
+
+document.getElementById('user-search').addEventListener('input', renderUsers);
+document.getElementById('role-filter').addEventListener('change', renderUsers);
+document.getElementById('status-filter').addEventListener('change', renderUsers);
+
+document.getElementById('add-user-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var form = e.target;
+    var data = {
+        name: form.elements.name.value,
+        email: form.elements.email.value,
+        password: form.elements.password.value,
+        role: form.elements.role.value
+    };
+    fetch('/api/users', {
+        method: 'POST',
+        headers: apiHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify(data)
+    }).then(function(r) {
+        if (r.ok) {
+            form.reset();
+            document.getElementById('add-user-modal').classList.add('hidden');
+            loadUsers();
+        } else {
+            return r.json().then(function(j) { alert(j.error || 'Failed to create user'); });
+        }
+    }).catch(function() { alert('Failed to create user'); });
+});
+
+document.getElementById('edit-role-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var email = document.getElementById('edit-role-email').value;
+    var role = document.getElementById('edit-role-value').value;
+    fetch('/api/users/' + encodeURIComponent(email) + '/role', {
+        method: 'PUT',
+        headers: apiHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify({ role: role })
+    }).then(function(r) {
+        if (r.ok) {
+            document.getElementById('edit-role-modal').classList.add('hidden');
+            loadUsers();
+        } else {
+            return r.json().then(function(j) { alert(j.error || 'Failed to update role'); });
+        }
+    }).catch(function() { alert('Failed to update role'); });
+});
+
+document.getElementById('delete-user-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var email = document.getElementById('delete-user-email').value;
+    fetch('/api/users/' + encodeURIComponent(email), {
+        method: 'DELETE',
+        headers: apiHeaders(),
+        credentials: 'same-origin'
+    }).then(function(r) {
+        document.getElementById('delete-user-modal').classList.add('hidden');
+        if (r.ok || r.status === 204) {
+            loadUsers();
+        } else {
+            alert('Failed to delete user');
+        }
+    }).catch(function() { alert('Failed to delete user'); });
+});
+
+loadUsers();
 </script>
 {% endblock %}

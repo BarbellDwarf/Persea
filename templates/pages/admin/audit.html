@@ -112,31 +112,6 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
-function outcomeBadge(outcome) {
-    var colors = {
-        success: 'bg-emerald-900/50 text-emerald-300 border-emerald-800',
-        failure: 'bg-red-900/50 text-red-300 border-red-800',
-        error: 'bg-red-900/50 text-red-300 border-red-800'
-    };
-    return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[outcome] || colors.success) + '">' + outcome + '</span>';
-}
-
-function renderAuditRow(event) {
-    var shortHash = event.event_hash ? event.event_hash.substring(0, 8) + '…' : '-';
-    var details = event.details && typeof event.details === 'object'
-        ? Object.entries(event.details).map(function(e) { return e[0] + ': ' + e[1]; }).join(', ')
-        : (event.details || '-');
-    return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
-        '<td class="px-4 py-3 text-sm text-[var(--text-muted)] whitespace-nowrap">' + event.timestamp + '</td>' +
-        '<td class="px-4 py-3 text-sm text-[var(--text-primary)]">' + event.event_type + '</td>' +
-        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (event.user_id || '-') + '</td>' +
-        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (event.source_ip || '-') + '</td>' +
-        '<td class="px-4 py-3">' + outcomeBadge(event.outcome) + '</td>' +
-        '<td class="px-4 py-3 text-sm text-[var(--text-muted)] max-w-xs truncate" title="' + details + '">' + details + '</td>' +
-        '<td class="px-4 py-3 text-sm text-[var(--text-muted)] font-mono text-right" title="' + event.event_hash + '">' + shortHash + '</td>' +
-        '</tr>';
-}
-
 function verifyChain() {
     var el = document.getElementById('chain-status');
     el.className = 'px-3 py-1.5 rounded-lg text-sm font-medium border bg-blue-900/50 text-blue-300 border-blue-800';

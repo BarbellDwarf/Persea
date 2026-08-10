@@ -1,5 +1,7 @@
 name: CI
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -80,6 +82,64 @@ jobs:
           done
           kill $SERVER_PID 2>/dev/null
           [ "$READY" = "1" ] || { echo "server failed to become healthy" >&2; exit 1; }
+
+  # Multi-DB backend smoke test — verify persea starts against Postgres, MySQL, and SQLite
+  db-backends:
+    runs-on: ubuntu-latest
+    needs: [check]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: postgres
+            db_url: "postgres://test:test@localhost:5432/persea_test"
+          - backend: mysql
+            db_url: "mysql://root:test@localhost:3306/persea_test"
+          - backend: sqlite
+            db_url: "sqlite:///tmp/persea-ci-test.db?mode=rwc"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: persea_test
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: persea_test
+        ports:
+          - 3306:3306
+        options: --health-cmd "mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          rustflags: ""
+      - run: cargo build
+      - name: Start persea with ${{ matrix.backend }}
+        run: |
+          cat > /tmp/persea-db-ci.toml <<EOF
+          db_url = "${{ matrix.db_url }}"
+          EOF
+          ./target/debug/persea --config /tmp/persea-db-ci.toml &
+          SERVER_PID=$!
+          READY=0
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8089/api/health >/dev/null 2>&1; then
+              echo "server healthy after ${i}s against ${{ matrix.backend }}"
+              READY=1
+              break
+            fi
+            sleep 1
+          done
+          kill $SERVER_PID 2>/dev/null
+          [ "$READY" = "1" ] || { echo "server failed to become healthy against ${{ matrix.backend }}" >&2; exit 1; }
 
   # Playwright auth E2E — tests password login over HTTP and HTTPS
   playwright-auth:

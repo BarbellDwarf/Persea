@@ -26,9 +26,20 @@ use rusqlite::params;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+/// Filters for querying audit events.
+#[derive(Debug, Clone, Default)]
+pub struct AuditFilters {
+    pub user_id: Option<String>,
+    pub event_type: Option<String>,
+    pub outcome: Option<String>,
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
 /// A single audit event stored in the hash chain.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AuditEvent {
+    pub id: i64,
     pub event_type: String,
     pub timestamp: DateTime<Utc>,
     pub user_id: Option<String>,
@@ -104,6 +115,7 @@ impl EventBuilder {
 
     pub fn build(self) -> AuditEvent {
         AuditEvent {
+            id: 0,
             event_type: self.event_type,
             timestamp: Utc::now(),
             user_id: self.user_id,
@@ -244,6 +256,7 @@ pub fn verify_chain(
         Ok((
             row.get::<_, i64>(0)?,
             AuditEvent {
+                id: row.get::<_, i64>(0)?,
                 event_type: row.get(1)?,
                 timestamp: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
                     .map(|dt| dt.with_timezone(&Utc))
@@ -323,4 +336,156 @@ pub fn verify_chain(
         events_scanned,
         errors,
     })
+}
+
+/// Build a WHERE clause and parameter list from optional filters.
+fn build_filter_clause(filters: &AuditFilters) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
+    let mut conditions = Vec::new();
+    let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+    if let Some(ref user_id) = filters.user_id {
+        let pos = param_values.len() + 1;
+        conditions.push(format!("user_id = ?{}", pos));
+        param_values.push(Box::new(user_id.clone()));
+    }
+    if let Some(ref event_type) = filters.event_type {
+        let pos = param_values.len() + 1;
+        conditions.push(format!("event_type = ?{}", pos));
+        param_values.push(Box::new(event_type.clone()));
+    }
+    if let Some(ref outcome) = filters.outcome {
+        let pos = param_values.len() + 1;
+        conditions.push(format!("outcome = ?{}", pos));
+        param_values.push(Box::new(outcome.clone()));
+    }
+    if let Some(ref from) = filters.from {
+        let pos = param_values.len() + 1;
+        conditions.push(format!("timestamp >= ?{}", pos));
+        param_values.push(Box::new(from.clone()));
+    }
+    if let Some(ref to) = filters.to {
+        let pos = param_values.len() + 1;
+        conditions.push(format!("timestamp <= ?{}", pos));
+        param_values.push(Box::new(to.clone()));
+    }
+
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    (where_clause, param_values)
+}
+
+/// List audit events with optional filters, pagination, and ordering (newest first).
+pub fn list_events(
+    db: &Db,
+    limit: u64,
+    offset: u64,
+    filters: &AuditFilters,
+) -> rusqlite::Result<Vec<AuditEvent>> {
+    let conn = db.lock().unwrap();
+    let (where_clause, param_values) = build_filter_clause(filters);
+
+    let sql = format!(
+        "SELECT id, event_type, timestamp, user_id, source_ip, outcome, details, session_id, prev_hash, event_hash
+         FROM audit_events {} ORDER BY id DESC LIMIT ?{} OFFSET ?{}",
+        where_clause,
+        param_values.len() + 1,
+        param_values.len() + 2,
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let mut all_params: Vec<Box<dyn rusqlite::types::ToSql>> = param_values;
+    all_params.push(Box::new(limit));
+    all_params.push(Box::new(offset));
+
+    let rows = stmt.query_map(rusqlite::params_from_iter(all_params.iter()), |row| {
+        let details_str: Option<String> = row.get(6)?;
+        let details: serde_json::Value = match details_str {
+            Some(s) => serde_json::from_str(&s).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        };
+        Ok(AuditEvent {
+            id: row.get(0)?,
+            event_type: row.get(1)?,
+            timestamp: DateTime::parse_from_rfc3339(&row.get::<_, String>(2)?)
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or_else(|_| Utc::now()),
+            user_id: row.get(3)?,
+            source_ip: row.get(4)?,
+            outcome: row.get(5)?,
+            details,
+            session_id: row.get(7)?,
+            prev_hash: row.get(8)?,
+            event_hash: row.get(9)?,
+        })
+    })?;
+
+    let mut events = Vec::new();
+    for row in rows {
+        events.push(row?);
+    }
+    Ok(events)
+}
+
+/// Count audit events matching optional filters.
+pub fn count_events(db: &Db, filters: &AuditFilters) -> rusqlite::Result<u64> {
+    let conn = db.lock().unwrap();
+    let (where_clause, param_values) = build_filter_clause(filters);
+
+    let sql = format!("SELECT COUNT(*) FROM audit_events {}", where_clause);
+
+    let count: u64 = conn.query_row(
+        &sql,
+        rusqlite::params_from_iter(param_values.iter()),
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+/// Export audit events as CSV with optional filters.
+pub fn export_events_csv(db: &Db, filters: &AuditFilters) -> rusqlite::Result<String> {
+    let events = list_events(db, 100000, 0, filters)?; // large limit for export
+    let mut out = String::new();
+    out.push_str(
+        "id,timestamp,event_type,user_id,source_ip,outcome,details,session_id,event_hash\n",
+    );
+
+    for event in &events {
+        let details_str = if event.details.is_null() {
+            String::new()
+        } else {
+            event.details.to_string()
+        };
+        // Escape fields that might contain commas or quotes
+        let escape_csv = |s: &str| -> String {
+            if s.contains(',') || s.contains('"') || s.contains('\n') {
+                format!("\"{}\"", s.replace('"', "\"\""))
+            } else {
+                s.to_string()
+            }
+        };
+
+        out.push_str(&escape_csv(&event.id.to_string()));
+        out.push(',');
+        out.push_str(&escape_csv(&event.timestamp.to_rfc3339()));
+        out.push(',');
+        out.push_str(&escape_csv(&event.event_type));
+        out.push(',');
+        out.push_str(&escape_csv(event.user_id.as_deref().unwrap_or("")));
+        out.push(',');
+        out.push_str(&escape_csv(event.source_ip.as_deref().unwrap_or("")));
+        out.push(',');
+        out.push_str(&escape_csv(&event.outcome));
+        out.push(',');
+        out.push_str(&escape_csv(&details_str));
+        out.push(',');
+        out.push_str(&escape_csv(event.session_id.as_deref().unwrap_or("")));
+        out.push(',');
+        out.push_str(&escape_csv(&event.event_hash));
+        out.push('\n');
+    }
+    Ok(out)
 }
