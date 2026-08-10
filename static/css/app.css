@@ -144,7 +144,7 @@ body {
     border-radius: 8px;
     font-size: 13px;
     font-weight: 400;
-    color: var(--text-secondary);
+    color: var(--text-primary);
     text-decoration: none;
     transition: all 0.15s ease;
     cursor: pointer;
@@ -158,7 +158,7 @@ body {
 .nav-item.active {
     color: var(--accent);
     background: rgba(16,185,129,0.08);
-    font-weight: 500;
+    font-weight: 700;
 }
 
 .nav-item svg {
@@ -752,9 +752,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 /* ── Responsive: 768px ─────────────────────────────────── */
 @media (max-width: 768px) {
     .sidebar { display: none; }
-    .sidebar.open { display: block; position: fixed; z-index: 50; }
+    .sidebar.open { display: block; position: fixed; z-index: 50; width: 240px; }
+    .sidebar.open .nav-text,
+    .sidebar.open .sidebar-logo-text { opacity: 1; width: auto; }
+    .sidebar.open .nav-item { justify-content: flex-start; padding: 8px 12px; gap: 10px; }
+    .sidebar.open .nav-section-label { opacity: 1; width: auto; }
     .main-area { margin-left: 0; }
+    .header { left: 0; padding-left: 16px; }
     .hamburger { display: flex; align-items: center; justify-content: center; }
+
+    .flex.items-center.gap-3 { flex-direction: column; align-items: stretch; }
+    .flex.items-center.gap-3 > * { width: 100%; }
 
     .grid-cols-2 { grid-template-columns: 1fr; }
     .grid-cols-3 { grid-template-columns: 1fr; }
@@ -801,7 +809,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .-translate-y-1\/2 { transform: translateY(-50%); }
 .tracking-\[0\.3em\] { letter-spacing: 0.3em; }
 .text-\[8px\] { font-size: 8px; }
-.lg\:block { display: block; }
+.lg\:block { display: block !important; }
 .lg\:grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
 
 /* ── Session Type Badges ─────────────────────────────────── */
