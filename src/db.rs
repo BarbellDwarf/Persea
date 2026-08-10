@@ -424,10 +424,11 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
     // `PRAGMA foreign_keys`, so delete_local_group removes mappings explicitly.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS local_groups (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT NOT NULL UNIQUE,
-            description TEXT NOT NULL DEFAULT '',
-            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL UNIQUE,
+            description     TEXT NOT NULL DEFAULT '',
+            auto_provisioned INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS group_mappings (
@@ -1181,8 +1182,8 @@ pub fn ensure_local_groups(db: &Db, groups: &[String]) -> rusqlite::Result<usize
     let mut created = 0usize;
     {
         let mut stmt = conn.prepare(
-            "INSERT OR IGNORE INTO local_groups (name, description)
-             VALUES (?1, 'Auto-provisioned from auth provider groups')",
+            "INSERT OR IGNORE INTO local_groups (name, description, auto_provisioned)
+             VALUES (?1, 'Auto-provisioned from auth provider groups', 1)",
         )?;
         for g in groups {
             let trimmed = g.trim();
@@ -3174,11 +3175,13 @@ pub struct LocalGroup {
     pub id: i64,
     pub name: String,
     pub description: String,
+    pub auto_provisioned: bool,
     pub created_at: String,
     /// Number of auth-provider groups mapped to this local group.
     pub provider_group_count: i64,
-    /// Number of address-book folders whose entries list this group name in
-    /// `allowed_groups` (vault-side folder configs are not scanned).
+    /// Number of address-book folders whose own `allowed_groups` or entries'
+    /// `allowed_groups` reference this group name (vault-side folder configs
+    /// are not scanned).
     pub folder_count: i64,
 }
 
@@ -3196,20 +3199,28 @@ fn local_group_row(row: &rusqlite::Row) -> rusqlite::Result<LocalGroup> {
         id: row.get(0)?,
         name: row.get(1)?,
         description: row.get(2)?,
-        created_at: row.get(3)?,
-        provider_group_count: row.get(4)?,
-        folder_count: row.get(5)?,
+        auto_provisioned: row.get::<_, i64>(3)? != 0,
+        created_at: row.get(4)?,
+        provider_group_count: row.get(5)?,
+        folder_count: row.get(6)?,
     })
 }
 
 /// COUNTs computed for every local group listing. `folder_count` counts
-/// address-book folders whose entries carry the group name in their
-/// comma-separated `allowed_groups` (INSTR is case-sensitive, matching the
-/// exact-match semantics of `resolve_folder_access`).
-const LOCAL_GROUP_COLUMNS: &str = "lg.id, lg.name, lg.description, lg.created_at, \
+/// distinct address-book folders referenced by both the folder's own
+/// `allowed_groups` and its entries' `allowed_groups` (INSTR is
+/// case-sensitive, matching the exact-match semantics of
+/// `resolve_folder_access`).
+const LOCAL_GROUP_COLUMNS: &str =
+    "lg.id, lg.name, lg.description, lg.auto_provisioned, lg.created_at, \
      (SELECT COUNT(*) FROM group_mappings gm WHERE gm.group_id = lg.id), \
-     (SELECT COUNT(DISTINCT e.folder_id) FROM address_book_entries e \
-       WHERE INSTR(',' || e.allowed_groups || ',', ',' || lg.name || ',') > 0)";
+     (SELECT COUNT(DISTINCT x.id) FROM (\
+       SELECT f.id FROM address_book_folders f \
+         WHERE INSTR(',' || f.allowed_groups || ',', ',' || lg.name || ',') > 0 \
+       UNION \
+       SELECT e.folder_id FROM address_book_entries e \
+         WHERE INSTR(',' || e.allowed_groups || ',', ',' || lg.name || ',') > 0 \
+     ) x)";
 
 /// List all local groups with usage counts, ordered by name.
 pub fn list_local_groups(db: &Db) -> rusqlite::Result<Vec<LocalGroup>> {
@@ -3252,6 +3263,22 @@ pub fn create_local_group(db: &Db, name: &str, description: &str) -> rusqlite::R
         LOCAL_GROUP_COLUMNS
     );
     conn.query_row(&sql, params![id], local_group_row)
+}
+
+/// Count how many address_book_folders and address_book_entries reference
+/// `group_name` in their `allowed_groups` column. Used to block renames
+/// that would leave stale ACL references.
+pub fn count_group_name_references(db: &Db, group_name: &str) -> rusqlite::Result<i64> {
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT
+           (SELECT COUNT(*) FROM address_book_folders
+              WHERE INSTR(',' || allowed_groups || ',', ',' || ?1 || ',') > 0)
+         + (SELECT COUNT(*) FROM address_book_entries
+              WHERE INSTR(',' || allowed_groups || ',', ',' || ?1 || ',') > 0)",
+        params![group_name],
+        |row| row.get(0),
+    )
 }
 
 /// Update a local group (rename / re-describe). `None` fields keep their

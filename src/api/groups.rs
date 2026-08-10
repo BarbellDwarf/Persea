@@ -220,6 +220,33 @@ pub async fn update_group(
         }
     }
 
+    // If renaming, check that the old name isn't referenced in any folder/entry ACLs.
+    if let Some(ref new_name) = name {
+        let db_clone = database.clone();
+        let current = tokio::task::spawn_blocking(move || db::get_local_group(&db_clone, id))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        if let Some(current) = current {
+            if current.name != *new_name {
+                let db_clone = database.clone();
+                let old_name = current.name.clone();
+                let refs = tokio::task::spawn_blocking(move || {
+                    db::count_group_name_references(&db_clone, &old_name)
+                })
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+                .map_err(|e| AppError::Internal(e.to_string()))?;
+                if refs > 0 {
+                    return Err(AppError::Conflict(format!(
+                        "Group is referenced by {} folder/entry ACL(s); remove references before renaming",
+                        refs,
+                    )));
+                }
+            }
+        }
+    }
+
     let db_clone = database.clone();
     let name_for_db = name.clone();
     let description = req.description.clone();

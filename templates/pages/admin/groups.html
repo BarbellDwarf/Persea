@@ -165,7 +165,9 @@ function renderGroupRow(g) {
         ? '<span class="text-emerald-400">' + g.provider_group_count + ' mapped</span>'
         : '<span class="text-[var(--text-muted)]">—</span>';
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
-        '<td class="px-4 py-3 text-sm font-medium text-[var(--text-primary)]">' + esc(g.name) + '</td>' +
+        '<td class="px-4 py-3 text-sm font-medium text-[var(--text-primary)]">' + esc(g.name) +
+            (g.auto_provisioned ? ' <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-blue-900/40 text-blue-300 border border-blue-800">auto</span>' : '') +
+        '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (g.description ? esc(g.description) : '—') + '</td>' +
         '<td class="px-4 py-3 text-sm">' + mapped + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + g.folder_count + '</td>' +

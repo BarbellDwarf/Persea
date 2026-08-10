@@ -96,6 +96,10 @@
                     </div>
                     <div id="detail-host" style="font-size:13px;color:var(--text-secondary);margin-bottom:16px"></div>
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
+                    <button id="detail-rotate-cred" class="btn btn-sm admin-only" style="width:100%;margin-bottom:16px;background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);display:none">
+                        <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-8.243a.75.75 0 00.219-.53V3.253a.75.75 0 00-1.5 0V5.23l-.312-.312A7 7 0 003.398 8.073a.75.75 0 101.449.39A5.5 5.5 0 0114.5 5.648l.312.311h-2.433a.75.75 0 000 1.5h3.634a.75.75 0 00.53-.219z" clip-rule="evenodd"/></svg>
+                        Rotate Credential
+                    </button>
                     <div id="detail-error" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:16px"></div>
                     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
                         <p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Parameters</p>
@@ -450,6 +454,20 @@
     .combo-item:hover, .combo-item.active { background:var(--bg-input); color:var(--accent); }
     .combo-item.empty { color:var(--text-muted); cursor:default; font-style:italic; }
     .combo-item.empty:hover { background:transparent; color:var(--text-muted); }
+    .rotate-toast {
+        position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:200;
+        background:var(--bg-card); border:1px solid rgba(245,158,11,0.3); border-radius:10px;
+        padding:16px 24px; box-shadow:0 8px 32px rgba(0,0,0,0.5); max-width:420px; width:90%;
+        font-size:13px; color:var(--text-primary); animation:fadeInUp 0.2s ease;
+    }
+    .rotate-toast .toast-label { font-size:11px;font-weight:600;color:#fbbf24;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px; }
+    .rotate-toast .toast-pw {
+        font-family:var(--font-mono); font-size:15px; color:#34d399; background:var(--bg-input);
+        border:1px solid var(--border); border-radius:6px; padding:10px 12px; word-break:break-all;
+        user-select:all; cursor:text;
+    }
+    .rotate-toast .toast-timer { font-size:11px;color:var(--text-muted);margin-top:8px;text-align:right; }
+    @keyframes fadeInUp { from { opacity:0; transform:translateX(-50%) translateY(12px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
 </style>
 
 <script nonce="{{ csp_nonce }}">
@@ -731,6 +749,7 @@
         var rows = document.querySelectorAll('.entry-row.selected');
         for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
         updateEntryActionButtons();
+        updateDetailRotateButton();
     }
     function wireEntryRows(container) {
         container.querySelectorAll('.entry-row').forEach(function(row) {
@@ -893,6 +912,7 @@
             if (!e) return;
             selectedEntry = e;
             updateEntryActionButtons();
+            updateDetailRotateButton();
             var panel = document.getElementById('detail-panel');
             panel.classList.remove('hidden');
             document.getElementById('detail-name').textContent = e.display_name || e.name;
@@ -1564,6 +1584,74 @@
         });
     }
 
+    // ── Credential rotation ───────────────────────────────────────────
+    function rotateCredential() {
+        if (!selectedFolder || !selectedEntry) return;
+        var entryName = selectedEntry.name;
+        var displayName = selectedEntry.display_name || entryName;
+        if (!confirm('Generate new credential for "' + displayName + '"?\nThe old credential will be replaced.')) return;
+        var newPw = generatePassword();
+        var url = '/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries/' + encodeURIComponent(entryName);
+        fetch(url, {
+            method: 'PUT',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({ password: newPw })
+        }).then(function(res) {
+            if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
+            if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
+            showRotateToast(newPw, displayName);
+            selectedEntry.has_credentials = true;
+            updateDetailRotateButton();
+            reloadSelectedEntries();
+        }).catch(function(err) {
+            if (err && err.message === 'redirect') return;
+            showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">Rotation failed: ' + escapeHtml(err.message || 'unknown error') + '</p>');
+        });
+    }
+    function showRotateToast(pw, entryName) {
+        var existing = document.querySelector('.rotate-toast');
+        if (existing) existing.remove();
+        var toast = document.createElement('div');
+        toast.className = 'rotate-toast';
+        toast.innerHTML = '<div class="toast-label">New credential for ' + escapeHtml(entryName) + '</div>'
+            + '<div class="toast-pw" id="rotate-toast-pw">' + escapeHtml(pw) + '</div>'
+            + '<div class="toast-timer" id="rotate-toast-timer">Copies automatically in 10 seconds. Memorize or copy now\u2014this is shown only once.</div>';
+        document.body.appendChild(toast);
+        var copyBtn = document.createElement('button');
+        copyBtn.textContent = 'Copy to clipboard';
+        copyBtn.className = 'btn btn-secondary btn-sm';
+        copyBtn.style.cssText = 'margin-top:8px;width:auto';
+        copyBtn.addEventListener('click', function() {
+            if (navigator.clipboard) navigator.clipboard.writeText(pw);
+            copyBtn.textContent = 'Copied!';
+            setTimeout(function() { copyBtn.textContent = 'Copy to clipboard'; }, 1500);
+        });
+        toast.appendChild(copyBtn);
+        var remaining = 10;
+        var timerEl = toast.querySelector('#rotate-toast-timer');
+        var interval = setInterval(function() {
+            remaining--;
+            if (timerEl) timerEl.textContent = remaining + 's \u2014 copy the credential now.';
+            if (remaining <= 0) {
+                clearInterval(interval);
+                toast.remove();
+            }
+        }, 1000);
+        toast.addEventListener('click', function(ev) {
+            if (ev.target === toast) { clearInterval(interval); toast.remove(); }
+        });
+    }
+    function updateDetailRotateButton() {
+        var btn = document.getElementById('detail-rotate-cred');
+        if (!btn) return;
+        if (selectedEntry && selectedEntry.has_credentials) {
+            btn.style.display = '';
+        } else {
+            btn.style.display = 'none';
+        }
+    }
+
     // ── Import CSV modal ─────────────────────────────────────────────
     var importCsvHeaders = ['name', 'protocol', 'hostname', 'port', 'username', 'password', 'folder', 'display_name', 'allowed_groups'];
     function openImportModal() {
@@ -2000,6 +2088,7 @@
     document.getElementById('btn-edit-entry').addEventListener('click', openEditEntry);
     document.getElementById('btn-delete-entry').addEventListener('click', deleteEntry);
     document.getElementById('btn-import').addEventListener('click', openImportModal);
+    document.getElementById('detail-rotate-cred').addEventListener('click', rotateCredential);
 
     document.getElementById('fm-cancel').addEventListener('click', function() { closeModal('folder-modal'); });
     document.getElementById('fm-save').addEventListener('click', saveFolder);
@@ -2089,6 +2178,8 @@
             ['folder-modal', 'entry-modal', 'import-modal', 'prompt-modal'].forEach(function(id) {
                 document.getElementById(id).classList.add('hidden');
             });
+            var rotateToast = document.querySelector('.rotate-toast');
+            if (rotateToast) rotateToast.remove();
         }
     });
     document.addEventListener('mousedown', function(ev) {

@@ -2009,7 +2009,9 @@ pub async fn ab_update_entry(
 
     let session_type = data.entry.session_type.clone();
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-    let details = json!({ "type": session_type }).to_string();
+    let credential_rotated = data.entry.password.is_some();
+    let details =
+        json!({ "type": session_type, "credential_rotated": credential_rotated }).to_string();
     log_ab_event(
         &database,
         &admin_email,
@@ -2021,6 +2023,19 @@ pub async fn ab_update_entry(
         Some(&details),
     )
     .await;
+    if credential_rotated {
+        log_ab_event(
+            &database,
+            &admin_email,
+            "credential_rotated",
+            &scope,
+            &folder,
+            Some(&entry),
+            &ip,
+            Some(&json!({ "timestamp": chrono::Utc::now().to_rfc3339() }).to_string()),
+        )
+        .await;
+    }
     Ok(Json(json!({"ok": true})))
 }
 
