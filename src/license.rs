@@ -376,6 +376,7 @@ mod tests {
     use super::*;
     use ring::rand::SecureRandom;
     use ring::signature::Ed25519KeyPair;
+    use ring::signature::KeyPair;
 
     /// Generate a throwaway Ed25519 keypair for tests (never the production key).
     fn test_keypair() -> Ed25519KeyPair {
