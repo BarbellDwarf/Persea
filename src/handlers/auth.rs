@@ -682,12 +682,164 @@ pub struct LoginFormData {
 ///
 /// Receives the SAMLResponse from the IdP, validates it, creates an auth
 /// session, and redirects to connections.
-/// POST /auth/saml/acs — SAML Assertion Consumer Service callback.
-///
-/// Receives the SAMLResponse from the IdP, validates it, creates an auth
-/// session, and redirects to connections.
-pub async fn saml_acs() -> Response {
-    Redirect::to("/?error=saml_not_configured").into_response()
+pub async fn saml_acs(
+    State(_state): State<crate::api::AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(database): Extension<Db>,
+    Extension(_sp): Extension<Arc<crate::auth_providers::saml::SamlProvider>>,
+    Extension(auth_chain): Extension<Arc<AuthChain>>,
+    Extension(trusted_proxies): Extension<TrustedProxies>,
+    Extension(totp_enforcement): Extension<TotpEnforcement>,
+    headers: HeaderMap,
+    axum::extract::Form(form): axum::extract::Form<SamlAcsForm>,
+) -> Response {
+    use crate::auth_provider::{AuthRequest, AuthResult};
+    use std::collections::HashMap;
+
+    let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
+
+    if form.SAMLResponse.is_empty() {
+        return Redirect::to("/?error=saml_missing_response").into_response();
+    }
+
+    // Build an AuthRequest with the SAMLResponse as a callback parameter.
+    let mut callback_params = HashMap::new();
+    callback_params.insert("SAMLResponse".to_string(), form.SAMLResponse.clone());
+    let auth_request = AuthRequest {
+        client_ip,
+        callback_params: Some(callback_params),
+        ..AuthRequest::default()
+    };
+
+    // Try each provider in chain order (first success wins).
+    let result = auth_chain.authenticate(&auth_request).await;
+
+    match result {
+        AuthResult::Success {
+            subject,
+            display_name,
+            role,
+            groups,
+            ..
+        } => {
+            // Auto-provision local groups from SAML claims.
+            if !groups.is_empty() {
+                let db_groups = database.clone();
+                let groups_provision = groups.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    match db::ensure_local_groups(&db_groups, &groups_provision) {
+                        Ok(created) if created > 0 => {
+                            tracing::info!(
+                                created,
+                                "auto-provisioned local groups from SAML claims"
+                            );
+                        }
+                        Ok(_) => {}
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to auto-provision local groups")
+                        }
+                    }
+                })
+                .await;
+            }
+
+            // Look up the user by email/subject
+            let db_clone = database.clone();
+            let email = subject.clone();
+            let user = match tokio::task::spawn_blocking(move || {
+                db::get_user_by_email(&db_clone, &email)
+            })
+            .await
+            {
+                Ok(Ok(user)) => user,
+                _ => {
+                    return Redirect::to("/?error=user_lookup_failed").into_response();
+                }
+            };
+
+            if user.disabled {
+                return Redirect::to("/?error=account_disabled").into_response();
+            }
+
+            // Check TOTP enforcement before creating session
+            let effective_role = role.clone().unwrap_or_else(|| user.role.clone());
+            if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
+            {
+                let ttl_secs = 300; // 5 minutes for MFA pending
+                return redirect_to_mfa(&database, &user, ttl_secs, &headers).await;
+            }
+
+            // Create auth session
+            let ttl_secs = 86400; // 24 hours
+            let db_clone = database.clone();
+            let session_token = match tokio::task::spawn_blocking(move || {
+                db::create_auth_session(&db_clone, user.id, ttl_secs)
+            })
+            .await
+            {
+                Ok(Ok(token)) => token,
+                _ => {
+                    return Redirect::to("/?error=session_failed").into_response();
+                }
+            };
+
+            tracing::info!(
+                email = %display_name,
+                role = role.as_deref().unwrap_or("unknown"),
+                client_ip = %client_ip,
+                "SAML login successful"
+            );
+
+            // Audit: successful SAML login
+            {
+                let db_audit = database.clone();
+                let uid = user.id.to_string();
+                let ip = client_ip.to_string();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _ = audit::log_event(
+                        &db_audit,
+                        &mut audit::EventBuilder::new("auth.saml.login", "success")
+                            .user_id(&uid)
+                            .source_ip(&ip)
+                            .build(),
+                    );
+                })
+                .await;
+            }
+
+            // Redirect to RelayState if present, otherwise /connections.html
+            let redirect_to = form
+                .RelayState
+                .filter(|n| n.starts_with('/') && !n.starts_with("//") && !n.contains("://"))
+                .unwrap_or_else(|| "/connections.html".to_string());
+
+            let session_cookie = format!(
+                "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
+                session_token,
+                crate::csrf::cookie_secure_attr(&headers),
+                ttl_secs
+            );
+
+            (
+                AppendHeaders([(header::SET_COOKIE, session_cookie)]),
+                Redirect::to(&redirect_to),
+            )
+                .into_response()
+        }
+        AuthResult::Failure(msg) => {
+            tracing::warn!(
+                client_ip = %client_ip,
+                "SAML authentication failed: {}",
+                msg
+            );
+            Redirect::to("/?error=saml_auth_failed").into_response()
+        }
+        AuthResult::Redirect(url) => Redirect::temporary(&url).into_response(),
+        AuthResult::Unavailable(msg) => {
+            tracing::error!("SAML auth provider unavailable: {}", msg);
+            Redirect::to("/?error=saml_unavailable").into_response()
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]

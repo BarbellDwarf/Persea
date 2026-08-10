@@ -1858,11 +1858,14 @@ async fn run_server(
         saml_routes = Router::new()
             .route("/auth/saml/acs", post(handlers::auth::saml_acs))
             .route("/auth/saml/metadata", get(handlers::auth::saml_metadata))
+            .with_state(manager.clone())
             .layer(csrf::CsrfLayer)
             .layer(Extension(sp_acs))
             .layer(Extension(sp_meta))
             .layer(Extension(database.clone()))
-            .layer(Extension(trusted_proxies.clone()));
+            .layer(Extension(auth_chain.clone()))
+            .layer(Extension(trusted_proxies.clone()))
+            .layer(Extension(totp_enforcement));
     }
 
     // Branded HTML page routes (served from memory with site_title/logo baked in)
