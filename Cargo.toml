@@ -48,7 +48,7 @@ md-5 = "0.11"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
-sqlx = { version = "0.8", features = [
+sqlx = { version = "0.9.0", features = [
     "runtime-tokio",
     "tls-rustls",
     "postgres",
@@ -63,7 +63,7 @@ sqlx = { version = "0.8", features = [
 ] }
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive"] }
 
 # IP matching
 ipnetwork = "0.21"
@@ -88,7 +88,7 @@ ssh-key = { version = "0.6", features = ["ed25519"] }
 tower_governor = "0.8"
 
 # Base64 decoding (JWT payload for OIDC groups)
-base64 = "0.23"
+base64 = "0.23.1"
 
 # HTTP client (Vault API)
 reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots"], default-features = false }
@@ -114,7 +114,7 @@ serde_urlencoded = "0.7"
 thiserror = "2"
 
 # Templates
-minijinja = "1"
+minijinja = "2.23.0"
 
 # Auth provider architecture
 async-trait = "0.1"
@@ -127,7 +127,7 @@ flate2 = "1"
 ldap3 = { version = "0.12", default-features = false, features = ["sync", "tls-rustls-ring"] }
 
 # TOTP MFA
-totp-rs = { version = "5", features = ["otpauth", "qr", "gen_secret"] }
+totp-rs = { version = "6.0.0", features = ["otpauth", "qr", "gen_secret"] }
 
 # Password hashing (Argon2id)
 argon2 = "0.5"

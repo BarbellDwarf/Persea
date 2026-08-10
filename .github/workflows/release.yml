@@ -42,7 +42,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Restore guacd build cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             /tmp/guacamole-server
@@ -115,7 +115,7 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - name: Restore guacd build cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             /tmp/guacamole-server
