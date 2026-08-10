@@ -1635,14 +1635,8 @@ async fn run_server(
         .route("/api/audit/verify", get(api::admin::audit_verify))
         .route("/api/audit/export", get(api::admin::audit_export))
         // License management
-        .route(
-            "/api/admin/license",
-            get(api::admin::get_license_status),
-        )
-        .route(
-            "/api/admin/license",
-            post(api::admin::set_license_key),
-        )
+        .route("/api/admin/license", get(api::admin::get_license_status))
+        .route("/api/admin/license", post(api::admin::set_license_key))
         // Login scripts listing
         .route("/api/login-scripts", get(api::list_login_scripts))
         .route("/api/ws-ticket", post(api::create_ws_ticket))

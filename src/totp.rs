@@ -76,9 +76,13 @@ pub fn generate_enrollment(user_email: &str, issuer: &str) -> Result<TotpEnrollm
         .build()
         .map_err(|e| TotpError::Generation(e.to_string()))?;
 
-    let otpauth_url = totp.to_url().map_err(|e| TotpError::Generation(e.to_string()))?;
+    let otpauth_url = totp
+        .to_url()
+        .map_err(|e| TotpError::Generation(e.to_string()))?;
 
-    let qr_png = totp.to_qr_png().map_err(|e| TotpError::QrCode(e.to_string()))?;
+    let qr_png = totp
+        .to_qr_png()
+        .map_err(|e| TotpError::QrCode(e.to_string()))?;
 
     Ok(TotpEnrollment {
         secret_b32,
@@ -199,7 +203,14 @@ mod tests {
         // Use the same TOTP instance to avoid timing issues across 30s boundaries.
         assert!(totp.check_current(&code_str).is_some());
         // verify_code (creates a new instance) should also work with generous skew.
-        assert!(verify_code(&secret_b32, &code_str, Algorithm::SHA1, 6, 30, 5));
+        assert!(verify_code(
+            &secret_b32,
+            &code_str,
+            Algorithm::SHA1,
+            6,
+            30,
+            5
+        ));
         // Wrong code should fail
         assert!(!verify_code(
             &secret_b32,
