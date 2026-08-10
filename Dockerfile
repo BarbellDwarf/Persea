@@ -96,6 +96,8 @@ ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
+COPY license-gen/ license-gen/
+COPY keys/ keys/
 
 # Compile all dependencies once with a dummy main so the dependency layer is
 # only rebuilt when Cargo.toml/Cargo.lock change, not on every source edit.
@@ -116,8 +118,6 @@ COPY templates/ templates/
 COPY migrations/ migrations/
 COPY docs/ docs/
 COPY static/ static/
-COPY license-gen/ license-gen/
-COPY keys/ keys/
 COPY tailwind.config.js ./
 RUN npx --yes tailwindcss@3 -i static/css/input.css -o static/css/tailwind.min.css --minify
 
