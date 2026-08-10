@@ -2,7 +2,8 @@
 
 [![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
-[![License](https://img.shields.io/github/license/BarbellDwarf/persea)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Commercial License](https://img.shields.io/badge/License-Commercial-green.svg)](COMMERCIAL_LICENSE.md)
 
 A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
 
@@ -198,4 +199,9 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+persea is dual-licensed:
+
+- **Open Source: AGPL-3.0** — Free for self-hosted use, including commercial use, provided all modifications are also released under AGPL-3.0. See [LICENSE](LICENSE).
+- **Commercial License** — For organizations that need to modify persea without open-sourcing their changes. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) or email licensing@persea.dev.
+
+By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md).

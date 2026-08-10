@@ -3,6 +3,7 @@ name = "persea"
 version = "1.1.0"
 edition = "2021"
 description = "Lightweight Rust replacement for Apache Guacamole client"
+license = "AGPL-3.0"
 
 [dependencies]
 # Web framework

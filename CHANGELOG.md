@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **License: Apache 2.0 → AGPL-3.0** — persea is now dual-licensed under AGPL-3.0 (open source) with a commercial license exception for organizations that need proprietary modifications. This protects the project from proprietary forks while allowing free self-hosted use. See [LICENSE](LICENSE), [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md), and [CLA.md](CLA.md).
+- All contributors must sign the Contributor License Agreement (CLA) — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## [1.1.0] - 2026-08-09
 
 ### Added

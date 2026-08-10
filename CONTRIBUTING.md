@@ -1,5 +1,9 @@
 # Contributing to persea
 
+## License
+
+By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md). This allows your contributions to be licensed under both the AGPL-3.0 open-source license and the commercial license.
+
 ## Development Setup
 
 ```bash
@@ -44,8 +48,9 @@ and asserts non-black pixels. Requires Xvnc and Chromium installed on the system
 2. Make changes following the code style above.
 3. Run `cargo fmt`, `cargo clippy`, and `cargo test`.
 4. Ensure the browser session test passes if you touched session or browser code.
-5. Update `CLAUDE.md` if you changed architecture, config keys, or session types.
-6. Open a PR against `main` with a clear title and description.
+5. **Sign the CLA**: add `I have read and agree to the persea Contributor License Agreement (CLA.md)` to your PR description. The CLA Assistant bot will verify your signature on first contribution.
+6. Update `AGENTS.md` if you changed architecture, config keys, or session types.
+7. Open a PR against `main` with a clear title and description.
 
 ## Adding guacamole-server Patches
 
