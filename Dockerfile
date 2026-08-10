@@ -116,6 +116,8 @@ COPY templates/ templates/
 COPY migrations/ migrations/
 COPY docs/ docs/
 COPY static/ static/
+COPY license-gen/ license-gen/
+COPY keys/ keys/
 COPY tailwind.config.js ./
 RUN npx --yes tailwindcss@3 -i static/css/input.css -o static/css/tailwind.min.css --minify
 
