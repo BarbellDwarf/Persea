@@ -31,7 +31,7 @@
     --border-focus: #10b981;
     --text-primary: #1e293b;
     --text-secondary: #64748b;
-    --text-muted: #94a3b8;
+    --text-muted: #64748b;
     --accent: #10b981;
     --accent-hover: #059669;
     --danger: #ef4444;
@@ -536,6 +536,9 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
     color: #6ee7b7;
 }
 
+.light .alert-error { color: #991b1b; }
+.light .alert-success { color: #065f46; }
+
 /* ── Divider ─────────────────────────────────────────────── */
 .divider {
     display: flex;
@@ -563,6 +566,7 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 .text-sm { font-size: 13px; }
 .text-xs { font-size: 12px; }
 .text-muted { color: var(--text-muted); }
+#detail-sessions-avatars > * + * { margin-left: -8px; }
 .mt-4 { margin-top: 16px; }
 .mt-6 { margin-top: 24px; }
 .mb-4 { margin-bottom: 16px; }
@@ -579,7 +583,6 @@ tbody tr:hover { background: rgba(255,255,255,0.02); }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
 
 /* ── Layout Utility ──────────────────────────────────────── */
-.hidden { display: none !important; }
 .block { display: block; }
 .inline-block { display: inline-block; }
 .inline-flex { display: inline-flex; }

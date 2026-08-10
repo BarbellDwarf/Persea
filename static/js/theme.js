@@ -1,7 +1,18 @@
+function _deriveCard(hex) {
+    var r = parseInt(hex.slice(1, 3), 16);
+    var g = parseInt(hex.slice(3, 5), 16);
+    var b = parseInt(hex.slice(5, 7), 16);
+    var brightness = (r * 299 + g * 587 + b * 114) / 1000;
+    var shift = brightness < 128 ? 16 : 8;
+    r = Math.min(255, r + shift);
+    g = Math.min(255, g + shift);
+    b = Math.min(255, b + shift);
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
 function applyThemeColors(colors) {
     var r = document.documentElement.style;
     for (var k in colors) r.setProperty('--' + k.replace(/_/g, '-'), colors[k]);
-    if (colors.bg) { r.setProperty('--bg-primary', colors.bg); r.setProperty('--bg-card', colors.bg); }
+    if (colors.bg) { r.setProperty('--bg-primary', colors.bg); r.setProperty('--bg-card', colors.card || _deriveCard(colors.bg)); }
     if (colors.surface) r.setProperty('--bg-secondary', colors.surface);
     if (colors.input) r.setProperty('--bg-input', colors.input);
     if (colors.bg && colors.surface) r.setProperty('--bg-hover', colors.surface);

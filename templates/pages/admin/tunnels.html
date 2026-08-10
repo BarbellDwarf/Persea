@@ -113,7 +113,7 @@
             </div>
             <div class="flex justify-end gap-2 pt-2">
                 <button type="button" onclick="hideModal()" class="btn btn-secondary btn-sm">Cancel</button>
-                <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-[var(--text-primary)] text-sm font-medium rounded-lg transition-colors">Save</button>
+                <button type="submit" class="btn btn-primary">Save</button>
             </div>
         </form>
     </div>
@@ -377,9 +377,9 @@
         }
     }
 
-    async function disconnectTunnel(id) {
-        if (!confirm('Disconnect this tunnel?')) return;
-        // Placeholder — actual disconnect API would go here
+    function disconnectTunnel(id) {
+        // TODO: implement disconnect API when backend support is added
+        alert('Disconnect is not yet implemented.');
     }
 
     // Refresh active tunnels periodically

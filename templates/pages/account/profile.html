@@ -40,9 +40,9 @@
             <!-- Role -->
             <div>
                 <label class="form-label">Role</label>
-                <div id="role-badge" class="badge badge-green">
+                <span id="role-badge" class="inline-block px-2 py-0.5 text-xs rounded border bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]">
                     Loading...
-                </div>
+                </span>
             </div>
 
             <!-- Member Since -->
@@ -185,7 +185,16 @@
                 document.getElementById('display-name').value = data.name || '';
                 document.getElementById('email').value = data.email || '';
                 document.getElementById('auth-source-badge').textContent = data.auth_source || 'OIDC';
-                document.getElementById('role-badge').textContent = data.role || 'user';
+                var roleEl = document.getElementById('role-badge');
+                var roleColors = {
+                    admin: 'bg-red-900/50 text-red-300 border-red-800',
+                    poweruser: 'bg-amber-900/50 text-amber-300 border-amber-800',
+                    operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
+                    viewer: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]'
+                };
+                var role = data.role || 'viewer';
+                roleEl.textContent = role;
+                roleEl.className = 'inline-block px-2 py-0.5 text-xs rounded border ' + (roleColors[role] || roleColors.viewer);
                 document.getElementById('member-since').textContent = data.created_at || 'Unknown';
                 // TOTP status
                 var totpText = document.getElementById('totp-status-text');
