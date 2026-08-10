@@ -756,13 +756,17 @@ async fn security_headers(
     );
     let _ = headers;
     response.extensions_mut().insert(CspNonce(nonce));
-    if tls.0 .0 {
-        let headers = response.headers_mut();
-        headers.insert(
-            "Strict-Transport-Security",
-            "max-age=31536000; includeSubDomains".parse().unwrap(),
-        );
-    }
+    // HSTS disabled for now — it causes Chromium to consider the origin
+    // "not secure" when the TLS cert is self-signed (invalid), which blocks
+    // Secure cookies from being sent even when ignoreHTTPSErrors is true.
+    // TODO: re-enable when the cert validation logic is sorted out.
+    // if tls.0 .0 {
+    //     let headers = response.headers_mut();
+    //     headers.insert(
+    //         "Strict-Transport-Security",
+    //         "max-age=31536000; includeSubDomains".parse().unwrap(),
+    //     );
+    // }
     response
 }
 
