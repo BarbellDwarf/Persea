@@ -1630,6 +1630,19 @@ async fn run_server(
             "/api/admin/addressbook-audit",
             get(api::admin_addressbook_audit),
         )
+        // Audit event log routes
+        .route("/api/audit/events", get(api::admin::audit_events))
+        .route("/api/audit/verify", get(api::admin::audit_verify))
+        .route("/api/audit/export", get(api::admin::audit_export))
+        // License management
+        .route(
+            "/api/admin/license",
+            get(api::admin::get_license_status),
+        )
+        .route(
+            "/api/admin/license",
+            post(api::admin::set_license_key),
+        )
         // Login scripts listing
         .route("/api/login-scripts", get(api::list_login_scripts))
         .route("/api/ws-ticket", post(api::create_ws_ticket))
@@ -1899,6 +1912,10 @@ async fn run_server(
         .route(
             "/admin/tunnels.html",
             get(handlers::pages::admin_tunnels_page),
+        )
+        .route(
+            "/admin/license.html",
+            get(handlers::pages::admin_license_page),
         )
         .route("/docs.html", get(handlers::account::docs_page))
         .route("/docs", get(handlers::account::docs_page))
