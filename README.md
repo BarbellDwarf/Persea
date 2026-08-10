@@ -82,8 +82,10 @@ guacd (C, from guacamole-server)
 - **SAML 2.0**: service provider with signature verification — **Enterprise**
 - **RADIUS**: PAP authentication for network equipment integration
 - **Database auth**: local password accounts with Argon2id hashing
-- **TOTP two-factor**: enrollment, QR codes, recovery codes, admin enforcement — **Enterprise**
-- **4-tier role system**: admin, poweruser, operator, viewer with OIDC group mapping — **Enterprise**
+- **TOTP two-factor**: enrollment, QR codes, recovery codes
+- **TOTP / MFA enforcement**: mandatory two-factor policies — **Enterprise**
+- **4-tier role system**: admin, poweruser, operator, viewer with OIDC group mapping
+- **Fine-grained RBAC**: connection-level permissions and group inheritance — **Enterprise**
 - **API key auth**: SHA-256 hashed keys with IP allowlists and expiry
 - **Vault-backed connections**: credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
 - **TLS everywhere**: HTTPS for clients, TLS between persea and guacd
@@ -92,7 +94,8 @@ guacd (C, from guacamole-server)
 - **Rate limiting**: per-IP, per-endpoint via tower_governor
 - **Session recording**: Guacamole format with playback UI, disk rotation, per-entry limits
 - **Encrypted session recording**: recordings encrypted at rest — **Enterprise**
-- **Audit logging**: SHA-256 hash chain with tamper evidence — **Enterprise**
+- **Audit logging**: SHA-256 hash chain with tamper evidence
+- **Audit log retention and compliance exports** — **Enterprise**
 - **High availability / clustering**: multi-instance deployments behind a load balancer — **Enterprise**
 
 ### Connectivity
