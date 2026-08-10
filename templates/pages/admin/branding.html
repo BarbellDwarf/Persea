@@ -1,0 +1,250 @@
+{% extends "layouts/app.html" %}
+
+{% block title %}{{ site_title }} — Branding{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-[var(--text-primary)]">Branding</h1>
+        <p class="text-sm text-[var(--text-muted)] mt-1">Customize site title, logo, and primary color</p>
+    </div>
+
+    <form id="branding-form" class="space-y-6">
+
+        <!-- Preview -->
+        <div class="card">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                Preview
+            </h2>
+            <div class="flex items-center gap-4 p-4 bg-[var(--bg-secondary)] rounded-lg">
+                <div id="preview-logo" class="flex items-center justify-center w-12 h-12 rounded-lg" style="background: var(--primary-color, #10b981); color: white; font-weight: bold; font-size: 1.2rem;">
+                    <span id="preview-logo-text">ps</span>
+                </div>
+                <div>
+                    <div id="preview-title" class="text-lg font-bold" style="color: var(--text-primary);">persea</div>
+                    <div class="text-xs text-[var(--text-muted)]">Branding preview</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Site Title -->
+        <div class="card">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"/></svg>
+                Site Title
+            </h2>
+            <div>
+                <label class="form-label">Display Name</label>
+                <input type="text" name="site_title" id="branding-site-title" class="form-input" placeholder="persea">
+                <p class="text-xs text-[var(--text-muted)] mt-1">Shown in the sidebar and page titles</p>
+            </div>
+        </div>
+
+        <!-- Logo -->
+        <div class="card">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                Logo
+            </h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="form-label">Logo URL</label>
+                    <input type="text" name="logo_url" id="branding-logo-url" class="form-input" placeholder="https://example.com/logo.png or /uploads/logo/logo.png">
+                    <p class="text-xs text-[var(--text-muted)] mt-1">URL of the logo image shown in the sidebar</p>
+                </div>
+                <div>
+                    <label class="form-label">Upload Logo</label>
+                    <div class="flex items-center gap-3">
+                        <input type="file" id="logo-file" accept=".png,.svg,.jpg,.jpeg,.ico" class="hidden">
+                        <button type="button" onclick="document.getElementById('logo-file').click()"
+                                class="btn btn-secondary btn-sm">
+                            Choose File
+                        </button>
+                        <span id="logo-filename" class="text-sm text-[var(--text-muted)]">No file chosen</span>
+                    </div>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">PNG, SVG, JPG, or ICO — max 2 MB</p>
+                </div>
+                <div id="logo-upload-status" class="hidden"></div>
+            </div>
+        </div>
+
+        <!-- Primary Color -->
+        <div class="card">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01"/></svg>
+                Primary Color
+            </h2>
+            <div>
+                <label class="form-label">Accent Color</label>
+                <div class="flex items-center gap-3">
+                    <input type="color" name="primary_color" id="branding-primary-color" value="#10b981" class="w-12 h-10 rounded cursor-pointer border border-[var(--border)]">
+                    <input type="text" id="branding-primary-color-hex" class="form-input w-32" placeholder="#10b981" maxlength="7">
+                </div>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Used for sidebar active state, buttons, and accents</p>
+            </div>
+        </div>
+
+        <!-- Save -->
+        <div class="flex justify-end">
+            <button type="submit" class="btn btn-primary">
+                Save Branding
+            </button>
+        </div>
+    </form>
+    <div id="branding-feedback" class="mt-4" aria-live="polite"></div>
+</div>
+
+<!-- Save Confirmation -->
+<div id="save-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="save-confirm-title">
+    <div class="card w-full max-w-sm text-center">
+        <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-emerald-900/50 flex items-center justify-center">
+            <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+        </div>
+        <h2 id="save-confirm-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Branding Saved</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">Changes will take effect on the next page load.</p>
+        <button onclick="document.getElementById('save-confirm').classList.add('hidden')"
+                class="btn btn-secondary btn-sm">OK</button>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+function showError(message) {
+    var feedback = document.getElementById('branding-feedback');
+    feedback.innerHTML = '';
+    var div = document.createElement('div');
+    div.className = 'p-3 rounded-lg bg-red-900/40 border border-red-800 text-red-300 text-sm';
+    div.textContent = message;
+    feedback.appendChild(div);
+}
+
+function updatePreview() {
+    var title = document.getElementById('branding-site-title').value || 'persea';
+    var color = document.getElementById('branding-primary-color').value || '#10b981';
+    var logoUrl = document.getElementById('branding-logo-url').value;
+
+    document.getElementById('preview-title').textContent = title;
+
+    var logoEl = document.getElementById('preview-logo');
+    var logoText = document.getElementById('preview-logo-text');
+    logoEl.style.background = color;
+
+    if (logoUrl) {
+        logoText.style.display = 'none';
+        var img = logoEl.querySelector('img');
+        if (!img) {
+            img = document.createElement('img');
+            img.style.cssText = 'height:28px;width:auto;object-fit:contain';
+            logoEl.appendChild(img);
+        }
+        img.src = logoUrl;
+    } else {
+        var img = logoEl.querySelector('img');
+        if (img) img.remove();
+        logoText.style.display = '';
+    }
+}
+
+// Sync color inputs
+document.getElementById('branding-primary-color').addEventListener('input', function() {
+    document.getElementById('branding-primary-color-hex').value = this.value;
+    updatePreview();
+});
+document.getElementById('branding-primary-color-hex').addEventListener('input', function() {
+    if (/^#[0-9a-fA-F]{6}$/.test(this.value)) {
+        document.getElementById('branding-primary-color').value = this.value;
+        updatePreview();
+    }
+});
+document.getElementById('branding-site-title').addEventListener('input', updatePreview);
+document.getElementById('branding-logo-url').addEventListener('input', updatePreview);
+
+// File upload
+document.getElementById('logo-file').addEventListener('change', function() {
+    var file = this.files[0];
+    if (!file) return;
+    document.getElementById('logo-filename').textContent = file.name;
+    var status = document.getElementById('logo-upload-status');
+    status.className = 'text-sm text-[var(--text-muted)]';
+    status.textContent = 'Uploading...';
+
+    var fd = new FormData();
+    fd.append('file', file);
+    var csrf = readCookie('csrf_token');
+    var headers = {};
+    if (csrf) headers['X-CSRF-Token'] = csrf;
+    fetch('/api/admin/upload-logo', {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin',
+        headers: headers
+    })
+    .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    })
+    .then(function(data) {
+        status.className = 'text-sm text-emerald-400';
+        status.textContent = 'Logo uploaded successfully';
+        document.getElementById('branding-logo-url').value = data.url;
+        updatePreview();
+    })
+    .catch(function(e) {
+        status.className = 'text-sm text-red-400';
+        status.textContent = 'Upload failed: ' + (e.message || e);
+    });
+});
+
+// Load current settings
+(function() {
+    fetch('/api/system/settings', { headers: apiHeaders(), credentials: 'same-origin' })
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function(s) {
+            if (s.site_title !== undefined && s.site_title !== null) {
+                document.getElementById('branding-site-title').value = s.site_title;
+            }
+            if (s.logo_url !== undefined && s.logo_url !== null) {
+                document.getElementById('branding-logo-url').value = s.logo_url;
+            }
+            if (s.primary_color !== undefined && s.primary_color !== null) {
+                document.getElementById('branding-primary-color').value = s.primary_color;
+                document.getElementById('branding-primary-color-hex').value = s.primary_color;
+            }
+            updatePreview();
+        })
+        .catch(function(e) {
+            showError('Failed to load settings: ' + (e.message || e));
+        });
+})();
+
+// Save form
+document.getElementById('branding-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var payload = {
+        site_title: document.getElementById('branding-site-title').value,
+        logo_url: document.getElementById('branding-logo-url').value,
+        primary_color: document.getElementById('branding-primary-color-hex').value
+    };
+    fetch('/api/system/settings', {
+        method: 'PUT',
+        credentials: 'same-origin',
+        headers: apiHeaders(),
+        body: JSON.stringify(payload)
+    })
+    .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+    })
+    .then(function() {
+        document.getElementById('branding-feedback').innerHTML = '';
+        document.getElementById('save-confirm').classList.remove('hidden');
+    })
+    .catch(function(e) {
+        showError('Failed to save branding: ' + (e.message || e));
+    });
+});
+</script>
+{% endblock %}

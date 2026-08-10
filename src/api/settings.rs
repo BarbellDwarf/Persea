@@ -11,6 +11,9 @@ use crate::api::SettingsBaseline;
 use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::error::AppError;
+use axum::extract::Multipart;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use rusqlite::params;
 use serde_json::{json, Value};
@@ -38,9 +41,20 @@ const SETTING_KEYS: &[&str] = &[
     "enable_file_transfer",
     "vault_enabled",
     "db_only_mode",
+    "site_title",
+    "logo_url",
+    "primary_color",
 ];
 
-const STRING_KEYS: &[&str] = &["listen_addr", "guacd_addr", "tls_cert_path", "tls_key_path"];
+const STRING_KEYS: &[&str] = &[
+    "listen_addr",
+    "guacd_addr",
+    "tls_cert_path",
+    "tls_key_path",
+    "site_title",
+    "logo_url",
+    "primary_color",
+];
 const ADDR_KEYS: &[&str] = &["listen_addr", "guacd_addr"];
 const DURATION_KEYS: &[&str] = &[
     "session_max_duration_secs",
@@ -102,6 +116,9 @@ fn default_value(key: &str) -> Value {
         "enable_browser_sessions" => json!(true),
         "vault_enabled" => json!(false),
         "db_only_mode" => json!(true),
+        "site_title" => json!("persea"),
+        "logo_url" => json!(""),
+        "primary_color" => json!("#10b981"),
         _ => json!(null),
     }
 }
@@ -329,4 +346,73 @@ pub async fn put_settings(
         baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
         &stored,
     )))
+}
+
+/// POST /api/admin/upload-logo — accept multipart image upload, save to
+/// static/uploads/logo/, return the URL path. Admin-only.
+pub async fn upload_logo(
+    identity: Option<Extension<AuthIdentity>>,
+    mut multipart: Multipart,
+) -> Result<Response, AppError> {
+    if !is_admin(&identity) {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+
+    let allowed_exts = ["png", "svg", "jpg", "jpeg", "ico"];
+    let max_size: usize = 2 * 1024 * 1024; // 2 MB
+
+    let mut file_data: Vec<u8> = Vec::new();
+    let mut filename: Option<String> = None;
+
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::Validation(format!("multipart error: {e}")))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        if name == "file" {
+            let fname = field
+                .file_name()
+                .map(|f| f.to_string())
+                .ok_or_else(|| AppError::Validation("missing filename".into()))?;
+            filename = Some(fname);
+            while let Some(chunk) = field
+                .chunk()
+                .await
+                .map_err(|e| AppError::Validation(format!("upload read error: {e}")))?
+            {
+                file_data.extend_from_slice(&chunk);
+                if file_data.len() > max_size {
+                    return Err(AppError::Validation(
+                        "file exceeds 2 MB limit".into(),
+                    ));
+                }
+            }
+        }
+    }
+
+    let fname = filename.ok_or_else(|| AppError::Validation("no file provided".into()))?;
+    let ext = fname
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    if !allowed_exts.contains(&ext.as_str()) {
+        return Err(AppError::Validation(format!(
+            "unsupported file type '.{ext}'; allowed: {}",
+            allowed_exts.join(", ")
+        )));
+    }
+
+    // Build a deterministic name: logo.<ext>
+    let out_name = format!("logo.{ext}");
+    let uploads_dir = std::path::Path::new("static").join("uploads").join("logo");
+    std::fs::create_dir_all(&uploads_dir)
+        .map_err(|e| AppError::Internal(format!("failed to create upload dir: {e}")))?;
+    let out_path = uploads_dir.join(&out_name);
+    std::fs::write(&out_path, &file_data)
+        .map_err(|e| AppError::Internal(format!("failed to write logo: {e}")))?;
+
+    let url = format!("/uploads/logo/{out_name}");
+    Ok((StatusCode::OK, Json(json!({ "url": url }))).into_response())
 }

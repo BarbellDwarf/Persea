@@ -322,7 +322,10 @@ fn eval_seconds_remaining() -> i64 {
 // ── Internal helpers ──
 
 /// The canonical string a license signature covers.
-fn signable_string(payload: &LicensePayload) -> String {
+///
+/// `pub` so the license generator CLI (`license-gen/`) signs the exact same
+/// string the server verifies — no format drift between the two.
+pub fn signable_string(payload: &LicensePayload) -> String {
     format!(
         "{}\n{}\n{}",
         payload.customer,
@@ -356,7 +359,10 @@ fn license_public_key_bytes() -> &'static [u8; 32] {
 }
 
 /// Encode bytes to URL-safe base64 (no padding).
-fn base64url_encode(data: &[u8]) -> String {
+///
+/// `pub` so the license generator CLI (`license-gen/`) produces keys in the
+/// exact same encoding the server parses.
+pub fn base64url_encode(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(data)
 }

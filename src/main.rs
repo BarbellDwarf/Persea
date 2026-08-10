@@ -1637,6 +1637,11 @@ async fn run_server(
         // License management
         .route("/api/admin/license", get(api::admin::get_license_status))
         .route("/api/admin/license", post(api::admin::set_license_key))
+        .route(
+            "/api/admin/upload-logo",
+            post(api::settings::upload_logo)
+                .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
         // Login scripts listing
         .route("/api/login-scripts", get(api::list_login_scripts))
         .route("/api/ws-ticket", post(api::create_ws_ticket))
@@ -1913,6 +1918,10 @@ async fn run_server(
         .route(
             "/admin/license.html",
             get(handlers::pages::admin_license_page),
+        )
+        .route(
+            "/admin/branding.html",
+            get(handlers::pages::admin_branding_page),
         )
         .route("/docs.html", get(handlers::account::docs_page))
         .route("/docs", get(handlers::account::docs_page))

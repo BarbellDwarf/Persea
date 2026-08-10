@@ -63,3 +63,6 @@ screenshots/
 
 # Benchmarks (local only)
 bench/
+
+# License generator private key (vendor tool output — never commit)
+/license_ed25519

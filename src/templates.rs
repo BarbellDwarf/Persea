@@ -341,6 +341,22 @@ impl IntoResponse for AdminTunnelsTemplate {
     }
 }
 
+/// Admin branding page template context.
+#[derive(Serialize)]
+pub struct AdminBrandingTemplate {
+    pub site_title: String,
+    pub logo_url: String,
+    pub is_admin: bool,
+    pub active_page: String,
+    pub csp_nonce: String,
+}
+
+impl IntoResponse for AdminBrandingTemplate {
+    fn into_response(self) -> Response {
+        render_template("pages/admin/branding.html", &self)
+    }
+}
+
 /// Admin license page template context.
 #[derive(Serialize)]
 pub struct AdminLicenseTemplate {
