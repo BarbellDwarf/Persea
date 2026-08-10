@@ -336,9 +336,10 @@ pub async fn update_me(
     let db_clone = database.clone();
     let email_clone = email.clone();
     let name = body.name.clone();
-    let updated = tokio::task::spawn_blocking(move || db::update_user_name(&db_clone, &email_clone, &name))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))??;
+    let updated =
+        tokio::task::spawn_blocking(move || db::update_user_name(&db_clone, &email_clone, &name))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))??;
     if !updated {
         return Err(AppError::Session("user not found".into()));
     }
