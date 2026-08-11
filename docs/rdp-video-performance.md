@@ -7,7 +7,7 @@ Guide to optimizing RDP video quality and frame rate through persea, particularl
 
 ## Connections Settings
 
-Three per-entry settings control RDP video behaviour:
+Four per-entry settings control RDP video behaviour:
 
 - **Enable Graphics Pipeline (GFX)** — Activates the RDP Graphics Pipeline Extension (RDPGFX), which enables the RemoteFX codec for better video compression. Recommended for video monitoring and media-heavy sessions. Requires 32-bit colour depth (set automatically).
 
@@ -15,7 +15,9 @@ Three per-entry settings control RDP video behaviour:
 
 - **Force Lossless** — Forces PNG-only encoding (no JPEG/WebP lossy compression). Better for text-heavy workloads where visual fidelity matters. Uses significantly more bandwidth — not recommended for video content.
 
-These settings appear in the connections entry editor for RDP entries under "Video Performance".
+- **Enable H.264 Passthrough** — Lets guacd forward the server's raw H.264 (AVC420/AVC444) NAL units to the browser's WebCodecs decoder instead of re-encoding (see [H.264 Passthrough Pipeline](#h264-passthrough-pipeline-xrdp-with-x264)). Default: on (`enable_h264`). Requires GFX and an H.264-capable server (e.g. xrdp rebuilt with x264).
+
+These are per-entry fields (`enable_gfx`, `enable_desktop_composition`, `force_lossless`, `enable_h264`) settable via the address-book entry API. The current Connections UI does not expose them.
 
 ## Windows RDP Server Tuning
 
@@ -85,7 +87,7 @@ wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/BarbellDwarf/persea/
 sudo bash setup-xrdp-gfx.sh --desktop mate
 ```
 
-Desktop options: `mate` (default, recommended), `xfce`, `kde`, `gnome`, `none`. MATE is lightweight and works reliably over xrdp without GPU.
+Desktop options: `mate` (default, recommended), `xfce`, `kde`, `gnome`, `cinnamon`, `none`. MATE is lightweight and works reliably over xrdp without GPU.
 
 The script runs in three phases:
 1. **Phase 1 (pure trixie):** Desktop + Firefox + Chromium, build tools, PulseAudio xrdp audio module, PipeWire→PulseAudio switch
@@ -245,10 +247,7 @@ For video monitoring workloads, a minimum of 20 Mbps per session is recommended.
 4. **persea** relays over WebSocket to the browser
 5. **Browser** decodes and renders to HTML Canvas
 
-guacd automatically adapts encoding quality based on network lag:
-- Low lag (<20ms): quality 90 (high detail)
-- Medium lag (50ms): quality 70 (balanced)
-- High lag (80ms): quality 30 (aggressive compression)
+guacd does not implement latency-based quality adaptation in this codebase — no such logic exists in the server or the bundled client, so JPEG/WebP quality is whatever guacd applies by default. (The JPEG Quality slider in the session toolbar is a UI control only and is not wired to the encoder.)
 
 ### H.264 Passthrough Pipeline (xrdp with x264)
 
@@ -266,6 +265,6 @@ Benefits:
 - **Lower latency** — one fewer encoding pass
 - **Consistent quality** — single lossy encoding pass (x264) instead of H.264 → bitmap → JPEG/WebP
 
-H.264 passthrough activates automatically when the RDP server sends AVC420/AVC444 codec data. Servers that don't support H.264 (stock Debian xrdp, Windows without GPU) use the standard pipeline automatically.
+H.264 passthrough is on by default (per-entry `enable_h264`, default true) and becomes active when the RDP server sends AVC420/AVC444 codec data. Servers that don't support H.264 (stock Debian xrdp, Windows without GPU) use the standard pipeline automatically.
 
 Browser requirements: Chrome/Edge 94+, Firefox 130+ (WebCodecs support).

@@ -1,7 +1,7 @@
 # Subagent Work Contract
 
 **Applies to:** every implementation subagent dispatched in this repo.
-**Reference:** `CLAUDE.md` → "Subagent Work Contract" section.
+**Reference:** `AGENTS.md` → "Subagent Work Contract" section.
 
 ## Model: Edits first, single verifier
 
