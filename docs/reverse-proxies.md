@@ -214,3 +214,20 @@ trusted_proxies = ["127.0.0.1/32"]
 
 Without this setting, all requests from behind the proxy appear to come
 from the proxy's own IP.
+
+**`X-Forwarded-Proto` is gated the same way.** persea only treats a
+request as HTTPS based on the `X-Forwarded-Proto: https` header when the
+immediate peer is inside `trusted_proxies` — a client-supplied header
+from an untrusted source is ignored. This matters for the `Secure`
+attribute on cookies: when persea serves plain HTTP behind a
+TLS-terminating proxy, the session cookie gets `Secure` only if the
+proxy is trusted and reports `https`.
+
+**Self-signed certs (`secure_cookies = false`):** when persea serves
+HTTPS with a self-signed certificate (or you set
+`tls.secure_cookies = false` for any other reason), the `Secure`
+attribute is omitted from all cookies regardless of headers, and
+`X-Forwarded-Proto` is not consulted. Browsers block `Secure` cookies
+over untrusted connections, so this is what makes login work behind a
+self-signed loopback cert. With a real CA-issued certificate, leave
+`secure_cookies` at its default (`true`).

@@ -10,11 +10,18 @@ Persea runs as a single Rust/Axum binary with guacd as a separate C process. The
 |-----------|-------|-------|-----------|
 | HTTP server (persea) | Stateless per-request | In-memory | Safe to replicate |
 | Session manager | **Stateful** | In-memory (HashMap) | Requires session affinity |
-| Auth sessions | Stateless | SQLite/DB | Shared across instances |
-| Address book | Stateless | SQLite or Vault | Shared across instances |
+| Auth sessions | **Stateful** | Local SQLite (rusqlite) | Per-instance — not shared |
+| Address book | **Stateful** | Local SQLite (metadata) + optional Vault (credentials) | Metadata per-instance; only credentials shared via Vault |
 | Audit log | Stateless | SQLite | Per-instance (acceptable) |
 | Recordings | Stateless | Filesystem | Per-instance or shared NFS |
-| guacd | **Stateful per-connection** | TCP per-session | Each persea needs its own guacd |
+| guacd | **Stateful per-connection** | TCP per-session | Can be pooled and shared |
+
+> **Clustering status:** persea has **no active clustering**. There is no
+> shared session store, no leader election, and no cross-instance session
+> migration. Horizontal scaling works only with session affinity (below),
+> and anything that must be shared across instances (address book metadata,
+> auth sessions, audit log) is currently per-instance. Features that would
+> change this are roadmap items, not shipped behaviour.
 
 ## Session Affinity (Required)
 
@@ -26,10 +33,18 @@ Active sessions live in `SessionManager` (in-memory HashMap keyed by UUID). A We
 
 ## guacd Pooling
 
-Each persea instance needs its own guacd. guacd is a per-connection process (one child per protocol connection). Two options:
+guacd is a per-connection process (one child per protocol connection). persea
+never spawns guacd itself — it always connects to a guacd daemon via
+`guacd_addr`. Two deployment options:
 
-1. **Embedded guacd** (default): persea spawns guacd as a child. Each instance gets its own. Simple but no pooling.
-2. **External guacd pool**: Multiple guacd instances behind a TCP load balancer. Each persea instance connects to a guacd via `guacd_addr`. The LB distributes connections. guacd is stateless per-connection — any instance can serve any session.
+1. **Co-located guacd** (default): guacd runs as a separate process on the
+   same host as persea — the systemd `persea-guacd` service on bare metal,
+   or the entrypoint-spawned guacd in the Docker image. Simple, but each
+   persea instance has its own guacd.
+2. **External guacd pool**: Multiple guacd instances behind a TCP load
+   balancer. Each persea instance connects to a guacd via `guacd_addr`. The
+   LB distributes connections. guacd is stateless per-connection — any
+   instance can serve any session.
 
 For HA, option 2 is recommended. A single guacd handles ~100-500 concurrent sessions on modest hardware, so 2-3 instances provide redundancy.
 
@@ -41,26 +56,41 @@ For HA, option 2 is recommended. A single guacd handles ~100-500 concurrent sess
 - Acceptable for single-instance deployments
 - For HA: each instance needs its own SQLite (loses cross-instance address book)
 
-### MySQL/PostgreSQL (via SQLx)
-- SQLx support exists (`DbPool` enum in `src/db_pool.rs`) but is not the primary tested path
-- Use for HA deployments where address book must be shared across instances
-- Config: `db_url = "mysql://user:pass@host/persea"` or `"postgres://..."`
+### MySQL/PostgreSQL (via SQLx) — roadmap, not implemented for data storage
+- The `DbPool` enum (`src/db_pool.rs`) can connect to PostgreSQL, MySQL, or
+  SQLite via `db_url`, but **no application data is stored there yet** — it
+  is currently only pinged by the `/api/health` deep check. Users, sessions,
+  audit log, and the address book all live in the per-instance rusqlite DB.
+- **Not implemented:** storing the address book (or any other data) in
+  MySQL/PostgreSQL so instances can share it. Do not configure `db_url`
+  expecting shared state today.
 
-### Vault (address book only)
-- Vault-backed address book is already supported (`[storage] backend = "vault"`)
-- Multiple persea instances can share one Vault address book
-- Credentials stored in Vault, address book metadata in Vault
-- Session data still per-instance (in-memory + local DB)
+### Vault (credentials only)
+- With `[storage] backend = "vault"`, connection **credentials** are stored
+  in Vault/OpenBao; folder and entry **metadata always stays in the local
+  DB** (see `src/api/address_book.rs`).
+- Multiple persea instances can share one Vault for credentials, but each
+  instance's address book tree (folders, entries, ACLs) is its own local
+  copy — changes do not propagate between instances.
+- Session data is still per-instance (in-memory + local DB).
 
 ## Cloud Deployment Patterns
+
+> **Status:** the patterns below are illustrative reference architectures,
+> not officially tested or supported configurations. They assume the
+> roadmap items above (shared address book storage) exist. Today, a
+> multi-instance deployment shares only recordings (via NFS/EFS) and
+> credentials (via Vault); everything else is per-instance. The
+> "ElastiCache Redis (session tokens)" element is **not implemented** —
+> there is no Redis integration in persea.
 
 ### AWS (ECS + ALB)
 ```
 ALB (sticky sessions) → ECS Service (persea containers, min 2)
     ↳ guacd ECS Service (min 2, TCP target group)
-    ↳ RDS MySQL/PostgreSQL (shared address book)
+    ↳ RDS MySQL/PostgreSQL (shared address book — roadmap)
     ↳ EFS (shared recordings)
-    ↳ ElastiCache Redis (session tokens, optional)
+    ↳ ElastiCache Redis (session tokens — not implemented)
 ```
 
 ### Azure (Container Apps)
@@ -89,7 +119,7 @@ HAProxy (TCP + HTTP mode)
     ↳ persea-3 (container, port 8083)
     ↳ guacd-1 (container, port 4822)
     ↳ guacd-2 (container, port 4823)
-    ↳ MySQL/PostgreSQL (shared address book) or Vault
+    ↳ Vault (shared credentials only — address book metadata stays per-instance)
     ↳ NFS mount (shared recordings)
 ```
 
@@ -116,8 +146,10 @@ Persea exposes `GET /api/health` (check `src/main.rs` for the route). Returns 20
 listen_addr = "0.0.0.0:8089"
 guacd_addr = "guacd-lb:4822"  # or individual guacd instances
 
-# Shared address book via MySQL
-db_url = "mysql://persea:secret@mysql-host:3306/persea"
+# NOTE: db_url (MySQL/PostgreSQL) is NOT used for address book storage yet —
+# it is only pinged by the health check. Address book metadata stays in the
+# per-instance SQLite DB. See "Database Options" above.
+# db_url = "mysql://persea:secret@mysql-host:3306/persea"
 
 # Recordings on shared storage
 [recording]

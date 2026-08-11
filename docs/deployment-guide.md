@@ -30,7 +30,7 @@ Internet
 | 443 | HAProxy (HTTPS) | Public / Knocknoc-gated |
 | 8089 | persea (HTTPS) | Loopback only (behind HAProxy) |
 | 4822 | guacd (TLS) | Loopback only |
-| 6000-6099 | Xvnc displays | Loopback only (web sessions) |
+| 6100-6199 | Xvnc displays | Loopback only (web sessions) |
 
 ## Step 1: Install persea
 
@@ -39,7 +39,9 @@ Internet
 ```bash
 # Download the latest .deb from GitHub releases
 # Asset name includes the version: persea_<version>+g<hash>_amd64.deb
-wget https://github.com/BarbellDwarf/persea/releases/latest
+curl -sL https://api.github.com/repos/BarbellDwarf/persea/releases/latest \
+  | sed -n 's/.*"browser_download_url": "\([^"]*_amd64\.deb\)".*/\1/p' \
+  | head -1 | xargs wget
 sudo apt install ./persea_*.deb
 ```
 
@@ -103,10 +105,10 @@ Examples:
 | shutdown_timeout_secs | PERSEA_SHUTDOWN_TIMEOUT_SECS | 30 | Graceful shutdown timeout |
 | rate_limit | PERSEA_RATE_LIMIT | false | Enable rate limiting |
 | user_credentials_default_scope | PERSEA_USER_CREDENTIALS_DEFAULT_SCOPE | local | Credential default scope |
-| ssh_allowed_networks | PERSEA_SSH_ALLOWED_NETWORKS | ["10.0.0.0/8", ...] | SSH allowed networks |
-| rdp_allowed_networks | PERSEA_RDP_ALLOWED_NETWORKS | ["10.0.0.0/8", ...] | RDP allowed networks |
-| vnc_allowed_networks | PERSEA_VNC_ALLOWED_NETWORKS | ["10.0.0.0/8", ...] | VNC allowed networks |
-| web_allowed_networks | PERSEA_WEB_ALLOWED_NETWORKS | ["127.0.0.0/8", ...] | Web allowed networks |
+| ssh_allowed_networks | PERSEA_SSH_ALLOWED_NETWORKS | ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"] | SSH allowed networks |
+| rdp_allowed_networks | PERSEA_RDP_ALLOWED_NETWORKS | ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"] | RDP allowed networks |
+| vnc_allowed_networks | PERSEA_VNC_ALLOWED_NETWORKS | ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"] | VNC allowed networks |
+| web_allowed_networks | PERSEA_WEB_ALLOWED_NETWORKS | ["127.0.0.0/8", "::1/128"] | Web allowed networks |
 | trusted_proxies | PERSEA_TRUSTED_PROXIES | [] | Trusted proxy CIDRs |
 | tls.secure_cookies | PERSEA_TLS__SECURE_COOKIES | true | Set `false` when serving HTTPS with a self-signed/untrusted cert — browsers block `Secure` cookies over untrusted connections, breaking logins. Auto-set by `install.sh` and the Docker entrypoint when they generate their own cert |
 | storage.encryption_key | PERSEA_STORAGE__ENCRYPTION_KEY | (none) | Storage encryption key |
@@ -293,7 +295,7 @@ groups_claim = "groups"
 auth_session_ttl_secs = 28800
 ```
 
-Group-to-role mappings are configured via the Admin page (http://localhost:8089/admin.html)
+Group-to-role mappings are configured via the Admin page (http://localhost:8089/admin/groups.html)
 or the API endpoint `POST /api/admin/group-mappings`.
 
 Set the client secret in `/opt/persea/env`:
@@ -430,9 +432,9 @@ Recordings can be played back in the browser via the Sessions page, or exported 
 ### Monitoring
 
 - **Health check:** `GET /api/health` — shallow `{"status":"ok"}` without auth; authenticated operators get the deep check (guacd, DB, Vault, disk). See [API Reference](api.md#get-apihealth)
-- **Metrics:** `GET /metrics` (Prometheus format, unauthenticated — see [API Reference](api.md#metrics))
+- **Metrics:** `GET /metrics` (Prometheus format, unauthenticated — see [API Reference](api.md#get-metrics))
 - **System status:** `GET /api/system/status` (admin only) shows version, uptime, active sessions
-- **Reports:** Session history, top connections, top users available at `/reports.html` (poweruser+ role)
+- **Reports:** Session history, top connections, top users available at `/reports.html` (admin page) and via the reports API (poweruser+ role)
 
 ### Upgrading
 

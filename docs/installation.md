@@ -37,9 +37,9 @@ This starts both `persea-guacd` (the protocol daemon) and `persea` (the web prox
 
 3. **Configure**, edit `/opt/persea/config.toml` as needed (see [Configuration](configuration.md)).
 
-4. **(Required for connections) Set up a storage backend:**
+4. **Choose a storage backend for connections (default: local DB):**
 
-The connections page is persea's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries either in the local database with AES-256-GCM encrypted credentials (the default `[storage] backend = "db"`), or in [HashiCorp Vault](https://www.vaultproject.io/) / [OpenBao](https://openbao.org/) KV v2 (`backend = "vault"`). A storage backend is required for the Connections UI — without one, users can only run ad-hoc sessions via the Sessions page or the API.
+The connections page is persea's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in the local database with AES-256-GCM encrypted credentials by default (`[storage] backend = "db"` — no Vault required), or in [HashiCorp Vault](https://www.vaultproject.io/) / [OpenBao](https://openbao.org/) KV v2 (`backend = "vault"`). The DB backend works out of the box; only switch to Vault if you need credentials stored outside the database.
 
 For a Vault-backed install the fastest path is the bundled quickstart helper, which auto-detects vault or bao and provisions everything:
 
@@ -84,7 +84,7 @@ After installation, verify everything works:
 
 1. **Check services are running:**
    ```bash
-   sudo systemctl status persea guacd
+   sudo systemctl status persea persea-guacd
    ```
 
 2. **Test the health endpoint:**
@@ -184,9 +184,9 @@ docker run -d -p 8089:8089 persea
 The Docker image:
 - Uses a multi-stage build (Debian 13 trixie-slim runtime)
 - Builds guacd from source with patches applied
-- Generates a self-signed TLS certificate at build time
+- Generates a self-signed TLS certificate on first start (entrypoint, into `/opt/persea/tls`)
 - Enables TLS between persea and guacd by default
-- Exposes HTTP on port 8089 (put a reverse proxy in front for HTTPS)
+- Serves HTTPS on port 8089 with the self-signed cert (put a reverse proxy in front for a trusted certificate)
 
 ### First run — setup wizard
 
@@ -194,8 +194,11 @@ On first start (when no database exists), persea redirects to the **setup wizard
 at `https://your-server:8089/setup`, which provisions the first admin user
 (email, display name, password) and applies initial feature toggles.
 
-After setup, log in with the admin credentials. API keys for automation are
-created separately when needed:
+After setup, log in with the admin credentials. The entrypoint also creates an
+admin API key named `docker-admin` on first start and writes it to
+`/opt/persea/data/admin-key.txt` (owner-read only) — useful for API automation
+before you have a web login. Additional API keys are created separately when
+needed:
 
 ```bash
 docker exec persea /opt/persea/bin/persea \
