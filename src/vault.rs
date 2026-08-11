@@ -309,6 +309,13 @@ pub struct EntryInfo {
     pub username: Option<String>,
     pub url: Option<String>,
     pub display_name: Option<String>,
+    /// DB row creation timestamp (SQLite datetime string; `None` for
+    /// vault-backed copies that carry no timestamps).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// DB row last-update timestamp (SQLite datetime string).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
     pub domain: Option<String>,
     pub security: Option<String>,
     pub ignore_cert: Option<bool>,
@@ -477,6 +484,8 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             username: e.username.clone(),
             url: e.url.clone(),
             display_name: e.display_name.clone(),
+            created_at: None, // filled from the DB row by the handler
+            updated_at: None,
             domain: e.domain.clone(),
             security: e.security.clone(),
             ignore_cert: e.ignore_cert,

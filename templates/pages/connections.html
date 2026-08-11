@@ -88,23 +88,21 @@
             </div>
 
             <!-- Right panel: Connection details -->
-            <div id="detail-panel" class="hidden" style="flex:0 0 320px;min-width:0;max-height:calc(100vh - 120px);overflow-y:auto">
+            <div id="detail-panel" class="hidden" style="flex:0 0 340px;min-width:0;max-height:calc(100vh - 120px);overflow-y:auto">
                 <div class="card" style="position:sticky;top:24px">
-                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+                    <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
                         <h3 id="detail-name" style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></h3>
                         <span id="detail-protocol" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid"></span>
                     </div>
-                    <div id="detail-host" style="font-size:13px;color:var(--text-secondary);margin-bottom:16px"></div>
+                    <div id="detail-host" style="font-size:13px;color:var(--text-secondary);margin-bottom:12px"></div>
+                    <div id="detail-description" class="hidden" style="margin-bottom:16px;padding:10px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word"></div>
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
                     <button id="detail-rotate-cred" class="btn btn-sm admin-only" style="width:100%;margin-bottom:16px;background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);display:none">
                         <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-8.243a.75.75 0 00.219-.53V3.253a.75.75 0 00-1.5 0V5.23l-.312-.312A7 7 0 003.398 8.073a.75.75 0 101.449.39A5.5 5.5 0 0114.5 5.648l.312.311h-2.433a.75.75 0 000 1.5h3.634a.75.75 0 00.53-.219z" clip-rule="evenodd"/></svg>
                         Rotate Credential
                     </button>
                     <div id="detail-error" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:16px"></div>
-                    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
-                        <p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Parameters</p>
-                        <div id="detail-params" style="font-size:13px"></div>
-                    </div>
+                    <div id="detail-details"></div>
                     <div id="detail-sessions" class="hidden" style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
                         <p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Active Sessions</p>
                         <div id="detail-sessions-avatars" style="display:flex"></div>
@@ -938,6 +936,94 @@
             })
             .catch(function() { connectEntry(scope, folder, entry); });
     }
+    function jumpHostsLabel(hops) {
+        if (!hops || hops.length === 0) return '';
+        return hops.map(function(h) { return h.hostname + ':' + h.port; }).join(', ');
+    }
+    function detailRow(label, value) {
+        return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:13px">'
+            + '<span style="color:var(--text-muted);flex-shrink:0">' + escapeHtml(label) + '</span>'
+            + '<span style="color:var(--text-secondary);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(String(value)) + '</span></div>';
+    }
+    function detailSection(title, body) {
+        if (!body) return '';
+        return '<div style="border-top:1px solid var(--border);padding-top:12px;margin-top:16px">'
+            + '<p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0 0 6px">' + escapeHtml(title) + '</p>'
+            + body + '</div>';
+    }
+    function detailHtmlFor(e, folderPath, scope) {
+        var rows = '';
+        function add(label, v) {
+            if (v === null || v === undefined || v === '') return;
+            rows += detailRow(label, v);
+        }
+        function addOn(label, v) { if (v) rows += detailRow(label, 'On'); }
+
+        add('Hostname', e.hostname);
+        add('Port', e.port);
+        add('URL', e.url);
+        add('Container image', e.container_image);
+        add('Proxmox API', e.proxmox_url);
+        add('VM ID', e.proxmox_vmid);
+        add('Username', e.username);
+        add('Domain', e.domain);
+        add('Security', e.security);
+        add('Auth package', e.auth_pkg);
+        add('KDC URL', e.kdc_url);
+        addOn('Ignore TLS errors', e.ignore_cert);
+        add('Color depth', e.color_depth);
+        add('Monitors', e.max_monitors);
+        add('Container user', e.container_username);
+        add('Created', e.created_at);
+        add('Updated', e.updated_at);
+        var connection = detailSection('Connection', rows);
+
+        rows = '';
+        add('Folder', folderPath + ' (' + scope + ')');
+        add('Allowed groups', e.allowed_groups);
+        add('Banner', e.banner);
+        add('Jump hosts', jumpHostsLabel(e.jump_hosts));
+        addOn('Recording', e.enable_recording);
+        add('Recordings kept', e.max_recordings);
+        addOn('Typescript', e.record_typescript);
+        add('Login script', e.login_script);
+        add('Allowed domains', e.allowed_domains ? e.allowed_domains.join(', ') : '');
+        addOn('Disable copy', e.disable_copy);
+        addOn('Disable paste', e.disable_paste);
+        addOn('Share links', e.allow_sharing);
+        addOn('Auto-open', e.auto_open_if_singleton);
+        var access = detailSection('Access', rows);
+
+        rows = '';
+        addOn('Drive', e.enable_drive);
+        addOn('Prompt for credentials', e.prompt_credentials);
+        add('Credential variables', e.credential_variables && e.credential_variables.length ? e.credential_variables.join(', ') : '');
+        addOn('GFX', e.enable_gfx);
+        addOn('Desktop composition', e.enable_desktop_composition);
+        addOn('Wallpaper', e.enable_wallpaper);
+        addOn('Theming', e.enable_theming);
+        addOn('Window drag', e.enable_full_window_drag);
+        addOn('Lossless', e.force_lossless);
+        addOn('H.264', e.enable_h264);
+        add('RemoteApp', e.remote_app);
+        add('RemoteApp dir', e.remote_app_dir);
+        add('RemoteApp args', e.remote_app_args);
+        add('Container CPU', e.container_cpu_limit);
+        add('Container memory', e.container_memory_limit ? e.container_memory_limit + ' MB' : '');
+        add('Container idle', e.container_idle_timeout_mins ? e.container_idle_timeout_mins + ' min' : '');
+        addOn('SPICE TLS', e.spice_tls);
+        add('SPICE TLS port', e.spice_tls_port);
+        add('SPICE proxy', e.spice_proxy);
+        add('SPICE cert subject', e.spice_cert_subject);
+        add('Proxmox node', e.proxmox_node);
+        add('Proxmox token', e.proxmox_token_id);
+        addOn('Verify TLS', e.proxmox_verify_tls);
+        addOn('Fullscreen on connect', e.fullscreen_on_connect);
+        addOn('Auto-hide tabs', e.autohide_side_tabs);
+        var advanced = detailSection('Advanced', rows);
+
+        return connection + access + advanced;
+    }
     function selectConnection(scope, folder, entry, el) {
         var rows = document.querySelectorAll('.entry-row.selected');
         for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
@@ -957,12 +1043,15 @@
             badge.textContent = proto.toUpperCase();
             badge.className = 'px-2 py-0.5 text-xs font-medium rounded border ' + protoClass(proto);
             document.getElementById('detail-host').textContent = entryHost(e) || '\u2014';
+            var descEl = document.getElementById('detail-description');
+            if (e.description) {
+                descEl.textContent = e.description;
+                descEl.classList.remove('hidden');
+            } else {
+                descEl.classList.add('hidden');
+            }
             document.getElementById('detail-connect').onclick = function() { maybePromptConnect(scope, folder, entry); };
-            var params = document.getElementById('detail-params');
-            var fields = [['Port', e.port], ['Username', e.username], ['Domain', e.domain], ['Security', e.security], ['Recording', e.enable_recording ? 'On' : null]];
-            params.innerHTML = fields.filter(function(f) { return f[1]; }).map(function(f) {
-                return '<div style="display:flex;justify-content:space-between;padding:4px 0"><span style="color:var(--text-muted)">' + escapeHtml(f[0]) + '</span><span style="color:var(--text-secondary)">' + escapeHtml(String(f[1])) + '</span></div>';
-            }).join('');
+            document.getElementById('detail-details').innerHTML = detailHtmlFor(e, folder, scope);
         };
         var e = findByName(list, entry);
         if (e) { render(e); return; }

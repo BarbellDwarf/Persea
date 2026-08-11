@@ -331,6 +331,8 @@ fn ab_entry_from_db(row: &db::AbEntry) -> AddressBookEntry {
 fn entry_info_from_db_row(database: &Db, row: &db::AbEntry) -> crate::vault::EntryInfo {
     let ab_entry = ab_entry_from_db(row);
     let mut info = crate::vault::EntryInfo::from((row.name.as_str(), &ab_entry));
+    info.created_at = Some(row.created_at.clone());
+    info.updated_at = Some(row.updated_at.clone());
     info.has_credentials = db::list_ab_credentials(database, row.id)
         .map(|creds| {
             creds
