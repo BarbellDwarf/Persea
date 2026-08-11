@@ -53,11 +53,14 @@ docker run -d \
   -p 443:8089 \
   -v persea-data:/opt/persea/data \
   -v persea-recordings:/opt/persea/recordings \
+  -v persea-tls:/opt/persea/tls \
   -v ./config.toml:/opt/persea/config.toml \
   ghcr.io/barbelldwarf/persea:latest
 ```
 
 The Docker image bundles guacd + FreeRDP + dependencies, so it runs cleanly on Ubuntu, RHEL, Rocky, Arch, and other distros where the bare-metal `.deb` would hit a FreeRDP ABI mismatch. See [installation.md](installation.md#other-linux-distributions) for the full story on non-Debian-13 targets.
+
+> **Persistent state:** the three named volumes (`persea-data`, `persea-recordings`, `persea-tls`) keep the SQLite database, recordings, and the TLS certificate across container recreations/upgrades. The `persea-tls` volume is important — without it, the entrypoint generates a fresh self-signed certificate on every container recreate, changing the cert fingerprint and re-triggering browser warnings. For production, mount your own certificate over `/opt/persea/tls/cert.pem` + `key.pem`; when persea generates a self-signed cert itself, it automatically adds `secure_cookies = false` to the config so browsers accept the session cookie over the untrusted connection.
 
 See [installation.md](installation.md) for all install options.
 
