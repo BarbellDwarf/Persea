@@ -310,6 +310,47 @@ Use cases:
 - **Disable paste**: prevents users from pasting potentially malicious content into remote sessions
 - **Disable both**: fully isolates the clipboard between the local browser and the remote session
 
+## RDP security
+
+### Kerberos NLA
+
+Kerberos Network Level Authentication (NLA) for RDP sessions requires a Kerberos client configuration so FreeRDP can discover the KDC for the account realm. The Docker image ships `krb5-user` (kinit and the Kerberos libraries), and the entrypoint writes `/etc/krb5.conf` at container start when configured — or copies an operator-supplied file into place.
+
+**Enable it by setting environment variables on the container:**
+
+| Env var | Purpose | Required |
+|---------|---------|----------|
+| `PERSEA_KRB5_REALM` | Active Directory realm (e.g. the domain name in uppercase) | yes |
+| `PERSEA_KRB5_KDC` | KDC hostname or IP | yes |
+| `PERSEA_KRB5_ADMIN_SERVER` | Kerberos admin server; defaults to the KDC | no |
+| `PERSEA_KRB5_DOMAIN` | DNS domain mapped to the realm in `[domain_realm]` | no |
+
+```bash
+docker run -d -p 8089:8089 \
+  -e PERSEA_KRB5_REALM=<REALM> \
+  -e PERSEA_KRB5_KDC=<KDC-HOSTNAME> \
+  persea
+```
+
+The generated config sets `dns_lookup_kdc = true`, so the realm's DNS SRV records are also used for KDC discovery. The entrypoint logs a warning at container start when the KDC is unreachable on TCP/88 (non-blocking check), so misconfiguration is visible before users hit RDP session errors.
+
+**Fully custom config:** mount a complete krb5.conf at `/opt/persea/krb5.conf`. The entrypoint detects it and uses it instead of generating one. Do not set the `PERSEA_KRB5_*` env vars in that case — they are ignored while the mounted file exists.
+
+**Per-entry settings:** individual address book entries can override the auth package and KDC:
+
+- `auth_pkg=kerberos` — use Kerberos for that entry's NLA/CredSSP (or set `default_auth_pkg = "kerberos"` under `[rdp]` in config.toml for all RDP sessions)
+- `kdc_url` — per-entry KDC override; can point at a specific KDC (e.g. a particular domain controller) instead of relying on the container-level config or DNS discovery
+
+**Verification path:** run `kinit <user>@<REALM>` with the account password inside the container (`docker exec -it <container> kinit <user>@<REALM>`, then `klist`) — if that succeeds, Kerberos itself is configured correctly and any remaining failures are in the RDP layer.
+
+**Troubleshooting:**
+
+- **KDC reachability**: Kerberos uses UDP/88 and TCP/88; many environments block UDP, so confirm TCP/88 is reachable from the container to the KDC.
+- **Clock skew**: the default tolerance is ~5 minutes. Verify the container time matches the domain controller (`date` inside the container vs. on the DC); skewed clocks produce authentication failures that look like credential problems.
+- **"KDC reply did not match expectations" / "Response was not from primary KDC"**: this class of error is environment-specific (wrong KDC for the realm, stale DNS, load-balanced KDCs, referral issues) rather than a persea bug — debug it with `kinit` and `klist` inside the container.
+
+**Status:** Kerberos NLA in the RDP stack is still experimental upstream (GUACAMOLE-2057, deferred to a future release), and NTLM remains the default auth package. Kerberos should be enabled only where the AD-integrated hosts and KDC infrastructure are known to work.
+
 ## Web session hardening
 
 Web browser sessions (headless Chromium on Xvnc) include several security layers:
