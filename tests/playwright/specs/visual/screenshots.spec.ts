@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ storageState: '.auth/user.json' });
 
 async function authenticate(page: import('@playwright/test').Page) {
   await page.goto('/');

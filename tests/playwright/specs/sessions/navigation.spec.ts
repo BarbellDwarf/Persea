@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ storageState: '.auth/user.json' });
 import { SessionsPage } from '../../pages/SessionsPage';
 
 test.describe('Sessions page', () => {

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ storageState: '.auth/user.json' });
 import { PerseaApi, setApiKey } from '../../fixtures/api';
 import { loginWithApiKey } from '../../fixtures/auth';
 

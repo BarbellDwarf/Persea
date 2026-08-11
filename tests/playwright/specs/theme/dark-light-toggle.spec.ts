@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ storageState: '.auth/user.json' });
 import { loginWithApiKey } from '../../fixtures/auth';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:9091';

@@ -29,6 +29,18 @@ fn guacd_reachable() -> bool {
     .is_ok()
 }
 
+/// The quick-connect tests seed an SSH entry pointing at 127.0.0.1 (default
+/// SSH port 22), so they also need a local SSH server — otherwise guacd
+/// accepts the connection but session creation fails with 502. Skip instead
+/// of failing when the target isn't present.
+fn ssh_target_reachable() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:22".parse().unwrap(),
+        std::time::Duration::from_millis(300),
+    )
+    .is_ok()
+}
+
 fn insert_test_admin(db: &Db, name: &str) -> String {
     let key = format!("test-key-{}", name);
     let key_hash = {
@@ -1257,8 +1269,8 @@ async fn test_quick_connect_prompts_when_no_credentials() {
 
 #[tokio::test]
 async fn test_quick_connect_reads_credentials_from_db() {
-    if !guacd_reachable() {
-        eprintln!("skipping: no guacd on 127.0.0.1:4822");
+    if !guacd_reachable() || !ssh_target_reachable() {
+        eprintln!("skipping: no guacd on 127.0.0.1:4822 or SSH target on 127.0.0.1:22");
         return;
     }
     let db = test_db();
@@ -1307,8 +1319,8 @@ async fn test_quick_connect_reads_credentials_from_db() {
 
 #[tokio::test]
 async fn test_quick_connect_reads_credentials_from_vault() {
-    if !guacd_reachable() {
-        eprintln!("skipping: no guacd on 127.0.0.1:4822");
+    if !guacd_reachable() || !ssh_target_reachable() {
+        eprintln!("skipping: no guacd on 127.0.0.1:4822 or SSH target on 127.0.0.1:22");
         return;
     }
     let db = test_db();

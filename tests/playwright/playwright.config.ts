@@ -4,6 +4,7 @@ const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
 
 export default defineConfig({
   testDir: './specs',
+  globalSetup: './global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

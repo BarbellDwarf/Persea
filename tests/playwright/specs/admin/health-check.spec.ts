@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ storageState: '.auth/user.json' });
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
 const ADMIN_KEY = process.env.ADMIN_API_KEY || '';

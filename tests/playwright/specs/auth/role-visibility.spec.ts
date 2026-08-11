@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ storageState: '.auth/user.json' });
 
 test.describe('Role-based navigation visibility', () => {
   test.describe('unauthenticated user', () => {
