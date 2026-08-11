@@ -11,7 +11,7 @@ test.describe('Recordings page', () => {
 
   test('page renders with title and nav', async ({ page }) => {
     await rec.goto();
-    await expect(page).toHaveTitle(/persea.*Recordings/);
+    await expect(page).toHaveTitle(/persea.*Recordings/i);
     await expect(page.locator('h1')).toBeVisible();
     await expect(rec.navRecordings).toHaveClass(/active/);
   });
@@ -29,20 +29,17 @@ test.describe('Recordings page', () => {
 
   test('recording list container is visible', async () => {
     await rec.goto();
-    await expect(rec.recordingList).toBeVisible();
+    // With recordings the list is shown; without any the empty state is shown
+    await expect(rec.recordingList.or(rec.recordingEmpty).first()).toBeVisible();
   });
 
-  test('search filters recordings', async () => {
+  test('search filters recordings', async ({ page }) => {
     await rec.goto();
+    const resp = page.waitForResponse((r) => r.url().includes('/api/recordings') && r.url().includes('q='));
     await rec.searchRecordings('nonexistent-session-xyz');
-    await expect(rec.recordingList).toContainText(/No recordings found/);
-  });
-
-  test('typescript section is hidden when no typescripts', async () => {
-    await rec.goto();
-    // Section may or may not be visible depending on data
-    const visible = await rec.isTypescriptSectionVisible();
-    expect(typeof visible).toBe('boolean');
+    await resp;
+    await expect(rec.recordingEmpty).toBeVisible();
+    await expect(rec.recordingEmpty).toContainText(/No recordings/);
   });
 
   test('nav links navigate correctly', async ({ page }) => {

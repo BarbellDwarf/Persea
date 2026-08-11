@@ -11,25 +11,23 @@ test.describe('Connections page', () => {
 
   test('page renders with title and nav', async ({ page }) => {
     await conn.goto();
-    await expect(page).toHaveTitle(/persea.*Connections/);
+    await expect(page).toHaveTitle(/persea.*Connections/i);
     await expect(page.locator('h1')).toBeVisible();
     await expect(conn.navConnections).toHaveClass(/active/);
   });
 
-  test('shows no-vault notice when vault not configured', async () => {
+  test('shows empty state when no connections configured', async () => {
     await conn.goto();
-    // Wait for the page to determine vault state (async JS)
+    // Wait for the page to determine address book state (async JS)
     await conn.page.waitForTimeout(2000);
-    // Either no-vault or vault-unavailable or main-content will be visible
-    // depending on backend config
-    const noVault = await conn.hasVaultNotConfigured();
-    const vaultDown = await conn.hasVaultUnavailable();
+    // Either empty-state (no folders) or main-content (folders exist) is
+    // shown depending on backend data
+    const emptyState = await conn.hasEmptyState();
     const hasContent = await conn.hasMainContent();
-    // At least one state should be resolved
-    expect(noVault || vaultDown || hasContent).toBe(true);
+    expect(emptyState || hasContent).toBe(true);
   });
 
-  test('folder list is present when vault is configured', async () => {
+  test('folder list is present when connections are configured', async () => {
     await conn.goto();
     if (await conn.hasMainContent()) {
       await expect(conn.folderList).toBeVisible();
@@ -69,10 +67,13 @@ test.describe('Connections page', () => {
     }
   });
 
-  test('credentials nav link is visible', async () => {
+  test('credentials nav link is visible', async ({ page }) => {
     await conn.goto();
-    const credsNav = conn.page.locator('#my-creds-nav');
-    // Always visible for logged-in users
-    await expect(credsNav).toBeVisible();
+    // Credential presets live under My Profile in the current UI
+    const profileNav = page.locator('nav a[href="/account/profile.html"]');
+    await expect(profileNav).toBeVisible();
+    await profileNav.click();
+    await expect(page).toHaveURL(/profile\.html/);
+    await expect(page.locator('#creds-form')).toBeVisible();
   });
 });
