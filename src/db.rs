@@ -1929,7 +1929,7 @@ pub fn stream_session_history_csv(
     from: Option<&str>,
     to: Option<&str>,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    if let Some(_) = pool_store() {
+    if pool_store().is_some() {
         let rows = pool_call(move |pool| {
             stream_session_history_csv_pool(
                 pool,
@@ -7871,7 +7871,7 @@ pub fn store_user_credentials(
     creds: &std::collections::HashMap<String, String>,
     encrypt: impl Fn(&str) -> String,
 ) -> rusqlite::Result<()> {
-    if let Some(_) = pool_store() {
+    if pool_store().is_some() {
         let entries: Vec<(String, String)> = creds
             .iter()
             .map(|(k, v)| {
