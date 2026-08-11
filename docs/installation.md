@@ -369,7 +369,7 @@ See [Option C: Docker](#option-c-docker) above for the full setup.
 
 If you need a bare-metal install on Ubuntu 24.04, you can build
 locally, but be aware that **Ubuntu 24.04 ships FreeRDP 3.5.1**, which
-is older than what our `patches/` directory targets (FreeRDP 3.15+ as
+is older than what the `patches/` directory targets (FreeRDP 3.15+ as
 shipped by Debian 13). The patches will fail to apply or apply against
 the wrong lines.
 
@@ -391,7 +391,7 @@ sudo apt-get install -y \
 # Rust toolchain (1.80+ required for cfg_select support in libsqlite3-sys)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
-# Build guacd against system FreeRDP 3.5 (skip our 3.15+ patches)
+# Build guacd against system FreeRDP 3.5 (skip the 3.15+ patches)
 git clone https://github.com/BarbellDwarf/persea.git
 git clone https://github.com/apache/guacamole-server.git
 cd guacamole-server
@@ -409,19 +409,18 @@ sudo dpkg -i ../persea_*_amd64.deb
 ```
 
 Drive redirection, audio, and clipboard should work. The 3.15-specific
-bugs our patches address are not present in 3.5.x, so the unpatched
+bugs the patches address are not present in 3.5.x, so the unpatched
 build is fine for that vintage of FreeRDP.
 
 **Option 2: install FreeRDP 3.15+ from a third-party source** (e.g. a
 PPA or build from source) and then run `install.sh` normally. Out of
 scope for this guide.
 
-Both paths are **untested**: we do not run CI against Ubuntu 24.04
-and we do not ship `.deb`s for it. Ubuntu issues will be
-triaged as best-effort and generally closed with a pointer to
-the Docker image. If you run persea on Ubuntu (successfully or
-otherwise), reports via GitHub issues help inform whether we
-add a CI target.
+Both paths are **untested**: no CI runs against Ubuntu 24.04 and no
+`.deb`s are shipped for it. Ubuntu issues will be triaged as
+best-effort and generally closed with a pointer to the Docker image.
+If you run persea on Ubuntu (successfully or otherwise), reports via
+GitHub issues help inform whether a CI target gets added.
 
 ### Other distributions
 

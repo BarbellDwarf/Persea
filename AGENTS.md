@@ -245,8 +245,8 @@ username = "administrator@vsphere.local"
 ## Enterprise features
 
 - **Password policies**: Argon2id (NIST 800-63B), 15-char minimum, breach screening (HIBP), history tracking
-- **Account lockout**: Progressive delay (30s → 5min → 30min) after 5 failed attempts
-- **Audit logging**: SHA-256 hash chain with tamper evidence, CLI verification, admin UI verification
+- **Account lockout**: account lockout after 5 failed attempts
+- **Audit logging**: SHA-256 hash chain with tamper evidence, verification via admin UI and API
 - **Session management**: Idle timeout, max duration, concurrent limits, activity tracking
 - **RBAC**: System + object permissions, recursive group inheritance
 - **TLS hot-reload**: File watcher (inotify/kqueue) + SIGHUP + admin UI upload

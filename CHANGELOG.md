@@ -50,7 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - WebSocket Origin validation and connection rate limiting
   - Per-session concurrent viewer limits
   - Login rate limiting (always-on, independent of global rate_limit)
-  - Failed login attempt tracking with progressive lockout
+  - Failed login attempt tracking with account lockout after 5 failed attempts
   - MFA lockout bypass fixed — TOTP verification now checks lockout state
   - Cookie format: all 15 Set-Cookie sites emit correct `HttpOnly; Secure; SameSite=Lax` (was double-semicolon on 10 sites)
 

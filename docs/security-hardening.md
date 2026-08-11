@@ -211,7 +211,7 @@ persea maintains a SHA-256 hash chain for audit events, providing tamper evidenc
 
 - Events include: event type, timestamp, user ID, source IP, outcome, details, and session ID
 - Each event hash is computed from canonical JSON (sorted keys, no whitespace) of all fields plus the previous hash
-- The hash chain is written on every audit event; verification tooling is not yet wired into a CLI command or UI
+- The hash chain is written on every audit event; verification is available via the admin UI and the `GET /api/audit/verify` API endpoint
 - A broken chain indicates tampering. The event at the break point and all subsequent events are flagged
 
 **Verification result:**
@@ -251,15 +251,9 @@ Passwords are stored as PHC-encoded Argon2id hashes containing all parameters. V
 
 ## Account lockout
 
-Failed authentication attempts are tracked per-user. After a configurable number of failed attempts, the account is temporarily locked with progressive delay:
+Failed authentication attempts are tracked per-user and source IP. After 5 failed attempts within a rolling 15-minute window, the account is locked (account lockout after 5 failed attempts): further attempts are rejected while more than 5 recent failures remain.
 
-| Failed attempts | Lockout duration |
-|----------------|------------------|
-| 5 | 30 seconds |
-| 10 | 5 minutes |
-| 15+ | 30 minutes |
-
-Lockout state is per-user and resets on successful authentication. The lockout counter is not exposed to users (no "N attempts remaining" messages) to prevent enumeration.
+Lockout state is per-user and source IP and resets on successful authentication. The lockout counter is not exposed to users (no "N attempts remaining" messages) to prevent enumeration.
 
 ## RBAC (Role-Based Access Control)
 
