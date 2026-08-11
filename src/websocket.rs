@@ -325,7 +325,9 @@ async fn handle_ws(
 
     // Run the bidirectional proxy
     let start = Instant::now();
-    let proxy_outcome = proxy_ws_guacd(session_id, ws, guacd_stream, recording_file, cancel).await;
+    let proxy_outcome =
+        proxy_ws_guacd(manager.clone(), session_id, ws, guacd_stream, recording_file, cancel)
+            .await;
     let elapsed = start.elapsed();
     let server_disconnected = proxy_outcome.server_disconnected;
     let proxy_result = proxy_outcome.result;
@@ -470,72 +472,155 @@ async fn handle_ws(
     tracing::info!(session_id = %session_id, client_ip = %client_addr, "Session disconnected");
 }
 
+/// Outcome of one guacd→browser pass.
+enum GuacdToWsEnd {
+    /// The guacd stream ended (EOF, I/O failure, or cancelled task).
+    Ended(Result<(), String>),
+    /// RDP negotiation failed with a retryable security-type error (guacd
+    /// error codes 519/769 — "wrong security type" family). Carries the
+    /// code and message so the caller can either retry through a loopback
+    /// relay or surface the original error to the browser.
+    RetryRequested { code: String, message: String },
+}
+
+/// Which branch of the per-attempt select finished.
+enum ProxyBranch {
+    GuacdEnded(Option<String>),
+    BrowserEnded(Option<String>),
+    Cancelled,
+    /// guacd reported a retryable RDP security-type error.
+    RdpRelayRetry { code: String, message: String },
+}
+
 /// Bidirectional proxy between WebSocket and guacd stream (TCP or TLS).
+///
+/// Each attempt proxies one guacd stream. In RDP fallback mode a failed
+/// direct attempt (security-type error) is retried transparently through a
+/// loopback relay without dropping the browser websocket: the running tasks
+/// are aborted (releasing the shared websocket read half), a fresh guacd
+/// connection is established through the relay, and the proxy restarts with
+/// the same websocket, recording file, and cancellation token. At most one
+/// relay retry per session (gated by the session manager).
 async fn proxy_ws_guacd(
+    manager: Arc<SessionManager>,
     session_id: Uuid,
     ws: WebSocket,
     guacd: GuacdStream,
     recording_file: Option<tokio::fs::File>,
     cancel: CancellationToken,
 ) -> ProxyOutcome {
-    let (guacd_read, guacd_write) = tokio::io::split(guacd);
     let (ws_write, ws_read) = ws.split();
+    let ws_sink = Arc::new(tokio::sync::Mutex::new(ws_write));
+
+    // The websocket read half is shared with the per-attempt task through
+    // this holder. `ws_to_guacd` holds the guard for the whole task, so a
+    // relay retry can abort the task and reclaim the same websocket for the
+    // next attempt.
+    let ws_read_holder: Arc<
+        tokio::sync::Mutex<Option<futures_util::stream::SplitStream<WebSocket>>>,
+    > = Arc::new(tokio::sync::Mutex::new(Some(ws_read)));
 
     let recording = recording_file.map(|f| Arc::new(tokio::sync::Mutex::new(f)));
 
-    // Shared flag: set by guacd_to_ws when it sees `10.disconnect;` in the stream
+    // Shared flags: set by guacd_to_ws when it sees `10.disconnect;` in the
+    // stream (indicates the remote server ended the session) and captured
+    // messages from guacd's `error` instruction.
     let server_disconnected = Arc::new(std::sync::atomic::AtomicBool::new(false));
-
-    // Captured message from guacd's `error` instruction, if any.
     let guacd_error = Arc::new(tokio::sync::Mutex::new(None::<String>));
 
-    // The WebSocket sink is shared so both halves can write to it. The browser →
-    // guacd side needs to echo `0.,4.ping,...` instructions back to the client
-    // (Apache webapp parity), without ever forwarding them to guacd.
-    let ws_sink = Arc::new(tokio::sync::Mutex::new(ws_write));
+    // The stream to proxy. Starts with the caller-provided guacd stream; a
+    // relayed retry (fallback mode) supplies the next one.
+    let mut next_guacd = Some(guacd);
 
-    // guacd → browser (also tee to recording)
-    let recording_clone = recording.clone();
-    let sd_flag = server_disconnected.clone();
-    let ws_sink_g = ws_sink.clone();
-    let err_flag = guacd_error.clone();
-    let guacd_to_browser = tokio::spawn(async move {
-        guacd_to_ws(
-            session_id,
-            guacd_read,
-            ws_sink_g,
-            recording_clone,
-            sd_flag,
-            err_flag,
-        )
-        .await
-    });
+    let result = loop {
+        let Some(stream) = next_guacd.take() else {
+            break ProxyResult::GuacdEnded(Some("guacd stream exhausted".into()));
+        };
+        let (guacd_read, guacd_write) = tokio::io::split(stream);
 
-    // browser → guacd
-    let ws_sink_b = ws_sink.clone();
-    let browser_to_guacd =
-        tokio::spawn(async move { ws_to_guacd(ws_read, guacd_write, ws_sink_b).await });
+        // guacd → browser (also tee to recording)
+        let recording_clone = recording.clone();
+        let sd_flag = server_disconnected.clone();
+        let ws_sink_g = ws_sink.clone();
+        let err_flag = guacd_error.clone();
+        let guacd_to_browser = tokio::spawn(async move {
+            guacd_to_ws(
+                session_id,
+                guacd_read,
+                ws_sink_g,
+                recording_clone,
+                sd_flag,
+                err_flag,
+            )
+            .await
+        });
 
-    // Wait for either direction to finish, or cancellation
-    let result = tokio::select! {
-        result = guacd_to_browser => {
-            let err = match result {
-                Ok(Err(e)) => Some(e.to_string()),
-                Err(e) => Some(e.to_string()),
-                _ => None,
-            };
-            ProxyResult::GuacdEnded(err)
-        }
-        result = browser_to_guacd => {
-            let err = match result {
-                Ok(Err(e)) => Some(e.to_string()),
-                Err(e) => Some(e.to_string()),
-                _ => None,
-            };
-            ProxyResult::BrowserEnded(err)
-        }
-        _ = cancel.cancelled() => {
-            ProxyResult::Cancelled
+        // browser → guacd
+        let ws_sink_b = ws_sink.clone();
+        let ws_read_holder_b = ws_read_holder.clone();
+        let browser_to_guacd = tokio::spawn(async move {
+            ws_to_guacd(ws_read_holder_b, guacd_write, ws_sink_b).await
+        });
+
+        let branch = tokio::select! {
+            result = guacd_to_browser => match result {
+                Ok(GuacdToWsEnd::RetryRequested { code, message }) => {
+                    ProxyBranch::RdpRelayRetry { code, message }
+                }
+                Ok(GuacdToWsEnd::Ended(Ok(()))) => ProxyBranch::GuacdEnded(None),
+                Ok(GuacdToWsEnd::Ended(Err(e))) => ProxyBranch::GuacdEnded(Some(e)),
+                Err(e) => ProxyBranch::GuacdEnded(Some(e.to_string())),
+            },
+            result = browser_to_guacd => match result {
+                Ok(Ok(())) => ProxyBranch::BrowserEnded(None),
+                Ok(Err(e)) => ProxyBranch::BrowserEnded(Some(e.to_string())),
+                Err(e) => ProxyBranch::BrowserEnded(Some(e.to_string())),
+            },
+            _ = cancel.cancelled() => {
+                ProxyBranch::Cancelled
+            }
+        };
+
+        match branch {
+            // guacd's direct RDP connection failed with a security-type
+            // error. In fallback mode the session manager retries through a
+            // loopback relay (at most once per session); otherwise the
+            // original error is surfaced to the browser.
+            ProxyBranch::RdpRelayRetry { code, message } => {
+                // The browser→guacd task holds the write half of the dead
+                // stream and, via the holder, the websocket read half —
+                // abort it so the retry can reuse the websocket.
+                browser_to_guacd.abort();
+                tracing::info!(
+                    session_id = %session_id,
+                    code = %code,
+                    "RDP negotiation failed — attempting relayed retry"
+                );
+                match manager.relay_rdp_retry(session_id).await {
+                    Some(stream) => {
+                        *guacd_error.lock().await = None;
+                        next_guacd = Some(stream);
+                        continue;
+                    }
+                    None => {
+                        // Not eligible (not fallback mode, already retried,
+                        // or the relayed attempt failed) — send the original
+                        // error instruction so the browser reports the real
+                        // failure.
+                        let instr = crate::protocol::Instruction::new(
+                            "error",
+                            vec![message.clone(), code],
+                        )
+                        .encode();
+                        let mut sink = ws_sink.lock().await;
+                        let _ = sink.send(Message::Text(instr.into())).await;
+                        break ProxyResult::GuacdEnded(Some(message));
+                    }
+                }
+            }
+            ProxyBranch::GuacdEnded(err) => break ProxyResult::GuacdEnded(err),
+            ProxyBranch::BrowserEnded(err) => break ProxyResult::BrowserEnded(err),
+            ProxyBranch::Cancelled => break ProxyResult::Cancelled,
         }
     };
 
@@ -566,6 +651,10 @@ const MAX_GUACD_CARRY: usize = 16 * 1024 * 1024;
 /// of instruction was not ';' nor ','". To prevent that, every Message::Text
 /// we emit ends at a true Guacamole instruction boundary; partial tail data
 /// is held in `carry` until the next read completes it.
+///
+/// Returns `RetryRequested` when guacd reports a retryable RDP security-type
+/// error (codes 519/769); the offending chunk is withheld from the browser
+/// so the caller can transparently retry through a relay.
 async fn guacd_to_ws(
     session_id: Uuid,
     mut guacd: tokio::io::ReadHalf<GuacdStream>,
@@ -573,12 +662,15 @@ async fn guacd_to_ws(
     recording: Option<Arc<tokio::sync::Mutex<tokio::fs::File>>>,
     server_disconnected: Arc<std::sync::atomic::AtomicBool>,
     last_error: Arc<tokio::sync::Mutex<Option<String>>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> GuacdToWsEnd {
     let mut buf = vec![0u8; 65536];
     let mut carry = bytes::BytesMut::new();
 
     loop {
-        let n = guacd.read(&mut buf).await?;
+        let n = match guacd.read(&mut buf).await {
+            Ok(n) => n,
+            Err(e) => return GuacdToWsEnd::Ended(Err(format!("guacd read failed: {}", e))),
+        };
         if n == 0 {
             break;
         }
@@ -611,17 +703,19 @@ async fn guacd_to_ws(
         // The boundary scanner only advances over valid UTF-8, so this
         // String::from_utf8 should never fail in practice; defensive in
         // case a force-flush above happened mid-multibyte char.
-        let text = String::from_utf8(carry_data.to_vec()).map_err(
-            |e| -> Box<dyn std::error::Error + Send + Sync> {
-                format!("invalid UTF-8 from guacd: {}", e).into()
-            },
-        )?;
+        let text = match String::from_utf8(carry_data.to_vec()) {
+            Ok(t) => t,
+            Err(e) => {
+                return GuacdToWsEnd::Ended(Err(format!("invalid UTF-8 from guacd: {}", e)))
+            }
+        };
 
         // Capture guacd's `error` instructions (e.g. RDP negotiation failures
         // like "Server refused connection (wrong security type?)"). The
         // instruction is forwarded to the browser verbatim, but logging it
         // here gives the operator the reason in persea's own logs, and the
         // message is used as the disconnect reason when the proxy ends.
+        let mut retryable_error: Option<(String, String)> = None;
         let mut parser = crate::protocol::InstructionParser::new();
         for parsed in parser.receive(&text) {
             if let Ok(crate::protocol::Instruction { opcode, args }) = parsed {
@@ -638,9 +732,19 @@ async fn guacd_to_ws(
                         code = %code,
                         "guacd reported upstream error: {}", message
                     );
-                    *last_error.lock().await = Some(message);
+                    *last_error.lock().await = Some(message.clone());
+                    // RDP "wrong security type" family (519/769): retryable
+                    // through a loopback relay in fallback mode. Withhold the
+                    // instruction so the browser never sees the failed
+                    // attempt; the caller either retries or re-surfaces it.
+                    if code == "519" || code == "769" {
+                        retryable_error = Some((code, message));
+                    }
                 }
             }
+        }
+        if let Some((code, message)) = retryable_error {
+            return GuacdToWsEnd::RetryRequested { code, message };
         }
 
         // Detect guacd-initiated disconnect (server-side logout/crash).
@@ -653,10 +757,12 @@ async fn guacd_to_ws(
         }
 
         let mut sink = ws.lock().await;
-        sink.send(Message::Text(text.into())).await?;
+        if let Err(e) = sink.send(Message::Text(text.into())).await {
+            return GuacdToWsEnd::Ended(Err(format!("websocket send failed: {}", e)));
+        }
     }
 
-    Ok(())
+    GuacdToWsEnd::Ended(Ok(()))
 }
 
 /// Forward data from WebSocket to guacd, intercepting empty-opcode tunnel
@@ -667,13 +773,22 @@ async fn guacd_to_ws(
 /// `__guac_user_call_opcode_handler`), so without echoing here the client
 /// would mark the tunnel UNSTABLE after 1.5s of guacd quiet time and close
 /// it after 15s. We mirror Apache's filter behaviour.
+///
+/// The websocket read half is borrowed through `ws_holder` for the whole
+/// task: if the proxy aborts this task (relay retry), the guard is released
+/// and the stream returns to the holder for the next attempt.
 async fn ws_to_guacd(
-    mut ws_read: futures_util::stream::SplitStream<WebSocket>,
+    ws_holder: Arc<tokio::sync::Mutex<Option<futures_util::stream::SplitStream<WebSocket>>>>,
     mut guacd: tokio::io::WriteHalf<GuacdStream>,
     ws_sink: WsSink,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /// Maximum allowed WebSocket message size (64 MiB).
     const MAX_WS_MSG_SIZE: usize = 64 * 1024 * 1024;
+
+    let mut ws_guard = ws_holder.lock().await;
+    let ws_read = (&mut *ws_guard)
+        .as_mut()
+        .ok_or("websocket read half unavailable")?;
 
     while let Some(msg) = ws_read.next().await {
         let msg = msg?;

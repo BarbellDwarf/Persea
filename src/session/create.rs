@@ -121,6 +121,14 @@ impl SessionManager {
 
         let mut pending_net_check: Option<(String, u16, Vec<String>)> = None;
 
+        // RDP relay state, populated by the RDP branch below: the resolved
+        // connection mode ("proxy"/"fallback"/"direct"), the original-target
+        // params kept for a relayed retry (fallback mode), and the active
+        // loopback relay handle (aborted on session cleanup).
+        let mut rdp_conn_mode: Option<String> = None;
+        let mut rdp_params_stored: Option<guacd::ConnectionParams> = None;
+        let mut rdp_relay: Option<crate::rdp_relay::RdpRelay> = None;
+
         let (
             mut conn_params,
             hostname,
@@ -315,48 +323,134 @@ impl SessionManager {
                     has_password = req.password.is_some(),
                     "RDP session params"
                 );
-                let params = guacd::ConnectionParams::Rdp(Box::new(guacd::RdpParams {
-                    hostname: hostname.clone(),
-                    port,
-                    username: username.clone(),
-                    password: req.password.clone(),
-                    domain: rdp.and_then(|s| s.domain.clone()),
-                    security: rdp_security,
-                    width,
-                    height,
-                    dpi,
-                    ignore_cert: rdp_ignore_cert,
-                    enable_drive: rdp_enable_drive,
-                    drive_path: session_drive_path
-                        .as_ref()
-                        .map(|p| p.to_string_lossy().to_string()),
-                    drive_name: drive_cfg.drive_name.clone(),
-                    disable_download: !drive_cfg.allow_download,
-                    disable_upload: !drive_cfg.allow_upload,
-                    auth_pkg: super::resolve_rdp_auth_pkg(
-                        rdp.and_then(|s| s.auth_pkg.as_deref()),
-                        &self.config,
-                    ),
-                    kdc_url: rdp.and_then(|s| s.kdc_url.clone()),
-                    kerberos_cache: rdp.and_then(|s| s.kerberos_cache.clone()),
-                    remote_app: rdp.and_then(|s| s.remote_app.clone()),
-                    remote_app_dir: rdp.and_then(|s| s.remote_app_dir.clone()),
-                    remote_app_args: rdp.and_then(|s| s.remote_app_args.clone()),
-                    disable_copy: req.disable_copy.unwrap_or(false),
-                    disable_paste: req.disable_paste.unwrap_or(false),
-                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(true),
-                    enable_desktop_composition: rdp
-                        .and_then(|s| s.enable_desktop_composition)
-                        .unwrap_or(false),
-                    enable_wallpaper: rdp.and_then(|s| s.enable_wallpaper).unwrap_or(false),
-                    enable_theming: rdp.and_then(|s| s.enable_theming).unwrap_or(false),
-                    enable_full_window_drag: rdp
-                        .and_then(|s| s.enable_full_window_drag)
-                        .unwrap_or(false),
-                    force_lossless: rdp.and_then(|s| s.force_lossless).unwrap_or(false),
-                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(true),
-                    secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
-                }));
+
+                // Resolve the RDP connection mode: admin system setting
+                // (system_settings.rdp_connection_mode) → [rdp]
+                // connection_mode → "proxy". The relay makes the outbound
+                // connection from a separate process — the proven workaround
+                // for hosts whose per-process network filter silently drops
+                // or corrupts RDP connections.
+                let conn_mode = super::resolve_rdp_connection_mode(
+                    self.read_system_setting("rdp_connection_mode")
+                        .await
+                        .as_deref(),
+                    &self.config,
+                );
+                rdp_conn_mode = Some(conn_mode.clone());
+
+                // "proxy" mode: relay everything through a loopback proxy so
+                // the outbound leg to the target is made by the relay's
+                // process, not guacd's. Skipped when jump hosts are in use —
+                // the tunnel already provides the separate-process outbound
+                // leg (its forward target is dialed by the jump host, so
+                // pointing it at a local relay port would break the chain).
+                let (connect_host, connect_port) = match conn_mode.as_str() {
+                    "proxy" if jump_hops.is_empty() => {
+                        match crate::rdp_relay::spawn(&hostname, port).await {
+                            Ok(relay) => {
+                                let local = relay.local_addr();
+                                tracing::info!(
+                                    session_id = %session_id,
+                                    relay_port = local.port(),
+                                    "RDP connection mode=proxy — relaying through loopback relay"
+                                );
+                                rdp_relay = Some(relay);
+                                ("127.0.0.1".to_string(), local.port())
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    session_id = %session_id,
+                                    error = %e,
+                                    "RDP relay spawn failed — connecting directly (mode=proxy)"
+                                );
+                                (hostname.clone(), port)
+                            }
+                        }
+                    }
+                    "proxy" => {
+                        tracing::info!(
+                            session_id = %session_id,
+                            "RDP connection mode=proxy with jump hosts — the SSH tunnel provides the separate-process outbound leg, skipping relay"
+                        );
+                        (hostname.clone(), port)
+                    }
+                    "fallback" => {
+                        tracing::info!(
+                            session_id = %session_id,
+                            "RDP connection mode=fallback — trying direct connection first"
+                        );
+                        (hostname.clone(), port)
+                    }
+                    "direct" => (hostname.clone(), port),
+                    other => {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            mode = %other,
+                            "Unknown RDP connection mode — connecting directly"
+                        );
+                        (hostname.clone(), port)
+                    }
+                };
+
+                let rdp_auth_pkg = super::resolve_rdp_auth_pkg(
+                    rdp.and_then(|s| s.auth_pkg.as_deref()),
+                    &self.config,
+                );
+                // Built twice for fallback mode: once for the initial direct
+                // connection and once, with the original target, stored on
+                // the session for the relayed retry hook.
+                let build_rdp_params = |host: String, port: u16| -> guacd::RdpParams {
+                    guacd::RdpParams {
+                        hostname: host,
+                        port,
+                        username: username.clone(),
+                        password: req.password.clone(),
+                        domain: rdp.and_then(|s| s.domain.clone()),
+                        security: rdp_security.clone(),
+                        width,
+                        height,
+                        dpi,
+                        ignore_cert: rdp_ignore_cert,
+                        enable_drive: rdp_enable_drive,
+                        drive_path: session_drive_path
+                            .as_ref()
+                            .map(|p| p.to_string_lossy().to_string()),
+                        drive_name: drive_cfg.drive_name.clone(),
+                        disable_download: !drive_cfg.allow_download,
+                        disable_upload: !drive_cfg.allow_upload,
+                        auth_pkg: rdp_auth_pkg.clone(),
+                        kdc_url: rdp.and_then(|s| s.kdc_url.clone()),
+                        kerberos_cache: rdp.and_then(|s| s.kerberos_cache.clone()),
+                        remote_app: rdp.and_then(|s| s.remote_app.clone()),
+                        remote_app_dir: rdp.and_then(|s| s.remote_app_dir.clone()),
+                        remote_app_args: rdp.and_then(|s| s.remote_app_args.clone()),
+                        disable_copy: req.disable_copy.unwrap_or(false),
+                        disable_paste: req.disable_paste.unwrap_or(false),
+                        enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(true),
+                        enable_desktop_composition: rdp
+                            .and_then(|s| s.enable_desktop_composition)
+                            .unwrap_or(false),
+                        enable_wallpaper: rdp.and_then(|s| s.enable_wallpaper).unwrap_or(false),
+                        enable_theming: rdp.and_then(|s| s.enable_theming).unwrap_or(false),
+                        enable_full_window_drag: rdp
+                            .and_then(|s| s.enable_full_window_drag)
+                            .unwrap_or(false),
+                        force_lossless: rdp.and_then(|s| s.force_lossless).unwrap_or(false),
+                        enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(true),
+                        secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
+                    }
+                };
+                let params =
+                    guacd::ConnectionParams::Rdp(Box::new(build_rdp_params(connect_host, connect_port)));
+                if conn_mode == "fallback" {
+                    rdp_params_stored = Some(guacd::ConnectionParams::Rdp(Box::new(
+                        build_rdp_params(hostname.clone(), port),
+                    )));
+                    tracing::info!(
+                        session_id = %session_id,
+                        "RDP fallback mode: original-target params stored for relayed retry"
+                    );
+                }
                 (
                     params,
                     hostname,
@@ -1173,6 +1267,10 @@ impl SessionManager {
             last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
             source_ip: None,
             user_id: Some(created_by),
+            rdp_connection_mode: rdp_conn_mode,
+            rdp_params: rdp_params_stored,
+            rdp_relay,
+            rdp_relay_retried: false,
         };
 
         let info = session.info();
@@ -1240,6 +1338,25 @@ impl SessionManager {
         });
 
         Ok(info)
+    }
+
+    /// Read a single admin system setting from the `system_settings` table
+    /// when a database is available. Mirrors the established read mechanism
+    /// (`crate::settings_merge::load_db_settings`, also used by the startup
+    /// overlay); unknown keys return None.
+    async fn read_system_setting(&self, key: &str) -> Option<String> {
+        let db = self.db.clone()?;
+        let key = key.to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::settings_merge::load_db_settings(&db)
+                .unwrap_or_default()
+                .into_iter()
+                .find(|(k, _)| k == &key)
+                .map(|(_, v)| v)
+        })
+        .await
+        .ok()
+        .flatten()
     }
 }
 
@@ -1433,12 +1550,13 @@ async fn check_allowed_network(
 #[cfg(test)]
 mod auth_pkg_tests {
     use crate::config::Config;
-    use crate::session::resolve_rdp_auth_pkg;
+    use crate::session::{resolve_rdp_auth_pkg, resolve_rdp_connection_mode};
 
     fn cfg(default_auth_pkg: Option<&str>) -> Config {
         Config {
             rdp: Some(crate::config::RdpConfig {
                 default_auth_pkg: default_auth_pkg.map(|s| s.to_string()),
+                connection_mode: None,
             }),
             ..Config::default()
         }
@@ -1479,6 +1597,40 @@ mod auth_pkg_tests {
     fn server_default_applies_when_entry_none() {
         let c = cfg(Some("negotiate"));
         assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("negotiate".into()));
+    }
+
+    // ── RDP connection mode resolution (R91) ──
+
+    #[test]
+    fn connection_mode_defaults_to_proxy() {
+        let c = Config::default();
+        assert_eq!(resolve_rdp_connection_mode(None, &c), "proxy");
+    }
+
+    #[test]
+    fn connection_mode_db_setting_wins_over_config() {
+        let mut c = Config::default();
+        c.rdp = Some(crate::config::RdpConfig {
+            default_auth_pkg: None,
+            connection_mode: Some("fallback".into()),
+        });
+        assert_eq!(resolve_rdp_connection_mode(Some("direct"), &c), "direct");
+    }
+
+    #[test]
+    fn connection_mode_config_applies_when_no_db_setting() {
+        let mut c = Config::default();
+        c.rdp = Some(crate::config::RdpConfig {
+            default_auth_pkg: None,
+            connection_mode: Some("fallback".into()),
+        });
+        assert_eq!(resolve_rdp_connection_mode(None, &c), "fallback");
+    }
+
+    #[test]
+    fn connection_mode_empty_db_setting_falls_through_to_proxy() {
+        let c = Config::default();
+        assert_eq!(resolve_rdp_connection_mode(Some("  "), &c), "proxy");
     }
 }
 

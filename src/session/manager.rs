@@ -397,6 +397,86 @@ impl SessionManager {
         Some((stream, cancel))
     }
 
+    /// RDP fallback-mode retry (R91): called by the WebSocket proxy when
+    /// guacd's direct RDP negotiation failed with a security-type error
+    /// (guacd codes 519/769). Spawns a loopback relay to the stored target,
+    /// repoints the session's RDP params at it, reconnects to guacd through
+    /// the relay, and returns the new stream.
+    ///
+    /// Gated: only sessions created in "fallback" mode, and only once per
+    /// session — the retried flag is set before the attempt, so a second
+    /// failure surfaces as a normal error instead of looping forever.
+    pub(crate) async fn relay_rdp_retry(&self, id: Uuid) -> Option<GuacdStream> {
+        let mut params = {
+            let sessions = self.sessions.read().await;
+            let session = sessions.get(&id)?;
+            let mut session = session.lock().await;
+            if session.rdp_connection_mode.as_deref() != Some("fallback")
+                || session.rdp_relay_retried
+            {
+                return None;
+            }
+            session.rdp_relay_retried = true;
+            session.rdp_params.take()?
+        };
+        let guacd::ConnectionParams::Rdp(rdp) = &mut params else {
+            tracing::warn!(session_id = %id, "RDP relay retry: stored params are not RDP");
+            return None;
+        };
+
+        let relay = match crate::rdp_relay::spawn(&rdp.hostname, rdp.port).await {
+            Ok(relay) => relay,
+            Err(e) => {
+                tracing::warn!(session_id = %id, error = %e, "RDP relay retry: relay spawn failed");
+                return None;
+            }
+        };
+        rdp.hostname = "127.0.0.1".into();
+        rdp.port = relay.local_addr().port();
+        tracing::info!(
+            session_id = %id,
+            relay_port = relay.local_addr().port(),
+            "RDP fallback: reconnecting guacd through loopback relay"
+        );
+
+        let stream = match guacd::connect_and_handshake(
+            &self.config.guacd_addr,
+            &params,
+            self.guacd_tls.as_ref(),
+        )
+        .await
+        {
+            Ok((stream, connection_id)) => {
+                tracing::info!(
+                    session_id = %id,
+                    connection_id = %connection_id,
+                    "RDP relay retry: guacd connected through loopback relay"
+                );
+                stream
+            }
+            Err(e) => {
+                tracing::warn!(
+                    session_id = %id,
+                    error = %e,
+                    "RDP relay retry: guacd connection through relay failed"
+                );
+                return None;
+            }
+        };
+
+        // Keep the relay and the relayed params on the session so cleanup
+        // stops the relay and any later reconnect goes through it.
+        {
+            let sessions = self.sessions.read().await;
+            if let Some(session) = sessions.get(&id) {
+                let mut session = session.lock().await;
+                session.rdp_relay = Some(relay);
+                session.rdp_params = Some(params);
+            }
+        }
+        Some(stream)
+    }
+
     /// Mark a session as errored.
     pub async fn error_session(&self, id: Uuid) {
         let sessions = self.sessions.read().await;

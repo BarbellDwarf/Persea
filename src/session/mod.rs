@@ -92,6 +92,36 @@ pub(super) fn resolve_rdp_auth_pkg(
     Some("ntlm".to_string())
 }
 
+/// Resolve the RDP connection mode for this session.
+///
+/// Precedence: admin system setting `rdp_connection_mode` (non-empty)
+/// → server-wide `[rdp] connection_mode` → `"proxy"` (the default).
+/// The relay mode makes the outbound connection from a separate
+/// process — the proven workaround for hosts whose per-process network
+/// filter silently drops or corrupts RDP connections. `"direct"` keeps
+/// the historical behaviour; `"fallback"` tries direct first and
+/// retries through the relay on negotiation failure.
+pub(super) fn resolve_rdp_connection_mode(
+    db_setting: Option<&str>,
+    config: &crate::config::Config,
+) -> String {
+    if let Some(v) = db_setting {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let Some(ref rdp) = config.rdp {
+        if let Some(ref mode) = rdp.connection_mode {
+            let trimmed = mode.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+    "proxy".to_string()
+}
+
 /// Kill browser processes if this is a web session, clean up drive directory,
 /// abort any running login script, and shut down any SSH tunnel.
 ///
@@ -137,6 +167,10 @@ pub(super) async fn cleanup_browser(
     // Shut down SSH tunnel chain (reverse order)
     tunnel::shutdown_chain(&session.tunnels);
     session.tunnels.clear();
+
+    // Abort the RDP loopback relay (if any). Dropping the handle aborts the
+    // accept task and every live relay connection.
+    session.rdp_relay = None;
 }
 
 /// Resolve cleanup behaviour from optional `[drive]` config. Falls back to
@@ -384,6 +418,10 @@ mod tests {
             last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
             source_ip: None,
             user_id: Some("alice".into()),
+            rdp_connection_mode: None,
+            rdp_params: None,
+            rdp_relay: None,
+            rdp_relay_retried: false,
         }
     }
 

@@ -36,6 +36,7 @@ mod protocol;
 mod providers_db;
 mod pve;
 mod rbac;
+mod rdp_relay;
 mod recording;
 mod role;
 mod session;

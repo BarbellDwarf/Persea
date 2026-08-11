@@ -372,6 +372,22 @@ pub struct Session {
     /// OIDC user ID (or created_by for non-OIDC sessions) for per-user
     /// concurrent session limits.
     pub user_id: Option<String>,
+    /// Resolved RDP connection mode: "proxy", "fallback", or "direct"
+    /// (None for non-RDP sessions). Read by the WebSocket proxy to
+    /// decide whether a relayed retry is allowed.
+    pub rdp_connection_mode: Option<String>,
+    /// RDP connection params as originally configured (fallback mode),
+    /// with the original target address — never relayed content. Kept on
+    /// the session so the WebSocket fallback hook can repoint them at a
+    /// loopback relay and reconnect guacd.
+    pub rdp_params: Option<ConnectionParams>,
+    /// Active loopback relay for this session (proxy mode at creation,
+    /// fallback mode after a relayed retry). Dropping the handle aborts
+    /// the relay task and every live relay connection.
+    pub rdp_relay: Option<RdpRelay>,
+    /// Set once a relayed retry has been attempted (fallback mode).
+    /// Guards against infinite retry loops — at most one per session.
+    pub rdp_relay_retried: bool,
 }
 
 /// A short-lived viewer token issued by an admin to shadow an active session.
