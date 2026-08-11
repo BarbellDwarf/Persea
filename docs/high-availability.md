@@ -96,7 +96,7 @@ ALB (sticky sessions) → ECS Service (persea containers, min 2)
 ### Azure (Container Apps)
 ```
 Azure Container Apps (persea, min replicas, sticky sessions via affinity)
-    ↳ Azure Database for MySQL (shared address book)
+    ↳ Azure Database for MySQL (shared address book — roadmap)
     ↳ Azure Files (shared recordings)
     ↳ Container Apps guacd instances (TCP scaling)
 ```
