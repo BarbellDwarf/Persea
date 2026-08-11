@@ -295,6 +295,11 @@
             </div>
             <div id="em-rdp-security-field" style="display:none">
                 <div>
+                    <label class="form-label" for="em-rdp-domain">Domain</label>
+                    <input type="text" id="em-rdp-domain" class="form-input" placeholder="DOMAIN" autocomplete="off">
+                    <p class="text-xs text-[var(--text-muted)] mt-1">The Windows/AD domain for NLA authentication. Leave blank if your username already includes it as <strong>DOMAIN\user</strong> — but for CredSSP/NLA an explicit domain is more reliable.</p>
+                </div>
+                <div>
                     <label class="form-label" for="em-rdp-security">Security mode</label>
                     <select id="em-rdp-security" class="form-input">
                         <option value="">Any (negotiate)</option>
@@ -1347,7 +1352,7 @@
         document.getElementById('em-rdp-kdc-field').style.display = pkg === 'kerberos' ? '' : 'none';
     }
     function clearEntryFields() {
-        var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url'];
+        var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain'];
         for (var i = 0; i < ids.length; i++) document.getElementById(ids[i]).value = '';
         document.getElementById('em-password').placeholder = '';
         document.getElementById('em-private-key').placeholder = '-----BEGIN OPENSSH PRIVATE KEY-----';
@@ -1418,6 +1423,7 @@
         document.getElementById('em-rdp-security').value = selectedEntry.security || '';
         document.getElementById('em-rdp-auth-pkg').value = selectedEntry.auth_pkg || '';
         document.getElementById('em-rdp-kdc-url').value = selectedEntry.kdc_url || '';
+        document.getElementById('em-rdp-domain').value = selectedEntry.domain || '';
         updateKdcField();
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
@@ -1510,6 +1516,8 @@
             entry.ignore_cert = document.getElementById('em-ignore-cert').checked;
         }
         if (type === 'rdp') {
+            var rdpDomain = document.getElementById('em-rdp-domain').value.trim();
+            if (rdpDomain) entry.domain = rdpDomain;
             var rdpSecurity = document.getElementById('em-rdp-security').value;
             if (rdpSecurity) entry.security = rdpSecurity;
             var rdpAuthPkg = document.getElementById('em-rdp-auth-pkg').value;
