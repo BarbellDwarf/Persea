@@ -8,6 +8,7 @@ This Contributor License Agreement ("Agreement") applies to any contribution sub
 
 - **"Contribution"** means any original work of authorship, including any modifications or additions to an existing work, that is intentionally submitted by You to the Licensor for inclusion in the Project. This includes any communication that accompanies, demonstrates, or otherwise relates to the Contribution.
 - **"Project"** means the persea software, including all source code, documentation, and related materials, hosted at github.com/BarbellDwarf/persea.
+- **"You" or "Contributor"** means the individual signing this Agreement, or, if You sign on behalf of a legal entity, that entity and any individual authorized to submit Contributions on its behalf (see Section 11).
 - **"Effective Date"** means the date You sign or accept this Agreement.
 
 ## 2. Grant of Copyright License
@@ -33,6 +34,7 @@ You represent and warrant that:
 - You are the original author of the Contribution, or you have sufficient rights to submit the Contribution under this Agreement
 - The Contribution does not infringe any third party's intellectual property rights
 - The Contribution is not subject to any conflicting obligations that would prevent its inclusion in the Project
+- If You sign on behalf of a legal entity, You are authorized to bind that entity to this Agreement, and all Contributions submitted by the entity's employees or agents are covered by this Agreement
 
 ## 5. License Compatibility
 
@@ -60,11 +62,33 @@ THE CONTRIBUTION IS PROVIDED "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCL
 
 ## 11. How to Sign
 
-This Agreement is signed electronically through the CLA Assistant bot or by submitting a pull request to the Project with the following statement in the PR description:
+Signing is recorded in the Project's signature registry, `cla/signed/`, and
+verified automatically by the Project's CLA check on every pull request.
+
+**Individual contributions.** Open a pull request adding
+`cla/signed/<your-github-username>.md` (lowercase username) containing Your
+name, GitHub username, the date, and the statement:
 
 ```
-I have read and agree to the persea Contributor License Agreement (CLA).
+I have read and agree to the persea Contributor License Agreement (CLA.md).
 ```
+
+The CLA check in `.github/workflows/cla.yml` verifies that a signed file
+exists for the pull request author and that it contains this statement.
+Once the signature is on the target branch, all of Your contributions are
+covered. A signed file may optionally include a cryptographic signature
+hash for stronger evidence.
+
+**Corporate contributions.** If You contribute on behalf of a legal entity
+(employer or client), the entity's authorized signatory signs for the
+entity: open a pull request adding a signed file in the entity's name
+(naming the entity and the authorized signatory, with the same statement),
+or contact the maintainers to record the signature. All Contributions
+submitted by the entity's employees or agents are then covered by this
+Agreement.
+
+This Agreement may also be signed by any equivalent written record
+accepted by the Licensor.
 
 ## 12. Entire Agreement
 
