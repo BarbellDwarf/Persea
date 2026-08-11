@@ -3,13 +3,13 @@
 > **Audience:** admins migrating from Apache Guacamole to persea, or moving persea connections between storage backends.
 > **Next:** [Configuration](configuration.md) for the `[vault]`, `[storage]`, and `[vault_shared]`/`[vault_local]` sections these commands rely on.
 
-persea can import connections from an Apache Guacamole MySQL/MariaDB database into its Vault-backed connections.
+persea can import connections from an Apache Guacamole MySQL/MariaDB database into its address book. Storage is DB-first: folders and entries are always written to the database, and credentials are encrypted (AES-256-GCM) into the DB unless `[storage].backend = "vault"` routes them to Vault/OpenBao instead.
 
 ## Prerequisites
 
-- A running Vault/OpenBao instance with `[vault]` configured in `config.toml`
-- `VAULT_SECRET_ID` environment variable set
 - A MySQL/MariaDB dump of your Guacamole database
+- DB mode (default): the storage encryption key, via `PERSEA_STORAGE_KEY` or `[storage].encryption_key` — a 64-character hex string (generate with `openssl rand -hex 32`). Without it, imported passwords and private keys are **not** stored; entries import credential-less. See [Configuration](configuration.md#storage-section).
+- Vault storage mode only (`[storage].backend = "vault"`): a running Vault/OpenBao instance with `[vault]` configured in `config.toml`, and the `VAULT_SECRET_ID` environment variable set.
 
 ## Step 1: Export the Guacamole database
 
@@ -41,12 +41,11 @@ Example output:
 ```
 Found 42 connections (3 skipped, 39 to import)
 
-[DRY RUN] Would import to folder "imported" (scope: shared):
+[DRY RUN] Would import under folder "imported" (scope: shared):
 
-  Web-Server (ssh) → 10.0.0.1:22
-  Database-Primary (ssh) → 10.0.0.5:22
-  Windows-DC (rdp) → 10.0.1.10:3389
-  Production-DMZ-Firewall (ssh) → 10.0.2.1:22
+  imported/Web-Server (ssh) → 10.0.0.1:22
+  imported/Database-Primary (ssh) → 10.0.0.5:22
+  imported/Production/DMZ-Firewall (ssh) → 10.0.2.1:22
   ...
 
 Re-run without --dry-run to import.
@@ -55,6 +54,19 @@ Re-run without --dry-run to import.
 Connections with unsupported protocols (e.g. telnet, kubernetes) are automatically skipped.
 
 ## Step 3: Import
+
+DB mode (default):
+
+```bash
+PERSEA_STORAGE_KEY=<64-char-hex-key> \
+persea --config /opt/persea/config.toml \
+  import-guacamole \
+  --file guacamole-dump.sql \
+  --folder my-servers \
+  --scope shared
+```
+
+Vault storage mode (`[storage].backend = "vault"`):
 
 ```bash
 VAULT_SECRET_ID=your-secret-id \
@@ -70,9 +82,10 @@ persea --config /opt/persea/config.toml \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--file` | (required) | Path to the mysqldump SQL file |
-| `--folder` | `imported` | Target folder in the connections |
+| `--folder` | `imported` | Target folder in the address book |
 | `--scope` | `shared` | `shared` (visible to all instances) or `instance` (this instance only) |
-| `--dry-run` | off | Preview without writing to Vault |
+| `--allowed-groups` | (empty) | Comma-separated OIDC groups allowed to access the imported tree; applied to the root folder, subfolders inherit |
+| `--dry-run` | off | Preview without writing anything |
 
 ## What gets imported
 
@@ -104,7 +117,11 @@ Unsupported protocols (telnet, kubernetes, etc.) are skipped with a warning.
 
 ### Connection groups
 
-Guacamole's connection group hierarchy is flattened into entry name prefixes. For example, a connection named "Firewall" in group "Production > DMZ" becomes `Production-DMZ-Firewall`.
+Guacamole's connection group hierarchy is preserved as folder structure. Each
+group becomes a sanitized subfolder under the target folder, and its
+connections land inside it. For example, a connection named "Firewall" in
+group "Production > DMZ" is imported as `imported/Production/DMZ/Firewall`.
+Connections without a parent group land at the root of the target folder.
 
 ### Name handling
 
@@ -125,16 +142,17 @@ Once imported, connections appear in the connections UI. You can:
 
 ## Notes
 
-- The import is additive: existing entries in the target folder are left untouched. If you re-run the import, entries with the same name will be updated.
+- The import is additive: existing entries in the target folder are left untouched. Re-running the import fails for names that already exist (duplicate names are deduplicated with `-2`, `-3` suffixes only within a single run) — delete or rename existing entries before re-importing. Use `db-migrate-from-vault`'s `--overwrite` for the Vault→DB path instead.
 - Guacamole user/group permissions are not imported. Use persea's OIDC group mappings and folder `allowed_groups` instead.
-- Credentials (passwords, private keys) are imported into Vault, stored encrypted at rest and never touching disk.
+- In DB mode, passwords and private keys are encrypted with AES-256-GCM into the database (`enc:v1:` values), never stored in plaintext; in Vault storage mode they go to Vault, encrypted at rest and never touching disk.
 
 # Migrating from Vault to the database backend
 
 If you want to stop using Vault and store connections in the database instead
 (the `[storage]` backend, see [Configuration](configuration.md#storage-section)),
 the `db-migrate-from-vault` subcommand copies address-book entries out of Vault
-into the DB's `connection_groups` / `connections` tables. Credential fields are
+into the DB's `address_book_folders` / `address_book_entries` tables
+(credentials into `address_book_credentials`). Credential fields are
 encrypted with AES-256-GCM on the way in; non-credential fields are stored as
 plain JSON params. Per-user credential variables (the `users/` subtree) are
 migrated too, with values encrypted.
@@ -181,11 +199,14 @@ persea --config /opt/persea/config.toml \
 
 ## What gets encrypted
 
-`password`, `private_key`, `container_password`, `proxmox_token_secret`,
-`jump_password`, `jump_private_key`, and `spice_ca_cert` values are encrypted
-(`enc:v1:` prefix). Credential variable references (e.g. `$corp_password`, see
-[Credential Variables](credential-variables.md)) are **not** encrypted — they
-are kept as-is so they keep resolving after the migration.
+`password`, `private_key`, `container_password`, and `proxmox_token_secret`
+values are encrypted (`enc:v1:` prefix) into the `address_book_credentials`
+table — the same set of fields the runtime API encrypts. Everything else,
+including jump-host credentials and `spice_ca_cert`, is carried in the entry's
+plain JSON params. Credential variable references (e.g. `$corp_password`, see
+[Credential Variables](credential-variables.md)) are encrypted like any other
+value; they are decrypted before variable resolution at connect time, so they
+keep resolving after the migration.
 
 ## Cut over
 
@@ -197,9 +218,11 @@ backend = "db"
 encryption_key = "<64-char-hex-key>"
 ```
 
-(or `PERSEA_STORAGE_KEY` in the environment). The API serves Vault data when
-Vault is reachable and falls back to the DB, so keep `[vault]` configured until
-you have verified the DB entries, then remove it if you no longer need it.
+(or `PERSEA_STORAGE_KEY` in the environment). With `backend = "db"`, connection
+credentials come exclusively from the DB — Vault is not consulted for them.
+Vault is still used for per-user credential variables (My Credentials) and the
+LUKS drive key, so keep `[vault]` configured if you use either of those, and
+remove it once you no longer do.
 
 # Splitting to multiple Vaults (disaster recovery)
 

@@ -229,9 +229,20 @@ Two things to watch:
 
 ---
 
-## Vault / OpenBao Connections
+## Vault / OpenBao Connections (optional)
 
-The connections feature stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser. **Either Vault or OpenBao is required for the connections feature** (entries, folders, the Connections page); without it persea falls back to ad-hoc-only sessions via the Sessions page.
+The address book is **DB-first**: folders, entries, and the Connections page
+always live in persea's own database, and credentials are encrypted at rest
+with AES-256-GCM when `[storage].encryption_key` (or `PERSEA_STORAGE_KEY`) is
+set — no Vault required (see [Configuration](configuration.md#storage-section)).
+
+Vault/OpenBao is optional, for deployments that want credentials in an external
+secrets manager: set `[storage].backend = "vault"` and credentials are stored
+in [HashiCorp Vault](https://www.vaultproject.io/) or
+[OpenBao](https://openbao.org/) KV v2 instead. Either way, credentials are read
+server-side and never sent to the browser. The setup sections below describe
+Vault storage mode; the "Entry types", "Name validation", and "Credential
+prompting" sections apply to the address book in either mode.
 
 ### Quickstart script
 
@@ -593,7 +604,7 @@ The chain is set up sequentially (each hop must connect before the next starts) 
 
 Admins configure jump hosts per entry in the connections editor. Click "Add Jump Host" to add hops to the chain. Each hop has its own credentials (username + password or private key). A visual flow diagram shows the tunnel path.
 
-Jump host credentials are stored in Vault alongside the entry's other credentials and are never sent to the browser. When editing an entry, existing hop passwords and keys are preserved if the edit form omits them (per-hop credential merge by index).
+Jump host credentials are stored with the entry's other credentials (Vault in vault storage mode; the entry's JSON params in DB mode) and are never sent to the browser. When editing an entry, existing hop passwords and keys are preserved if the edit form omits them (per-hop credential merge by index).
 
 #### Ad-hoc sessions
 

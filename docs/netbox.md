@@ -2,6 +2,7 @@
 
 > **Audience:** NetBox administrators wiring one-click console access from device pages into persea.
 > **Next:** [API Reference](api.md) for the exact `/api/connect` and `/api/addressbook/...` endpoints these recipes call.
+> **Status:** recipes only — persea ships **no NetBox integration code**. The endpoints this guide calls (`GET /api/connect`, `/api/addressbook/...`) are stable, shipped API surface, but a built-in NetBox plugin or sync engine is roadmap, not shipped. If the API surface changes, re-test these recipes.
 
 This guide is **NetBox-side**: it shows how to generate links *into* persea using
 NetBox's built-in Custom Fields, Custom Links, and Event Rules. persea itself
@@ -24,7 +25,7 @@ Go to **Customization > Custom Fields** and create the following fields. Assign 
 
 The `console_enabled` field is the master switch — no links appear until it's checked. The `console_mode` field controls which link is shown:
 
-- **`addressbook`** — connects via a Vault connections entry. Credentials are managed in Vault and never appear in the URL. Requires a matching entry name (lowercase device name). Minimum role: **operator**.
+- **`addressbook`** — connects via a stored connections entry. Credentials are managed in persea (encrypted DB or Vault) and never appear in the URL. Requires a matching entry name (lowercase device name). Minimum role: **operator**.
 - **`adhoc`** — connects directly to the device's primary IP. No stored credentials — the user sees guacd's login prompt. Minimum role: **poweruser**.
 
 ## Custom Links

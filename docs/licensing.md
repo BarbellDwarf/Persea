@@ -7,9 +7,9 @@ persea ships in two versions: a **free, self-hosted** edition that runs without 
 
 ## The two versions
 
-**Free (self-hosted)** — the open-source edition, licensed under AGPL-3.0. Runs without a license key. Includes all session types (SSH, RDP, VNC, SPICE, Proxmox VE, VMware, web, VDI), OIDC/LDAP/RADIUS authentication, API keys, Vault-backed connections, session recording, and more.
+**Free (self-hosted)** — the open-source edition, licensed under AGPL-3.0. Runs without a license key. Includes all session types (SSH, RDP, VNC, SPICE, Proxmox VE, VMware, web, VDI), OIDC/LDAP/RADIUS authentication, API keys, database-backed connections (Vault/OpenBao optional), session recording, and more.
 
-**Enterprise** — the free edition plus the enterprise features below, unlocked by a commercial license key (`PSEA-<base64>`).
+**Enterprise** — the free edition plus the enterprise features below, unlocked by a commercial license key (`PSEA-<base64url-encoded JSON payload>`).
 
 ## Enterprise features
 
@@ -18,9 +18,14 @@ persea ships in two versions: a **free, self-hosted** edition that runs without 
 | **SAML SSO** | SAML 2.0 service provider with signature verification |
 | **Fine-grained RBAC** | Connection-level permissions and group inheritance beyond the 4-tier role system |
 | **TOTP / MFA enforcement** | Mandatory two-factor authentication policies (AdminsOnly / All) |
-| **Audit log retention and compliance exports** | Retention policies and compliance-oriented exports of the audit log |
+| **Audit log compliance exports** | Filtered CSV/JSON download of the audit log (basic audit viewing and tamper verification stay free) |
 | **Encrypted session recording** | Session recordings encrypted at rest |
-| **High availability / clustering** | Multi-instance deployments behind a load balancer |
+
+> **Not implemented (roadmap):** high availability / clustering. The license
+> format reserves an `ha` feature flag, but no clustering code exists in
+> persea — it is a single-instance server, so the flag can never be granted by
+> a license today. See [High Availability Architecture](high-availability.md)
+> for what is and is not shareable across instances.
 
 ## 30-day evaluation period
 
@@ -37,6 +42,8 @@ Set the `license_key` option in the config file (top-level key, before any `[sec
 ```toml
 license_key = "PSEA-XXXX-XXXX-XXXX-XXXX"
 ```
+
+(The dashes are illustrative — real keys are a single base64url-encoded JSON payload after the `PSEA-` prefix.)
 
 Or via the `PERSEA_LICENSE_KEY` environment variable:
 
