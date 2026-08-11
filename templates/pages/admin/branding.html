@@ -57,7 +57,7 @@
                     <label class="form-label">Upload Logo</label>
                     <div class="flex items-center gap-3">
                         <input type="file" id="logo-file" accept=".png,.svg,.jpg,.jpeg,.ico" class="hidden">
-                        <button type="button" onclick="document.getElementById('logo-file').click()"
+                        <button type="button" id="logo-choose"
                                 class="btn btn-secondary btn-sm">
                             Choose File
                         </button>
@@ -103,12 +103,21 @@
         </div>
         <h2 id="save-confirm-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Branding Saved</h2>
         <p class="text-sm text-[var(--text-muted)] mb-4">Changes will take effect on the next page load.</p>
-        <button onclick="document.getElementById('save-confirm').classList.add('hidden')"
+        <button id="save-confirm-ok"
                 class="btn btn-secondary btn-sm">OK</button>
     </div>
 </div>
 
 <script nonce="{{ csp_nonce }}">
+// CSP-safe wiring: the page's CSP (script-src nonce, no unsafe-inline)
+// blocks inline onclick attributes, so button actions are wired here.
+document.getElementById('logo-choose').addEventListener('click', function() {
+    document.getElementById('logo-file').click();
+});
+document.getElementById('save-confirm-ok').addEventListener('click', function() {
+    document.getElementById('save-confirm').classList.add('hidden');
+});
+
 function showError(message) {
     var feedback = document.getElementById('branding-feedback');
     feedback.innerHTML = '';

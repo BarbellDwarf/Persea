@@ -54,7 +54,6 @@
     </div>
 
     <form id="settings-form" hx-put="/api/system/settings" hx-ext="json-enc" hx-swap="none"
-          hx-on::after-request="showSaveConfirmation(event)"
           class="space-y-6">
 
         <!-- Server Settings -->
@@ -123,8 +122,7 @@
                         <p class="text-xs text-[var(--text-muted)]">Remote Desktop Protocol connections via guacd</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_rdp"
-                               onchange="syncToggle('enable_rdp')">
+                        <input type="checkbox" id="enable_rdp">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -136,8 +134,7 @@
                         <p class="text-xs text-[var(--text-muted)]">SSH tunnel management for secure remote access</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_ssh_tunnels"
-                               onchange="syncToggle('enable_ssh_tunnels')">
+                        <input type="checkbox" id="enable_ssh_tunnels">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -149,8 +146,7 @@
                         <p class="text-xs text-[var(--text-muted)]">User-managed API key generation and revocation</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_api_keys"
-                               onchange="syncToggle('enable_api_keys')">
+                        <input type="checkbox" id="enable_api_keys">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -162,8 +158,7 @@
                         <p class="text-xs text-[var(--text-muted)]">Session recording and playback for audit</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_recordings"
-                               onchange="syncToggle('enable_recordings')">
+                        <input type="checkbox" id="enable_recordings">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -175,8 +170,7 @@
                         <p class="text-xs text-[var(--text-muted)]">Browser-based web proxy sessions</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_web_sessions"
-                               onchange="syncToggle('enable_web_sessions')">
+                        <input type="checkbox" id="enable_web_sessions">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -188,8 +182,7 @@
                         <p class="text-xs text-[var(--text-muted)]">SPICE protocol for KVM/QEMU virtual machines</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_spice"
-                               onchange="syncToggle('enable_spice')">
+                        <input type="checkbox" id="enable_spice">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -201,8 +194,7 @@
                         <p class="text-xs text-[var(--text-muted)]">Proxmox VE integration for VM management</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_proxmox"
-                               onchange="syncToggle('enable_proxmox')">
+                        <input type="checkbox" id="enable_proxmox">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -214,8 +206,7 @@
                         <p class="text-xs text-[var(--text-muted)]">VMware vSphere/ESXi integration</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_vmware"
-                               onchange="syncToggle('enable_vmware')">
+                        <input type="checkbox" id="enable_vmware">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -227,8 +218,7 @@
                         <p class="text-xs text-[var(--text-muted)]">Per-user Docker desktop containers</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_vdi"
-                               onchange="syncToggle('enable_vdi')">
+                        <input type="checkbox" id="enable_vdi">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -240,8 +230,7 @@
                         <p class="text-xs text-[var(--text-muted)]">Upload and download files via RDP drive and SSH SFTP</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="enable_file_transfer"
-                               onchange="syncToggle('enable_file_transfer')">
+                        <input type="checkbox" id="enable_file_transfer">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -262,8 +251,7 @@
                         <p class="text-xs text-[var(--text-muted)]">Use Vault/OpenBao for connection storage</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="vault_enabled"
-                               onchange="syncToggle('vault_enabled')">
+                        <input type="checkbox" id="vault_enabled">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -274,8 +262,7 @@
                         <p class="text-xs text-[var(--text-muted)]">Store connections in SQLite (no Vault required)</p>
                     </div>
                     <div class="toggle-switch">
-                        <input type="checkbox" id="db_only_mode"
-                               onchange="syncToggle('db_only_mode')">
+                        <input type="checkbox" id="db_only_mode">
                         <span class="toggle-slider"></span>
                     </div>
                 </label>
@@ -302,7 +289,7 @@
         </div>
         <h2 id="save-confirm-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Settings Saved</h2>
         <p class="text-sm text-[var(--text-muted)] mb-4">Changes will take effect on the next request.</p>
-        <button onclick="document.getElementById('save-confirm').classList.add('hidden')"
+        <button id="save-confirm-ok"
                 class="btn btn-secondary btn-sm">OK</button>
     </div>
 </div>
@@ -339,6 +326,29 @@ function syncToggle(name) {
     document.getElementById(name + '-hidden').value = box.checked ? 'true' : 'false';
 }
 
+// Feature toggle names shared by the load code and the change listeners.
+var toggleBoxes = [
+    'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
+    'enable_recordings', 'enable_web_sessions', 'enable_spice',
+    'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_file_transfer',
+    'vault_enabled', 'db_only_mode'
+];
+
+// CSP-safe wiring: the page's CSP (script-src nonce, no unsafe-inline)
+// blocks inline onchange/onclick attributes, so everything is wired with
+// addEventListener here instead.
+toggleBoxes.forEach(function(name) {
+    var box = document.getElementById(name);
+    if (box) {
+        box.addEventListener('change', function() { syncToggle(name); });
+    }
+});
+document.getElementById('settings-form').addEventListener(
+    'htmx:afterRequest', showSaveConfirmation);
+document.getElementById('save-confirm-ok').addEventListener('click', function() {
+    document.getElementById('save-confirm').classList.add('hidden');
+});
+
 (function() {
     fetch('/api/system/settings', { headers: apiHeaders(), credentials: 'same-origin' })
         .then(function(r) {
@@ -357,12 +367,7 @@ function syncToggle(name) {
                     el.value = String(s[name]);
                 }
             });
-            var boxes = [
-                'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
-                'enable_recordings', 'enable_web_sessions', 'enable_spice',
-                'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_file_transfer',
-                'vault_enabled', 'db_only_mode'
-            ];
+            var boxes = toggleBoxes;
             boxes.forEach(function(name) {
                 var box = document.getElementById(name);
                 if (box) {
