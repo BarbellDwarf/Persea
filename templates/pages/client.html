@@ -396,10 +396,18 @@
         // ── Auto-reconnect ──
         var userDisconnected = false;
         var reconnectAttempts = 0;
-        var maxReconnectAttempts = 5;
-        var reconnectDelays = [1000, 2000, 4000, 8000, 16000];
+        // Reconnect is capped and backed off: every auto-rejoin of a live
+        // session makes the server spawn a fresh guacd connection, so the
+        // loop must be bounded (a manual Reconnect button is always shown).
+        var maxReconnectAttempts = 3;
+        var reconnectDelays = [1000, 2000, 4000];
         var reconnectTimer = null;
         var lastSessionError = null;
+        // True once the Guacamole client reached CONNECTED. Auto-reconnect is
+        // only allowed after that — a join that never succeeded means the
+        // connection attempt was aborted while the session was still
+        // starting, and retrying would only hammer a dead session.
+        var everConnected = false;
 
         // ── Toolbar auto-hide ──
         var toolbarEl = document.getElementById('toolbar');
@@ -489,6 +497,7 @@
         document.getElementById('btn-disconnect').addEventListener('click', function() {
             if (!confirm('Disconnect from this session? The session will remain active and you can reconnect later.')) return;
             userDisconnected = true;
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
             window.location.href = '/connections.html';
         });
@@ -497,6 +506,7 @@
         document.getElementById('btn-logout').addEventListener('click', function() {
             if (!confirm('Log out and destroy this session? You will not be able to reconnect.')) return;
             userDisconnected = true;
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             var headers = {};
             if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
             var csrfToken = readCookie('csrf_token');
@@ -586,6 +596,14 @@
             if (apiKey) fetchHeaders['Authorization'] = 'Bearer ' + apiKey;
             fetch('/api/sessions/' + sessionId, { headers: fetchHeaders, credentials: 'same-origin' })
             .then(function(res) {
+                if (res.status === 401 || res.status === 404) {
+                    // Session gone (cancelled while starting, reaped, or
+                    // deleted) or the auth session expired — return to the
+                    // Connections page instead of stranding the user on a
+                    // dead tab with no way out.
+                    window.location.href = '/connections.html';
+                    throw new Error('redirect');
+                }
                 if (!res.ok) { statusEl.textContent = 'Error: Session not found'; throw new Error('Session not found'); }
                 return res.json();
             })
@@ -603,17 +621,16 @@
                 return showBanner(session.banner);
             })
             .then(function() { startGuacamole(); })
-            .catch(function(err) { statusEl.textContent = 'Error: ' + err.message; });
+            .catch(function(err) { if (err && err.message === 'redirect') return; statusEl.textContent = 'Error: ' + err.message; });
         }
 
         function attemptReconnect() {
             // The tunnel close fires through both the tunnel and client state
             // handlers — only ever schedule one reconnect at a time.
             if (reconnectTimer) return;
+            if (userDisconnected) return;
             if (reconnectAttempts >= maxReconnectAttempts) {
-                document.getElementById('disconnected-title').textContent = 'Session Ended';
-                document.getElementById('disconnected-message').textContent = 'Connection lost after ' + maxReconnectAttempts + ' attempts.';
-                document.getElementById('disconnected-overlay').className = 'visible';
+                showSessionEnded('Session Ended', 'Connection lost after ' + maxReconnectAttempts + ' attempts.');
                 return;
             }
             var delay = reconnectDelays[reconnectAttempts];
@@ -627,34 +644,54 @@
             }, delay);
         }
 
+        // Show the ended overlay and stop the auto-reconnect loop for good.
+        function showSessionEnded(title, message) {
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+            reconnectAttempts = maxReconnectAttempts;
+            statusEl.textContent = 'Disconnected';
+            statusEl.className = '';
+            document.getElementById('disconnected-title').textContent = title;
+            document.getElementById('disconnected-message').textContent = message;
+            document.getElementById('disconnected-overlay').className = 'visible';
+        }
+
         // Distinguish "the session actually ended" (user typed exit, remote
         // closed, auth failed) from "the connection dropped". Reconnecting
-        // into a dead session is pointless and confusing, so check the
-        // server-side session status before scheduling a reconnect.
+        // into a dead session is pointless and confusing — and each rejoin of
+        // a live one makes the server spawn a fresh guacd connection — so
+        // check the server-side session status before scheduling a reconnect.
         function checkSessionEnded() {
+            if (userDisconnected) return;
             var headers = {};
             if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
             fetch('/api/sessions/' + sessionId, { headers: headers, credentials: 'same-origin' })
                 .then(function(r) { return r.ok ? r.json() : null; })
                 .then(function(s) {
-                    if (!s) { attemptReconnect(); return; }
+                    if (!s) {
+                        // Session gone entirely (cancelled while starting,
+                        // reaped, or deleted) — re-joining can only 404, so
+                        // stop instead of hammering the server with joins.
+                        showSessionEnded('Session Ended', 'The session is no longer available.');
+                        return;
+                    }
                     if (s.status === 'completed' || s.status === 'error' || s.status === 'expired') {
-                        statusEl.textContent = 'Session ended';
-                        document.getElementById('disconnected-title').textContent = 'Session Ended';
+                        var msg;
                         if (lastSessionError) {
                             // Surface the specific reason from guacd (e.g.
                             // "Authentication failure (invalid credentials?)")
                             // no matter how the server classified the end.
-                            document.getElementById('disconnected-message').textContent =
-                                'The session ended: ' + lastSessionError;
+                            msg = 'The session ended: ' + lastSessionError;
                         } else if (s.status === 'error') {
-                            document.getElementById('disconnected-message').textContent =
-                                'The session ended with an error. Check the connection details and try again.';
+                            msg = 'The session ended with an error. Check the connection details and try again.';
                         } else {
-                            document.getElementById('disconnected-message').textContent =
-                                'The remote session has ended.';
+                            msg = 'The remote session has ended.';
                         }
-                        document.getElementById('disconnected-overlay').className = 'visible';
+                        showSessionEnded('Session Ended', msg);
+                    } else if (!everConnected) {
+                        // The join never succeeded — the connection attempt
+                        // was aborted while the session was still starting.
+                        // Don't loop re-joining; show the overlay instead.
+                        showSessionEnded('Session Ended', 'The session could not be reached. Close and try again.');
                     } else {
                         attemptReconnect();
                     }
@@ -688,6 +725,9 @@
 
         function setupClient(client, tunnel) {
             var displayEl = document.getElementById('display');
+            // A reconnect attempt mounts a brand-new display — drop the
+            // previous one instead of stacking canvases.
+            displayEl.textContent = '';
             displayEl.appendChild(client.getDisplay().getElement());
 
             // Resume AudioContext
@@ -822,6 +862,7 @@
                     case Guacamole.Client.State.CONNECTING: statusEl.textContent = 'Connecting...'; statusEl.className = ''; break;
                     case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; break;
                     case Guacamole.Client.State.CONNECTED:
+                        everConnected = true;
                         statusEl.textContent = 'Connected'; statusEl.className = 'connected';
                         reconnectAttempts = 0;
                         connectStartTime = Date.now();
@@ -888,9 +929,15 @@
             // Disconnected overlay buttons
             document.getElementById('btn-close-session').addEventListener('click', function() {
                 userDisconnected = true;
-                window.location.href = '/';
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                // Owners go back to the Connections page (still authenticated).
+                // Share viewers have no connections page — the site home is
+                // their landing spot.
+                window.location.href = shareToken ? '/' : '/connections.html';
             });
             document.getElementById('btn-reconnect').addEventListener('click', function() {
+                userDisconnected = true;
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
                 var btn = this;
                 btn.disabled = true; btn.textContent = 'Reconnecting...';
                 if (shareToken) { window.location.reload(); return; }
