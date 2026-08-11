@@ -37,8 +37,11 @@ test.describe('Settings Page', () => {
     const maxDuration = page.locator('input[name="session_max_duration_secs"]');
     await expect(maxDuration).toBeVisible();
 
-    const idleTimeout = page.locator('input[name="session_idle_timeout_secs"]');
-    await expect(idleTimeout).toBeVisible();
+    const maxConcurrent = page.locator('input[name="max_concurrent_sessions"]');
+    await expect(maxConcurrent).toBeVisible();
+
+    const retention = page.locator('input[name="session_history_retention_days"]');
+    await expect(retention).toBeVisible();
   });
 
   test('TLS config fields present', async ({ page }) => {
