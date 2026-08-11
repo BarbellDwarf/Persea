@@ -1324,6 +1324,9 @@
 
     // ── Entry modal ──────────────────────────────────────────────────
     var entryTypeDefaults = { ssh: '22', rdp: '3389', vnc: '5900', spice: '5900' };
+    // True while the port field holds a protocol default auto-filled by the
+    // type switch (not something the user typed or an existing entry's value).
+    var portAutoSet = false;
     var entryTypeHelp = {
         ssh: 'Opens a terminal to a Linux/Unix server. <strong>Hostname</strong>: the server IP (e.g. 192.168.50.11) — no http://. <strong>Username/Password</strong>: the login account on that server, or paste a <strong>private key</strong> and leave the password blank.',
         rdp: 'Remote desktop to a Windows machine (or xrdp server). <strong>Hostname</strong>: its IP. <strong>Username</strong>: e.g. DOMAIN\\user. <strong>Password</strong>: the Windows account password.',
@@ -1349,7 +1352,14 @@
         document.getElementById('em-rdp-security-field').style.display = type === 'rdp' ? '' : 'none';
         updateKdcField();
         var portEl = document.getElementById('em-port');
-        if (!portEl.value && entryTypeDefaults[type]) portEl.value = entryTypeDefaults[type];
+        if (portAutoSet || !portEl.value) {
+            if (entryTypeDefaults[type]) {
+                portEl.value = entryTypeDefaults[type];
+                portAutoSet = true;
+            }
+        } else {
+            portAutoSet = false;
+        }
         updateTypeHelp();
     }
     function updateKdcField() {
@@ -1357,6 +1367,7 @@
         document.getElementById('em-rdp-kdc-field').style.display = pkg === 'kerberos' ? '' : 'none';
     }
     function clearEntryFields() {
+        portAutoSet = false;
         var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain'];
         for (var i = 0; i < ids.length; i++) document.getElementById(ids[i]).value = '';
         document.getElementById('em-password').placeholder = '';
@@ -1400,6 +1411,7 @@
         document.getElementById('em-display-name').value = selectedEntry.display_name || '';
         document.getElementById('em-hostname').value = selectedEntry.hostname || '';
         if (selectedEntry.port) document.getElementById('em-port').value = String(selectedEntry.port);
+        portAutoSet = false; // the stored port must never be clobbered by a default
         document.getElementById('em-username').value = selectedEntry.username || '';
         // Entry-level ACLs round-trip via EntryInfo.allowed_groups.
         emGroups = (selectedEntry.allowed_groups || '').split(',').map(function(g) { return g.trim(); }).filter(function(g) { return g !== ''; });
@@ -2167,6 +2179,7 @@
     document.getElementById('em-groups-add').addEventListener('click', function() { addGroupFromInput('em'); });
     wireGroupCombo('em');
     document.getElementById('em-type').addEventListener('change', updateEntryTypeFields);
+    document.getElementById('em-port').addEventListener('input', function() { portAutoSet = false; });
     document.getElementById('em-rdp-auth-pkg').addEventListener('change', updateKdcField);
 
     var rbacComboEl = document.getElementById('em-rbac-combo');
