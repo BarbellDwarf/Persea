@@ -1,6 +1,6 @@
 # Web Browser Sessions
 
-> **Audience:** admins enabling and securing web browser sessions (autofill, domain allowlists, login scripts).
+> **Audience:** admins enabling and securing web browser sessions (domain allowlists, login scripts, clipboard control).
 > **Next:** [Security](security-hardening.md#web-session-hardening) for hardening, or [Configuration](configuration.md#browser-session-settings) for the browser settings.
 
 Web browser sessions give users a full Chromium browser running on the server, streamed to their own browser via the Guacamole protocol. Each session spawns a headless Xvnc display with Chromium in kiosk mode. The user sees and interacts with a real browser without installing anything locally.
@@ -10,7 +10,7 @@ This supports several use cases:
 - **Controlled web access** — give operators access to specific internal web applications without exposing credentials or granting direct network access
 - **Credential isolation** — passwords and session cookies stay server-side, never reaching the user's machine
 - **Kiosk-style portals** — lock Chromium to a specific site with domain allowlisting
-- **Automated login** — pre-fill credentials via native autofill or run a login script so the user lands on an authenticated page
+- **Automated login** — run a login script so the user lands on an authenticated page (native autofill is currently disabled, see [Native autofill](#native-autofill))
 
 ## How it works
 
@@ -36,7 +36,7 @@ Xvnc (virtual display :100–:199)
 
 1. persea allocates an X display number and spawns Xvnc
 2. A unique Chromium profile directory is created (`/tmp/persea-chromium-{uuid}`)
-3. Optionally, the autofill database is pre-populated with credentials
+3. If a login script is configured, a Chrome DevTools Protocol (CDP) port is allocated for it
 4. Chromium launches on the Xvnc display, navigating to the configured URL
 5. guacd connects to the Xvnc display via VNC and streams it to the user
 6. Optionally, a login script runs to automate complex login flows
@@ -53,7 +53,7 @@ Create a web entry in the connections with at minimum:
 | Type | `web` |
 | URL | `https://your-app.example.com` |
 
-Optionally add credentials for autofill or login scripts:
+Optionally add credentials for login scripts or URL placeholders:
 
 | Field | Value |
 |-------|-------|
@@ -82,17 +82,15 @@ By default, web sessions can only connect to localhost. To allow external URLs, 
 web_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12"]
 ```
 
-This is a server-side CIDR check applied at session creation. The URL's hostname is resolved and every returned IP must match at least one allowed range. See [Domain allowlisting](#domain-allowlisting) for the separate client-side restriction.
+This is a server-side CIDR check applied at session creation. The URL's hostname is resolved and the session is created only if at least one of the resolved IPs falls inside an allowed range (a hostname resolving to a mix of allowed and disallowed addresses passes — one match is enough). See [Domain allowlisting](#domain-allowlisting) for the separate client-side restriction.
 
 ## Native autofill
 
-For simple login flows (a form with username and password fields), native autofill is the easiest approach. persea pre-populates Chromium's built-in password manager database before launch. No scripts, no external runtimes, no CDP.
+> **Status: disabled in the current build.** The `autofill` field is still accepted by the entry schema and API, but persea no longer populates Chromium's password store: `populate_login_data()` in `src/browser.rs` is a no-op (H09 — "disable autofill/credential storage for ephemeral VDI sessions"), so no `Default/Login Data` database is ever written, and Chromium is launched with `--disable-autofill`. For automated login, use [login scripts](#login-scripts).
 
-When the user clicks on a login form, Chromium shows its familiar autofill dropdown with the pre-filled credentials.
+### Schema (accepted, no effect)
 
-### Configuring autofill
-
-The `autofill` field on an connections entry is a JSON string containing an array of credential objects:
+The `autofill` field on a connections entry is a JSON string containing an array of credential objects:
 
 ```json
 [
@@ -110,42 +108,13 @@ The `autofill` field on an connections entry is a JSON string containing an arra
 | `username` | Username to autofill. Use `$USERNAME` to substitute the entry's username field. |
 | `password` | Password to autofill. Use `$PASSWORD` to substitute the entry's password field. |
 
-The `$USERNAME` and `$PASSWORD` placeholders are resolved server-side from the entry's credentials before Chromium launches. You can also use literal values if the credentials differ from the entry's main username/password.
+The `$USERNAME` and `$PASSWORD` placeholders are resolved server-side from the entry's credentials at session creation (`parse_autofill_credentials` in `src/session/create.rs`), and the result is passed to the browser spawner — which then ignores it because the population step is a no-op.
 
-### Multiple autofill entries
+### Implementation note
 
-For SSO redirect chains where the user is redirected from one site to an identity provider and back, add multiple entries:
+The Chromium Linux `os_crypt` obfuscation scheme (16-byte AES key via PBKDF2 with password `"peanuts"` / salt `"saltysalt"`, 1 iteration, SHA-1; AES-128-CBC with IV = 16 × `0x20`; `v10` prefix + ciphertext blob) is implemented in `src/browser.rs`, but the database population that would use it is disabled, so it is currently dead code. It is Chromium's obfuscation layer for the headless Linux case (no keyring) and was never a security boundary — the real boundary is that the profile directory is ephemeral (deleted on session end) and only accessible server-side.
 
-```json
-[
-  {
-    "url": "https://app.example.com",
-    "username": "$USERNAME",
-    "password": "$PASSWORD"
-  },
-  {
-    "url": "https://idp.example.com",
-    "username": "$USERNAME",
-    "password": "$PASSWORD"
-  }
-]
-```
-
-Chromium will offer autofill on both domains.
-
-### How it works internally
-
-persea creates a Chromium profile directory before launch and writes to `Default/Login Data` (a SQLite database that Chromium uses for its password manager). Passwords are encrypted using Chromium's Linux `os_crypt` backend:
-
-1. Derive a 16-byte AES key via PBKDF2 (password `"peanuts"`, salt `"saltysalt"`, 1 iteration, SHA-1)
-2. Encrypt with AES-128-CBC, IV = 16 × `0x20` (space characters)
-3. Store as `v10` prefix + ciphertext blob
-
-This is Chromium's own obfuscation layer for the headless Linux case (no keyring). It is not a security boundary. The security boundary is that the profile directory is ephemeral (deleted on session end) and only accessible server-side.
-
-### UI
-
-In the connections entry editor, the **Autofill** section provides a visual builder. Click **"Add site"** to add credential rows. The URL field auto-populates with the entry's target URL. Save the entry and the UI serialises the rows to JSON.
+There is no autofill editor in the current Connections UI — the `autofill` field is only settable via the address-book entry API.
 
 ## Domain allowlisting
 
@@ -153,7 +122,7 @@ Each connections entry can specify an `allowed_domains` list to restrict which w
 
 ### Configuring allowed domains
 
-In the connections entry editor, expand the **Allowed Domains** section and add domain names:
+Set the `allowed_domains` list on the connections entry (via the address-book entry API; the current Connections UI does not expose it):
 
 ```
 example.com
@@ -173,7 +142,7 @@ There are two separate mechanisms that control what a web session can access:
 
 Both can be active simultaneously for defense in depth. `web_allowed_networks` prevents persea from initiating connections to disallowed networks (SSRF protection). `allowed_domains` prevents the user from navigating to sites outside the allowlist within an already-running session.
 
-**Example:** Your config allows `10.0.0.0/8` for web sessions (server-side). An connections entry for the internal wiki sets `allowed_domains: ["wiki.internal.example.com"]`. The session can only reach the wiki, even though the server-side allowlist permits the entire `10.0.0.0/8` range.
+**Example:** Your config allows `10.0.0.0/8` for web sessions (server-side). A connections entry for the internal wiki sets `allowed_domains: ["wiki.internal.example.com"]`. The session can only reach the wiki, even though the server-side allowlist permits the entire `10.0.0.0/8` range.
 
 ### API
 
@@ -209,11 +178,11 @@ A login script is a server-side executable that connects to the already-running 
 | Variable | Description |
 |----------|-------------|
 | `DISPLAY` | X display number (e.g., `:100`) |
-| `PERSEA_CDP_PORT` | Chrome DevTools Protocol port (e.g., `9200`) |
-| `PERSEA_URL` | Target URL |
-| `PERSEA_USERNAME` | Username (empty string if not set) |
-| `PERSEA_PASSWORD` | Password (empty string if not set) |
-| `PERSEA_SESSION_ID` | Session UUID |
+| `RUSTGUAC_CDP_PORT` | Chrome DevTools Protocol port (e.g., `9200`) |
+| `RUSTGUAC_URL` | Target URL |
+| `RUSTGUAC_SESSION_ID` | Session UUID |
+
+Credentials are **not** passed as environment variables — they arrive only on stdin as JSON (see below).
 
 **Stdin (preferred for credentials):**
 
@@ -271,10 +240,10 @@ async function getCredentials() {
         }
     }
     return {
-        cdpPort:  parseInt(process.env.PERSEA_CDP_PORT, 10),
-        url:      process.env.PERSEA_URL || '',
-        username: process.env.PERSEA_USERNAME || '',
-        password: process.env.PERSEA_PASSWORD || '',
+        cdpPort:  parseInt(process.env.RUSTGUAC_CDP_PORT, 10),
+        url:      process.env.RUSTGUAC_URL || '',
+        username: '',
+        password: '',
     };
 }
 
@@ -366,7 +335,7 @@ main().catch((err) => {
 1. Save it to `/opt/persea/scripts/login-example.js`
 2. Make it executable: `chmod +x /opt/persea/scripts/login-example.js`
 3. Install Playwright: `cd /opt/persea/scripts && npm install playwright-core`
-4. Set the `login_script` field on an connections entry to `login-example.js`
+4. Set the `login_script` field on a connections entry to `login-example.js`
 
 ### Example: Shell script with curl
 
@@ -404,9 +373,7 @@ echo "[login] Done — user should see authenticated page"
 
 ### Combining autofill and login scripts
 
-Autofill and login scripts can be used together on the same entry. Autofill pre-populates the password manager, useful if the script fails or for subsequent logins during the session. Login scripts automate the initial login flow and handle complex cases like MFA, JavaScript-heavy forms, or multi-step wizards.
-
-The autofill database is written before Chromium launches, and the login script runs after. They don't interfere with each other.
+Native autofill is currently disabled (see [Native autofill](#native-autofill)), so login scripts are the only supported automation path. The `autofill` field is still accepted by the schema but has no effect — do not rely on it.
 
 ### Configuration
 
@@ -434,13 +401,14 @@ The session page supports a small set of browser-side shortcuts:
 
 | Shortcut | Action | Notes |
 |----------|--------|-------|
-| `Ctrl+Alt+Shift` | Toggle the clipboard side panel | Works globally on the session page (capture phase), including when the remote display is focused. |
+| `Ctrl+Alt+Shift` | Toggle the auto-hide toolbar (Paste, Fullscreen, Screenshot buttons) | Works globally on the session page (capture phase), including when the remote display is focused. |
+| `F11` | Toggle fullscreen | Browser-side toggle, intercepted before it reaches the remote session. |
 | `Ctrl+V` (Windows/Linux) or `Cmd+V` (macOS) | Sync browser clipboard text to the remote session, then send paste | If clipboard API access is available, persea reads local clipboard text and sends it to the remote before forwarding the paste key event. |
-| `Esc` (browser fullscreen) | Exit fullscreen | Browser-native fullscreen key. persea may request keyboard lock while in fullscreen; if lock is unavailable, an on-screen notice reminds users to press Esc. |
 
 Additional behavior:
 
-- No dedicated keyboard combo is currently assigned for entering fullscreen. Users can use entry-level fullscreen-on-connect, or open the `Ctrl+Alt+Shift` clipboard panel and click its **Fullscreen** button (next to **Home**).
+- `Esc` exits browser fullscreen natively (browser behaviour — it is not intercepted).
+- Entry-level `fullscreen_on_connect` opens the session in fullscreen automatically; the toolbar's Fullscreen button (`F11`) toggles it at any time.
 - All other key presses are passed through to the remote host by Guacamole keyboard handling.
 - Clipboard policy flags still apply: `disable_copy` and `disable_paste` can block corresponding clipboard flows regardless of local shortcuts.
 
@@ -449,13 +417,13 @@ Additional behavior:
 The entry URL supports credential placeholders that are URL-encoded and substituted before Chromium navigates:
 
 ```
-https://app.example.com/login?user=$PERSEA_USERNAME&pass=$PERSEA_PASSWORD
+https://app.example.com/login?user=$RUSTGUAC_USERNAME&pass=$RUSTGUAC_PASSWORD
 ```
 
 | Placeholder | Substituted with |
 |-------------|-----------------|
-| `$PERSEA_USERNAME` | Entry username (URL-encoded) |
-| `$PERSEA_PASSWORD` | Entry password (URL-encoded) |
+| `$RUSTGUAC_USERNAME` | Entry username (URL-encoded) |
+| `$RUSTGUAC_PASSWORD` | Entry password (URL-encoded) |
 
 This is useful for applications that accept credentials as URL parameters (e.g., some IPMI/KVM web consoles).
 
@@ -482,7 +450,7 @@ Key restrictions:
 - Dangerous URL schemes (`file://`, `chrome://`, `javascript:`) are blocked
 - Browser sign-in and sync are disabled
 - Each session gets a fresh UUID-based profile directory, deleted on session end
-- Chromium runs with its normal SUID sandbox (no `--no-sandbox`)
+- Chromium runs with its normal SUID sandbox — `--no-sandbox` is only appended when persea itself runs as root (e.g. local development); production installs (install.sh, Docker) run as the `persea` system user and keep the sandbox active
 
 ## API reference
 
@@ -512,12 +480,12 @@ POST /api/sessions
 |-------|------|----------|-------------|
 | `session_type` | string | Yes | Must be `"web"` |
 | `url` | string | Yes | Target URL (`http://` or `https://`) |
-| `username` | string | No | Username for autofill/script substitution |
-| `password` | string | No | Password for autofill/script substitution |
+| `username` | string | No | Username for script/URL-placeholder substitution |
+| `password` | string | No | Password for script/URL-placeholder substitution |
 | `width` | integer | No | Browser width in pixels (default: 1920, range: 640–8192) |
 | `height` | integer | No | Browser height in pixels (default: 1080, range: 480–8192) |
 | `dpi` | integer | No | Display DPI (default: 96) |
-| `autofill` | string | No | JSON array of autofill credentials (see [Native autofill](#native-autofill)) |
+| `autofill` | string | No | JSON array of autofill credentials — accepted for compatibility but currently has no effect (see [Native autofill](#native-autofill)) |
 | `allowed_domains` | array | No | Domain allowlist (see [Domain allowlisting](#domain-allowlisting)) |
 | `login_script` | string | No | Script filename in `login_scripts_dir` |
 | `disable_copy` | boolean | No | Disable clipboard copy (default: false) |
@@ -547,9 +515,8 @@ When creating entries via the Vault connections (UI or API), the same fields are
 ## Troubleshooting
 
 **Autofill dropdown doesn't appear:**
-- Verify the `url` in the autofill JSON matches the login form's origin (scheme + host + port). For example, `https://app.example.com` won't match a form at `https://app.example.com:8443`.
-- Check that the autofill JSON is valid — the server logs a warning if parsing fails.
-- Ensure the entry has a username and password set (the `$USERNAME`/`$PASSWORD` placeholders need values to substitute).
+- Expected in the current build — native autofill is disabled (`populate_login_data()` is a no-op and Chromium is launched with `--disable-autofill`). Use a [login script](#login-scripts) instead.
+- The `autofill` entry field is still accepted by the schema but has no effect.
 
 **Domain blocking is too strict:**
 - Remember that subdomains are automatically included — adding `example.com` allows `*.example.com`.

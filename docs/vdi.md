@@ -40,7 +40,7 @@ enabled = true
 # docker_socket = "/var/run/docker.sock"   # default
 # default_cpu_limit = 2.0                   # cores, 0 = no limit
 # default_memory_limit = 2048               # MB, 0 = no limit
-# ready_timeout_secs = 120                  # wait for xrdp to start
+# ready_timeout_secs = 30                   # wait for xrdp to start (default)
 # port_range_start = 39000                  # optional localhost RDP port range
 # port_range_end = 39999
 # container_hook_script = "/opt/persea/vdi-container-hook.sh"
@@ -49,6 +49,8 @@ enabled = true
 # home_base = "/vdi-homes"                  # persistent home directories
 # allowed_images = ["myregistry/desktop:latest"]  # whitelist, empty = allow all
 ```
+
+VDI can also be toggled from **Admin → Settings** — the `enable_vdi` setting maps directly to `[vdi] enabled`. Sessions are refused while either is off.
 
 The `persea` system user must be in the `docker` group:
 
@@ -67,7 +69,7 @@ The image reads `VDI_USERNAME` and `VDI_PASSWORD` from its entrypoint, calls `us
 
 - persea derives `VDI_USERNAME` from the operator's identity (everything before `@`, lowercased, non-alphanumeric replaced with `_`).
 - `VDI_PASSWORD` is freshly generated per connect (32 random hex chars).
-- Container name is deterministic per operator (`persea-vdi-<username>`), so reconnects reuse the same container.
+- Container name is deterministic per operator — `persea-vdi-<username>` for ad-hoc sessions, `persea-vdi-<username>-<entry>` when connecting via an address-book entry — so reconnects reuse the same container.
 - xrdp listens on port 3389 with TLS certificates configured.
 
 A minimal example image is at `contrib/vdi-test-image/` (Debian + xfce4).
@@ -114,8 +116,8 @@ exec xrdp --nodaemon
 1. Create a folder in the connections (or use an existing one)
 2. Add a new entry with type **VDI (Docker)**
 3. Set the **Container Image** (e.g. `persea-vdi-test:latest`)
-4. Optionally set CPU limit, memory limit, environment variables, idle timeout
-5. If the image has a baked-in user account (Pattern B above), set **Container username** and **Container password** to match; otherwise leave them blank and the image's entrypoint will provision the account from `VDI_USERNAME` / `VDI_PASSWORD`
+4. Optionally set per-entry overrides — CPU limit, memory limit, environment variables, idle timeout — as entry fields (`container_cpu_limit`, `container_memory_limit`, `container_env`, `container_idle_timeout_mins`). These are part of the entry schema/API; the current Connections UI only exposes the container image and container password, so set them via the address-book API if needed.
+5. If the image has a baked-in user account (Pattern B above), set the `container_username` / `container_password` entry fields to match (the UI exposes the container password; the username is set via the entry API); otherwise leave them blank and the image's entrypoint will provision the account from `VDI_USERNAME` / `VDI_PASSWORD`
 6. Click Save
 
 Users in the folder's allowed groups can now click Connect to get a desktop.
@@ -141,6 +143,8 @@ home_base = "/vdi-homes"
 ```
 
 Each user gets `{home_base}/{username}` mounted as `/home/{username}` inside the container. Files persist across container restarts. The directory is created automatically on first use.
+
+In the Docker image, the `vdi-homes` volume is mounted at `/opt/persea/vdi-homes` — set `home_base` to that path there. On bare metal any writable directory works (e.g. `/vdi-homes`).
 
 ## Active Sessions
 
