@@ -8,6 +8,42 @@ persea sits between web browsers and guacd, proxying the Guacamole protocol over
 
 The connections feature supports credential storage in HashiCorp Vault / OpenBao, or directly in the database with AES-256-GCM encryption. See [Configuration](configuration.md) for the full reference.
 
+## Screenshots
+
+persea ships a responsive web UI with built-in light and dark themes — the header toggle cycles **auto → dark → light** (auto follows your OS preference). Screenshots below show key pages in both modes.
+
+### Connections
+
+The Connections page is the main workspace: folder tree on the left, connection details and one-click connect on the right.
+
+| Light | Dark |
+|-------|------|
+| ![Connections light](images/persea-connections-light.png) | ![Connections dark](images/persea-connections-dark.png) |
+
+### Sessions
+
+The Sessions page shows active sessions with live status, idle timers, and the ad-hoc session form (SSH/RDP/VNC/SPICE).
+
+| Light | Dark |
+|-------|------|
+| ![Sessions light](images/persea-sessions-light.png) | ![Sessions dark](images/persea-sessions-dark.png) |
+
+### Admin — Users
+
+The admin area covers user management, groups/RBAC, auth providers, audit logs, settings, and more.
+
+| Light | Dark |
+|-------|------|
+| ![Admin users light](images/persea-admin-users-light.png) | ![Admin users dark](images/persea-admin-users-dark.png) |
+
+### Admin — Settings
+
+| Light | Dark |
+|-------|------|
+| ![Admin settings light](images/persea-admin-settings-light.png) | ![Admin settings dark](images/persea-admin-settings-dark.png) |
+
+The theme toggle is in the header on every page; the chosen mode persists in `localStorage`, and color-accent presets (default, aurora, jaguar, catppuccin-macchiato, and more) are available under **My Profile → Color Accent**.
+
 ## Why not Apache Guacamole?
 
 Apache Guacamole is a mature, feature-rich platform. persea is a purpose-built alternative for organisations that want:
