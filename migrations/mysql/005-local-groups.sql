@@ -1,23 +1,19 @@
--- Local groups + provider-group mappings (ticket #029)
--- MySQL variant. Mirrors the SQLite schema created in src/db.rs::init_db.
+-- Local groups + provider-group mappings (ticket #029) — MySQL variant.
+-- Mirrors src/db.rs::init_db. `auto_provisioned` (ticket F38) is folded in
+-- here so the three backends stay in sync.
 
--- Admin-defined named groups that folders/connections can grant access to.
--- Folder `allowed_groups` reference a local group by *name* as a free-form
--- string, so renaming/deleting a local group never rewrites folder configs.
 CREATE TABLE IF NOT EXISTS local_groups (
-    id          BIGINT AUTO_INCREMENT PRIMARY KEY,
-    name        VARCHAR(255) NOT NULL UNIQUE,
-    description TEXT NOT NULL,
-    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+    id               BIGINT AUTO_INCREMENT PRIMARY KEY,
+    name             VARCHAR(255) NOT NULL UNIQUE,
+    description      TEXT NOT NULL,
+    auto_provisioned TINYINT(1) NOT NULL DEFAULT 0,
+    created_at       VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
 );
 
--- Links an auth-provider group name (OIDC/LDAP claim group) to a local group.
--- One provider group maps to at most one local group (UNIQUE).
 CREATE TABLE IF NOT EXISTS group_mappings (
     id             BIGINT AUTO_INCREMENT PRIMARY KEY,
     group_id       BIGINT NOT NULL,
-    provider_group VARCHAR(255) NOT NULL UNIQUE,
-    created_at     DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT fk_group_mappings_local_group FOREIGN KEY (group_id)
-        REFERENCES local_groups(id) ON DELETE CASCADE
+    provider_group VARCHAR(512) NOT NULL UNIQUE,
+    created_at     VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    CONSTRAINT fk_group_mappings_group FOREIGN KEY (group_id) REFERENCES local_groups(id) ON DELETE CASCADE
 );

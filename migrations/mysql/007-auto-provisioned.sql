@@ -1,3 +1,6 @@
--- Auto-provisioned group marker (ticket F38): boolean flag on local_groups
--- so the UI can distinguish provider-synced groups from manually created ones.
-ALTER TABLE local_groups ADD COLUMN auto_provisioned TINYINT(1) NOT NULL DEFAULT 0 AFTER description;
+-- Auto-provisioned group marker (ticket F38) — MySQL variant.
+--
+-- The `auto_provisioned` column is part of the base `local_groups` DDL in
+-- 005-local-groups.sql; this migration exists to keep the per-backend file
+-- sets in sync and is a no-op.
+SELECT 1;

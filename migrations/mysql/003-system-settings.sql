@@ -1,11 +1,8 @@
--- System settings key-value store (ticket #024)
--- Admin-configurable server settings persisted in the database.
--- `key` is a reserved word in MySQL, hence backticks. TEXT columns cannot
--- have a DEFAULT clause in MySQL, so `value` has none — the application
--- always writes an explicit value.
+-- System settings key-value store (ticket #024) — MySQL variant.
+-- `key` is a reserved word in MySQL and is backtick-quoted.
 
 CREATE TABLE IF NOT EXISTS system_settings (
-    `key`       VARCHAR(255) PRIMARY KEY,
+    `key`       VARCHAR(64) PRIMARY KEY,
     value       TEXT NOT NULL,
-    updated_at  VARCHAR(32) NOT NULL DEFAULT (UTC_TIMESTAMP())
+    updated_at  VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
 );

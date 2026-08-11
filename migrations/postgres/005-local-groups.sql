@@ -1,21 +1,18 @@
--- Local groups + provider-group mappings (ticket #029)
--- PostgreSQL variant. Mirrors the SQLite schema created in src/db.rs::init_db.
+-- Local groups + provider-group mappings (ticket #029) — PostgreSQL variant.
+-- Mirrors src/db.rs::init_db. `auto_provisioned` (ticket F38) is folded in
+-- here so the three backends stay in sync.
 
--- Admin-defined named groups that folders/connections can grant access to.
--- Folder `allowed_groups` reference a local group by *name* as a free-form
--- string, so renaming/deleting a local group never rewrites folder configs.
 CREATE TABLE IF NOT EXISTS local_groups (
-    id          BIGSERIAL PRIMARY KEY,
-    name        TEXT NOT NULL UNIQUE,
-    description TEXT NOT NULL DEFAULT '',
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id               BIGSERIAL PRIMARY KEY,
+    name             TEXT NOT NULL UNIQUE,
+    description      TEXT NOT NULL DEFAULT '',
+    auto_provisioned BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at       TEXT NOT NULL DEFAULT to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS')
 );
 
--- Links an auth-provider group name (OIDC/LDAP claim group) to a local group.
--- One provider group maps to at most one local group (UNIQUE).
 CREATE TABLE IF NOT EXISTS group_mappings (
     id             BIGSERIAL PRIMARY KEY,
     group_id       BIGINT NOT NULL REFERENCES local_groups(id) ON DELETE CASCADE,
     provider_group TEXT NOT NULL UNIQUE,
-    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at     TEXT NOT NULL DEFAULT to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS')
 );

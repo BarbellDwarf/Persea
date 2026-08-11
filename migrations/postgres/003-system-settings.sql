@@ -1,5 +1,4 @@
--- System settings key-value store (ticket #024)
--- Admin-configurable server settings persisted in the database.
+-- System settings key-value store (ticket #024) — PostgreSQL variant.
 
 CREATE TABLE IF NOT EXISTS system_settings (
     key         TEXT PRIMARY KEY,

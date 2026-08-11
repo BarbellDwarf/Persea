@@ -1,11 +1,14 @@
--- Address book tables for DB-backed storage (ticket #022)
--- When Vault is not configured, the DB stores connection entries directly.
+-- Address book tables for DB-backed storage — SQLite backend.
+-- Mirrors src/db.rs::init_db (includes the folder-ACL columns added by
+-- tickets 022/027 so all three backends stay in sync).
 
 CREATE TABLE IF NOT EXISTS address_book_folders (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     scope       TEXT NOT NULL DEFAULT 'shared',
     name        TEXT NOT NULL,
     description TEXT DEFAULT '',
+    allowed_groups TEXT NOT NULL DEFAULT '',
+    inherit_from_parent INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(scope, name)
