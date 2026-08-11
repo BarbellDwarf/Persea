@@ -1634,6 +1634,22 @@ mod auth_pkg_tests {
         let c = Config::default();
         assert_eq!(resolve_rdp_connection_mode(Some("  "), &c), "proxy");
     }
+
+    #[test]
+    fn connection_mode_invalid_db_setting_falls_back_to_proxy() {
+        let c = Config::default();
+        assert_eq!(resolve_rdp_connection_mode(Some("banana"), &c), "proxy");
+    }
+
+    #[test]
+    fn connection_mode_invalid_config_value_falls_back_to_proxy() {
+        let mut c = Config::default();
+        c.rdp = Some(crate::config::RdpConfig {
+            default_auth_pkg: None,
+            connection_mode: Some("banana".into()),
+        });
+        assert_eq!(resolve_rdp_connection_mode(None, &c), "proxy");
+    }
 }
 
 #[cfg(test)]

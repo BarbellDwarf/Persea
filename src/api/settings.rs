@@ -254,6 +254,13 @@ fn parse_bool(value: &Value, key: &str) -> Result<bool, AppError> {
 
 /// Validate one submitted value and reduce it to its canonical string form.
 fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
+    // The settings form historically submitted checkbox+hidden pairs with
+    // duplicate names; htmx's json-enc collects duplicates as arrays. Take
+    // the last entry so those payloads still validate.
+    let value = match value {
+        Value::Array(items) => items.last().unwrap_or(value),
+        other => other,
+    };
     if ADDR_KEYS.contains(&key) {
         let addr = value
             .as_str()

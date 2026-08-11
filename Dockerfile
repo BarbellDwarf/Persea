@@ -166,6 +166,9 @@ RUN printf 'krb5-config krb5-config/default_realm string \n' | debconf-set-selec
     # Minimal runtime utilities
     ca-certificates \
     curl \
+    # socat: the RDP relay's outbound leg (system binaries are typically
+    # allowed by endpoint filters that block the gateway's own processes)
+    socat \
     && rm -rf /var/lib/apt/lists/*
 
 # Install guacd

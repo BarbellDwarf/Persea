@@ -378,9 +378,10 @@ pub struct Session {
     /// decide whether a relayed retry is allowed.
     pub rdp_connection_mode: Option<String>,
     /// RDP connection params as originally configured (fallback mode),
-    /// with the original target address — never relayed content. Kept on
-    /// the session so the WebSocket fallback hook can repoint them at a
-    /// loopback relay and reconnect guacd.
+    /// with the original target address. Kept on the session so the
+    /// WebSocket fallback hook can repoint them at a loopback relay and
+    /// reconnect guacd. After a relayed retry the host/port are rewritten
+    /// to the relay's loopback address (see `relay_rdp_retry`).
     pub rdp_params: Option<ConnectionParams>,
     /// Active loopback relay for this session (proxy mode at creation,
     /// fallback mode after a relayed retry). Dropping the handle aborts

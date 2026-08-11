@@ -105,16 +105,17 @@ pub(super) fn resolve_rdp_connection_mode(
     db_setting: Option<&str>,
     config: &crate::config::Config,
 ) -> String {
+    let valid = |v: &str| matches!(v, "proxy" | "fallback" | "direct");
     if let Some(v) = db_setting {
         let trimmed = v.trim();
-        if !trimmed.is_empty() {
+        if valid(trimmed) {
             return trimmed.to_string();
         }
     }
     if let Some(ref rdp) = config.rdp {
         if let Some(ref mode) = rdp.connection_mode {
             let trimmed = mode.trim();
-            if !trimmed.is_empty() {
+            if valid(trimmed) {
                 return trimmed.to_string();
             }
         }

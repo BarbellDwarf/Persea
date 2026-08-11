@@ -199,6 +199,31 @@ async fn put_persists_and_get_returns_saved_values() {
 }
 
 #[tokio::test]
+async fn put_accepts_array_values_from_duplicate_form_names() {
+    // The settings form's checkbox+hidden pairs historically shared a name;
+    // htmx's json-enc serializes duplicate names as arrays. The last entry
+    // must win so the UI can save booleans and enum settings.
+    let db = test_db();
+    let key = create_admin(&db, "admin");
+    let router = test_router(db.clone());
+
+    let body = serde_json::json!({
+        "db_only_mode": ["false", "false"],
+        "enable_rdp": ["true", "true"],
+        "rdp_connection_mode": ["proxy", "fallback"],
+    });
+    let resp = router
+        .oneshot(admin_put(&key, "/api/system/settings", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let saved = body_json(resp).await;
+    assert_eq!(saved["db_only_mode"].as_bool(), Some(false));
+    assert_eq!(saved["enable_rdp"].as_bool(), Some(true));
+    assert_eq!(saved["rdp_connection_mode"].as_str(), Some("fallback"));
+}
+
+#[tokio::test]
 async fn put_partial_object_only_updates_given_keys() {
     let db = test_db();
     let key = create_admin(&db, "admin");

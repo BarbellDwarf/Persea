@@ -7,13 +7,16 @@
 //! moves the outbound leg to a different process — the proven workaround
 //! for such environments.
 //!
-//! The relay binds an ephemeral loopback-only listener and transparently
-//! bridges every accepted connection to the configured target. guacd
-//! retries its connection once on failure, so the accept loop serves
-//! multiple connections.
+//! The outbound leg is made by **socat** when it is available on PATH (a
+//! common system binary that endpoint filters typically allow), falling
+//! back to an in-process tokio bridge. The relay binds an ephemeral
+//! loopback-only listener and transparently bridges every accepted
+//! connection to the configured target. guacd retries its connection once
+//! on failure, so the accept loop serves multiple connections.
 
 use std::io;
 use std::net::SocketAddr;
+use std::process::Stdio;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
@@ -22,15 +25,29 @@ use tokio::task::JoinHandle;
 /// fails fast so guacd reports a clean error instead of hanging.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Backend that actually performs the loopback→target forwarding.
+enum RelayBackend {
+    /// socat subprocess (`TCP-LISTEN … TCP:<target>`). Killed on drop.
+    Socat {
+        child: tokio::process::Child,
+        target: String,
+        target_port: u16,
+    },
+    /// In-process tokio accept loop + per-connection bridges.
+    Tokio {
+        task: JoinHandle<()>,
+        connections: std::sync::Arc<std::sync::Mutex<Vec<JoinHandle<()>>>>,
+    },
+}
+
 /// A loopback relay between guacd and the real RDP target.
 ///
-/// Holds the accept task and the per-connection bridge tasks. Dropping the
-/// handle aborts all of them — no orphaned listeners, tasks, or half-open
-/// sockets survive.
+/// Holds the backend. Dropping the handle kills the socat child or aborts
+/// the tokio tasks — no orphaned listeners, tasks, or half-open sockets
+/// survive.
 pub struct RdpRelay {
     local: SocketAddr,
-    task: JoinHandle<()>,
-    connections: std::sync::Arc<std::sync::Mutex<Vec<JoinHandle<()>>>>,
+    backend: RelayBackend,
 }
 
 impl RdpRelay {
@@ -42,9 +59,16 @@ impl RdpRelay {
 
 impl Drop for RdpRelay {
     fn drop(&mut self) {
-        self.task.abort();
-        for handle in self.connections.lock().unwrap().iter() {
-            handle.abort();
+        match &mut self.backend {
+            RelayBackend::Socat { child, .. } => {
+                let _ = child.start_kill();
+            }
+            RelayBackend::Tokio { task, connections } => {
+                task.abort();
+                for handle in connections.lock().unwrap().iter() {
+                    handle.abort();
+                }
+            }
         }
     }
 }
@@ -52,8 +76,57 @@ impl Drop for RdpRelay {
 /// Spawn a relay that forwards loopback connections to `target_host:target_port`.
 ///
 /// The listener binds `127.0.0.1:0` (loopback only, ephemeral port) and the
-/// returned handle exposes the local address guacd should dial.
+/// returned handle exposes the local address guacd should dial. Prefers a
+/// `socat` subprocess for the outbound leg (endpoint filters commonly
+/// allowlist system binaries); falls back to an in-process tokio bridge.
 pub async fn spawn(target_host: &str, target_port: u16) -> io::Result<RdpRelay> {
+    match spawn_socat(target_host, target_port).await {
+        Ok(Some(relay)) => Ok(relay),
+        // socat not installed — fall back to the in-process bridge.
+        Ok(None) => spawn_tokio(target_host, target_port).await,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            spawn_tokio(target_host, target_port).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Spawn `socat` as the relay backend, if socat is on PATH.
+///
+/// The port is reserved on the loopback first, then handed to socat (the
+/// bind→release window is tiny; guacd's own connection retry covers it).
+async fn spawn_socat(target_host: &str, target_port: u16) -> io::Result<Option<RdpRelay>> {
+    let probe = TcpListener::bind("127.0.0.1:0").await?;
+    let port = probe.local_addr()?.port();
+    drop(probe);
+
+    let child = tokio::process::Command::new("socat")
+        .arg(format!("TCP-LISTEN:{port},reuseaddr,fork,bind=127.0.0.1"))
+        .arg(format!("TCP:{target_host}:{target_port}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    tracing::info!(
+        port,
+        target = %target_host,
+        target_port,
+        "RDP relay: socat backend listening on loopback"
+    );
+
+    Ok(Some(RdpRelay {
+        local: SocketAddr::from(([127, 0, 0, 1], port)),
+        backend: RelayBackend::Socat {
+            child,
+            target: target_host.to_string(),
+            target_port,
+        },
+    }))
+}
+
+/// Spawn the in-process tokio bridge relay.
+async fn spawn_tokio(target_host: &str, target_port: u16) -> io::Result<RdpRelay> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local = listener.local_addr()?;
     let target_host = target_host.to_string();
@@ -96,8 +169,7 @@ pub async fn spawn(target_host: &str, target_port: u16) -> io::Result<RdpRelay> 
 
     Ok(RdpRelay {
         local,
-        task,
-        connections,
+        backend: RelayBackend::Tokio { task, connections },
     })
 }
 
@@ -143,7 +215,18 @@ mod tests {
         });
 
         let relay = spawn("127.0.0.1", target_addr.port()).await.unwrap();
-        let mut client = TcpStream::connect(relay.local_addr()).await.unwrap();
+        // The socat backend binds the reserved port asynchronously — retry
+        // briefly so the test doesn't race it (guacd's own retry covers
+        // this in production).
+        let mut client = None;
+        for _ in 0..20 {
+            if let Ok(c) = TcpStream::connect(relay.local_addr()).await {
+                client = Some(c);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        let mut client = client.expect("relay listener did not come up in time");
         client.write_all(b"hello relay").await.unwrap();
         let mut buf = [0u8; 11];
         client.read_exact(&mut buf).await.unwrap();

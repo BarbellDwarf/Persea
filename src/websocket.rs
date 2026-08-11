@@ -605,7 +605,7 @@ async fn proxy_ws_guacd(
                 tracing::info!(
                     session_id = %session_id,
                     code = %code,
-                    "RDP negotiation failed — attempting relayed retry"
+                    "RDP negotiation failed — checking relayed retry eligibility"
                 );
                 match manager.relay_rdp_retry(session_id).await {
                     Some(stream) => {
