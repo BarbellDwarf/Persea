@@ -42,6 +42,10 @@ struct ProxyOutcome {
     /// remote server ended the session (user logout, crash), as opposed to the
     /// browser/network dropping the WebSocket.
     server_disconnected: bool,
+    /// The message from guacd's `error` instruction, if one was seen (e.g.
+    /// "Server refused connection (wrong security type?)"). Forwarded to the
+    /// browser verbatim; captured here for logging and the disconnect reason.
+    guacd_error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -321,10 +325,11 @@ async fn handle_ws(
 
     // Run the bidirectional proxy
     let start = Instant::now();
-    let proxy_outcome = proxy_ws_guacd(ws, guacd_stream, recording_file, cancel).await;
+    let proxy_outcome = proxy_ws_guacd(session_id, ws, guacd_stream, recording_file, cancel).await;
     let elapsed = start.elapsed();
     let server_disconnected = proxy_outcome.server_disconnected;
     let proxy_result = proxy_outcome.result;
+    let guacd_error = proxy_outcome.guacd_error;
 
     manager.disconnect_viewer(session_id).await;
 
@@ -336,6 +341,7 @@ async fn handle_ws(
                     session_id = %session_id, client_ip = %client_addr,
                     elapsed_ms = elapsed.as_millis() as u64,
                     error = ?err,
+                    guacd_error = ?guacd_error,
                     "guacd closed connection quickly (possible connection failure)"
                 );
                 true // mark as error
@@ -466,6 +472,7 @@ async fn handle_ws(
 
 /// Bidirectional proxy between WebSocket and guacd stream (TCP or TLS).
 async fn proxy_ws_guacd(
+    session_id: Uuid,
     ws: WebSocket,
     guacd: GuacdStream,
     recording_file: Option<tokio::fs::File>,
@@ -479,6 +486,9 @@ async fn proxy_ws_guacd(
     // Shared flag: set by guacd_to_ws when it sees `10.disconnect;` in the stream
     let server_disconnected = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+    // Captured message from guacd's `error` instruction, if any.
+    let guacd_error = Arc::new(tokio::sync::Mutex::new(None::<String>));
+
     // The WebSocket sink is shared so both halves can write to it. The browser →
     // guacd side needs to echo `0.,4.ping,...` instructions back to the client
     // (Apache webapp parity), without ever forwarding them to guacd.
@@ -488,10 +498,18 @@ async fn proxy_ws_guacd(
     let recording_clone = recording.clone();
     let sd_flag = server_disconnected.clone();
     let ws_sink_g = ws_sink.clone();
-    let guacd_to_browser =
-        tokio::spawn(
-            async move { guacd_to_ws(guacd_read, ws_sink_g, recording_clone, sd_flag).await },
-        );
+    let err_flag = guacd_error.clone();
+    let guacd_to_browser = tokio::spawn(async move {
+        guacd_to_ws(
+            session_id,
+            guacd_read,
+            ws_sink_g,
+            recording_clone,
+            sd_flag,
+            err_flag,
+        )
+        .await
+    });
 
     // browser → guacd
     let ws_sink_b = ws_sink.clone();
@@ -521,9 +539,12 @@ async fn proxy_ws_guacd(
         }
     };
 
+    let guacd_err = guacd_error.lock().await.take();
+
     ProxyOutcome {
         result,
         server_disconnected: server_disconnected.load(std::sync::atomic::Ordering::Relaxed),
+        guacd_error: guacd_err,
     }
 }
 
@@ -546,10 +567,12 @@ const MAX_GUACD_CARRY: usize = 16 * 1024 * 1024;
 /// we emit ends at a true Guacamole instruction boundary; partial tail data
 /// is held in `carry` until the next read completes it.
 async fn guacd_to_ws(
+    session_id: Uuid,
     mut guacd: tokio::io::ReadHalf<GuacdStream>,
     ws: WsSink,
     recording: Option<Arc<tokio::sync::Mutex<tokio::fs::File>>>,
     server_disconnected: Arc<std::sync::atomic::AtomicBool>,
+    last_error: Arc<tokio::sync::Mutex<Option<String>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
     let mut carry = bytes::BytesMut::new();
@@ -593,6 +616,29 @@ async fn guacd_to_ws(
                 format!("invalid UTF-8 from guacd: {}", e).into()
             },
         )?;
+
+        // Capture guacd's `error` instructions (e.g. RDP negotiation failures
+        // like "Server refused connection (wrong security type?)"). The
+        // instruction is forwarded to the browser verbatim, but logging it
+        // here gives the operator the reason in persea's own logs, and the
+        // message is used as the disconnect reason when the proxy ends.
+        let mut parser = crate::protocol::InstructionParser::new();
+        for parsed in parser.receive(&text) {
+            if let Ok(crate::protocol::Instruction { opcode, args }) = parsed {
+                if opcode == "error" {
+                    let message = args
+                        .get(1)
+                        .cloned()
+                        .unwrap_or_else(|| "unknown error".to_string());
+                    tracing::warn!(
+                        session_id = %session_id,
+                        code = args.first().cloned().unwrap_or_default(),
+                        "guacd reported upstream error: {}", message
+                    );
+                    *last_error.lock().await = Some(message);
+                }
+            }
+        }
 
         // Detect guacd-initiated disconnect (server-side logout/crash).
         // guacd sends "10.disconnect;" as the final instruction when the

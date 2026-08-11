@@ -293,6 +293,32 @@
                 </label>
                 <p class="text-xs text-[var(--text-muted)] mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
             </div>
+            <div id="em-rdp-security-field" style="display:none">
+                <div>
+                    <label class="form-label" for="em-rdp-security">Security mode</label>
+                    <select id="em-rdp-security" class="form-input">
+                        <option value="">Any (negotiate)</option>
+                        <option value="nla">NLA (Network Level Authentication)</option>
+                        <option value="tls">TLS (SSL encryption)</option>
+                        <option value="rdp">RDP (standard encryption)</option>
+                    </select>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">Corporate Windows servers usually require <strong>NLA</strong>. If the server refuses the connection ("wrong security type?"), try NLA first, then TLS. Any is the default.</p>
+                </div>
+                <div>
+                    <label class="form-label" for="em-rdp-auth-pkg">Authentication package</label>
+                    <select id="em-rdp-auth-pkg" class="form-input">
+                        <option value="">Negotiate (default)</option>
+                        <option value="kerberos">Kerberos</option>
+                        <option value="ntlm">NTLM</option>
+                    </select>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">Use <strong>Kerberos</strong> when the domain restricts NTLM (common in hardened AD environments). NTLM is the fallback default.</p>
+                </div>
+                <div id="em-rdp-kdc-field" style="display:none">
+                    <label class="form-label" for="em-rdp-kdc-url">KDC URL</label>
+                    <input type="text" id="em-rdp-kdc-url" class="form-input" placeholder="kdc.example.com" autocomplete="off">
+                    <p class="text-xs text-[var(--text-muted)] mt-1">Your AD Kerberos KDC hostname — required when using the Kerberos authentication package.</p>
+                </div>
+            </div>
             <div id="em-proxmox-secret-field" style="display:none">
                 <label class="form-label" for="em-proxmox-token-secret">Proxmox token secret</label>
                 <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
@@ -1310,17 +1336,25 @@
         document.getElementById('em-container-field').style.display = type === 'vdi' ? '' : 'none';
         document.getElementById('em-proxmox-fields').style.display = type === 'proxmox' ? '' : 'none';
         document.getElementById('em-ignore-cert-field').style.display = (type === 'rdp' || type === 'spice') ? '' : 'none';
+        document.getElementById('em-rdp-security-field').style.display = type === 'rdp' ? '' : 'none';
+        updateKdcField();
         var portEl = document.getElementById('em-port');
         if (!portEl.value && entryTypeDefaults[type]) portEl.value = entryTypeDefaults[type];
         updateTypeHelp();
     }
+    function updateKdcField() {
+        var pkg = document.getElementById('em-rdp-auth-pkg').value;
+        document.getElementById('em-rdp-kdc-field').style.display = pkg === 'kerberos' ? '' : 'none';
+    }
     function clearEntryFields() {
-        var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id'];
+        var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url'];
         for (var i = 0; i < ids.length; i++) document.getElementById(ids[i]).value = '';
         document.getElementById('em-password').placeholder = '';
         document.getElementById('em-private-key').placeholder = '-----BEGIN OPENSSH PRIVATE KEY-----';
         document.getElementById('em-proxmox-token-secret').placeholder = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
         document.getElementById('em-container-password').placeholder = 'Leave blank to generate per-connect';
+        document.getElementById('em-rdp-security').value = '';
+        document.getElementById('em-rdp-auth-pkg').value = '';
         updateEntryTypeFields();
     }
     function openNewEntry() {
@@ -1381,6 +1415,10 @@
         document.getElementById('em-proxmox-token-id').value = selectedEntry.proxmox_token_id || '';
         document.getElementById('em-proxmox-verify-tls').checked = !!selectedEntry.proxmox_verify_tls;
         document.getElementById('em-ignore-cert').checked = !!selectedEntry.ignore_cert;
+        document.getElementById('em-rdp-security').value = selectedEntry.security || '';
+        document.getElementById('em-rdp-auth-pkg').value = selectedEntry.auth_pkg || '';
+        document.getElementById('em-rdp-kdc-url').value = selectedEntry.kdc_url || '';
+        updateKdcField();
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
@@ -1470,6 +1508,14 @@
         if (privateKey) entry.private_key = privateKey;
         if (type === 'rdp' || type === 'spice') {
             entry.ignore_cert = document.getElementById('em-ignore-cert').checked;
+        }
+        if (type === 'rdp') {
+            var rdpSecurity = document.getElementById('em-rdp-security').value;
+            if (rdpSecurity) entry.security = rdpSecurity;
+            var rdpAuthPkg = document.getElementById('em-rdp-auth-pkg').value;
+            if (rdpAuthPkg) entry.auth_pkg = rdpAuthPkg;
+            var kdcUrl = document.getElementById('em-rdp-kdc-url').value.trim();
+            if (kdcUrl) entry.kdc_url = kdcUrl;
         }
         var ts = document.getElementById('em-proxmox-token-secret').value.trim();
         if (ts) entry.proxmox_token_secret = ts;
@@ -2108,6 +2154,7 @@
     document.getElementById('em-groups-add').addEventListener('click', function() { addGroupFromInput('em'); });
     wireGroupCombo('em');
     document.getElementById('em-type').addEventListener('change', updateEntryTypeFields);
+    document.getElementById('em-rdp-auth-pkg').addEventListener('change', updateKdcField);
 
     var rbacComboEl = document.getElementById('em-rbac-combo');
     var rbacInputEl = document.getElementById('em-rbac-input');
