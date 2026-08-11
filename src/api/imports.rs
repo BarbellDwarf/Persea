@@ -62,6 +62,8 @@ pub struct ImportRow {
     pub display_name: String,
     #[serde(default)]
     pub allowed_groups: Vec<String>,
+    #[serde(default)]
+    pub description: String,
 }
 
 /// Normalize an entry name for near-duplicate detection: lowercase,
@@ -183,6 +185,7 @@ pub async fn import_csv(
                     folder: r.folder,
                     display_name: r.display_name,
                     allowed_groups: r.allowed_groups,
+                    description: r.description,
                 })
                 .collect(),
         }
@@ -252,6 +255,7 @@ pub async fn import_csv(
 
         let display_name = row.display_name.trim().to_string();
         let username = row.username.trim().to_string();
+        let description = row.description.trim().to_string();
         let allowed_groups = row
             .allowed_groups
             .iter()
@@ -259,6 +263,14 @@ pub async fn import_csv(
             .filter(|g| !g.is_empty())
             .collect::<Vec<_>>()
             .join(",");
+
+        // Description is non-credential metadata: persist it in the
+        // protocol_config JSON column so it round-trips the API.
+        let mut entry_meta = serde_json::Map::new();
+        if !description.is_empty() {
+            entry_meta.insert("description".into(), json!(description));
+        }
+        let protocol_config = serde_json::to_string(&entry_meta).unwrap_or_else(|_| "{}".into());
 
         let entry_id = match db::create_ab_entry(
             &database,
@@ -269,7 +281,7 @@ pub async fn import_csv(
             &hostname,
             row.port,
             &username,
-            "{}",
+            &protocol_config,
             &allowed_groups,
         ) {
             Ok(id) => id,

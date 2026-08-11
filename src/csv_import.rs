@@ -11,7 +11,7 @@
 use std::collections::HashSet;
 
 /// Column names, in order, for the CSV header and template.
-pub const HEADERS: [&str; 9] = [
+pub const HEADERS: [&str; 10] = [
     "name",
     "protocol",
     "hostname",
@@ -21,6 +21,7 @@ pub const HEADERS: [&str; 9] = [
     "folder",
     "display_name",
     "allowed_groups",
+    "description",
 ];
 
 /// Protocols accepted by the address book.
@@ -41,6 +42,8 @@ pub struct Row {
     pub display_name: String,
     /// Trimmed, de-duplicated group names (in file order).
     pub allowed_groups: Vec<String>,
+    /// Free-form description/notes (may be empty).
+    pub description: String,
 }
 
 /// A per-row or file-level parse problem.
@@ -122,6 +125,7 @@ pub fn parse_rows(input: &str) -> Result<ParseResult, CsvError> {
         let folder = normalize_folder(&fields[6]);
         let display_name = fields[7].trim().to_string();
         let allowed_groups = parse_groups(&fields[8]);
+        let description = fields[9].trim().to_string();
 
         let mut messages = Vec::new();
         if let Err(msg) = &port {
@@ -159,6 +163,7 @@ pub fn parse_rows(input: &str) -> Result<ParseResult, CsvError> {
             folder,
             display_name,
             allowed_groups,
+            description,
         });
     }
 
@@ -228,7 +233,7 @@ fn parse_port(input: &str) -> Result<Option<u16>, String> {
 /// Render the downloadable template: header row plus one example row.
 pub fn render_template() -> String {
     format!(
-        "{}\nMy Server,ssh,10.0.0.1,22,root,secret,Production/Web,My Server,\"group1,group2\"\n",
+        "{}\nMy Server,ssh,10.0.0.1,22,root,secret,Production/Web,My Server,\"group1,group2\",Production web server\n",
         HEADERS.join(",")
     )
 }

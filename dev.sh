@@ -3,7 +3,7 @@
 # dev.sh — Build and run persea + guacd for local development/testing.
 #
 # Usage:
-#   ./dev.sh build-guacd    Build guacd from ../guacamole-server into .guacd-build/
+#   ./dev.sh build-guacd    Build guacd from ../guacamole-server (fork branch persea-1.6.1-freerdp3) into .guacd-build/
 #   ./dev.sh start-guacd    Start guacd in foreground on localhost:4822
 #   ./dev.sh build           Build persea (cargo build)
 #   ./dev.sh tailwind        Build Tailwind CSS (input.css -> tailwind.min.css)
@@ -58,35 +58,16 @@ cmd_deps() {
     info "Dependencies installed."
 }
 
-#--- Apply guacd patches (FreeRDP 3.x / Debian 13 fixes) ---
-apply_guacd_patches() {
-    local src="$1"
-    local patch_dir="${SCRIPT_DIR}/patches"
-
-    if [[ ! -d "$patch_dir" ]]; then
-        return 0
-    fi
-
-    for patch in "$patch_dir"/*.patch; do
-        [[ -f "$patch" ]] || continue
-        if git -C "$src" apply --check "$patch" 2>/dev/null; then
-            info "Applying patch: $(basename "$patch")"
-            git -C "$src" apply "$patch"
-        else
-            info "Patch already applied or N/A: $(basename "$patch")"
-        fi
-    done
-}
-
 #--- Build guacd from source ---
 cmd_build_guacd() {
     if [[ ! -d "$GUACD_SRC" ]]; then
         error "guacamole-server source not found at $GUACD_SRC"
         error "Expected it at ../guacamole-server relative to persea"
+        error "  (check out branch persea-1.6.1-freerdp3 of the fork"
+        error "   BarbellDwarf/persea-guacamole-server there — the former"
+        error "   patches/ quilt now lives on that branch as commits)"
         exit 1
     fi
-
-    apply_guacd_patches "$GUACD_SRC"
 
     info "Building guacd from $GUACD_SRC"
     info "Build dir:   $GUACD_BUILD"

@@ -262,9 +262,8 @@ username = "administrator@vsphere.local"
 
 ## Build notes
 
-- guacd is built from `../guacamole-server` (apache/guacamole-server)
+- guacd is built from the maintained fork `BarbellDwarf/persea-guacamole-server`, branch `persea-1.6.1-freerdp3` (apache/guacamole-server pinned at `de97609` with the former `patches/` quilt applied as one commit per patch). See `patches/README.md`.
 - Debian 13 ships freerdp3-dev. guacamole-server 1.6.1+ has FreeRDP 3 auto-detection.
-- **Patches required:** See `patches/README.md` for FreeRDP 3.15+ fixes.
 - SQLx: `cargo sqlx prepare` for offline compile-time checking (per-backend)
 
 ## Testing

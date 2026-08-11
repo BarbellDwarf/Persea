@@ -199,6 +199,10 @@
                 <input type="text" id="em-display-name" class="form-input" placeholder="e.g. Web Server 01" autocomplete="off">
             </div>
             <div>
+                <label class="form-label" for="em-description">Description</label>
+                <textarea id="em-description" class="form-input" rows="2" style="resize:vertical" placeholder="e.g. Production web server behind the load balancer" autocomplete="off"></textarea>
+            </div>
+            <div>
                 <label class="form-label" for="em-type">Type</label>
                 <select id="em-type" class="form-input">
                     <option value="ssh">SSH</option>
@@ -399,7 +403,7 @@
             <div>
                 <label class="form-label" for="import-file">CSV file</label>
                 <input type="file" id="import-file" accept=".csv,text/csv" class="form-input">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Columns: name, protocol, hostname, port, username, password, folder, display_name, allowed_groups. Quoted fields with commas are supported.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Columns: name, protocol, hostname, port, username, password, folder, display_name, allowed_groups, description. Quoted fields with commas are supported.</p>
             </div>
             <div>
                 <a href="/api/addressbook/import-template" class="text-sm text-emerald-400 hover:text-emerald-300">Download CSV template</a>
@@ -837,7 +841,7 @@
             if (scopeFilter && f.scope !== scopeFilter) return;
             (entriesByFolder.get(folderKey(f.scope, f.path)) || []).forEach(function(e) {
                 var host = entryHost(e);
-                var hay = [e.name, e.display_name || '', host, e.username || '', e.url || '', e.domain || '', e.session_type, f.name, f.scope].join(' ').toLowerCase();
+                var hay = [e.name, e.display_name || '', e.description || '', host, e.username || '', e.url || '', e.domain || '', e.session_type, f.name, f.scope].join(' ').toLowerCase();
                 if (hay.indexOf(q) !== -1) results.push({ scope: f.scope, path: f.path, folderName: f.name, entry: e });
             });
         });
@@ -1457,7 +1461,7 @@
     }
     function clearEntryFields() {
         portAutoSet = false;
-        var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain'];
+        var ids = ['em-display-name', 'em-description', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain'];
         for (var i = 0; i < ids.length; i++) document.getElementById(ids[i]).value = '';
         document.getElementById('em-password').placeholder = '';
         document.getElementById('em-private-key').placeholder = '-----BEGIN OPENSSH PRIVATE KEY-----';
@@ -1498,6 +1502,7 @@
         document.getElementById('em-type').disabled = true;
         clearEntryFields();
         document.getElementById('em-display-name').value = selectedEntry.display_name || '';
+        document.getElementById('em-description').value = selectedEntry.description || '';
         document.getElementById('em-hostname').value = selectedEntry.hostname || '';
         if (selectedEntry.port) document.getElementById('em-port').value = String(selectedEntry.port);
         portAutoSet = false; // the stored port must never be clobbered by a default
@@ -1579,6 +1584,7 @@
     function saveEntry() {
         var name = document.getElementById('em-name').value.trim();
         var displayName = document.getElementById('em-display-name').value.trim();
+        var description = document.getElementById('em-description').value.trim();
         var type = document.getElementById('em-type').value;
         var errEl = document.getElementById('em-error');
         if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name)) {
@@ -1609,6 +1615,8 @@
         }
         var entry = { type: type };
         if (displayName) entry.display_name = displayName;
+        // Always sent (may be empty): lets editing clear a stored description.
+        entry.description = description;
         if (hostname) entry.hostname = hostname;
         if (port) entry.port = port;
         var username = document.getElementById('em-username').value.trim();
@@ -1813,7 +1821,7 @@
     }
 
     // ── Import CSV modal ─────────────────────────────────────────────
-    var importCsvHeaders = ['name', 'protocol', 'hostname', 'port', 'username', 'password', 'folder', 'display_name', 'allowed_groups'];
+    var importCsvHeaders = ['name', 'protocol', 'hostname', 'port', 'username', 'password', 'folder', 'display_name', 'allowed_groups', 'description'];
     function openImportModal() {
         document.getElementById('import-file').value = '';
         document.getElementById('import-error').textContent = '';
@@ -1892,7 +1900,8 @@
                     username: (cols[4] || '').trim(),
                     password: cols[5] || '',
                     folder: (cols[6] || '').trim(),
-                    display_name: (cols[7] || '').trim()
+                    display_name: (cols[7] || '').trim(),
+                    description: (cols[9] || '').trim()
                 };
                 var portRaw = (cols[3] || '').trim();
                 if (portRaw !== '') {

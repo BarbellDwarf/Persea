@@ -151,6 +151,10 @@ fn ab_entry_from_db(row: &db::AbEntry) -> AddressBookEntry {
         } else {
             Some(row.display_name.clone())
         },
+        description: protocol_config
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(String::from),
         jump_hosts: protocol_config
             .get("jump_hosts")
             .and_then(|v| serde_json::from_value::<Vec<crate::tunnel::JumpHost>>(v.clone()).ok()),
@@ -351,6 +355,11 @@ pub(crate) fn build_protocol_config(
     entry: &AddressBookEntry,
 ) -> serde_json::Map<String, serde_json::Value> {
     let mut config = serde_json::Map::new();
+    // Description is non-credential metadata persisted alongside the other
+    // per-protocol fields (no schema/migration needed).
+    if let Some(ref v) = entry.description {
+        config.insert("description".into(), json!(v));
+    }
     // Jump hosts are part of the routing config: persist them so the DB row
     // round-trips them (they were silently dropped before).
     if let Some(ref hops) = entry.jump_hosts {

@@ -85,6 +85,7 @@ pub async fn cmd_import_guacamole(
                 .get("ignore-cert")
                 .map(|s| s.eq_ignore_ascii_case("true")),
             display_name: Some(conn.name.clone()),
+            description: None,
             enable_drive: param_map
                 .get("enable-drive")
                 .map(|s| s.eq_ignore_ascii_case("true")),
@@ -863,6 +864,7 @@ mod tests {
             security: None,
             ignore_cert: None,
             display_name: None,
+            description: None,
             enable_drive: None,
             auth_pkg: None,
             kdc_url: None,

@@ -86,6 +86,10 @@ pub struct AddressBookEntry {
     pub security: Option<String>,
     pub ignore_cert: Option<bool>,
     pub display_name: Option<String>,
+    /// Free-form description/notes for this entry (stored in the
+    /// `protocol_config` JSON column — no schema change).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Override drive/file transfer setting for this entry.
     pub enable_drive: Option<bool>,
     /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
@@ -316,6 +320,9 @@ pub struct EntryInfo {
     /// DB row last-update timestamp (SQLite datetime string).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// Free-form description/notes for this entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     pub domain: Option<String>,
     pub security: Option<String>,
     pub ignore_cert: Option<bool>,
@@ -486,6 +493,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             display_name: e.display_name.clone(),
             created_at: None, // filled from the DB row by the handler
             updated_at: None,
+            description: e.description.clone(),
             domain: e.domain.clone(),
             security: e.security.clone(),
             ignore_cert: e.ignore_cert,

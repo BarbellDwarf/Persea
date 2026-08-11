@@ -15,7 +15,7 @@ use std::net::SocketAddr;
 use tower::ServiceExt;
 
 const HEADER: &str =
-    "name,protocol,hostname,port,username,password,folder,display_name,allowed_groups";
+    "name,protocol,hostname,port,username,password,folder,display_name,allowed_groups,description";
 
 fn test_db() -> Db {
     db::init_db(std::path::Path::new(":memory:")).unwrap()
@@ -116,8 +116,8 @@ async fn body_text(resp: axum::response::Response) -> String {
 fn parse_valid_csv() {
     let csv = format!(
         "{}\n\
-         web01,ssh,10.0.0.1,22,root,secret,Production/Web,Web Server 1,group1\n\
-         portal,web,,443,,,Internal,Portal,",
+         web01,ssh,10.0.0.1,22,root,secret,Production/Web,Web Server 1,group1,Production web server\n\
+         portal,web,,443,,,Internal,Portal,,",
         HEADER
     );
     let result = csv_import::parse_rows(&csv).unwrap();
@@ -135,12 +135,26 @@ fn parse_valid_csv() {
     assert_eq!(r0.folder, "Production/Web");
     assert_eq!(r0.display_name, "Web Server 1");
     assert_eq!(r0.allowed_groups, vec!["group1"]);
+    assert_eq!(r0.description, "Production web server");
 
     let r1 = &result.rows[1];
     assert_eq!(r1.protocol, "web");
     assert_eq!(r1.hostname, "");
     assert_eq!(r1.port, Some(443));
     assert!(r1.allowed_groups.is_empty());
+    assert_eq!(r1.description, "");
+}
+
+#[test]
+fn parse_description_with_commas_quoted() {
+    let csv = format!(
+        "{}\nweb,ssh,10.0.0.1,22,,,Root,,\"a,b\",\"Web server, DMZ\"",
+        HEADER
+    );
+    let result = csv_import::parse_rows(&csv).unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows[0].allowed_groups, vec!["a", "b"]);
+    assert_eq!(result.rows[0].description, "Web server, DMZ");
 }
 
 #[test]
@@ -306,7 +320,7 @@ fn parse_invalid_header() {
 
 #[test]
 fn parse_header_case_insensitive() {
-    let csv = "Name,Protocol,Hostname,Port,Username,Password,Folder,Display_Name,Allowed_Groups\nx,ssh,1.2.3.4,22,,,Root,,";
+    let csv = "Name,Protocol,Hostname,Port,Username,Password,Folder,Display_Name,Allowed_Groups,Description\nx,ssh,1.2.3.4,22,,,Root,,,";
     let result = csv_import::parse_rows(csv).unwrap();
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.rows[0].name, "x");
@@ -328,7 +342,7 @@ fn parse_blank_lines_ignored() {
 
 #[test]
 fn parse_too_many_columns() {
-    let csv = format!("{}\nx,ssh,1.2.3.4,22,,,Root,,,extra", HEADER);
+    let csv = format!("{}\nx,ssh,1.2.3.4,22,,,Root,,,,extra", HEADER);
     let result = csv_import::parse_rows(&csv).unwrap();
     assert!(result.rows.is_empty());
     assert_eq!(result.errors.len(), 1);
@@ -367,11 +381,11 @@ fn render_template_matches_contract() {
     assert_eq!(lines.len(), 2);
     assert_eq!(
         lines[0],
-        "name,protocol,hostname,port,username,password,folder,display_name,allowed_groups"
+        "name,protocol,hostname,port,username,password,folder,display_name,allowed_groups,description"
     );
     assert_eq!(
         lines[1],
-        "My Server,ssh,10.0.0.1,22,root,secret,Production/Web,My Server,\"group1,group2\""
+        "My Server,ssh,10.0.0.1,22,root,secret,Production/Web,My Server,\"group1,group2\",Production web server"
     );
     // The template must round-trip through the parser.
     let result = csv_import::parse_rows(&template).unwrap();
@@ -379,6 +393,7 @@ fn render_template_matches_contract() {
     assert_eq!(result.rows[0].name, "My Server");
     assert_eq!(result.rows[0].folder, "Production/Web");
     assert_eq!(result.rows[0].allowed_groups, vec!["group1", "group2"]);
+    assert_eq!(result.rows[0].description, "Production web server");
 }
 
 // ── Import handler ──
@@ -444,6 +459,54 @@ async fn import_creates_entries_and_folders() {
     assert_eq!(e2.hostname, "");
     assert_eq!(e2.port, Some(443));
     assert!(prod.id != 0 && web.id != 0 && root.id != 0);
+}
+
+#[tokio::test]
+async fn import_stores_description_in_protocol_config() {
+    let db = test_db();
+    let key = create_admin(&db, "admin");
+    let router = test_router(db.clone());
+    let resp = router
+        .oneshot(admin_post(
+            &key,
+            "/api/addressbook/import",
+            serde_json::json!({
+                "scope": "shared",
+                "rows": [
+                    {
+                        "name": "web01",
+                        "protocol": "ssh",
+                        "hostname": "10.0.0.1",
+                        "port": 22,
+                        "folder": "Production",
+                        "display_name": "Web 1",
+                        "description": "Production web server, DMZ"
+                    },
+                    {
+                        "name": "bare",
+                        "protocol": "ssh",
+                        "hostname": "10.0.0.2",
+                        "port": 22,
+                        "folder": "Production"
+                    }
+                ]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["imported"], 2);
+    assert_eq!(json["errors"].as_array().unwrap().len(), 0);
+
+    let folder = db::get_ab_folder(&db, "shared", "Production").unwrap();
+    let e1 = db::get_ab_entry(&db, folder.id, "web01").unwrap();
+    let cfg: serde_json::Value = serde_json::from_str(&e1.protocol_config).unwrap();
+    assert_eq!(cfg["description"], "Production web server, DMZ");
+
+    let e2 = db::get_ab_entry(&db, folder.id, "bare").unwrap();
+    let cfg2: serde_json::Value = serde_json::from_str(&e2.protocol_config).unwrap();
+    assert!(cfg2.get("description").is_none());
 }
 
 #[tokio::test]

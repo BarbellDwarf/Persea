@@ -37,25 +37,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-# Pin to main HEAD (de97609, 2026-07-28) — the base the patch set is built
-# against. The 1.6.0 tag predates the display-layer refactor the H.264 patch
-# needs; staging/1.6.1 lacks the clipboard-recording API the SPICE patch uses.
-# Fetch the exact commit rather than cloning main: a shallow clone of main
-# cannot check out a pin once upstream moves past it.
-RUN git init guacamole-server \
-    && cd guacamole-server \
-    && git remote add origin https://github.com/apache/guacamole-server.git \
-    && git fetch --depth 1 origin de97609007c088b5e6afd827eff5e9076013a247 \
-    && git checkout FETCH_HEAD
-
-# Apply patches for FreeRDP 3.x / Debian 13 compatibility
-COPY patches/ /build/patches/
-WORKDIR /build/guacamole-server
-RUN for patch in /build/patches/*.patch; do \
-        [ -f "$patch" ] || continue; \
-        echo "Applying patch: $(basename "$patch")"; \
-        git apply "$patch"; \
-    done
+# guacd source comes from the maintained fork
+# BarbellDwarf/persea-guacamole-server, branch persea-1.6.1-freerdp3: a fork
+# of apache/guacamole-server at the pinned base commit de97609 with the
+# former patch quilt (FreeRDP 3.x / Debian 13 fixes, Kerberos NLA, H.264,
+# SPICE, multimonitor) applied as one commit per patch. Shallow-clone the
+# branch so the image stays small.
+RUN git clone --depth 1 --branch persea-1.6.1-freerdp3 \
+    https://github.com/BarbellDwarf/persea-guacamole-server.git guacamole-server
 
 RUN autoreconf -fi
 
