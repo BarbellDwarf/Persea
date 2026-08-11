@@ -295,6 +295,37 @@ async fn main() {
         }
     }
 
+    // When `db_url` is set, the SQLx pool IS the store: connect it and run
+    // the per-backend migrations BEFORE anything else touches the database,
+    // then install it as the active store so every store function routes to
+    // it. Fail fast — continuing on the legacy SQLite file would silently
+    // split writes between two databases.
+    if let Some(ref url) = config.db_url {
+        match DbPool::connect(url).await {
+            Ok(pool) => {
+                if let Err(e) = pool.run_migrations().await {
+                    eprintln!("FATAL: SQLx migrations failed for {}: {}", url, e);
+                    std::process::exit(1);
+                }
+                if let Err(_) = crate::db::set_active_pool(pool) {
+                    eprintln!("FATAL: failed to start the database worker thread");
+                    std::process::exit(1);
+                }
+                tracing::info!(
+                    backend = ?crate::db::active_pool().and_then(|p| p.kind()),
+                    "SQLx pool installed as the active store"
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "FATAL: failed to connect to database backend {}: {}",
+                    url, e
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Open database
     let database = db::init_db(&config.db_path).expect("Failed to open database");
     // DB-configured auth providers (wayfinder ticket 025) — schema + rows
@@ -473,26 +504,8 @@ fn cmd_create_user(database: &Db, email: &str, name: &str, password: &str, role:
             std::process::exit(1);
         }
     };
-    let now = chrono::Utc::now().to_rfc3339();
-    let conn = database.lock().unwrap();
-
-    // Ensure password_hash and auth_source columns exist (migrate old schema)
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
-    let _ = conn.execute(
-        "ALTER TABLE users ADD COLUMN auth_source TEXT DEFAULT 'database'",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE users ADD COLUMN oidc_groups TEXT DEFAULT ''",
-        [],
-    );
-
-    match conn.execute(
-        "INSERT INTO users (email, name, auth_source, password_hash, role, disabled, created_at)
-         VALUES (?1, ?2, 'database', ?3, ?4, 0, ?5)",
-        rusqlite::params![email, name, hash, role, now],
-    ) {
-        Ok(_) => {
+    match crate::db::create_user_with_password(database, email, name, &hash, role, "database") {
+        Ok(()) => {
             println!("User '{}' created (email: {}, role: {})", name, email, role);
             println!("Password: {}", password);
         }
@@ -1276,29 +1289,10 @@ async fn run_server(
     let guacd_tls = build_guacd_tls(&config);
     let rate_limit_enabled = config.rate_limit;
 
-    // Initialise SQLx pool if db_url is configured
-    let db_pool = if let Some(ref url) = config.db_url {
-        match DbPool::connect(url).await {
-            Ok(pool) => {
-                tracing::info!(
-                    "SQLx pool connected: {}",
-                    pool.kind()
-                        .map(|k| k.to_string())
-                        .unwrap_or_else(|| "unknown".into())
-                );
-                if let Err(e) = pool.run_migrations().await {
-                    tracing::error!("SQLx migrations failed: {}", e);
-                }
-                pool
-            }
-            Err(e) => {
-                tracing::error!("Failed to connect SQLx pool: {}", e);
-                DbPool::None
-            }
-        }
-    } else {
-        DbPool::None
-    };
+    // The SQLx pool was connected and installed as the active store in
+    // main() (when db_url is set); this extension backs the deep health
+    // check's db_pool probe and reports the ACTIVE backend truthfully.
+    let db_pool = crate::db::active_pool().cloned().unwrap_or(DbPool::None);
 
     // Enterprise license: construct before `config` is moved into
     // SessionManager, and before the SAML/TOTP blocks below since both
