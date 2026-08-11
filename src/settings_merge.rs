@@ -25,6 +25,9 @@ pub const SETTINGS_KEYS: &[&str] = &[
 
 /// Read the `system_settings` table as a map of key → string value.
 pub fn load_db_settings(db: &Db) -> rusqlite::Result<Vec<(String, String)>> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool| crate::db::settings_load_all_pool(pool));
+    }
     let conn = db.lock().unwrap();
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS system_settings (

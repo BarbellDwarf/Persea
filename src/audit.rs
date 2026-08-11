@@ -162,6 +162,10 @@ pub fn compute_event_hash(event: &AuditEvent) -> String {
 /// Log an audit event: compute its hash, chain it to the previous event, insert, and return the
 /// event's database ID.
 pub fn log_event(db: &Db, event: &mut AuditEvent) -> rusqlite::Result<i64> {
+    if crate::db::pool_active() {
+        let mut owned = event.clone();
+        return crate::db::pool_call(move |pool| crate::db::audit_log_event_pool(pool, &mut owned));
+    }
     let conn = db.lock().unwrap();
 
     // Fetch previous event's hash for chaining
@@ -219,6 +223,13 @@ pub fn verify_chain(
     from: Option<&str>,
     to: Option<&str>,
 ) -> rusqlite::Result<ChainVerification> {
+    if crate::db::pool_active() {
+        let events = crate::db::pool_call(move |pool| {
+            crate::db::audit_events_pool(pool, from.map(str::to_string), to.map(str::to_string))
+        })?;
+        let first_id = crate::db::pool_call(move |pool| crate::db::audit_first_id_pool(pool))?;
+        return Ok(verify_events(events, first_id));
+    }
     let conn = db.lock().unwrap();
 
     let mut conditions = Vec::new();
@@ -272,15 +283,27 @@ pub fn verify_chain(
         ))
     })?;
 
+    let mut events = Vec::new();
+    for row in rows {
+        events.push(row?);
+    }
+    let first_id: Option<i64> = conn
+        .query_row("SELECT MIN(id) FROM audit_events", [], |row| row.get(0))
+        .ok()
+        .flatten();
+    Ok(verify_events(events, first_id))
+}
+
+/// Verify the hash chain over an in-memory event list (shared by the
+/// rusqlite and SQLx backends so both produce byte-identical verdicts).
+fn verify_events(events: Vec<(i64, AuditEvent)>, first_id: Option<i64>) -> ChainVerification {
     let mut events_scanned: u64 = 0;
     let mut errors = Vec::new();
     let mut prev_event_hash: Option<String> = None;
 
-    for row in rows {
-        let (id, event) = row?;
+    for (id, event) in events {
         events_scanned += 1;
 
-        // Verify hash chain linkage
         if let Some(ref expected) = prev_event_hash {
             if event.prev_hash != *expected {
                 errors.push(ChainError {
@@ -291,28 +314,18 @@ pub fn verify_chain(
                     ),
                 });
             }
-        } else {
-            // First event in range: prev_hash should be the genesis hash (64 zeros) or match
-            if event.prev_hash != "0".repeat(64) {
-                // Not the very first event — possible gap, flag it
-                // Only flag if this isn't the absolute first event in the table
-                let first_id: Option<i64> = conn
-                    .query_row("SELECT MIN(id) FROM audit_events", [], |row| row.get(0))
-                    .ok()
-                    .flatten();
-                if first_id != Some(id) {
-                    errors.push(ChainError {
-                        event_id: id,
-                        message: format!(
-                            "prev_hash {} does not match genesis hash or preceding event",
-                            event.prev_hash
-                        ),
-                    });
-                }
+        } else if event.prev_hash != "0".repeat(64) {
+            if first_id != Some(id) {
+                errors.push(ChainError {
+                    event_id: id,
+                    message: format!(
+                        "prev_hash {} does not match genesis hash or preceding event",
+                        event.prev_hash
+                    ),
+                });
             }
         }
 
-        // Verify event hash recomputation
         let computed = compute_event_hash(&event);
         if computed != event.event_hash {
             errors.push(ChainError {
@@ -327,7 +340,7 @@ pub fn verify_chain(
         prev_event_hash = Some(event.event_hash.clone());
     }
 
-    Ok(ChainVerification {
+    ChainVerification {
         status: if errors.is_empty() {
             ChainStatus::Verified
         } else {
@@ -335,7 +348,7 @@ pub fn verify_chain(
         },
         events_scanned,
         errors,
-    })
+    }
 }
 
 /// Build a WHERE clause and parameter list from optional filters.
@@ -385,6 +398,12 @@ pub fn list_events(
     offset: u64,
     filters: &AuditFilters,
 ) -> rusqlite::Result<Vec<AuditEvent>> {
+    if crate::db::pool_active() {
+        let filters = filters.clone();
+        return crate::db::pool_call(move |pool| {
+            crate::db::audit_list_events_pool(pool, limit, offset, filters)
+        });
+    }
     let conn = db.lock().unwrap();
     let (where_clause, param_values) = build_filter_clause(filters);
 
@@ -432,6 +451,10 @@ pub fn list_events(
 
 /// Count audit events matching optional filters.
 pub fn count_events(db: &Db, filters: &AuditFilters) -> rusqlite::Result<u64> {
+    if crate::db::pool_active() {
+        let filters = filters.clone();
+        return crate::db::pool_call(move |pool| crate::db::audit_count_events_pool(pool, filters));
+    }
     let conn = db.lock().unwrap();
     let (where_clause, param_values) = build_filter_clause(filters);
 

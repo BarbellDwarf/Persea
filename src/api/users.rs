@@ -4,7 +4,6 @@ use crate::auth::AuthIdentity;
 use crate::db::{self, Db};
 use crate::error::AppError;
 use axum::{extract::Path, http::StatusCode, Extension, Json};
-use rusqlite::params;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -75,12 +74,15 @@ pub async fn create_user(
     tokio::task::spawn_blocking(move || {
         let password_hash = crate::password::hash_password(&password)
             .map_err(|e| AppError::Internal(e.to_string()))?;
-        let conn = db_clone.lock().unwrap();
-        conn.execute(
-            "INSERT INTO users (email, name, password_hash, role, auth_source, disabled, created_at)
-             VALUES (?1, ?2, ?3, ?4, 'local', 0, datetime('now'))",
-            params![email, name, password_hash, role_clone],
-        )?;
+        db::create_user_with_password(
+            &db_clone,
+            &email,
+            &name,
+            &password_hash,
+            &role_clone,
+            "local",
+        )
+        .map_err(|e| AppError::Internal(e.to_string()))?;
         Ok::<_, AppError>(())
     })
     .await

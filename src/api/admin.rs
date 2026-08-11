@@ -247,17 +247,19 @@ pub async fn system_status(
     };
 
     let user_count = {
-        let conn = database.lock().unwrap();
-        conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get::<_, i64>(0))
+        let db_clone = database.clone();
+        tokio::task::spawn_blocking(move || crate::db::count_users(&db_clone))
+            .await
+            .unwrap_or(Ok(0))
             .unwrap_or(0)
     };
 
     let history_total = {
-        let conn = database.lock().unwrap();
-        conn.query_row("SELECT COUNT(*) FROM session_history", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .unwrap_or(0)
+        let db_clone = database.clone();
+        tokio::task::spawn_blocking(move || crate::db::count_session_history(&db_clone))
+            .await
+            .unwrap_or(Ok(0))
+            .unwrap_or(0)
     };
 
     let oidc_configured = manager.config().oidc.is_some();

@@ -12,8 +12,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use rusqlite::params;
-
 use crate::config::Config;
 use crate::crypto::{encrypt_value, EncryptionKey};
 use crate::db::{self, Db};
@@ -454,40 +452,15 @@ fn insert_user_credentials(
     creds: &HashMap<String, String>,
     enc_key: &EncryptionKey,
 ) -> Result<(), rusqlite::Error> {
-    let conn = db.lock().unwrap();
-
-    // Ensure the table exists
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS user_credentials (
-            user_key    TEXT NOT NULL,
-            var_name    TEXT NOT NULL,
-            var_value   TEXT NOT NULL,
-            created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-            PRIMARY KEY (user_key, var_name)
-        );",
-    )?;
-
-    // Delete existing entries for this user (full replace)
-    conn.execute(
-        "DELETE FROM user_credentials WHERE user_key = ?1",
-        params![user_key],
-    )?;
-
-    // Insert each credential variable with encrypted value
-    for (var_name, var_value) in creds {
-        let enc_value = if var_value.is_empty() {
+    // Routed through the store so db-migrate-from-vault writes to the
+    // active backend (SQLx pool) when db_url is set, never the legacy file.
+    crate::db::store_user_credentials(db, user_key, creds, |v| {
+        if v.is_empty() {
             String::new()
         } else {
-            encrypt_value(enc_key, var_value).unwrap_or_else(|_| var_value.clone())
-        };
-        conn.execute(
-            "INSERT INTO user_credentials (user_key, var_name, var_value)
-             VALUES (?1, ?2, ?3)",
-            params![user_key, var_name, enc_value],
-        )?;
-    }
-
-    Ok(())
+            encrypt_value(enc_key, v).unwrap_or_else(|_| v.to_string())
+        }
+    })
 }
 
 #[cfg(test)]

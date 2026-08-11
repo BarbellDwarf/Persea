@@ -178,6 +178,11 @@ fn effective_settings(stored: &std::collections::HashMap<String, String>) -> Val
 }
 
 fn read_all_settings(database: &Db) -> Result<std::collections::HashMap<String, String>, AppError> {
+    if crate::db::pool_active() {
+        let rows = crate::db::pool_call(move |pool| crate::db::settings_load_all_pool(pool))
+            .map_err(|e| AppError::Internal(e.to_string()))?;
+        return Ok(rows.into_iter().collect());
+    }
     let conn = database.lock().unwrap();
     conn.execute_batch(CREATE_TABLE_SQL)?;
     let mut stmt = conn.prepare("SELECT key, value FROM system_settings")?;
@@ -329,6 +334,9 @@ pub async fn put_settings(
 
     let db_clone = database.clone();
     tokio::task::spawn_blocking(move || {
+        if crate::db::pool_active() {
+            return crate::db::pool_call(move |pool| crate::db::settings_put_pool(pool, entries));
+        }
         let conn = db_clone.lock().unwrap();
         conn.execute_batch(CREATE_TABLE_SQL)?;
         for (key, value) in &entries {
