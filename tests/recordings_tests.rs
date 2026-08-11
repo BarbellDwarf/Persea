@@ -54,10 +54,7 @@ fn test_router(recordings_dir: &Path, with_key: bool, identity: Option<AuthIdent
 }
 
 fn get(path: &str) -> Request<Body> {
-    Request::builder()
-        .uri(path)
-        .body(Body::empty())
-        .unwrap()
+    Request::builder().uri(path).body(Body::empty()).unwrap()
 }
 
 fn del(path: &str) -> Request<Body> {
@@ -107,19 +104,16 @@ async fn listing_includes_plain_and_encrypted_recordings() {
     std::fs::write(dir.join("notes.txt"), b"not a recording").unwrap();
 
     let router = test_router(&dir, true, Some(admin()));
-    let resp = router
-        .oneshot(get("/api/recordings"))
-        .await
-        .unwrap();
+    let resp = router.oneshot(get("/api/recordings")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     let items = json.as_array().unwrap();
 
-    let names: Vec<&str> = items
-        .iter()
-        .map(|r| r["name"].as_str().unwrap())
-        .collect();
-    assert!(names.contains(&"session-a.guac"), "plain recording listed: {names:?}");
+    let names: Vec<&str> = items.iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert!(
+        names.contains(&"session-a.guac"),
+        "plain recording listed: {names:?}"
+    );
     assert!(
         names.contains(&"session-b.guac.enc"),
         "encrypted recording listed: {names:?}"
