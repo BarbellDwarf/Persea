@@ -71,7 +71,7 @@ guacd (C, from guacamole-server)
 | **VNC** | Connect to any VNC server (KVM/IPMI consoles, remote desktops, VM displays). |
 | **SPICE** | Direct SPICE displays (libvirt/QEMU consoles) with TLS, CA verification, certificate-subject pinning, SPICE-proxy support. |
 | **Proxmox VE** | VM consoles through the Proxmox API. One-time SPICE tickets fetched at connect, node auto-detected from VM ID, SSH-tunnel aware. |
-| **VMware vSphere** | VM inventory and console brokering through the vCenter REST API. In development. |
+| **VMware vSphere** | VM inventory and console brokering through the vCenter REST API, with OS-aware RDP/SSH/VNC routing. |
 | **Web** | Headless Chromium on Xvnc with native autofill, domain allowlisting, login script automation. |
 | **VDI** | Ephemeral Docker desktop containers per user. Persist after disconnect, auto-cleanup on idle. |
 
@@ -207,7 +207,7 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 ### Integration and reference
 - [Integrations](docs/integrations.md): Vault, LUKS drives, SSH tunnels, Kerberos, HAProxy, Knocknoc
 - [NetBox](docs/netbox.md): connections sync via custom fields and webhooks
-- [Security](docs/security.md): TLS, rate limiting, headers, audit logging, hardening
+- [Security](docs/security-hardening.md): TLS, rate limiting, headers, audit logging, hardening
 - [API Reference](docs/api.md): REST API endpoints, the session connection flow, and headless ws-ticket integration
 - [Migration from Apache Guacamole](docs/migration.md): MySQL/MariaDB to Vault
 

@@ -98,9 +98,9 @@ while that Vault is unreachable, so a connection that references it fails even i
 the target and the local Vault are up. Keep credentials a site must never lose
 (for example break-glass logins) **local**.
 
-## Vault storage
+## Credential storage
 
-User credentials are stored in Vault KV v2 at:
+With the Vault backend, user credentials are stored in Vault KV v2 at:
 
 ```
 <base_path>/users/<sanitized_email>

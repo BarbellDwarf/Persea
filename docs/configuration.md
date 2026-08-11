@@ -21,7 +21,7 @@ See `config.example.toml` for a fully commented reference.
 | `static_path` | `./static` | Static web files directory |
 | `db_path` | `./persea.db` | SQLite database path (used when `db_url` is not set) |
 | `db_url` | — | Multi-backend database URL: `postgres://...`, `mysql://...`, or `sqlite://...` (see [Multi-database backend](#multi-database-backend)) |
-| `site_title` | `persea` | Browser tab and page header title |
+| `site_title` | `Persea` | Browser tab and page header title |
 | `max_sessions` | `500` | Maximum concurrent sessions (all types). 0 = unlimited |
 | `max_sessions_per_user` | `50` | Maximum concurrent sessions per user. 0 = unlimited |
 
@@ -76,15 +76,15 @@ The license status is also visible in the admin UI (Admin → License, `/admin/l
 
 ## Connection allowlists
 
-CIDR ranges controlling which hosts sessions can connect to. All default to localhost only.
+CIDR ranges controlling which hosts sessions can connect to. SSH, RDP, and VNC default to the private RFC1918 ranges plus loopback; web sessions default to loopback only.
 
 **Important:** These are top-level TOML keys and must appear *before* any `[section]` header. Keys placed after a section header (e.g., `[tls]`) are scoped to that section and will be ignored.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `ssh_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed SSH targets |
-| `rdp_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed RDP targets |
-| `vnc_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed VNC targets |
+| `ssh_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` | Allowed SSH targets |
+| `rdp_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` | Allowed RDP targets |
+| `vnc_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` | Allowed VNC targets |
 | `web_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed web session URL hosts |
 
 ## Trusted proxies
@@ -104,11 +104,12 @@ Configures TLS for the web server and/or the guacd connection. There is no `enab
 
 All fields are optional. The `[tls]` section can contain any combination.
 
-| Key | Description |
-|-----|-------------|
-| `cert_path` | HTTPS certificate path (PEM). Both `cert_path` and `key_path` must be set for HTTPS. |
-| `key_path` | HTTPS private key path (PEM). Both `cert_path` and `key_path` must be set for HTTPS. |
-| `guacd_cert_path` | Trust certificate for guacd TLS connection (independent of server HTTPS) |
+| Key | Default | Description |
+|-----|---------|-------------|
+| `cert_path` | — | HTTPS certificate path (PEM). Both `cert_path` and `key_path` must be set for HTTPS. |
+| `key_path` | — | HTTPS private key path (PEM). Both `cert_path` and `key_path` must be set for HTTPS. |
+| `guacd_cert_path` | — | Trust certificate for guacd TLS connection (independent of server HTTPS) |
+| `secure_cookies` | `true` | Whether to set the `Secure` attribute on session cookies. Set to `false` when serving a self-signed certificate — browsers block `Secure` cookies over connections with invalid certificates, which breaks login even after clicking through the cert warning. `install.sh` and the Docker image set this automatically for generated self-signed certs; set it by hand if you supplied your own cert. |
 
 **Examples:**
 
@@ -314,7 +315,7 @@ username = "administrator@vsphere.local"
 
 ## `[vault]` section
 
-Enables the Vault-backed connections. Requires `VAULT_SECRET_ID` environment variable.
+Optional. Enables Vault-backed credentials — used when `[storage] backend = "vault"` (or for the LUKS drive key and multiple-Vault setups). With the default DB backend, Vault is not required for connections. Requires the `VAULT_SECRET_ID` environment variable.
 
 | Key | Default | Description |
 |-----|---------|-------------|
@@ -417,7 +418,7 @@ Controls session recording behaviour and disk management.
 | `path` | string | `recording_path` | Path for recording files. Overrides the top-level `recording_path`. |
 | `enabled` | bool | `true` | Whether recording is enabled globally. |
 | `max_disk_percent` | integer | `80` | Delete oldest recordings when disk usage exceeds this percent. 0 = disabled. |
-| `max_recordings` | integer | `0` | Keep at most this many recordings globally. 0 = unlimited. |
+| `max_recordings` | integer | `1000` | Keep at most this many recordings globally. 0 = unlimited. |
 | `rotation_interval_secs` | integer | `300` | How often (seconds) to run the rotation check. |
 | `typescript_path` | string | (unset) | Directory for SSH typescript (raw terminal text) files. Unset = disabled. See below. |
 | `typescript_name` | string | `{connection}-{user}-{date}-{time}` | Filename template for typescripts. Tokens listed below. |
@@ -561,6 +562,8 @@ home_base = "/vdi-homes"
 ```
 
 ## Environment variables
+
+Every config key can also be set as an environment variable with the `PERSEA_` prefix, nesting section keys with `__` (e.g. `PERSEA_STORAGE__ENCRYPTION_KEY`, `PERSEA_TLS__CERT_PATH`, `PERSEA_LISTEN_ADDR`). The table below lists the variables that do **not** follow that scheme:
 
 | Variable | Description |
 |----------|-------------|

@@ -305,6 +305,30 @@ The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop co
 | `height` | integer | All | Display height in pixels |
 | `dpi` | integer | All | Display DPI |
 | `banner` | string | All | Banner message shown before session starts |
+| `max_monitors` | integer | All | Number of monitors to offer (default 1) |
+| `enable_recording` | boolean | All | Override the global recording setting for this session |
+| `max_recordings` | integer | All | Per-session recording retention cap |
+| `allow_sharing` | boolean | All | Allow generating a Share URL for this session (entry-derived sessions only) |
+| `fullscreen_on_connect` | boolean | All | Open the client in fullscreen on connect |
+| `autohide_side_tabs` | boolean | All | Auto-hide the clipboard/files side tabs when idle |
+| `record_typescript` | boolean | SSH | Enable SSH typescript recording (requires `[recording].typescript_path` configured) |
+| `remote_app` | string | RDP | RemoteApp program alias (RAIL) |
+| `remote_app_dir` | string | RDP | Working directory for RemoteApp |
+| `remote_app_args` | string | RDP | Command-line arguments for RemoteApp |
+| `enable_gfx` | boolean | RDP | Enable the RDP Graphics Pipeline Extension (GFX) |
+| `enable_h264` | boolean | RDP | Enable H.264 passthrough |
+| `enable_desktop_composition` | boolean | RDP | Enable desktop composition (DWM) |
+| `enable_wallpaper` | boolean | RDP | Show the remote desktop wallpaper |
+| `enable_theming` | boolean | RDP | Enable window/control theming |
+| `enable_full_window_drag` | boolean | RDP | Show window contents while dragging |
+| `force_lossless` | boolean | RDP | Force lossless encoding (PNG only) |
+| `container_image` | string | VDI | Docker image for the VDI container |
+| `container_cpu_limit` | float | VDI | CPU limit for the container (fractional cores) |
+| `container_memory_limit` | integer | VDI | Memory limit for the container in MB |
+| `container_env` | object | VDI | Extra environment variables for the container |
+| `container_idle_timeout_mins` | integer | VDI | Override the container idle timeout in minutes |
+| `container_username` | string | VDI | Fixed container username override (auto-derived when unset) |
+| `container_password` | string | VDI | Fixed container password override (ephemerally generated when unset) |
 
 **SPICE fields** (`session_type: spice`, direct connection to a SPICE server):
 
@@ -362,11 +386,11 @@ The token needs `VM.Console` (and `VM.Audit` for node auto-detect) on the target
 
 ### `GET /api/sessions`
 
-List all sessions. Requires **operator** role or higher.
+List sessions. Any authenticated user sees their own sessions; pass `?all=true` as an **admin** to list every user's sessions. Optional `limit` truncates the result (most recent first).
 
 ### `GET /api/sessions/:id`
 
-Get session details. Requires **operator** role or higher.
+Get session details. The session owner or an **admin**.
 
 ### `DELETE /api/sessions/:id`
 
@@ -397,7 +421,7 @@ The built-in client (`client_url`) authenticates the owner WebSocket one of thre
 
 ### `POST /api/ws-ticket`
 
-Exchange an API key or OIDC session for a **single-use, short-lived** WebSocket ticket. Requires an authenticated identity with **operator** role or higher.
+Exchange an API key or OIDC session for a **single-use, short-lived** WebSocket ticket. Requires any authenticated identity — the endpoint itself enforces no role. The ticket inherits the caller's identity, and the owner WebSocket connection still requires the **operator** role or higher (see [Owner vs. join](#owner-vs-join)).
 
 ```
 POST /api/ws-ticket
@@ -428,11 +452,11 @@ To build your own client, open the WebSocket at `ws_url` with the `guacamole` su
 
 ### `GET /api/recordings`
 
-List all recording files. Requires **operator** role or higher.
+List all recording files. Requires **poweruser** role or higher.
 
 ### `GET /api/recordings/:name`
 
-Serve a recording file for playback. Requires **operator** role or higher. Filename is validated against path traversal.
+Serve a recording file for playback. Requires **poweruser** role or higher. Filename is validated against path traversal.
 
 ### `DELETE /api/recordings/:name`
 
@@ -534,7 +558,7 @@ Optional body to override or supply credentials at connect time:
 }
 ```
 
-Prompted credentials are used for the current session only and are never stored. Jump host credentials always come from the Vault entry and cannot be overridden at connect time.
+Prompted credentials are used for the current session only and are never stored. Jump host credentials always come from the stored entry (Vault or DB backend) and cannot be overridden at connect time.
 
 ### `POST /api/addressbook/folders` (admin)
 
@@ -653,7 +677,7 @@ The `token` field is the plaintext token. It is only returned once at creation a
 
 ### `GET /api/me/tokens`
 
-List your own tokens. Available to any OIDC user (operator+). Returns token metadata only (never the plaintext token).
+List your own tokens. Available to any OIDC-authenticated user. Returns token metadata only (never the plaintext token).
 
 ### `DELETE /api/me/tokens/:id`
 
@@ -706,7 +730,13 @@ No authentication required. Returns whether OIDC is enabled and the site title.
 ```json
 {
   "oidc_enabled": true,
-  "site_title": "persea"
+  "site_title": "Persea",
+  "drive_configured": false,
+  "theme": {
+    "admin_preset": "aurora",
+    "admin_colors": {},
+    "presets": ["aurora", "dark", "light", "high-contrast", "terminal", "nord", "corporate", "jaguar"]
+  }
 }
 ```
 
@@ -720,9 +750,10 @@ Returns current user info. Requires authentication.
   "email": "user@example.com",
   "role": "operator",
   "groups": ["engineering"],
-  "auth_type": "oidc",
+  "auth_source": "oidc",
   "vault_enabled": true,
-  "vault_configured": true
+  "vault_configured": true,
+  "created_at": "2025-01-01T00:00:00Z"
 }
 ```
 

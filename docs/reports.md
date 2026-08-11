@@ -26,7 +26,7 @@ The table supports:
 
 ### CSV export
 
-Click the **Export CSV** button next to the filter input to download the full session history as a CSV file. The export respects the same filters available via the API (user, entry, type, date range) and returns all matching rows (up to 100,000).
+Click the **Export CSV** button next to the filter input to download the full session history as a CSV file. The export respects the same filters available via the API (user, entry, type, date range) and returns all matching rows.
 
 The CSV columns are: Session ID, Type, Hostname, Username, User, Entry, Folder, Started, Ended, Duration (secs), Status, Recording.
 
@@ -58,6 +58,7 @@ All endpoints require authentication (API key, user token, or OIDC session cooki
 | `GET` | `/api/reports/summary` | Summary statistics (total sessions, hours, unique users, active now) |
 | `GET` | `/api/reports/sessions` | Paginated session history with filters |
 | `GET` | `/api/reports/sessions/csv` | Export session history as CSV download |
+| `GET` | `/api/reports/activity` | Sessions started per hour (default: last 24 hours; `hours` parameter, 1–168) |
 | `GET` | `/api/reports/top-connections` | Most-used connections leaderboard |
 | `GET` | `/api/reports/top-users` | Most active users leaderboard |
 
@@ -67,7 +68,7 @@ All endpoints require authentication (API key, user token, or OIDC session cooki
 |-----------|-------------|
 | `user` | Filter by username (partial match) |
 | `entry` | Filter by connections entry name (partial match) |
-| `type` | Filter by session type: `ssh`, `rdp`, `vnc`, `web` |
+| `type` | Filter by session type (exact match): `ssh`, `rdp`, `vnc`, `spice`, `proxmox`, `web`, `vdi` |
 | `from` | Start date filter (ISO 8601, e.g. `2025-01-01T00:00:00Z`) |
 | `to` | End date filter (ISO 8601) |
 | `limit` | Page size (default 100, max 1000; ignored for CSV export) |
