@@ -177,7 +177,6 @@
     <script>(function(){var c=localStorage.getItem('persea_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);}catch(e){}}})();</script>
 
     <!-- Guacamole JS modules -->
-    <script src="/js/utils.js?v=1.1.1"></script>
     <script src="/guac/Namespace.js"></script>
     <script src="/guac/Client.js"></script>
     <script src="/guac/Display.js"></script>
@@ -740,8 +739,28 @@
             var fileTransferStatus = document.getElementById('file-transfer-status');
             var fileTransferInput = document.getElementById('file-transfer-input');
             var fileTransferBtn = document.getElementById('btn-file-transfer');
-            function showTransferStatus(html) { fileTransferStatus.innerHTML = html; fileTransferStatus.style.display = ''; }
-            function hideTransferStatus() { fileTransferStatus.style.display = 'none'; fileTransferStatus.innerHTML = ''; }
+            // Status line is built with textContent/appendChild only — no
+            // innerHTML, so filenames can never be interpreted as markup
+            // (CodeQL js/xss-through-dom).
+            function showTransferStatus(kind, name, detail) {
+                var labels = { uploading: 'Uploading:', sent: 'Sent:', failed: 'Failed:', error: 'Error:' };
+                var label = document.createElement('span');
+                label.style.color = (kind === 'uploading' || kind === 'sent') ? 'var(--accent)' : 'var(--primary)';
+                label.textContent = labels[kind] || kind;
+                var text = document.createElement('span');
+                text.textContent = ' ' + (name || '');
+                fileTransferStatus.textContent = '';
+                fileTransferStatus.appendChild(label);
+                fileTransferStatus.appendChild(text);
+                if (detail) {
+                    var d = document.createElement('span');
+                    d.style.color = 'var(--text-dim)';
+                    d.textContent = ' ' + detail;
+                    fileTransferStatus.appendChild(d);
+                }
+                fileTransferStatus.style.display = '';
+            }
+            function hideTransferStatus() { fileTransferStatus.style.display = 'none'; fileTransferStatus.textContent = ''; }
 
             fileTransferBtn.addEventListener('click', function() { fileTransferInput.value = ''; fileTransferInput.click(); });
             fileTransferInput.addEventListener('change', function() {
@@ -750,7 +769,7 @@
                 for (var i = 0; i < files.length; i++) { uploadFile(files[i]); }
             });
             function uploadFile(file) {
-                showTransferStatus('<span style="color:var(--accent);">Uploading:</span> ' + escapeHtml(file.name) + ' <span style="color:var(--text-dim);">(' + formatBytes(file.size) + ')</span>');
+                showTransferStatus('uploading', file.name, '(' + formatBytes(file.size) + ')');
                 var reader = new FileReader();
                 reader.onload = function(e) {
                     try {
@@ -758,16 +777,16 @@
                         var writer = new Guacamole.ArrayBufferWriter(stream);
                         writer.onack = function(status) {
                             if (status.code && status.code !== 0x0000) {
-                                showTransferStatus('<span style="color:var(--primary);">Error:</span> ' + escapeHtml(file.name));
+                                showTransferStatus('error', file.name);
                                 setTimeout(hideTransferStatus, 3000);
                             }
                         };
                         writer.sendData(e.target.result);
                         writer.sendEnd();
-                        showTransferStatus('<span style="color:var(--accent);">Sent:</span> ' + escapeHtml(file.name));
+                        showTransferStatus('sent', file.name);
                         setTimeout(hideTransferStatus, 2000);
                     } catch (err) {
-                        showTransferStatus('<span style="color:var(--primary);">Failed:</span> ' + escapeHtml(file.name));
+                        showTransferStatus('failed', file.name);
                         setTimeout(hideTransferStatus, 3000);
                     }
                 };

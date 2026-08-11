@@ -11,7 +11,7 @@ async function globalSetup(config: FullConfig): Promise<void> {
   const context = await browser.newContext({ ignoreHTTPSErrors: ignoreHTTPS });
   const page = await context.newPage();
 
-  console.log(`[global-setup] Logging in as ${USERNAME} at ${BASE_URL}`);
+  console.log(`[global-setup] Authenticating at ${BASE_URL}`);
   await page.goto(`${BASE_URL}/`, { waitUntil: 'domcontentloaded', timeout: 15000 });
   await page.waitForSelector('#username', { timeout: 15000 });
   await page.fill('#username', USERNAME);
