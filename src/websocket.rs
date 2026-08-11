@@ -626,13 +626,16 @@ async fn guacd_to_ws(
         for parsed in parser.receive(&text) {
             if let Ok(crate::protocol::Instruction { opcode, args }) = parsed {
                 if opcode == "error" {
+                    // guacd encodes the error instruction as
+                    // `error,<message>,<code>` (guac_protocol_send_error).
                     let message = args
-                        .get(1)
+                        .first()
                         .cloned()
                         .unwrap_or_else(|| "unknown error".to_string());
+                    let code = args.get(1).cloned().unwrap_or_default();
                     tracing::warn!(
                         session_id = %session_id,
-                        code = args.first().cloned().unwrap_or_default(),
+                        code = %code,
                         "guacd reported upstream error: {}", message
                     );
                     *last_error.lock().await = Some(message);
