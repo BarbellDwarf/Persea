@@ -52,9 +52,9 @@ Permissions are inherited through the connection group hierarchy:
 - **Direct grants**: a permission granted on a connection applies to that connection only
 - **Group inheritance**: a permission granted on a connection group applies to all connections within it (recursively)
 - **User + group grants**: permissions can be granted to individual users or to groups
-- **Group membership**: resolved from OIDC claims, LDAP memberOf, or SAML attributes
+- **Group membership**: for RBAC connection groups, membership is assigned explicitly by admins; for folder access, membership of local groups is resolved from OIDC claims, LDAP memberOf, or SAML attributes
 
-Example: granting `connect` on the "Engineering" group gives all members of that group (and subgroups) the ability to create sessions from any connection in the Engineering tree.
+Example: granting `connect` on a connection to the "Engineering" group lets every member of that group — including members of its subgroups in the connection-group tree — create sessions from that connection.
 
 ### Permission evaluation
 
@@ -66,13 +66,15 @@ When a user attempts an action, permissions are evaluated as follows:
 
 Admins bypass all object permission checks — they always have full access.
 
+Object permissions are enforced at connect time: when a non-admin starts a session from a connections entry, persea checks the `connect` permission (direct grant or inherited through group membership) and **fails closed** with `No permission to connect to this entry` if no grant matches (`src/api/address_book.rs`). A connection with no grants at all is therefore connectable only by admins. The folder-access check still applies first — an RBAC grant cannot bypass folder or entry `allowed_groups`.
+
 ## Authentication paths
 
-persea supports three authentication methods, tried in order: admin API key, user API token, OIDC session cookie.
+The API middleware accepts three credential types, tried in order: admin API key, user API token, and session cookie. The session cookie (`persea_session`) is issued by the web UI's login flow, so it covers users from **every** login provider — local database (email + password), OIDC, LDAP, SAML, and RADIUS — not just OIDC.
 
 ### API key admins
 
-API key holders always have full **admin** access (level 4). There is no way to restrict an API key to a lower role. API keys are intended for automation, CI/CD, and system administration.
+API key holders always have full **admin** access (level 4). There is no way to restrict an API key to a lower role. API keys are intended for automation, CI/CD, and system administration. Send them as `Authorization: Bearer <key>` or `X-API-Key: <key>` (both are accepted, `src/auth.rs`).
 
 ```bash
 # Create an API key admin
@@ -86,15 +88,15 @@ persea add-admin --name ci-bot \
 
 ### User API tokens
 
-User API tokens authenticate as the OIDC user who owns the token, with an effective role capped by the token's `max_role`. Tokens use the same `Authorization: Bearer <token>` header as admin API keys, and persea tries admin keys first, then user tokens. See [User API tokens](#user-api-tokens) below for details.
+User API tokens authenticate as the user who owns the token (from any provider), with an effective role capped by the token's `max_role`. Tokens use the same `Authorization: Bearer <token>` header as admin API keys, and persea tries admin keys first, then user tokens. See [User API tokens](#user-api-tokens) below for details.
 
 ### OIDC / LDAP / SAML / database users
 
 Users authenticating via any primary provider (OIDC, LDAP, SAML, or local database) are assigned a role through three mechanisms (in order of precedence):
 
-1. **Group-to-role mappings**: evaluated on every login. If the user's groups match any mappings, the highest matching role is applied.
+1. **Group-to-role mappings** (OIDC logins): evaluated on every OIDC login. If the user's groups match any mappings, the highest matching role is applied.
 2. **Manual role assignment**: admins can set a user's role via CLI, API, or the Admin page.
-3. **Default role**: new users get the `default_role` from OIDC config on first login (default: `operator`).
+3. **Default role**: new OIDC users get the `default_role` from the `[oidc]` config on first login (default: `operator`).
 
 ## Endpoint access control
 
@@ -111,7 +113,7 @@ Users authenticating via any primary provider (OIDC, LDAP, SAML, or local databa
 
 | Endpoint | Required role | Notes |
 |----------|--------------|-------|
-| `GET /api/addressbook/folders` | operator | Filtered by OIDC group membership |
+| `GET /api/addressbook/folders` | operator | Filtered by group membership |
 | `GET /api/addressbook/folders/:scope/:folder/entries` | operator | Requires folder group access |
 | `POST .../entries/:entry/connect` | operator | Creates session from connections entry |
 | `POST /api/addressbook/folders` | admin | Create folders |
@@ -151,30 +153,28 @@ Users authenticating via any primary provider (OIDC, LDAP, SAML, or local databa
 
 ### RBAC (connection-level permissions)
 
+All RBAC endpoints require the **admin** role **and** the enterprise RBAC license — without the license they return `403`. Grants are made per connection; `entity_id` is `u:<user-id>` or `g:<group-id>` and `permission` is one of the object permissions.
+
 | Endpoint | Required role | Notes |
 |----------|--------------|-------|
-| `GET /api/rbac/groups` | admin | List connection groups |
-| `POST /api/rbac/groups` | admin | Create connection group |
-| `PUT /api/rbac/groups/:id` | admin | Update connection group |
-| `DELETE /api/rbac/groups/:id` | admin | Delete connection group |
-| `GET /api/rbac/permissions` | admin | List all permission grants |
-| `POST /api/rbac/permissions` | admin | Grant a permission |
-| `DELETE /api/rbac/permissions/:id` | admin | Revoke a permission |
-| `GET /api/rbac/user-groups` | admin | List user groups |
-| `POST /api/rbac/user-groups` | admin | Create user group |
-| `DELETE /api/rbac/user-groups/:id` | admin | Delete user group |
-| `POST /api/rbac/user-groups/:id/members` | admin | Add member to user group |
-| `DELETE /api/rbac/user-groups/:id/members/:user` | admin | Remove member from user group |
+| `GET /api/admin/rbac/groups` | admin | List connection groups |
+| `POST /api/admin/rbac/groups` | admin | Create connection group (`name`, `parent_id?`, `description?`) |
+| `DELETE /api/admin/rbac/groups/{id}` | admin | Delete group (children are unparented, not deleted) |
+| `POST /api/admin/rbac/groups/{id}/members` | admin | Add member (`user_id`) |
+| `DELETE /api/admin/rbac/groups/{id}/members/{user_id}` | admin | Remove member |
+| `GET /api/admin/rbac/connections/{id}/permissions` | admin | List grants on a connection |
+| `POST /api/admin/rbac/connections/{id}/permissions` | admin | Grant (`entity_id`, `permission`) |
+| `DELETE /api/admin/rbac/connections/{id}/permissions` | admin | Revoke (same body as grant) |
 
 ### User API tokens (self-service)
 
 | Endpoint | Required role | Notes |
 |----------|--------------|-------|
 | `POST /api/me/tokens` | poweruser | Create a personal API token |
-| `GET /api/me/tokens` | operator | List own tokens (metadata only) |
+| `GET /api/me/tokens` | Any signed-in user | List own tokens (metadata only) |
 | `DELETE /api/me/tokens/:id` | poweruser | Revoke own token |
 
-Operators can view their tokens (created by an admin on their behalf) but cannot create or revoke them.
+Operators and viewers can view tokens created for them by an admin, but only powerusers and admins can create or revoke their own.
 
 ### User API tokens (admin)
 
@@ -198,7 +198,7 @@ Operators can view their tokens (created by an admin on their behalf) but cannot
 Connections folders have group-based access control. Each folder has an `allowed_groups` list stored in its `.config` entry in Vault or the database.
 
 - **Admins** bypass group checks and see all folders
-- **Operators and powerusers** see only folders where their OIDC groups intersect with the folder's `allowed_groups`
+- **Operators and powerusers** see only folders where their auth-provider groups intersect with the folder's `allowed_groups`
 - If `allowed_groups` is empty, all authenticated users can see the folder
 - Folders the user cannot access are **hidden** from the tree, not shown-then-denied. This applies at every level, including subfolders.
 - A folder the user cannot access directly is still shown if they can access one of its descendants, so a deeper grant is never orphaned out of the tree. Access of a child can be granted independently of its parent (see Inheritance below).
@@ -211,14 +211,17 @@ A subfolder created with `inherit_from_parent: true` (the default for new subfol
 
 Beyond folder access control, persea supports a separate RBAC system for connection-level permissions:
 
-- **Connection groups** are hierarchical containers for connections (similar to folders but for RBAC)
-- **User groups** map to OIDC/LDAP/SAML group memberships
-- **Permission grants** assign system or object permissions to users or groups on specific connection groups or connections
+- **Connection groups** are hierarchical containers (each has a `parent_id`); a group granted `connect` on a connection passes that access on to its members
+- **Membership is explicit** — admins add users (by numeric user ID) to a connection group. It is *not* derived from OIDC/LDAP/SAML groups; those feed the folder-access `local_groups` instead
+- **Permission grants** are made on individual connections: `entity_id` is `u:<user-id>` or `g:<group-id>`, and the permission is one of the object permissions. `connect` is the permission enforced at session start
+- A user's effective access is the union of their direct grants and the grants on groups they belong to, inherited up the connection-group tree (recursive CTE in `src/rbac.rs`)
 
 This allows scenarios like:
-- Granting a support team `connect` permission on the "Production Servers" group without elevating them to poweruser
-- Giving a contractor read-only access to specific connections without access to the full address book
+- Granting a support team `connect` on the "Production Servers" group without elevating them to poweruser
+- Requiring an extra `connect` grant for sensitive entries on top of normal folder access
 - Inheriting permissions through the connection group tree for automatic access management
+
+Fine-grained RBAC is an enterprise feature: the management API (`/api/admin/rbac/*`) rejects calls without the RBAC license (`FEAT_RBAC`, `src/handlers/rbac.rs`). The connect-time enforcement check itself is not license-gated.
 
 ### Example
 
@@ -250,7 +253,7 @@ A user with groups `["engineering", "support"]` would get `poweruser` (the highe
 
 ## User API tokens
 
-User API tokens allow OIDC users to authenticate via bearer token for automation and scripting (e.g., creating ad-hoc sessions via CI/CD, or integrating with monitoring tools).
+User API tokens allow signed-in users to authenticate via bearer token for automation and scripting (e.g., creating ad-hoc sessions via CI/CD, or integrating with monitoring tools).
 
 ### Who can create tokens
 
@@ -259,7 +262,7 @@ User API tokens allow OIDC users to authenticate via bearer token for automation
 | admin | Yes | Yes |
 | poweruser | Yes | Yes |
 | operator | No | Yes |
-| viewer | No | No |
+| viewer | No | Yes (capped at `viewer`) |
 
 The primary use case is powerusers creating tokens for service account automation, and admins creating tokens for select operators who need API access.
 
@@ -278,13 +281,13 @@ This means:
 
 ### Token management UI
 
-- **Tokens page** (`/tokens.html`) — self-service for powerusers and admins to create, view, and revoke their own tokens. Operators can view tokens created for them.
-- **Admin page** (`/admin.html`) — admins can create tokens for any user, view all tokens across all users, revoke any token, and view the audit log.
+- **Tokens page** (`/tokens.html`, also `/account/tokens.html`) — self-service for powerusers and admins to create, view, and revoke their own tokens. Operators and viewers can view tokens created for them.
+- **Admin token endpoints** (API only, no UI) — `/api/admin/user-tokens` (create tokens for any user, list all, revoke any) and `/api/admin/token-audit` (token audit log). See the [API Reference](api.md).
 
 ## User management CLI
 
 ```bash
-# List all OIDC users
+# List all users
 persea list-users
 
 # Set a user's role
@@ -302,14 +305,13 @@ persea delete-user --email user@example.com
 
 ## Admin UI for permission management
 
-The admin page provides a visual interface for managing RBAC:
+RBAC is managed partly in the UI and partly via the admin API:
 
-- **Connection Groups** — create, edit, and delete connection groups; set descriptions and parent groups
-- **Permission Grants** — grant or revoke system and object permissions on connection groups and individual connections
-- **User Groups** — manage user groups and their members; map groups to connection group permissions
-- **Audit Log** — view the hash chain audit log and verify chain integrity
+- **Connect permissions (RBAC)** — the Connections page's entry editor (admin only) has a "Connect permissions (RBAC)" section for granting or revoking `connect` access on that entry to groups or users. Connection groups themselves are created via the API (`POST /api/admin/rbac/groups`).
+- **Admin → Groups** (`/admin/groups.html`) — manages the *local groups* used for folder access and group-to-role mappings (with provider-group mappings). These are a separate concept from RBAC connection groups.
+- **Audit Log** — `/admin/audit.html` shows the hash chain audit log and chain-integrity verification.
 
-Access the admin page at `/admin.html` (requires admin role).
+Admin pages live at `/admin.html` and `/admin/users.html` (both require the admin role).
 
 ## Admin (API key) management CLI
 

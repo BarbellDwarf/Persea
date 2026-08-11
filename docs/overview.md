@@ -2,7 +2,7 @@
 
 ## What is persea?
 
-persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, web browser sessions, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
+persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. It provides browser-based remote access to SSH, RDP, VNC, SPICE, Proxmox VE, VMware, web browser sessions, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server), the Guacamole protocol daemon.
 
 persea sits between web browsers and guacd, proxying the Guacamole protocol over WebSockets. It manages session lifecycle, authentication (LDAP, OIDC, SAML, RADIUS, TOTP, database, API keys), session recording, VDI container orchestration, connection-level RBAC, and credential storage (Vault or encrypted DB).
 
@@ -147,6 +147,14 @@ Connects guacd to a target VNC server. Supports password-based authentication. U
 
 Supports optional [multi-hop SSH tunnel chains](#ssh-tunnel--jump-hosts) to reach VNC targets through bastion hosts.
 
+### SPICE
+
+Connects guacd to a SPICE server (TLS with CA verification, SPICE proxy support). Ad-hoc SPICE sessions are created from the Sessions page.
+
+### Proxmox VE
+
+Ad-hoc sessions into Proxmox VE guests via the PVE API: SPICE consoles (brokered through the PVE spiceproxy), VNC, LXC containers, and serial consoles (xterm.js). See [API Reference](api.md) for the proxmox session fields.
+
 ### Web browser
 
 Spawns a headless Xvnc display and Chromium in kiosk mode, then connects guacd via VNC to the local display. The user sees a full browser session in their own browser. Each session gets an isolated Chromium profile directory.
@@ -192,19 +200,21 @@ Each hop supports independent credentials (username + password or private key). 
 src/
   main.rs              Entry point, CLI, server setup
   config.rs            TOML config loading with defaults
-  auth.rs              Auth middleware (API key, OIDC session, WebSocket tickets)
+  auth.rs              Auth middleware (API key, session cookie, WebSocket tickets)
   auth_provider.rs     AuthProvider trait, Capabilities bitflags, AuthResult
   auth_chain.rs        Ordered provider chain with MFA support
   auth_providers/      Individual auth provider implementations:
     database.rs          Local password auth (Argon2id)
     ldap.rs              LDAP bind+search auth
-    oidc.rs              OpenID Connect login flow
     saml.rs              SAML 2.0 SP (XML metadata, signed requests)
     radius.rs            RADIUS PAP/CHAP/MSCHAPv2 auth
     totp.rs              TOTP MFA second factor
-  api.rs               REST API endpoints
+  oidc.rs              OpenID Connect login flow
+  api/                 REST API endpoints (sessions, address book, users, tokens, reports, admin)
+  handlers/            Page handlers and new API endpoints (auth, pages, account, tunnels, rbac)
   browser.rs           Xvnc + Chromium process manager
   crypto.rs            AES-256-GCM credential encryption
+  csrf.rs              CSRF double-submit middleware, cookie helpers
   db.rs                SQLite admin database (rusqlite)
   db_pool.rs           SQLx multi-backend pool (PostgreSQL/MySQL/SQLite)
   db_migrate.rs        Vault-to-DB migration tool
@@ -213,21 +223,24 @@ src/
   password.rs          Argon2id hashing/verification (OWASP params)
   protocol.rs          Guacamole wire format parser
   rbac.rs              RBAC: system + object permissions, connection groups
+  role.rs              Role levels and validation
   audit.rs             SHA-256 hash chain audit logging
-  session.rs           Session state machine
+  session/             Session state machine (types, manager, create)
   totp.rs              TOTP enrollment, QR codes, verification
   tunnel.rs            Multi-hop SSH tunnel chain
   vault.rs             Vault/OpenBao KV v2 client (AppRole auth)
-  vsphere.rs           VMware vSphere REST API (VM inventory, OS detection, one-click connect).
+  pve.rs               Proxmox VE API (SPICE, VNC, LXC, serial)
+  vsphere.rs           VMware vSphere REST API (VM inventory, OS detection, one-click connect)
   vdi/mod.rs           VDI driver trait and container types
   vdi/docker.rs        Docker-based VDI driver (bollard)
   websocket.rs         WebSocket <-> guacd proxy
   recording.rs         Recording rotation and management
   templates.rs         HTML template rendering (minijinja)
   metrics.rs           Prometheus metrics
+  license.rs           Enterprise feature licensing
+templates/             HTML templates (minijinja + htmx + Tailwind)
 static/
-  *.html               Web UI pages
-  guac/                Guacamole JS client library
+  css/ js/ fonts/ images/ vendor/ guac/   Static assets; pages are served from templates/, not static/*.html
 docs/                  This documentation
 migrations/            Per-backend schema DDL (PostgreSQL/MySQL/SQLite)
 patches/               guacd patches for FreeRDP 3.x

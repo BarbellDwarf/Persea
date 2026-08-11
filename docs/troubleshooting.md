@@ -33,6 +33,11 @@
 - Config validation failures print `FATAL: config validation failed: <msg>` and exit before serving — fix the offending key (see [Configuration](configuration.md))
 - Non-fatal config problems print `WARNING: ...` but the server still starts; read these on startup (e.g. the deprecated `recording_path`, below)
 
+### Login works on some pages but not others / session lost
+- The session cookie is `persea_session`, set as `Path=/; HttpOnly; Secure; SameSite=Lax` (HTTPS) or `Path=/; HttpOnly; SameSite=Lax` (plain HTTP), 24-hour lifetime (`Max-Age=86400`). The CSRF cookie is `csrf_token`, deliberately **not** `HttpOnly` so JavaScript can read it for the double-submit header (`src/csrf.rs`).
+- **Self-signed certs**: if you use a self-signed certificate, browsers refuse to send `Secure` cookies over an untrusted-cert connection even after you click through the warning. Set `secure_cookies = false` under `[tls]` in `config.toml` (env: `PERSEA_TLS__SECURE_COOKIES=false`) and restart — `install.sh` and the Docker entrypoint do this automatically when they generate their own cert.
+- If you are behind a reverse proxy, verify it forwards `Set-Cookie` and does not rewrite `Host` (the session cookie is bound to the host the browser used).
+
 ### CSRF 403 errors
 - Symptom: POST/PUT/DELETE/PATCH requests return `403` with `{"error": "CSRF token missing or invalid"}` (`src/csrf.rs`)
 - Cause: the `X-CSRF-Token` header must exactly match the `csrf_token` cookie. Every state-changing request needs both, including API calls from scripts and curl

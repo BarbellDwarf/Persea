@@ -10,13 +10,15 @@ new theme as a `.toml` file.
 
 ## Quick choices
 
-- **Just want a different look?** Pick from the gear menu in the top right
-  of any page. Your choice is stored per-browser (localStorage), so it
-  follows you across sessions on that machine but doesn't affect anyone
-  else.
-- **Want to set the default for the whole deployment?** Add a `[theme]`
-  block to `config.toml` (see below). Individual users can still override
-  via the gear menu.
+- **Just want a different look?** Use the dark/light/auto toggle in the top-right
+  of every page (it cycles **auto → dark → light**), and pick a colour accent
+  preset under **My Profile → Appearance → Color Accent**. Your choices are
+  stored per-browser (localStorage), so they follow you across sessions on
+  that machine but don't affect anyone else.
+- **Want to brand the whole deployment?** Add a `[theme]`
+  block to `config.toml` (see below) for the logo and the preset list.
+  Note that the configured preset is only applied to users who pick it —
+  see below.
 - **Want a custom palette or your org's brand colours?** Drop a `.toml`
   file into the themes directory. No recompile, no PR to the project.
 
@@ -24,22 +26,22 @@ new theme as a `.toml` file.
 
 | Name | Description |
 |------|-------------|
-| `aurora` | Default. Cool blues with a soft radial gradient backdrop. |
-| `dark` | Classic dark mode (red primary, teal accent). |
-| `light` | Bright neutral. |
+| `aurora` | Default. Midnight-navy background with a soft blue/cyan radial glow. |
+| `dark` | Classic dark mode (red primary, teal accent, navy backgrounds). |
+| `light` | Clean white & blue. |
 | `high-contrast` | Maximum legibility, accessibility-friendly. |
 | `terminal` | Monospaced green-on-black aesthetic. |
 | `nord` | Cool greys + cyan, based on the Nord palette. |
-| `corporate` | Muted business blues. |
-| `jaguar` | Deep emerald + indigo. |
+| `corporate` | Slate & steel blue with an orange accent. |
+| `jaguar` | Racing green & gold on a deep green-black background. |
 
 Plus any user-supplied themes you've dropped into the themes directory
 (see [User-supplied themes](#user-supplied-themes) below).
 
 ## Setting the default in `config.toml`
 
-The `[theme]` block in `config.toml` picks the default preset for new
-users and lets you override individual colours on top of that preset.
+The `[theme]` block in `config.toml` sets the admin-configured preset and
+lets you override individual colours on top of that preset.
 
 ```toml
 [theme]
@@ -48,8 +50,13 @@ logo_url = "/logo.png"       # optional, replaces the persea logo
 primary_color = "#003366"    # any of the per-field overrides below
 ```
 
-When `[theme]` is absent entirely the default is the same as
-`preset = "aurora"` with no overrides.
+Note that the admin preset is **not** force-applied to every user: the
+frontend only applies a preset when the user has explicitly chosen one in
+**My Profile → Appearance → Color Accent** (stored in
+`localStorage.persea_theme`). Users who haven't picked anything see the
+app's green CSS defaults. The preset name and colours are still what the
+server serves to the picker, and `logo_url` applies globally (login page
+and header).
 
 ### Per-field overrides
 
@@ -97,11 +104,11 @@ accent_color = "#FF6600"
 
 ## User-supplied themes
 
-Since v1.7.1 you can ship arbitrary themes as standalone files without
-touching Rust or the project repo. Drop a `<name>.toml` file into
-`<static_path>/themes/` (typically `/opt/persea/static/themes/`), restart
-persea, and the theme appears in the gear-menu picker. Available to all
-users; selectable as `preset = "<name>"` in `config.toml`.
+You can ship arbitrary themes as standalone files without touching Rust or
+the project repo. Drop a `<name>.toml` file into `<static_path>/themes/`
+(typically `/opt/persea/static/themes/`), restart persea, and the theme
+appears in the Color Accent picker (My Profile → Appearance) and is
+selectable as `preset = "<name>"` in `config.toml`. Available to all users.
 
 ### File format
 
@@ -198,8 +205,13 @@ docker run -v /etc/persea/themes:/opt/persea/static/themes:ro ...
 
 ## Per-user theme switching
 
-The gear menu in the top right of every page lets each user pick from any
-available theme. The choice persists in browser localStorage, so it
-follows the user across sessions on that browser but doesn't affect
-anyone else. The admin-configured `preset` is the default for users who
-haven't picked one.
+- **Mode** — the header toggle cycles **auto → dark → light** (auto follows
+  your OS preference). The same choice is available under **My Profile →
+  Appearance → Mode**.
+- **Color Accent** — My Profile → Appearance → Color Accent lists **default**
+  (the original persea green) plus every built-in and user-supplied preset.
+
+Both choices persist in browser localStorage, so they follow the user across
+sessions on that browser but don't affect anyone else. A user who selects
+**default** (or has never picked anything) sees the app's green CSS
+defaults — the admin-configured `preset` is not applied automatically.
