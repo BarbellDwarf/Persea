@@ -135,7 +135,7 @@ Persea exposes `GET /api/health` (check `src/main.rs` for the route). Returns 20
 |----------|------------|------------|
 | Session count | In-memory per instance | Scale instances horizontally (session affinity) |
 | guacd connections | One child per session | Pool guacd instances |
-| SQLite write contention | Single-writer | Switch to MySQL/PostgreSQL for HA |
+| SQLite write contention | Single-writer | Switch to MySQL/PostgreSQL for HA (roadmap) |
 | Recordings disk | Per-instance storage | Shared NFS/EFS for cross-instance access |
 | WebSocket connections | Per-instance | Load balancer handles distribution |
 
