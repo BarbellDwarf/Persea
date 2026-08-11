@@ -170,11 +170,15 @@ pub async fn login_page(
         .as_ref()
         .and_then(|t| t.logo_url.clone())
         .unwrap_or_default();
+    // SAML is only offered when it's BOTH configured and licensed — the
+    // routes are dropped entirely for unlicensed instances (main.rs), so
+    // showing the button here would point at a 404.
     let saml_enabled = state
         .config()
         .auth
         .as_ref()
-        .is_some_and(|a| a.saml.is_some());
+        .is_some_and(|a| a.saml.is_some())
+        && crate::license::global().is_some_and(|m| m.has_feature(crate::license::FEAT_SAML));
 
     let providers = oidc_provider_names
         .map(|Extension(p)| p.0.clone())

@@ -108,6 +108,7 @@ Examples:
 | vnc_allowed_networks | PERSEA_VNC_ALLOWED_NETWORKS | ["10.0.0.0/8", ...] | VNC allowed networks |
 | web_allowed_networks | PERSEA_WEB_ALLOWED_NETWORKS | ["127.0.0.0/8", ...] | Web allowed networks |
 | trusted_proxies | PERSEA_TRUSTED_PROXIES | [] | Trusted proxy CIDRs |
+| tls.secure_cookies | PERSEA_TLS__SECURE_COOKIES | true | Set `false` when serving HTTPS with a self-signed/untrusted cert — browsers block `Secure` cookies over untrusted connections, breaking logins. Auto-set by `install.sh` and the Docker entrypoint when they generate their own cert |
 | storage.encryption_key | PERSEA_STORAGE__ENCRYPTION_KEY | (none) | Storage encryption key |
 
 **Precedence:** Environment variables override config file values, which override built-in defaults.
