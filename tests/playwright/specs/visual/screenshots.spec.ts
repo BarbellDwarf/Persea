@@ -73,7 +73,7 @@ test.describe('Visual regression screenshots', () => {
     {
       name: 'sessions',
       url: '/sessions.html',
-      masks: ['#session-list', '#session-counts'],
+      masks: ['#session-list', '#session-counts', '#session-empty'],
     },
     { name: 'connections', url: '/connections.html' },
     { name: 'recordings', url: '/recordings.html' },
@@ -117,7 +117,7 @@ test.describe('Visual regression screenshots', () => {
     await expect(page).toHaveScreenshot('sessions-form-expanded.png', {
       fullPage: true,
       maxDiffPixels: 200,
-      mask: [page.locator('#session-list'), page.locator('#session-counts')],
+      mask: [page.locator('#session-list'), page.locator('#session-counts'), page.locator('#session-empty')],
       maskColor: '#e2e8f0',
     });
   });
@@ -154,7 +154,7 @@ test.describe('Visual regression screenshots', () => {
     await expect(page).toHaveScreenshot('sessions-mobile.png', {
       fullPage: true,
       maxDiffPixels: 200,
-      mask: [page.locator('#session-list'), page.locator('#session-counts')],
+      mask: [page.locator('#session-list'), page.locator('#session-counts'), page.locator('#session-empty')],
       maskColor: '#e2e8f0',
     });
   });

@@ -80,7 +80,7 @@ test.describe('Visual Regression - All Pages', () => {
     await stabilizeTable(page, '#session-list', 5, '#session-empty');
     await expect(page).toHaveScreenshot('sessions-page.png', {
       fullPage: true,
-      mask: [page.locator('#session-list'), page.locator('#session-counts')],
+      mask: [page.locator('#session-list'), page.locator('#session-counts'), page.locator('#session-empty')],
       maskColor: '#e2e8f0',
     });
   });

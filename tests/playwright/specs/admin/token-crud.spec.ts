@@ -91,14 +91,18 @@ test.describe('Token CRUD', () => {
 
   test('created token visible in API Keys page UI', async ({ page, request }) => {
     // Tokens UI moved out of the admin page to the account API Keys page.
+    // The token must be created for the SESSION user (the one global-setup
+    // logged in as) — /api/me/tokens only lists the session identity's
+    // tokens, and adminUserEmail() may resolve a different admin.
     const tokenName = `ui-test-${Date.now()}`;
+    const sessionEmail = process.env.LOGIN_USERNAME || 'admin@local.test';
     const createRes = await request.post(`${BASE_URL}/api/admin/user-tokens`, {
       headers: {
         Authorization: `Bearer ${ADMIN_KEY}`,
         'Content-Type': 'application/json',
         ...(await csrfHeaders(request)),
       },
-      data: { email: await adminUserEmail(request), name: tokenName, max_role: 'admin' },
+      data: { email: sessionEmail, name: tokenName, max_role: 'admin' },
     });
     expect(createRes.ok()).toBeTruthy();
 
