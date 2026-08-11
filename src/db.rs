@@ -4058,6 +4058,26 @@ async fn exec_returning_id(pool: &DbPool, sql: &str, args: &[Arg]) -> Result<i64
 fn map_sqlx_err(e: sqlx::Error) -> rusqlite::Error {
     match e {
         sqlx::Error::RowNotFound => rusqlite::Error::QueryReturnedNoRows,
+        sqlx::Error::Database(db_err) => {
+            // Handlers map duplicate-name conflicts with
+            // `msg.contains("UNIQUE constraint")` (tokens, address book,
+            // imports). Translate the backend-native unique-violation
+            // codes to the same message shape so that behavior is
+            // identical on Postgres (23505), MySQL (1062) and SQLite
+            // (2067/1555).
+            let code = db_err.code().map(|c| c.to_string()).unwrap_or_default();
+            if matches!(code.as_str(), "23505" | "1062" | "2067" | "1555") {
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some("UNIQUE constraint failed (duplicate key)".into()),
+                )
+            } else {
+                rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(1),
+                    Some(db_err.to_string()),
+                )
+            }
+        }
         other => {
             rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(other.to_string()))
         }
