@@ -352,10 +352,24 @@ pub(crate) fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path
     {
         return false;
     }
-    let full = recording_dir.join(name);
-    match (full.canonicalize(), recording_dir.canonicalize()) {
-        (Ok(resolved), Ok(base)) => resolved.starts_with(&base),
-        _ => false,
+    // The named file may be the plaintext or the encrypted variant; accept
+    // the sibling when the literal name is the other variant.
+    let resolve = |n: &str| {
+        let full = recording_dir.join(n);
+        match (full.canonicalize(), recording_dir.canonicalize()) {
+            (Ok(resolved), Ok(base)) => resolved.starts_with(&base),
+            _ => false,
+        }
+    };
+    if resolve(name) {
+        return true;
+    }
+    if name.ends_with(".guac") {
+        resolve(&format!("{name}.enc"))
+    } else if let Some(plain) = name.strip_suffix(".enc") {
+        resolve(plain)
+    } else {
+        false
     }
 }
 
@@ -376,15 +390,17 @@ pub async fn serve_recording(
         return Err(AppError::Internal("invalid recording name".into()));
     }
 
-    let path = manager.recording_path().join(&name);
     // `.guac.enc` requests decrypt the named file directly; `.guac` requests
     // transparently fall back to the encrypted sibling when present.
     let is_enc = name.ends_with(".guac.enc");
-    let plain_path = if is_enc {
-        path.with_extension("guac")
+    let plain_name = if is_enc {
+        // Strip only the `.enc` suffix so `foo.guac.enc` maps to `foo.guac`
+        // (Path::with_extension would produce `foo.guac.guac`).
+        name.strip_suffix(".enc").unwrap_or(&name).to_string()
     } else {
-        path.clone()
+        name.clone()
     };
+    let plain_path = manager.recording_path().join(&plain_name);
     let enc_path = plain_path.with_extension("guac.enc");
 
     // Prefer the encrypted file when it exists.
@@ -450,13 +466,13 @@ pub async fn delete_recording(
         return Err(AppError::Internal("invalid recording name".into()));
     }
 
-    let path = manager.recording_path().join(&name);
     let is_enc = name.ends_with(".guac.enc");
-    let plain_path = if is_enc {
-        path.with_extension("guac")
+    let plain_name = if is_enc {
+        name.strip_suffix(".enc").unwrap_or(&name).to_string()
     } else {
-        path.clone()
+        name.clone()
     };
+    let plain_path = manager.recording_path().join(&plain_name);
     let enc_path = plain_path.with_extension("guac.enc");
 
     // Remove whichever of the plaintext/encrypted variants exist.

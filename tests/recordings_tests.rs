@@ -3,7 +3,7 @@
 //! recordings (R94: encrypted recordings were invisible to the UI).
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use axum::routing::{delete, get};
+use axum::routing::delete;
 use axum::{Extension, Router};
 use persea::api::reports::{delete_recording, list_recordings, serve_recording};
 use persea::auth::AuthIdentity;
@@ -21,7 +21,9 @@ const PLAIN_CONTENT: &[u8] = b"4.3\nsize 800,600\n";
 const ENC_PLAINTEXT: &[u8] = b"4.3\nsize 1024,768\n";
 
 fn temp_dir(tag: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("persea-rec-test-{tag}-{}", uuid::Uuid::new_v4()))
+    let dir = std::env::temp_dir().join(format!("persea-rec-test-{tag}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).expect("create temp recordings dir");
+    dir
 }
 
 fn admin() -> AuthIdentity {
@@ -44,8 +46,11 @@ fn test_router(recordings_dir: &Path, with_key: bool, identity: Option<AuthIdent
     }
     let manager = Arc::new(SessionManager::new(config, None));
     let router = Router::new()
-        .route("/api/recordings", get(list_recordings))
-        .route("/api/recordings/{name}", get(serve_recording))
+        .route("/api/recordings", axum::routing::get(list_recordings))
+        .route(
+            "/api/recordings/{name}",
+            axum::routing::get(serve_recording),
+        )
         .route("/api/recordings/{name}", delete(delete_recording));
     match identity {
         Some(id) => router.layer(Extension(id)).with_state(manager),
@@ -53,11 +58,11 @@ fn test_router(recordings_dir: &Path, with_key: bool, identity: Option<AuthIdent
     }
 }
 
-fn get(path: &str) -> Request<Body> {
+fn req_get(path: &str) -> Request<Body> {
     Request::builder().uri(path).body(Body::empty()).unwrap()
 }
 
-fn del(path: &str) -> Request<Body> {
+fn req_del(path: &str) -> Request<Body> {
     Request::builder()
         .method("DELETE")
         .uri(path)
@@ -104,7 +109,7 @@ async fn listing_includes_plain_and_encrypted_recordings() {
     std::fs::write(dir.join("notes.txt"), b"not a recording").unwrap();
 
     let router = test_router(&dir, true, Some(admin()));
-    let resp = router.oneshot(get("/api/recordings")).await.unwrap();
+    let resp = router.oneshot(req_get("/api/recordings")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let json = body_json(resp).await;
     let items = json.as_array().unwrap();
@@ -150,7 +155,7 @@ async fn listing_requires_poweruser_role() {
         groups: vec![],
     };
     let router = test_router(&dir, false, Some(viewer));
-    let resp = router.oneshot(get("/api/recordings")).await.unwrap();
+    let resp = router.oneshot(req_get("/api/recordings")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
@@ -159,7 +164,7 @@ async fn listing_without_identity_is_forbidden() {
     let dir = temp_dir("listing-noauth");
     std::fs::write(dir.join("session-a.guac"), PLAIN_CONTENT).unwrap();
     let router = test_router(&dir, false, None);
-    let resp = router.oneshot(get("/api/recordings")).await.unwrap();
+    let resp = router.oneshot(req_get("/api/recordings")).await.unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);
 }
 
@@ -171,7 +176,7 @@ async fn serve_plain_recording_streams_content() {
     std::fs::write(dir.join("plain.guac"), PLAIN_CONTENT).unwrap();
     let router = test_router(&dir, false, Some(admin()));
     let resp = router
-        .oneshot(get("/api/recordings/plain.guac"))
+        .oneshot(req_get("/api/recordings/plain.guac"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -186,7 +191,7 @@ async fn serve_encrypted_recording_by_enc_name_decrypts() {
     encrypt_recording_file(&src, TEST_KEY_HEX).unwrap();
     let router = test_router(&dir, true, Some(admin()));
     let resp = router
-        .oneshot(get("/api/recordings/enc.guac.enc"))
+        .oneshot(req_get("/api/recordings/enc.guac.enc"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -202,7 +207,7 @@ async fn serve_encrypted_recording_by_plain_name_decrypts() {
     let router = test_router(&dir, true, Some(admin()));
     // The plain `.guac` name transparently falls back to the enc sibling.
     let resp = router
-        .oneshot(get("/api/recordings/enc2.guac"))
+        .oneshot(req_get("/api/recordings/enc2.guac"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -214,7 +219,7 @@ async fn serve_unknown_recording_returns_error() {
     let dir = temp_dir("serve-missing");
     let router = test_router(&dir, false, Some(admin()));
     let resp = router
-        .oneshot(get("/api/recordings/missing.guac"))
+        .oneshot(req_get("/api/recordings/missing.guac"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -234,7 +239,7 @@ async fn delete_encrypted_recording_removes_file_and_meta() {
 
     let router = test_router(&dir, true, Some(admin()));
     let resp = router
-        .oneshot(del("/api/recordings/del.guac.enc"))
+        .oneshot(req_del("/api/recordings/del.guac.enc"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
@@ -248,7 +253,7 @@ async fn delete_plain_recording_removes_file() {
     std::fs::write(dir.join("plain2.guac"), PLAIN_CONTENT).unwrap();
     let router = test_router(&dir, false, Some(admin()));
     let resp = router
-        .oneshot(del("/api/recordings/plain2.guac"))
+        .oneshot(req_del("/api/recordings/plain2.guac"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
@@ -265,7 +270,7 @@ async fn delete_plain_name_also_removes_enc_sibling() {
 
     let router = test_router(&dir, true, Some(admin()));
     let resp = router
-        .oneshot(del("/api/recordings/both.guac"))
+        .oneshot(req_del("/api/recordings/both.guac"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
@@ -277,7 +282,7 @@ async fn delete_unknown_recording_returns_error() {
     let dir = temp_dir("delete-missing");
     let router = test_router(&dir, false, Some(admin()));
     let resp = router
-        .oneshot(del("/api/recordings/missing.guac"))
+        .oneshot(req_del("/api/recordings/missing.guac"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -295,7 +300,7 @@ async fn delete_requires_admin_role() {
     };
     let router = test_router(&dir, false, Some(poweruser));
     let resp = router
-        .oneshot(del("/api/recordings/plain3.guac"))
+        .oneshot(req_del("/api/recordings/plain3.guac"))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);

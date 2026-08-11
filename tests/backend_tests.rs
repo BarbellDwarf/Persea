@@ -44,13 +44,8 @@ async fn mysql_backend_round_trip_and_persistence() {
 }
 
 macro_rules! check_rows_in_backend {
-    ($pool:expr, $placeholder:expr, $email:expr, $folder:expr, $entry:expr, $site_title:expr) => {{
-        let p = $placeholder;
-        let users_sql = format!("SELECT COUNT(*) FROM users WHERE email = {p} OR username = {p}");
-        let folders_sql = format!("SELECT COUNT(*) FROM address_book_folders WHERE name = {p}");
-        let entries_sql = format!("SELECT COUNT(*) FROM address_book_entries WHERE name = {p}");
-
-        let row = sqlx::query(&users_sql)
+    ($pool:expr, $users_q:expr, $folders_q:expr, $entries_q:expr, $email:expr, $folder:expr, $entry:expr, $site_title:expr) => {{
+        let row = sqlx::query($users_q)
             .bind(&$email)
             .bind(&$email)
             .fetch_one($pool)
@@ -73,7 +68,7 @@ macro_rules! check_rows_in_backend {
             "site_title row in the backend system_settings table is wrong"
         );
 
-        let row = sqlx::query(&folders_sql)
+        let row = sqlx::query($folders_q)
             .bind(&$folder)
             .fetch_one($pool)
             .await
@@ -85,7 +80,7 @@ macro_rules! check_rows_in_backend {
             $folder
         );
 
-        let row = sqlx::query(&entries_sql)
+        let row = sqlx::query($entries_q)
             .bind(&$entry)
             .fetch_one($pool)
             .await
@@ -327,13 +322,31 @@ async fn assert_rows_in_backend(
             let pool = PgPool::connect(db_url)
                 .await
                 .expect("direct connection to Postgres");
-            check_rows_in_backend!(&pool, "$1", email, folder_name, entry_name, site_title);
+            check_rows_in_backend!(
+                &pool,
+                "SELECT COUNT(*) FROM users WHERE email = $1 OR username = $1",
+                "SELECT COUNT(*) FROM address_book_folders WHERE name = $1",
+                "SELECT COUNT(*) FROM address_book_entries WHERE name = $1",
+                email,
+                folder_name,
+                entry_name,
+                site_title
+            );
         }
         "mysql" => {
             let pool = MySqlPool::connect(db_url)
                 .await
                 .expect("direct connection to MySQL");
-            check_rows_in_backend!(&pool, "?", email, folder_name, entry_name, site_title);
+            check_rows_in_backend!(
+                &pool,
+                "SELECT COUNT(*) FROM users WHERE email = ? OR username = ?",
+                "SELECT COUNT(*) FROM address_book_folders WHERE name = ?",
+                "SELECT COUNT(*) FROM address_book_entries WHERE name = ?",
+                email,
+                folder_name,
+                entry_name,
+                site_title
+            );
         }
         other => panic!("unexpected expected_backend: {other}"),
     }
