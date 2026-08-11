@@ -330,7 +330,7 @@ Connections stores connection entries in HashiCorp Vault/OpenBao, or — with th
 
 If you want the Vault-backed Connections UI:
 
-1. **Install and initialize Vault**, see [Vault from Zero](integrations.md#vault-from-zero) in the integrations guide
+1. **Install and initialize Vault**, see [Vault from Zero](integrations.md#vault-from-zero--complete-setup-guide) in the integrations guide
 2. **Enable KV v2** at the `secret` mount path
 3. **Create the persea policy** with read/write access to `secret/data/persea/*`
 4. **Enable AppRole** and get role_id + secret_id
