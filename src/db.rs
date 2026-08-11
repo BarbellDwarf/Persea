@@ -5853,7 +5853,7 @@ async fn cleanup_old_audit_log_pool(pool: &DbPool, retain_days: u32) -> rusqlite
         ),
         _ => qsql!(
             pool,
-            "DELETE FROM token_audit_log WHERE created_at < to_char((now() at time zone 'utc') - make_interval(days => $1), 'YYYY-MM-DD HH24:MI:SS')",
+            "DELETE FROM token_audit_log WHERE created_at < to_char((now() at time zone 'utc') - make_interval(days => $1::int), 'YYYY-MM-DD HH24:MI:SS')",
             "DELETE FROM token_audit_log WHERE created_at < datetime('now', ?)"
         ),
     }
@@ -5871,7 +5871,7 @@ async fn cleanup_old_audit_log_pool(pool: &DbPool, retain_days: u32) -> rusqlite
         ),
         _ => qsql!(
             pool,
-            "DELETE FROM addressbook_audit_log WHERE created_at < to_char((now() at time zone 'utc') - make_interval(days => $1), 'YYYY-MM-DD HH24:MI:SS')",
+            "DELETE FROM addressbook_audit_log WHERE created_at < to_char((now() at time zone 'utc') - make_interval(days => $1::int), 'YYYY-MM-DD HH24:MI:SS')",
             "DELETE FROM addressbook_audit_log WHERE created_at < datetime('now', ?)"
         ),
     }
@@ -6450,7 +6450,7 @@ async fn session_activity_by_hour_pool(
         pool,
         "SELECT to_char(started_at, 'YYYY-MM-DD HH24:00:00') AS hour, COUNT(*) AS count \
          FROM session_history \
-         WHERE started_at >= to_char((now() at time zone 'utc') - make_interval(hours => $1), 'YYYY-MM-DD HH24:MI:SS') \
+         WHERE started_at >= to_char((now() at time zone 'utc') - make_interval(hours => $1::int), 'YYYY-MM-DD HH24:MI:SS') \
          GROUP BY hour ORDER BY hour ASC",
         "SELECT strftime('%Y-%m-%d %H:00:00', started_at) AS hour, COUNT(*) AS count \
          FROM session_history \
@@ -6496,7 +6496,7 @@ async fn cleanup_session_history_pool(pool: &DbPool, retain_days: u32) -> rusqli
         ),
         _ => qsql!(
             pool,
-            "DELETE FROM session_history WHERE started_at < to_char((now() at time zone 'utc') - make_interval(days => $1), 'YYYY-MM-DD HH24:MI:SS')",
+            "DELETE FROM session_history WHERE started_at < to_char((now() at time zone 'utc') - make_interval(days => $1::int), 'YYYY-MM-DD HH24:MI:SS')",
             "DELETE FROM session_history WHERE started_at < datetime('now', ?)"
         ),
     }
