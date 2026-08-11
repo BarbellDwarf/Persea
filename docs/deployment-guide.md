@@ -278,6 +278,20 @@ This enables AVC 4:4:4, 60 FPS, desktop composition, and GPU encoding.
 
 **Note:** Windows only sends H.264 when a GPU (physical or virtual) is available. Without GPU, it uses Planar/RemoteFX which guacd re-encodes as JPEG/WebP. This is still good quality, just not as low-latency as H.264 passthrough.
 
+### RDP connection modes
+
+Some corporate networks and endpoint-security agents drop RDP connections based on the process that initiates them. Because the gateway runs as a single containerized process, an agent that flags that process can terminate every RDP session. The configurable connection mode changes how guacd's RDP connection is routed:
+
+| Mode | Behavior |
+|------|----------|
+| `proxy` (default) | guacd connects to a local loopback relay, which opens the actual outbound connection to the target from a separate process. Recommended for environments where endpoint agents or network filters drop RDP from the gateway process. |
+| `fallback` | Tries a direct connection first; on negotiation failure, automatically retries via the relay. Good middle ground when connectivity is inconsistent. |
+| `direct` | Current/legacy behavior: guacd connects straight to the target. Use only in environments where direct connections work reliably. |
+
+**Kerberos NLA caveat:** `proxy` mode hands guacd a `127.0.0.1` target, which breaks SPN-based Kerberos NLA (the SPN is resolved from the target hostname). Environments that rely on Kerberos NLA should use `direct` (or `fallback`, which succeeds directly when Kerberos negotiation works). NTLM authentication is unaffected.
+
+The mode is set by admins in **Admin → Settings → RDP Connection Mode**; the admin setting overrides the `[rdp] connection_mode` config value (or the `PERSEA_RDP__CONNECTION_MODE` environment variable).
+
 ## Step 5: Configure Authentication
 
 ### OIDC Single Sign-On (recommended)
