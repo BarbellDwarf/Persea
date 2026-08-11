@@ -36,7 +36,7 @@
 ### CSRF 403 errors
 - Symptom: POST/PUT/DELETE/PATCH requests return `403` with `{"error": "CSRF token missing or invalid"}` (`src/csrf.rs`)
 - Cause: the `X-CSRF-Token` header must exactly match the `csrf_token` cookie. Every state-changing request needs both, including API calls from scripts and curl
-- Fix: read the `csrf_token` cookie (it is deliberately **not** `HttpOnly`, so JavaScript can read it) and send it back as `X-CSRF-Token`. The built-in UI does this automatically (see [Security > CSRF protection](security.md#csrf-protection)). For a curl example:
+- Fix: read the `csrf_token` cookie (it is deliberately **not** `HttpOnly`, so JavaScript can read it) and send it back as `X-CSRF-Token`. The built-in UI does this automatically (see [Security > CSRF protection](security-hardening.md#csrf-protection)). For a curl example:
   ```bash
   curl -c jar.txt https://console.example.com/api/health > /dev/null
   TOKEN=$(awk '$6 == "csrf_token" {print $7}' jar.txt)
@@ -49,7 +49,7 @@
 
 ### WebSocket connection fails
 - **Origin rejected** — the WebSocket endpoint validates the `Origin` header against the `Host` header and rejects mismatches (and missing Origins) with `403` and `{"error": "cross-origin WebSocket request rejected"}` or `{"error": "WebSocket upgrade requires Origin header"}` (`src/websocket.rs`). Fix: connect from the same origin as the site (use the hostname users actually browse, not `localhost`, and don't omit the `Origin` header in custom clients)
-- **Rate limited** — WebSocket upgrades are always rate limited at 5/sec burst 50 per IP (unlike the API routes, which are only limited when `rate_limit = true`). Bursts of reconnects or many users behind one NAT can hit this; the upgrade fails with a 429. See [Security > Rate limiting](security.md#rate-limiting)
+- **Rate limited** — WebSocket upgrades are always rate limited at 5/sec burst 50 per IP (unlike the API routes, which are only limited when `rate_limit = true`). Bursts of reconnects or many users behind one NAT can hit this; the upgrade fails with a 429. See [Security > Rate limiting](security-hardening.md#rate-limiting)
 - **Shutdown** — during graceful shutdown new WebSockets are rejected with 503 `{"error": "server is shutting down"}`
 - Check if `allowed_networks` includes your IP (target-side CIDR checks still apply to the session target)
 - Check browser console for WebSocket errors
@@ -71,7 +71,7 @@
 
 ### Missing or wrong PERSEA_STORAGE_KEY (DB credentials)
 - Symptom: sessions started from connections entries fail authentication on the target — the password sent to guacd is the raw encrypted blob (`enc:v1:...`) instead of the plaintext
-- Cause: with the DB storage backend, credentials are stored AES-256-GCM encrypted (see [Security > Multi-database encryption at rest](security.md#multi-database-encryption-at-rest)). persea reads the key from the `PERSEA_STORAGE_KEY` environment variable (`src/api/address_book.rs`); if it is unset, encrypted values are passed through untouched; if it is the wrong key, decryption fails the same way
+- Cause: with the DB storage backend, credentials are stored AES-256-GCM encrypted (see [Security > Multi-database encryption at rest](security-hardening.md#multi-database-encryption-at-rest)). persea reads the key from the `PERSEA_STORAGE_KEY` environment variable (`src/api/address_book.rs`); if it is unset, encrypted values are passed through untouched; if it is the wrong key, decryption fails the same way
 - Fix: export `PERSEA_STORAGE_KEY=<64-char hex>` (generate with `openssl rand -hex 32`) in `/opt/persea/env` and restart. It must be the **same key that was used to encrypt the data** — entries created without a key configured cannot be decrypted afterwards. `[storage].encryption_key` is the config-file equivalent. A wrong-format key (not 64 hex chars) crashes the process with `panic: invalid encryption key` at connect time — always validate the key before restart
 
 ### Session history / reports missing

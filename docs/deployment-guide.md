@@ -117,13 +117,24 @@ Examples:
 
 ## Step 2: Initial Configuration
 
-### Create an admin API key
+### Complete the setup wizard
+
+On first start (no database yet), persea redirects to the **setup wizard** at
+`https://your-server:8089/setup` — it provisions the first admin user (email,
+display name, password) and applies initial feature toggles. Log in with those
+credentials afterwards.
+
+### Create admin API keys (for automation, optional)
+
+API keys are for scripts and API access — the web UI logs in with the
+setup-wizard admin credentials instead:
 
 ```bash
 /opt/persea/bin/persea --config /opt/persea/config.toml add-admin --name admin
 ```
 
-Save the printed key (`rgu_...`), it is shown only once. Use it for initial setup, then **delete it once OIDC is configured** (see Step 5).
+Save the printed key (`rgu_...`), it is shown only once. Use it for API
+automation, then **delete it once OIDC is configured** (see Step 5).
 
 ### Edit config.toml
 

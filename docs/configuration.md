@@ -1,7 +1,7 @@
 # Configuration Reference
 
 > **Audience:** operators and admins configuring persea.
-> **Next:** [Security](security.md) for hardening, or the [API Reference](api.md) for endpoints.
+> **Next:** [Security](security-hardening.md) for hardening, or the [API Reference](api.md) for endpoints.
 
 persea reads a TOML configuration file. All settings have sensible defaults and are optional.
 

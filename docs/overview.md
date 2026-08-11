@@ -245,12 +245,12 @@ Every guide states its audience and a "Next" link; the map below mirrors that.
 ### Getting started
 - [Installation](installation.md) — all install options (Debian, Docker, bare-metal, dev, RPM from source). *Audience: first-time installers. Next: deployment-guide.md*
 - [Deployment Guide](deployment-guide.md) — step-by-step production setup (architecture, HAProxy, RDP targets, hardening). *Audience: operators. Next: installation.md*
-- [Configuration](configuration.md) — full config.toml reference, including `[storage]`, `[vault]`, and `shutdown_timeout_secs`. *Audience: operators and admins. Next: security.md*
+- [Configuration](configuration.md) — full config.toml reference, including `[storage]`, `[vault]`, and `shutdown_timeout_secs`. *Audience: operators and admins. Next: security-hardening.md*
 - [Troubleshooting](troubleshooting.md) — guacd, Vault, database, CSRF, WebSocket, and disk failure modes. *Audience: operators. Next: configuration.md*
 
 ### Features
-- [Roles and Access Control](roles-and-access-control.md) — 4-tier role hierarchy, connection-level RBAC, OIDC groups, user API tokens. *Audience: admins. Next: security.md*
-- [Web Browser Sessions](web-sessions.md) — autofill, domain allowlisting, login scripts. *Audience: admins. Next: security.md*
+- [Roles and Access Control](roles-and-access-control.md) — 4-tier role hierarchy, connection-level RBAC, OIDC groups, user API tokens. *Audience: admins. Next: security-hardening.md*
+- [Web Browser Sessions](web-sessions.md) — autofill, domain allowlisting, login scripts. *Audience: admins. Next: security-hardening.md*
 - [Credential Variables](credential-variables.md) — shared credentials across entries. *Audience: admins. Next: configuration.md*
 - [Reports](reports.md) — session analytics, history, CSV export. *Audience: admins and powerusers. Next: api.md*
 - [RDP Video Performance](rdp-video-performance.md) — H.264 passthrough, GFX pipeline, xrdp/Windows tuning. *Audience: admins tuning RDP. Next: deployment-guide.md*
@@ -264,7 +264,7 @@ Every guide states its audience and a "Next" link; the map below mirrors that.
 - [Migration from Apache Guacamole](migration.md) — MySQL/MariaDB import, Vault-to-Vault split, and Vault-to-DB migration. *Audience: admins. Next: configuration.md*
 
 ### Reference
-- [Security](security.md) — TLS, network allowlists, headers, CSRF, rate limiting, audit logging, hardening. *Audience: security-minded operators and admins. Next: roles-and-access-control.md*
+- [Security](security-hardening.md) — TLS, network allowlists, headers, CSRF, rate limiting, audit logging, hardening. *Audience: security-minded operators and admins. Next: roles-and-access-control.md*
 - [API Reference](api.md) — REST API endpoints, unified error format, deep health check, `/metrics`, and the headless ws-ticket flow. *Audience: developers and integrators. Next: netbox.md*
 
 ### Historical research

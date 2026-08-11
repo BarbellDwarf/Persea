@@ -23,23 +23,19 @@ The package installs to `/opt/persea` and creates systemd services for both guac
 
 ### Post-install
 
-1. **Create an admin API key:**
-
-```bash
-/opt/persea/bin/persea --config /opt/persea/config.toml add-admin --name admin
-```
-
-Save the printed API key, it is only shown once.
-
-2. **Configure**, edit `/opt/persea/config.toml` as needed (see [Configuration](configuration.md)).
-
-3. **Start the services:**
+1. **Start the services:**
 
 ```bash
 sudo systemctl enable --now persea
 ```
 
 This starts both `persea-guacd` (the protocol daemon) and `persea` (the web proxy).
+
+2. **Complete the setup wizard** — open `https://your-server:8089` and follow
+   `/setup`, which provisions the first admin user (email + password) and
+   applies initial feature toggles. Log in with those credentials.
+
+3. **Configure**, edit `/opt/persea/config.toml` as needed (see [Configuration](configuration.md)).
 
 4. **(Required for connections) Set up a storage backend:**
 
@@ -103,12 +99,14 @@ After installation, verify everything works:
    journalctl -u persea-guacd -n 20 --no-pager
    ```
 
-4. **Create an admin user** (if not done during install):
+4. **Create the first admin via the setup wizard** (if not done during install):
+   open `https://your-server:8089` and follow `/setup`. For automation/API
+   access, create an admin API key instead:
    ```bash
    sudo -u persea /opt/persea/bin/persea add-admin --name admin
    ```
 
-5. **Open the web interface** at `https://your-server:8089` and log in with the admin API key.
+5. **Open the web interface** at `https://your-server:8089` and log in with the setup-wizard admin credentials (or the API key as `Authorization: Bearer` for the API).
 
 6. **Test an SSH session**, create an ad-hoc SSH session to `localhost` or another machine on your network.
 
@@ -190,20 +188,21 @@ The Docker image:
 - Enables TLS between persea and guacd by default
 - Exposes HTTP on port 8089 (put a reverse proxy in front for HTTPS)
 
-### API key setup
+### First run — setup wizard
 
-On first run (when no database exists), the container generates an admin API key and prints it to the logs:
+On first start (when no database exists), persea redirects to the **setup wizard**
+at `https://your-server:8089/setup`, which provisions the first admin user
+(email, display name, password) and applies initial feature toggles.
 
-```bash
-docker logs persea
-```
-
-Save the printed key, it is only shown once. To generate additional keys later:
+After setup, log in with the admin credentials. API keys for automation are
+created separately when needed:
 
 ```bash
 docker exec persea /opt/persea/bin/persea \
     --config /opt/persea/config.toml add-admin --name my-admin
 ```
+
+The printed key (`rgu_...`) is shown only once — save it immediately.
 
 ### Customizing the configuration
 

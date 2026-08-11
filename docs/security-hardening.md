@@ -1,4 +1,4 @@
-# Security
+# Security Hardening
 
 > **Audience:** operators and admins hardening a persea deployment.
 > **Next:** [Roles and Access Control](roles-and-access-control.md) for the role and permission model.

@@ -1,7 +1,7 @@
 # Web Browser Sessions
 
 > **Audience:** admins enabling and securing web browser sessions (autofill, domain allowlists, login scripts).
-> **Next:** [Security](security.md#web-session-hardening) for hardening, or [Configuration](configuration.md#browser-session-settings) for the browser settings.
+> **Next:** [Security](security-hardening.md#web-session-hardening) for hardening, or [Configuration](configuration.md#browser-session-settings) for the browser settings.
 
 Web browser sessions give users a full Chromium browser running on the server, streamed to their own browser via the Guacamole protocol. Each session spawns a headless Xvnc display with Chromium in kiosk mode. The user sees and interacts with a real browser without installing anything locally.
 
@@ -426,7 +426,7 @@ Clipboard copy and paste can be independently disabled per connections entry. Th
 | `disable_copy` | Prevents server → client clipboard transfer (data loss prevention) |
 | `disable_paste` | Prevents client → server clipboard transfer (prevents pasting malicious content) |
 
-These work for all session types (SSH, RDP, VNC, Web), not just web sessions. See [Security: Clipboard control](security.md#clipboard-control) for details.
+These work for all session types (SSH, RDP, VNC, Web), not just web sessions. See [Security: Clipboard control](security-hardening.md#clipboard-control) for details.
 
 ## In-session keyboard shortcuts
 
@@ -471,7 +471,7 @@ Web sessions support [multi-hop SSH tunnel chains](overview.md#ssh-tunnel--jump-
 
 ## Chromium security hardening
 
-Every web session runs Chromium with a comprehensive managed policy and an isolated profile. See [Security: Web session hardening](security.md#web-session-hardening) for the full policy table.
+Every web session runs Chromium with a comprehensive managed policy and an isolated profile. See [Security: Web session hardening](security-hardening.md#web-session-hardening) for the full policy table.
 
 **Warning:** The Chromium managed policy is installed globally at `/etc/chromium/policies/managed/persea.json`. This affects **all** Chromium instances on the machine, not just persea sessions. Do not install persea on a desktop machine where you want to use Chromium for normal browsing. persea is designed to run on a dedicated server or VM.
 

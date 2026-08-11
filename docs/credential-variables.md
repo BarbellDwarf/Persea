@@ -1,11 +1,11 @@
 # Credential Variables
 
 > **Audience:** admins configuring shared credentials across connections entries.
-> **Next:** [Security](security.md#multi-database-encryption-at-rest) for how stored credentials are encrypted.
+> **Next:** [Security](security-hardening.md#multi-database-encryption-at-rest) for how stored credentials are encrypted.
 
 Credential variables let connections entries reference shared credentials by name instead of storing passwords directly. Users maintain their own credential values in Vault via the **My Credentials** dialog (the **Credentials** link in the top navigation, or the gear menu). When a session launches, persea substitutes the variables from the user's saved values.
 
-This gives a similar experience to LDAP credential passthrough in Apache Guacamole, where users log in once and sessions just work, but without persea needing to bind to LDAP. Credentials never reach the browser. They are stored in Vault KV v2, or — with the DB storage backend — AES-256-GCM encrypted at rest in the database (see [Security > Multi-database encryption at rest](security.md#multi-database-encryption-at-rest)).
+This gives a similar experience to LDAP credential passthrough in Apache Guacamole, where users log in once and sessions just work, but without persea needing to bind to LDAP. Credentials never reach the browser. They are stored in Vault KV v2, or — with the DB storage backend — AES-256-GCM encrypted at rest in the database (see [Security > Multi-database encryption at rest](security-hardening.md#multi-database-encryption-at-rest)).
 
 ## How it works
 

@@ -58,7 +58,7 @@ The HTTP status is set per error variant (`src/error.rs`). The mapping is:
 | `Vsphere` | 502 | VMware vSphere API failure |
 | `Internal` | 500 | Unexpected server error |
 
-Two middleware-level rejections return the same JSON shape but with only the `error` field (no `code`/`error_code`): the CSRF layer (`{"error": "CSRF token missing or invalid"}` with 403 — see [Security](security.md#csrf-protection)) and the WebSocket Origin check (`{"error": "cross-origin WebSocket request rejected"}` / `{"error": "WebSocket upgrade requires Origin header"}` with 403).
+Two middleware-level rejections return the same JSON shape but with only the `error` field (no `code`/`error_code`): the CSRF layer (`{"error": "CSRF token missing or invalid"}` with 403 — see [Security](security-hardening.md#csrf-protection)) and the WebSocket Origin check (`{"error": "cross-origin WebSocket request rejected"}` / `{"error": "WebSocket upgrade requires Origin header"}` with 403).
 
 ## Health
 
