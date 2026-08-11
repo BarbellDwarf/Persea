@@ -15,7 +15,7 @@ export class SessionsPage {
 
   // Form
   readonly sessionForm: Locator;
-  readonly newSessionToggle: Locator;
+  readonly newSessionBtn: Locator;
   readonly newSessionFields: Locator;
   readonly sessionType: Locator;
   readonly connectBtn: Locator;
@@ -26,7 +26,6 @@ export class SessionsPage {
   readonly port: Locator;
   readonly username: Locator;
   readonly password: Locator;
-  readonly generateKeypair: Locator;
 
   // RDP
   readonly rdpHostname: Locator;
@@ -44,10 +43,6 @@ export class SessionsPage {
   // VDI
   readonly vdiImage: Locator;
 
-  // Jump hosts
-  readonly jumpSection: Locator;
-  readonly addHopBtn: Locator;
-
   // Session list
   readonly sessionList: Locator;
   readonly sessionEmpty: Locator;
@@ -62,10 +57,10 @@ export class SessionsPage {
     this.navAdmin = page.locator(S.navAdmin);
     this.navTokens = page.locator(S.navTokens);
     this.navReports = page.locator(S.navReports);
-    this.navLogout = page.locator(S.navLogout);
+    this.navLogout = page.locator('header a[href="/auth/logout"]');
 
     this.sessionForm = page.locator(S.sessionForm);
-    this.newSessionToggle = page.locator(S.newSessionToggle);
+    this.newSessionBtn = page.locator('#btn-new-session');
     this.newSessionFields = page.locator(S.newSessionFields);
     this.sessionType = page.locator(S.sessionType);
     this.connectBtn = page.locator(S.connectBtn);
@@ -75,7 +70,6 @@ export class SessionsPage {
     this.port = page.locator(S.port);
     this.username = page.locator(S.username);
     this.password = page.locator(S.password);
-    this.generateKeypair = page.locator(S.generateKeypair);
 
     this.rdpHostname = page.locator(S.rdpHostname);
     this.rdpPort = page.locator(S.rdpPort);
@@ -88,9 +82,6 @@ export class SessionsPage {
     this.url = page.locator(S.url);
 
     this.vdiImage = page.locator(S.vdiImage);
-
-    this.jumpSection = page.locator(S.jumpSection);
-    this.addHopBtn = page.locator(S.addHopBtn);
 
     this.sessionList = page.locator(S.sessionList);
     this.sessionEmpty = page.locator(S.sessionEmpty);
@@ -109,8 +100,13 @@ export class SessionsPage {
     await this.sessionType.selectOption(type);
   }
 
-  async toggleNewSession(): Promise<void> {
-    await this.newSessionToggle.click();
+  /**
+   * Opens the ad-hoc session form. The form starts hidden and is only
+   * revealed via the "+ New Session" button, which appears once the
+   * `/api/me` role check resolves for admin/poweruser.
+   */
+  async openNewSession(): Promise<void> {
+    await this.newSessionBtn.click();
   }
 
   async isFormVisible(): Promise<boolean> {

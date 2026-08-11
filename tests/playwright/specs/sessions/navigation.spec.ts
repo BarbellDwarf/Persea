@@ -11,7 +11,7 @@ test.describe('Sessions page', () => {
 
   test('page renders with title and nav', async ({ page }) => {
     await sessions.goto();
-    await expect(page).toHaveTitle(/persea.*Sessions/);
+    await expect(page).toHaveTitle(/persea.*Sessions/i);
     await expect(page.locator('h1')).toBeVisible();
     await expect(sessions.navConnections).toBeVisible();
     await expect(sessions.navSessions).toHaveClass(/active/);
@@ -30,12 +30,20 @@ test.describe('Sessions page', () => {
   });
 
   test('ad-hoc session form visibility depends on role', async ({ page }) => {
-    // Navigate without auth to test unauthenticated state
-    await page.goto('/sessions.html');
-    // Without auth, the page redirects to / (login), so form is not present
-    // This validates the element exists but is hidden for unauthenticated users
-    const formVisible = await sessions.isFormVisible();
-    expect(formVisible).toBe(false);
+    await sessions.goto();
+    // Admin/poweruser: the "+ New Session" button appears once the role
+    // check resolves, and opens the (initially hidden) form.
+    await expect(sessions.newSessionBtn).toBeVisible();
+    await sessions.openNewSession();
+    await expect(sessions.newSessionFields).toBeVisible();
+
+    // Without auth, /sessions.html redirects to the login page and the
+    // form is never shown.
+    await page.evaluate(() => sessionStorage.clear());
+    await page.context().clearCookies();
+    await page.reload();
+    await expect(page).toHaveURL(/\?error=login_required/);
+    await expect(sessions.sessionForm).toBeHidden();
   });
 
   test('nav links navigate correctly', async ({ page }) => {
@@ -49,23 +57,29 @@ test.describe('Sessions page', () => {
   });
 
   test('logout clears session and redirects', async ({ page }) => {
-    await sessions.goto();
+    // Log in via the login form so this test holds its own DB-backed session.
+    // Logout deletes that session row from the DB — doing it with the shared
+    // storageState cookie would invalidate every other test's session mid-run.
+    await page.goto('/');
+    await page.evaluate(() => sessionStorage.clear());
+    await page.context().clearCookies();
+    await page.reload();
+    await page.fill('#username', process.env.LOGIN_USERNAME || 'admin@local.test');
+    await page.fill('#password', process.env.LOGIN_PASSWORD || 'AdminPass123!');
+    await page.click('#login-submit');
+    await page.waitForURL(/connections\.html|sessions\.html/, { timeout: 10_000 });
+    await page.goto('/sessions.html');
+
     await sessions.navLogout.click();
     await expect(page).toHaveURL(/\//);
   });
 
   test('session type toggle shows correct fields', async ({ page }) => {
-    await page.goto('/');
-    await page.evaluate((key) => {
-      sessionStorage.setItem('persea_api_key', key);
-    }, process.env.ADMIN_API_KEY || '');
-    await page.goto('/sessions.html');
+    await sessions.goto();
 
-    // Form should be visible for admin API key users
-    await expect(sessions.sessionForm).toBeVisible();
-
-    // Toggle the new session section
-    await sessions.toggleNewSession();
+    // The form starts hidden; open it via the "+ New Session" button
+    await expect(sessions.newSessionBtn).toBeVisible();
+    await sessions.openNewSession();
     await expect(sessions.newSessionFields).toBeVisible();
 
     // Default is SSH
