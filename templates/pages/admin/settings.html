@@ -130,20 +130,6 @@
                 </label>
                 <input type="hidden" name="enable_rdp" id="enable_rdp-hidden" value="false">
 
-                <div>
-                    <label class="form-label">RDP Connection Mode</label>
-                    <select name="rdp_connection_mode" class="form-input">
-                        <option value="proxy" selected>Proxy (recommended)</option>
-                        <option value="fallback">Fallback</option>
-                        <option value="direct">Direct</option>
-                    </select>
-                    <p class="text-xs text-[var(--text-muted)] mt-1">
-                        Some corporate networks and endpoint-security agents drop RDP connections from specific
-                        processes. Proxy routes RDP through a local loopback relay (recommended); Fallback tries
-                        direct first, then retries via the relay; Direct disables the relay.
-                    </p>
-                </div>
-
                 <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
                     <div>
                         <span class="text-sm text-[var(--text-primary)]">SSH Tunnels</span>
@@ -390,10 +376,6 @@ function syncToggle(name) {
                     status.textContent = 'Configured';
                     status.className = 'px-2 py-0.5 text-xs rounded border bg-emerald-900/50 text-emerald-300 border-emerald-800';
                 }
-            }
-            var modeSelect = document.querySelector('select[name="rdp_connection_mode"]');
-            if (modeSelect && s.rdp_connection_mode !== undefined && s.rdp_connection_mode !== null) {
-                modeSelect.value = s.rdp_connection_mode;
             }
         })
         .catch(function(e) {

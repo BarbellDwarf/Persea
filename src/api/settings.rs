@@ -5,8 +5,7 @@
 //! to handlers, so `GET /api/system/settings` returns whatever is stored in
 //! the DB, falling back to sensible defaults that mirror the hardcoded
 //! values in `templates/pages/admin/settings.html` and the documented
-//! defaults in `src/config.rs`. Enum-style keys (e.g. `rdp_connection_mode`)
-//! are validated against a fixed set of values on PUT.
+//! defaults in `src/config.rs`.
 
 use crate::api::SettingsBaseline;
 use crate::auth::AuthIdentity;
@@ -31,7 +30,6 @@ const SETTING_KEYS: &[&str] = &[
     "max_concurrent_sessions",
     "session_history_retention_days",
     "enable_rdp",
-    "rdp_connection_mode",
     "enable_ssh_tunnels",
     "enable_api_keys",
     "enable_recordings",
@@ -58,9 +56,6 @@ const STRING_KEYS: &[&str] = &[
     "primary_color",
 ];
 const ADDR_KEYS: &[&str] = &["listen_addr", "guacd_addr"];
-/// Enum-style string keys validated against a fixed set of values.
-const RDP_MODE_KEYS: &[&str] = &["rdp_connection_mode"];
-const RDP_CONNECTION_MODES: &[&str] = &["proxy", "fallback", "direct"];
 const DURATION_KEYS: &[&str] = &[
     "session_max_duration_secs",
     "max_concurrent_sessions",
@@ -109,7 +104,6 @@ fn default_value(key: &str) -> Value {
         "max_concurrent_sessions" => json!(500u64),
         "session_history_retention_days" => json!(90u64),
         "enable_rdp" => json!(true),
-        "rdp_connection_mode" => json!("proxy"),
         "enable_ssh_tunnels" => json!(true),
         "enable_api_keys" => json!(true),
         "enable_recordings" => json!(true),
@@ -135,12 +129,6 @@ fn default_value(key: &str) -> Value {
 fn stored_to_value(key: &str, stored: &str) -> Value {
     if STRING_KEYS.contains(&key) {
         json!(stored)
-    } else if RDP_MODE_KEYS.contains(&key) {
-        if RDP_CONNECTION_MODES.contains(&stored) {
-            json!(stored)
-        } else {
-            default_value(key)
-        }
     } else if DURATION_KEYS.contains(&key) {
         stored
             .parse::<u64>()
@@ -282,17 +270,6 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
             }
         }
         Ok(addr.to_string())
-    } else if RDP_MODE_KEYS.contains(&key) {
-        let mode = value
-            .as_str()
-            .ok_or_else(|| AppError::Validation(format!("{key} must be a string")))?;
-        if !RDP_CONNECTION_MODES.contains(&mode) {
-            return Err(AppError::Validation(format!(
-                "{key} must be one of: {}",
-                RDP_CONNECTION_MODES.join(", ")
-            )));
-        }
-        Ok(mode.to_string())
     } else if STRING_KEYS.contains(&key) {
         Ok(value
             .as_str()

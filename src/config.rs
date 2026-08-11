@@ -621,19 +621,9 @@ impl Default for StorageConfig {
 /// don't have, and the failure mode is a silent hang. Override here
 /// with `"kerberos"` or `"negotiate"` if your environment actually
 /// supports it.
-///
-/// `connection_mode` selects how guacd reaches the RDP target:
-/// `"proxy"` (default) relays through a local loopback proxy so the
-/// outbound connection is made by a different process — the proven
-/// workaround for hosts where a per-process network filter silently
-/// drops or corrupts RDP connections; `"fallback"` tries a direct
-/// connection first and automatically retries through the relay when
-/// negotiation fails; `"direct"` keeps the historical behaviour.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct RdpConfig {
     pub default_auth_pkg: Option<String>,
-    /// RDP connection mode: "proxy" (default), "fallback", or "direct".
-    pub connection_mode: Option<String>,
 }
 
 /// Fully-resolved theme palette with all 26 color fields.
