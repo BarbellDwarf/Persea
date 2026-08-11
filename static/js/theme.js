@@ -26,7 +26,7 @@ function applyThemeColors(colors) {
     localStorage.setItem('persea_theme_colors', JSON.stringify(colors));
 }
 var _themePresets = {}, _adminPreset = 'aurora';
-var _themeDescriptions = { dark: 'Navy & cyan \u2014 the default', light: 'Clean white & blue', 'high-contrast': 'Maximum readability', terminal: 'Retro green-on-black', nord: 'Arctic, muted blues', corporate: 'Slate & steel blue', aurora: 'Midnight blue with ambient glow', jaguar: 'Racing green & gold' };
+var _themeDescriptions = { dark: 'Red & teal on navy', light: 'Blue & teal on white', 'high-contrast': 'High-contrast red & green on black', terminal: 'Amber & green on near-black', nord: 'Arctic ice blue & sage', corporate: 'Blue & orange on slate', aurora: 'Blue & cyan on midnight', jaguar: 'Gold & emerald on dark green' };
 function initTheme(t) {
     if (!t) return;
     _themePresets = t.presets || {};
