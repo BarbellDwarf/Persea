@@ -440,8 +440,10 @@ impl SessionManager {
                         secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                     }
                 };
-                let params =
-                    guacd::ConnectionParams::Rdp(Box::new(build_rdp_params(connect_host, connect_port)));
+                let params = guacd::ConnectionParams::Rdp(Box::new(build_rdp_params(
+                    connect_host,
+                    connect_port,
+                )));
                 if conn_mode == "fallback" {
                     rdp_params_stored = Some(guacd::ConnectionParams::Rdp(Box::new(
                         build_rdp_params(hostname.clone(), port),

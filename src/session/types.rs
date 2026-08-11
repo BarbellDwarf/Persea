@@ -1,5 +1,6 @@
 use crate::browser::BrowserSession;
-use crate::guacd::GuacdStream;
+use crate::guacd::{ConnectionParams, GuacdStream};
+use crate::rdp_relay::RdpRelay;
 use crate::tunnel;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

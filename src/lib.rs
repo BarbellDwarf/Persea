@@ -45,6 +45,7 @@ pub mod protocol;
 pub mod providers_db;
 pub mod pve;
 pub mod rbac;
+pub mod rdp_relay;
 pub mod recording;
 pub mod role;
 pub mod session;

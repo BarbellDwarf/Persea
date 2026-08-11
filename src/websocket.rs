@@ -325,9 +325,15 @@ async fn handle_ws(
 
     // Run the bidirectional proxy
     let start = Instant::now();
-    let proxy_outcome =
-        proxy_ws_guacd(manager.clone(), session_id, ws, guacd_stream, recording_file, cancel)
-            .await;
+    let proxy_outcome = proxy_ws_guacd(
+        manager.clone(),
+        session_id,
+        ws,
+        guacd_stream,
+        recording_file,
+        cancel,
+    )
+    .await;
     let elapsed = start.elapsed();
     let server_disconnected = proxy_outcome.server_disconnected;
     let proxy_result = proxy_outcome.result;
@@ -489,7 +495,10 @@ enum ProxyBranch {
     BrowserEnded(Option<String>),
     Cancelled,
     /// guacd reported a retryable RDP security-type error.
-    RdpRelayRetry { code: String, message: String },
+    RdpRelayRetry {
+        code: String,
+        message: String,
+    },
 }
 
 /// Bidirectional proxy between WebSocket and guacd stream (TCP or TLS).
@@ -558,9 +567,11 @@ async fn proxy_ws_guacd(
         // browser → guacd
         let ws_sink_b = ws_sink.clone();
         let ws_read_holder_b = ws_read_holder.clone();
-        let browser_to_guacd = tokio::spawn(async move {
-            ws_to_guacd(ws_read_holder_b, guacd_write, ws_sink_b).await
-        });
+        let browser_to_guacd =
+            tokio::spawn(
+                async move { ws_to_guacd(ws_read_holder_b, guacd_write, ws_sink_b).await },
+            );
+        let browser_to_guacd_abort = browser_to_guacd.abort_handle();
 
         let branch = tokio::select! {
             result = guacd_to_browser => match result {
@@ -590,7 +601,7 @@ async fn proxy_ws_guacd(
                 // The browser→guacd task holds the write half of the dead
                 // stream and, via the holder, the websocket read half —
                 // abort it so the retry can reuse the websocket.
-                browser_to_guacd.abort();
+                browser_to_guacd_abort.abort();
                 tracing::info!(
                     session_id = %session_id,
                     code = %code,
@@ -607,11 +618,9 @@ async fn proxy_ws_guacd(
                         // or the relayed attempt failed) — send the original
                         // error instruction so the browser reports the real
                         // failure.
-                        let instr = crate::protocol::Instruction::new(
-                            "error",
-                            vec![message.clone(), code],
-                        )
-                        .encode();
+                        let instr =
+                            crate::protocol::Instruction::new("error", vec![message.clone(), code])
+                                .encode();
                         let mut sink = ws_sink.lock().await;
                         let _ = sink.send(Message::Text(instr.into())).await;
                         break ProxyResult::GuacdEnded(Some(message));
@@ -705,9 +714,7 @@ async fn guacd_to_ws(
         // case a force-flush above happened mid-multibyte char.
         let text = match String::from_utf8(carry_data.to_vec()) {
             Ok(t) => t,
-            Err(e) => {
-                return GuacdToWsEnd::Ended(Err(format!("invalid UTF-8 from guacd: {}", e)))
-            }
+            Err(e) => return GuacdToWsEnd::Ended(Err(format!("invalid UTF-8 from guacd: {}", e))),
         };
 
         // Capture guacd's `error` instructions (e.g. RDP negotiation failures

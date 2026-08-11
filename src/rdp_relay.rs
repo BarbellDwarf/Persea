@@ -69,10 +69,7 @@ pub async fn spawn(target_host: &str, target_port: u16) -> io::Result<RdpRelay> 
                 Ok((inbound, _)) => {
                     // Prune finished bridge tasks so a long-lived session
                     // doesn't accumulate handles.
-                    conn_list_task
-                        .lock()
-                        .unwrap()
-                        .retain(|h| !h.is_finished());
+                    conn_list_task.lock().unwrap().retain(|h| !h.is_finished());
                     let target = target_host.clone();
                     let conns = conn_list_task.clone();
                     let bridge = tokio::spawn(async move {
@@ -106,12 +103,8 @@ pub async fn spawn(target_host: &str, target_port: u16) -> io::Result<RdpRelay> 
 }
 
 /// Bridge one accepted connection to the target until either side closes.
-async fn bridge(
-    mut inbound: TcpStream,
-    target_host: &str,
-    target_port: u16,
-) -> io::Result<()> {
-    let outbound = tokio::time::timeout(
+async fn bridge(mut inbound: TcpStream, target_host: &str, target_port: u16) -> io::Result<()> {
+    let mut outbound = tokio::time::timeout(
         CONNECT_TIMEOUT,
         TcpStream::connect((target_host, target_port)),
     )
