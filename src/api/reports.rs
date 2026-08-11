@@ -51,7 +51,16 @@ pub async fn list_recordings(
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("guac") {
+            // Accept both plain `.guac` recordings and encrypted-at-rest
+            // `.guac.enc` recordings (extension `enc`, stem ending `.guac`).
+            let ext = path.extension().and_then(|e| e.to_str());
+            let is_guac = ext == Some("guac");
+            let is_enc = ext == Some("enc")
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s.ends_with(".guac"));
+            if !is_guac && !is_enc {
                 continue;
             }
             let name = match path.file_name().and_then(|n| n.to_str()) {
@@ -334,7 +343,8 @@ pub async fn report_activity(
 pub(crate) fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path) -> bool {
     if name.is_empty()
         || name == ".guac"
-        || !name.ends_with(".guac")
+        || name == ".guac.enc"
+        || (!name.ends_with(".guac") && !name.ends_with(".guac.enc"))
         || name.contains('/')
         || name.contains('\\')
         || name.contains("..")
@@ -367,7 +377,15 @@ pub async fn serve_recording(
     }
 
     let path = manager.recording_path().join(&name);
-    let enc_path = path.with_extension("guac.enc");
+    // `.guac.enc` requests decrypt the named file directly; `.guac` requests
+    // transparently fall back to the encrypted sibling when present.
+    let is_enc = name.ends_with(".guac.enc");
+    let plain_path = if is_enc {
+        path.with_extension("guac")
+    } else {
+        path.clone()
+    };
+    let enc_path = plain_path.with_extension("guac.enc");
 
     // Prefer the encrypted file when it exists.
     if enc_path.exists() {
@@ -375,7 +393,7 @@ pub async fn serve_recording(
             AppError::Internal("recording is encrypted but no encryption key is configured".into())
         })?;
         let plaintext = tokio::task::spawn_blocking(move || {
-            crate::recording::decrypt_recording(&path, &enc_key)
+            crate::recording::decrypt_recording(&plain_path, &enc_key)
         })
         .await
         .map_err(|e| AppError::Internal(format!("join error: {e}")))?
@@ -396,7 +414,7 @@ pub async fn serve_recording(
     }
 
     // Legacy unencrypted recording.
-    let file = tokio::fs::File::open(&path).await.map_err(|e| {
+    let file = tokio::fs::File::open(&plain_path).await.map_err(|e| {
         tracing::warn!(name = %name, error = %e, "Recording not found");
         AppError::Session("recording not found".into())
     })?;
@@ -433,10 +451,29 @@ pub async fn delete_recording(
     }
 
     let path = manager.recording_path().join(&name);
+    let is_enc = name.ends_with(".guac.enc");
+    let plain_path = if is_enc {
+        path.with_extension("guac")
+    } else {
+        path.clone()
+    };
+    let enc_path = plain_path.with_extension("guac.enc");
 
-    tokio::fs::remove_file(&path).await.map_err(|e| {
-        tracing::warn!(name = %name, error = %e, "Recording not found");
-        AppError::Session("recording not found".into())
-    })?;
+    // Remove whichever of the plaintext/encrypted variants exist.
+    let mut removed = false;
+    for p in [&plain_path, &enc_path] {
+        match tokio::fs::remove_file(p).await {
+            Ok(_) => removed = true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(name = %name, error = %e, "Failed to delete recording");
+            }
+        }
+    }
+    if !removed {
+        return Err(AppError::Session("recording not found".into()));
+    }
+    // Also remove the sidecar `.meta` file (best effort).
+    let _ = tokio::fs::remove_file(plain_path.with_extension("meta")).await;
     Ok(StatusCode::NO_CONTENT)
 }
