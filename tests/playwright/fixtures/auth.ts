@@ -12,18 +12,15 @@ export async function loginWithApiKey(page: Page, apiKey: string): Promise<void>
 }
 
 /**
- * Login via the index.html form with an API key.
+ * Login via the password form on the login page.
  */
-export async function loginViaForm(page: Page, apiKey: string): Promise<void> {
+export async function loginWithPassword(page: Page, username: string, password: string): Promise<void> {
   await page.goto('/');
-  // If SSO is enabled, the API key form might be hidden — toggle it
-  const toggle = page.locator('#api-key-toggle');
-  if (await toggle.isVisible()) {
-    await toggle.click();
-  }
-  await page.fill('#api-key', apiKey);
-  await page.click('#login-btn');
-  await page.waitForURL(/connections\.html|sessions\.html/);
+  await page.waitForSelector('#username');
+  await page.fill('#username', username);
+  await page.fill('#password', password);
+  await page.click('#login-submit');
+  await page.waitForURL(/connections\.html|sessions\.html/, { timeout: 10_000 });
 }
 
 /**

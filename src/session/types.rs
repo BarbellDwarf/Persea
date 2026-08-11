@@ -254,6 +254,8 @@ pub enum SessionStatus {
     Error,
     /// Session expired (no browser connected in time)
     Expired,
+    /// Browser disconnected but session remains in manager for reconnection
+    Disconnected,
 }
 
 /// Public session info returned by the API.
@@ -291,6 +293,10 @@ pub struct SessionInfo {
     /// client.html from the /api/sessions/:id fetch; omitted when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub autohide_side_tabs: bool,
+    /// Whether file transfer (RDP drive / SSH SFTP) is enabled for this
+    /// session. Read by client.html to show/hide the upload button.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub drive_enabled: bool,
 }
 
 /// Internal session state including the guacd connection.
@@ -318,6 +324,8 @@ pub struct Session {
     pub deferred_params: Option<crate::guacd::ConnectionParams>,
     /// Per-session drive directory path (RDP sessions with drive enabled).
     pub drive_path: Option<std::path::PathBuf>,
+    /// Whether file transfer (RDP drive / SSH SFTP) is enabled for this session.
+    pub drive_enabled: bool,
     /// SSH tunnel chain (jump hosts) — kept alive for the session duration.
     pub tunnels: Vec<tunnel::SshTunnel>,
     /// Docker container ID for VDI sessions.
@@ -454,6 +462,7 @@ impl Session {
             thumbnail_url: Some(format!("/api/sessions/{}/thumbnail", self.id)),
             fullscreen_on_connect: self.fullscreen_on_connect,
             autohide_side_tabs: self.autohide_side_tabs,
+            drive_enabled: self.drive_enabled,
         }
     }
 }

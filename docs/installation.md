@@ -238,13 +238,17 @@ services:
       - ./config.toml:/opt/persea/config.toml
       - persea-data:/opt/persea/data
       - persea-recordings:/opt/persea/recordings
+      - persea-tls:/opt/persea/tls
     environment:
       - RUST_LOG=info
 
 volumes:
   persea-data:
   persea-recordings:
+  persea-tls:
 ```
+
+> **Keep the TLS volume.** `persea-tls` holds the certificate the entrypoint generates on first start. Without it, every `docker compose down && up` (or image upgrade) regenerates the self-signed cert, changing the fingerprint and re-triggering browser warnings. Mount your own cert for production; when persea self-generates one it also sets `secure_cookies = false` in the config so the session cookie works over the untrusted HTTPS connection.
 
 ### Sharing guacd with Apache Guacamole
 
@@ -267,6 +271,7 @@ services:
       - ./config.toml:/opt/persea/config.toml
       - persea-data:/opt/persea/data
       - persea-recordings:/opt/persea/recordings
+      - persea-tls:/opt/persea/tls
     environment:
       - RUST_LOG=info
     # Must be on the same Docker network as guacd

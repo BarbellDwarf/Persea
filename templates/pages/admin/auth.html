@@ -6,10 +6,10 @@
 <div class="max-w-7xl mx-auto">
     <div class="flex items-center justify-between mb-6">
         <div>
-            <h1 class="text-2xl font-bold text-gray-100">Authentication Providers</h1>
-            <p class="text-sm text-gray-500 mt-1">Configure and manage authentication backends</p>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)]">Authentication Providers</h1>
+            <p class="text-sm text-[var(--text-muted)] mt-1">Configure and manage authentication backends</p>
         </div>
-        <button onclick="document.getElementById('add-provider-modal').classList.remove('hidden')"
+        <button data-action="open-add-modal"
                 class="btn btn-primary btn-sm">
             + Add Provider
         </button>
@@ -19,7 +19,7 @@
     <div class="card table-wrapper">
         <table class="w-full">
             <thead>
-                <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
+                <tr class="border-b border-[var(--border)] text-left text-xs text-[var(--text-muted)] uppercase tracking-wider">
                     <th class="w-8"></th>
                     <th>Provider Name</th>
                     <th>Type</th>
@@ -28,8 +28,8 @@
                     <th class="text-right">Actions</th>
                 </tr>
             </thead>
-            <tbody id="provider-table-body" class="divide-y divide-gray-800">
-                <tr><td colspan="6" class="px-4 py-8 text-center text-gray-500 text-sm">Loading providers...</td></tr>
+            <tbody id="provider-table-body" class="divide-y divide-[var(--border)]">
+                <tr><td colspan="6" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">Loading providers...</td></tr>
             </tbody>
         </table>
     </div>
@@ -38,7 +38,7 @@
 <!-- Add Provider Modal -->
 <div id="add-provider-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="add-provider-title">
     <div class="card w-full max-w-md">
-        <h2 id="add-provider-title" class="text-lg font-bold text-gray-100 mb-4">Add Auth Provider</h2>
+        <h2 id="add-provider-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Add Auth Provider</h2>
         <form id="add-provider-form">
             <div class="space-y-4">
                 <div>
@@ -47,7 +47,7 @@
                 </div>
                 <div>
                     <label class="form-label">Type</label>
-                    <select name="type" id="new-provider-type" onchange="showProviderFields(this.value)"
+                    <select name="type" id="new-provider-type"
                             class="form-input">
                         <option value="ldap">LDAP / Active Directory</option>
                         <option value="saml">SAML 2.0</option>
@@ -73,11 +73,11 @@
                     <div><label class="form-label">Search Filter</label>
                         <input type="text" name="ldap_search_filter" placeholder="(uid={0})" class="form-input"></div>
                     <div class="flex items-center gap-4">
-                        <label class="flex items-center gap-2 text-sm text-gray-300">
-                            <input type="checkbox" name="ldap_start_tls" class="rounded bg-gray-800 border-gray-700 text-emerald-500"> StartTLS
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                            <input type="checkbox" name="ldap_start_tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500"> StartTLS
                         </label>
-                        <label class="flex items-center gap-2 text-sm text-gray-300">
-                            <input type="checkbox" name="ldap_tls_skip_verify" class="rounded bg-gray-800 border-gray-700 text-emerald-500"> Skip TLS Verify
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                            <input type="checkbox" name="ldap_tls_skip_verify" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500"> Skip TLS Verify
                         </label>
                     </div>
                 </div>
@@ -108,7 +108,7 @@
 
                 <!-- Database Fields (minimal) -->
                 <div id="database-fields" class="hidden">
-                    <p class="text-sm text-gray-500">Database authentication uses the built-in users table. No additional configuration required.</p>
+                    <p class="text-sm text-[var(--text-muted)]">Database authentication uses the built-in users table. No additional configuration required.</p>
                 </div>
 
                 <!-- TOTP Fields -->
@@ -147,9 +147,9 @@
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
-                <button type="button" onclick="document.getElementById('add-provider-modal').classList.add('hidden')"
+                <button type="button" data-action="close-add-modal"
                         class="btn btn-secondary btn-sm">Cancel</button>
-                <button type="submit" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Create</button>
+                <button type="submit" class="btn btn-primary">Create</button>
             </div>
         </form>
     </div>
@@ -158,20 +158,20 @@
 <!-- Provider Config Modal -->
 <div id="provider-config-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="provider-config-title">
     <div class="card w-full max-w-lg">
-        <h2 id="provider-config-title" class="text-lg font-bold text-gray-100 mb-4">Configure Provider</h2>
+        <h2 id="provider-config-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Configure Provider</h2>
         <div id="provider-config-body"></div>
         <div class="flex justify-end gap-3 mt-6">
-            <button type="button" onclick="document.getElementById('provider-config-modal').classList.add('hidden')"
+            <button type="button" data-action="close-config-modal"
                     class="btn btn-secondary btn-sm">Close</button>
-            <button onclick="testProvider()"
-                    class="btn btn-sm" style="background:#2563eb;color:#fff">Test Connection</button>
-            <button onclick="saveProviderConfig()"
-                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Save</button>
+            <button data-action="test-provider"
+                    class="btn btn-info btn-sm">Test Connection</button>
+            <button data-action="save-provider-config"
+                    class="btn btn-primary">Save</button>
         </div>
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function showProviderFields(type) {
     ['ldap', 'saml', 'radius', 'database', 'totp', 'oidc'].forEach(function(t) {
         var el = document.getElementById(t + '-fields');
@@ -185,7 +185,7 @@ function providerTypeBadge(type) {
         ldap: 'bg-purple-900/50 text-purple-300 border-purple-800',
         saml: 'bg-cyan-900/50 text-cyan-300 border-cyan-800',
         radius: 'bg-orange-900/50 text-orange-300 border-orange-800',
-        database: 'bg-gray-800 text-gray-400 border-gray-700',
+        database: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]',
         totp: 'bg-teal-900/50 text-teal-300 border-teal-800'
     };
     return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[type] || colors.database) + '">' + type.toUpperCase() + '</span>';
@@ -193,21 +193,21 @@ function providerTypeBadge(type) {
 
 function renderProviderRow(provider) {
     var statusToggle = provider.enabled
-        ? '<button onclick="toggleProvider(\'' + provider.id + '\', false)" class="text-emerald-400 hover:text-red-400">Enabled</button>'
-        : '<button onclick="toggleProvider(\'' + provider.id + '\', true)" class="text-gray-500 hover:text-emerald-400">Disabled</button>';
+        ? '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="false" class="text-emerald-400 hover:text-red-400">Enabled</button>'
+        : '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="true" class="text-[var(--text-muted)] hover:text-emerald-400">Disabled</button>';
 
-    return '<tr class="hover:bg-gray-800/50">' +
-        '<td class="px-4 py-3 text-gray-600 cursor-grab">⠿</td>' +
-        '<td class="px-4 py-3 text-sm text-gray-200">' + escapeHtml(provider.name) + '</td>' +
+    return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
+        '<td class="px-4 py-3 text-[var(--text-muted)] cursor-grab">⠿</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-primary)]">' + escapeHtml(provider.name) + '</td>' +
         '<td class="px-4 py-3">' + providerTypeBadge(provider.type) + '</td>' +
         '<td class="px-4 py-3 text-sm">' + statusToggle + '</td>' +
-        '<td class="px-4 py-3 text-sm text-gray-500">' + provider.position + '</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + provider.position + '</td>' +
         '<td class="px-4 py-3 text-right text-sm">' +
-            '<button onclick="moveProvider(\'' + provider.id + '\', \'up\')" class="text-gray-400 hover:text-gray-200 mr-2" title="Move up">↑</button>' +
-            '<button onclick="moveProvider(\'' + provider.id + '\', \'down\')" class="text-gray-400 hover:text-gray-200 mr-2" title="Move down">↓</button>' +
-            '<button onclick="configureProvider(\'' + provider.id + '\')" class="text-gray-400 hover:text-emerald-400 mr-2">Configure</button>' +
-            '<button onclick="testProviderConnection(\'' + provider.id + '\')" class="text-gray-400 hover:text-blue-400 mr-2">Test</button>' +
-            '<button onclick="deleteProvider(\'' + provider.id + '\')" class="text-gray-400 hover:text-red-400">Delete</button>' +
+            '<button data-action="move-provider" data-id="' + provider.id + '" data-direction="up" class="text-[var(--text-muted)] hover:text-[var(--text-primary)] mr-2" title="Move up">↑</button>' +
+            '<button data-action="move-provider" data-id="' + provider.id + '" data-direction="down" class="text-[var(--text-muted)] hover:text-[var(--text-primary)] mr-2" title="Move down">↓</button>' +
+            '<button data-action="configure-provider" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-2">Configure</button>' +
+            '<button data-action="test-provider-connection" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-blue-400 mr-2">Test</button>' +
+            '<button data-action="delete-provider" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
         '</td></tr>';
 }
 
@@ -234,7 +234,7 @@ function moveProvider(id, direction) {
 
 function configureProvider(id) {
     editingProviderId = id;
-    document.getElementById('provider-config-body').innerHTML = '<p class="text-sm text-gray-500">Loading configuration...</p>';
+    document.getElementById('provider-config-body').innerHTML = '<p class="text-sm text-[var(--text-muted)]">Loading configuration...</p>';
     document.getElementById('provider-config-modal').classList.remove('hidden');
     fetch('/api/auth/providers/' + id + '/config', { headers: apiHeaders() })
         .then(function(r) {
@@ -266,7 +266,7 @@ function buildConfigForm(config) {
         var isSecret = SECRET_CONFIG_KEYS.indexOf(key) !== -1;
         html += '<div><label class="form-label">' + key.replace(/_/g, ' ') + '</label>';
         if (typeof val === 'boolean') {
-            html += '<input type="checkbox" name="' + escapeAttr(key) + '" ' + (val ? 'checked' : '') + ' class="rounded bg-gray-800 border-gray-700 text-emerald-500">';
+            html += '<input type="checkbox" name="' + escapeAttr(key) + '" ' + (val ? 'checked' : '') + ' class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">';
         } else if (typeof val === 'number') {
             html += '<input type="number" name="' + escapeAttr(key) + '" value="' + val + '" class="form-input">';
         } else if (isSecret) {
@@ -355,7 +355,7 @@ function loadProviders() {
             window.__providers = data.providers || [];
             var tbody = document.getElementById('provider-table-body');
             if (!window.__providers.length) {
-                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-gray-500 text-sm">No providers configured. Add one above.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">No providers configured. Add one above.</td></tr>';
                 return;
             }
             tbody.innerHTML = window.__providers.map(renderProviderRow).join('');
@@ -409,6 +409,42 @@ function providerConfigForType(type, form) {
 }
 
 (function() {
+    var newTypeSelect = document.getElementById('new-provider-type');
+    if (newTypeSelect) {
+        newTypeSelect.addEventListener('change', function() {
+            showProviderFields(this.value);
+        });
+    }
+
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        var action = btn.getAttribute('data-action');
+        var id = btn.getAttribute('data-id');
+
+        if (action === 'open-add-modal') {
+            document.getElementById('add-provider-modal').classList.remove('hidden');
+        } else if (action === 'close-add-modal') {
+            document.getElementById('add-provider-modal').classList.add('hidden');
+        } else if (action === 'close-config-modal') {
+            document.getElementById('provider-config-modal').classList.add('hidden');
+        } else if (action === 'test-provider') {
+            testProvider();
+        } else if (action === 'save-provider-config') {
+            saveProviderConfig();
+        } else if (action === 'toggle-provider') {
+            toggleProvider(id, btn.getAttribute('data-enable') === 'true');
+        } else if (action === 'move-provider') {
+            moveProvider(id, btn.getAttribute('data-direction'));
+        } else if (action === 'configure-provider') {
+            configureProvider(id);
+        } else if (action === 'test-provider-connection') {
+            testProviderConnection(id);
+        } else if (action === 'delete-provider') {
+            deleteProvider(id);
+        }
+    });
+
     var form = document.getElementById('add-provider-form');
     if (form) {
         form.addEventListener('submit', function(evt) {

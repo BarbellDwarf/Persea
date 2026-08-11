@@ -12,6 +12,12 @@ pub struct TlsConfig {
     /// Path to guacd's TLS certificate (PEM). When set, persea connects to guacd over TLS.
     /// This is independent of server HTTPS — you can use guacd TLS without serving HTTPS.
     pub guacd_cert_path: Option<PathBuf>,
+    /// Whether to set the Secure attribute on session cookies. Defaults to true
+    /// when TLS is enabled. Set to false when using self-signed certs — browsers
+    /// block Secure cookies over connections with invalid certificates, which
+    /// breaks login even after clicking through the cert warning.
+    #[serde(default = "default_secure_cookies")]
+    pub secure_cookies: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -201,8 +207,8 @@ pub struct RecordingConfig {
     /// Delete oldest recordings when disk usage exceeds this percent. 0 = disabled.
     #[serde(default = "default_max_disk_percent")]
     pub max_disk_percent: u8,
-    /// Keep at most this many recordings globally. 0 = unlimited.
-    #[serde(default)]
+    /// Keep at most this many recordings globally. 0 = unlimited. Default: 1000.
+    #[serde(default = "default_max_recordings")]
     pub max_recordings: u32,
     /// How often (in seconds) to run the rotation check. Default: 300 (5 min).
     #[serde(default = "default_rotation_interval_secs")]
@@ -226,6 +232,14 @@ pub struct RecordingConfig {
     /// Ask guacd to create `typescript_path` if it doesn't already exist.
     #[serde(default)]
     pub create_typescript_path: bool,
+    /// Encrypt recording files at rest using the storage encryption key.
+    /// Default: true when `[storage].encryption_key` is set, false otherwise.
+    #[serde(default)]
+    pub encrypt_at_rest: Option<bool>,
+}
+
+fn default_max_recordings() -> u32 {
+    1000
 }
 
 fn default_max_disk_percent() -> u8 {
@@ -242,11 +256,12 @@ impl Default for RecordingConfig {
             path: default_recording_path(),
             enabled: true,
             max_disk_percent: default_max_disk_percent(),
-            max_recordings: 0,
+            max_recordings: default_max_recordings(),
             rotation_interval_secs: default_rotation_interval_secs(),
             typescript_path: None,
             typescript_name: None,
             create_typescript_path: false,
+            encrypt_at_rest: None,
         }
     }
 }
@@ -337,6 +352,12 @@ pub struct AuthConfig {
     pub saml: Option<crate::auth_providers::saml::SamlConfig>,
     /// TOTP second-factor configuration.
     pub totp: Option<AuthTotpConfig>,
+    /// When true, the username/password from password-based logins (database,
+    /// LDAP, RADIUS, SAML) is stored encrypted and reused as fallback
+    /// credentials for connection entries that carry none of their own.
+    /// OIDC/SSO logins have no password to pass through. Off by default.
+    #[serde(default)]
+    pub pass_login_credentials: bool,
 }
 
 /// TOTP configuration for the auth chain (maps to `[auth.totp]` in TOML).
@@ -370,6 +391,9 @@ fn default_totp_period() -> u16 {
 }
 fn default_totp_skew() -> u8 {
     1
+}
+fn default_secure_cookies() -> bool {
+    true
 }
 
 impl Default for AuthTotpConfig {
@@ -486,6 +510,11 @@ pub struct Config {
     #[serde(default = "default_max_sessions_per_user")]
     pub max_sessions_per_user: usize,
 
+    /// Maximum concurrent viewers per session (share-token joins). Default: 10.
+    /// Set to 0 for unlimited. The owner connection is not counted.
+    #[serde(default = "default_max_viewers")]
+    pub max_viewers: u32,
+
     /// Seconds to keep completed/error/expired sessions in memory before cleanup.
     /// Default: 300 (5 minutes). The session history in SQLite is not affected.
     #[serde(default = "default_session_cleanup_delay_secs")]
@@ -545,6 +574,12 @@ pub struct Config {
     /// made available via Extension. The existing rusqlite `Db` continues
     /// to work alongside it.
     pub db_url: Option<String>,
+
+    /// Commercial license key (format: `PSEA-<base64>`).
+    /// When absent, enterprise features are available during the 30-day
+    /// evaluation period.
+    #[serde(default)]
+    pub license_key: Option<String>,
     /// Storage backend for the address book (connections, credentials).
     /// When `backend = "db"` (default), the DB stores folder/entry metadata
     /// and encrypted credentials. When `backend = "vault"`, metadata stays
@@ -1211,6 +1246,10 @@ fn default_max_sessions_per_user() -> usize {
     50
 }
 
+fn default_max_viewers() -> u32 {
+    10
+}
+
 fn default_session_cleanup_delay_secs() -> u64 {
     300 // 5 minutes
 }
@@ -1260,7 +1299,7 @@ fn default_login_scripts_dir() -> String {
 }
 
 fn default_site_title() -> String {
-    "persea".into()
+    "Persea".into()
 }
 
 fn default_localhost_networks() -> Vec<String> {
@@ -1273,8 +1312,125 @@ fn default_localhost_networks() -> Vec<String> {
     ]
 }
 
+fn default_loopback_networks() -> Vec<String> {
+    vec!["127.0.0.0/8".to_string(), "::1/128".to_string()]
+}
+
 fn default_ssh_scrollback() -> u32 {
     10000
+}
+
+/// Generate default configuration as TOML string for the config crate's layered builder.
+fn default_toml() -> String {
+    let mut s = String::new();
+    s.push_str(&format!("listen_addr = \"{}\"\n", default_listen_addr()));
+    s.push_str(&format!("guacd_addr = \"{}\"\n", default_guacd_addr()));
+    s.push_str(&format!(
+        "static_path = \"{}\"\n",
+        default_static_path().to_string_lossy()
+    ));
+    s.push_str(&format!(
+        "db_path = \"{}\"\n",
+        default_db_path().to_string_lossy()
+    ));
+    s.push_str(&format!(
+        "session_pending_timeout_secs = {}\n",
+        default_session_timeout_secs()
+    ));
+    s.push_str(&format!(
+        "session_max_duration_secs = {}\n",
+        default_session_max_duration_secs()
+    ));
+    s.push_str(&format!(
+        "auth_session_ttl_secs = {}\n",
+        default_auth_session_ttl_secs()
+    ));
+    s.push_str(&format!(
+        "session_history_retention_days = {}\n",
+        default_session_history_retention_days()
+    ));
+    s.push_str(&format!("xvnc_path = \"{}\"\n", default_xvnc_path()));
+    s.push_str(&format!(
+        "chromium_path = \"{}\"\n",
+        default_chromium_path()
+    ));
+    s.push_str(&format!(
+        "display_range_start = {}\n",
+        default_display_range_start()
+    ));
+    s.push_str(&format!(
+        "display_range_end = {}\n",
+        default_display_range_end()
+    ));
+    s.push_str(&format!(
+        "cdp_port_range_start = {}\n",
+        default_cdp_port_range_start()
+    ));
+    s.push_str(&format!(
+        "cdp_port_range_end = {}\n",
+        default_cdp_port_range_end()
+    ));
+    s.push_str(&format!(
+        "login_script_timeout_secs = {}\n",
+        default_login_script_timeout_secs()
+    ));
+    s.push_str(&format!(
+        "login_scripts_dir = \"{}\"\n",
+        default_login_scripts_dir()
+    ));
+    s.push_str(&format!("site_title = \"{}\"\n", default_site_title()));
+    s.push_str(&format!("ssh_scrollback = {}\n", default_ssh_scrollback()));
+    s.push_str(&format!("ssh_tmux_detach = {}\n", default_false()));
+    s.push_str(&format!("max_sessions = {}\n", default_max_sessions()));
+    s.push_str(&format!(
+        "max_sessions_per_user = {}\n",
+        default_max_sessions_per_user()
+    ));
+    s.push_str(&format!("max_viewers = {}\n", default_max_viewers()));
+    s.push_str(&format!(
+        "session_cleanup_delay_secs = {}\n",
+        default_session_cleanup_delay_secs()
+    ));
+    s.push_str(&format!(
+        "shutdown_timeout_secs = {}\n",
+        default_shutdown_timeout_secs()
+    ));
+    s.push_str(&format!("rate_limit = {}\n", false));
+    s.push_str(&format!(
+        "user_credentials_default_scope = \"{}\"\n",
+        default_user_credentials_scope()
+    ));
+    // Vec fields
+    s.push_str("ssh_allowed_networks = ");
+    s.push_str(&format!("{:?}\n", default_localhost_networks()));
+    s.push_str("rdp_allowed_networks = ");
+    s.push_str(&format!("{:?}\n", default_localhost_networks()));
+    s.push_str("vnc_allowed_networks = ");
+    s.push_str(&format!("{:?}\n", default_localhost_networks()));
+    s.push_str("web_allowed_networks = ");
+    s.push_str(&format!("{:?}\n", default_loopback_networks()));
+    s.push_str("trusted_proxies = []\n");
+    // [recording] — materialised so the merged config carries the previous
+    // defaults (max_recordings=1000, max_disk_percent=80, enabled=true).
+    s.push_str("[recording]\n");
+    s.push_str(&format!(
+        "path = \"{}\"\n",
+        default_recording_path().to_string_lossy()
+    ));
+    s.push_str(&format!("enabled = {}\n", default_true()));
+    s.push_str(&format!(
+        "max_disk_percent = {}\n",
+        default_max_disk_percent()
+    ));
+    s.push_str(&format!("max_recordings = {}\n", default_max_recordings()));
+    s.push_str(&format!(
+        "rotation_interval_secs = {}\n",
+        default_rotation_interval_secs()
+    ));
+    // [storage] — backend defaults to "db" when the section is absent.
+    s.push_str("[storage]\n");
+    s.push_str(&format!("backend = \"{}\"\n", default_storage_backend()));
+    s
 }
 
 impl Default for Config {
@@ -1302,10 +1458,11 @@ impl Default for Config {
             ssh_tmux_detach: default_false(),
             rdp_allowed_networks: default_localhost_networks(),
             vnc_allowed_networks: default_localhost_networks(),
-            web_allowed_networks: default_localhost_networks(),
+            web_allowed_networks: default_loopback_networks(),
             session_history_retention_days: default_session_history_retention_days(),
             max_sessions: default_max_sessions(),
             max_sessions_per_user: default_max_sessions_per_user(),
+            max_viewers: default_max_viewers(),
             session_cleanup_delay_secs: default_session_cleanup_delay_secs(),
             shutdown_timeout_secs: default_shutdown_timeout_secs(),
             rate_limit: false,
@@ -1325,6 +1482,7 @@ impl Default for Config {
             rdp: None,
             db_url: None,
             storage: None,
+            license_key: None,
         }
     }
 }
@@ -1347,11 +1505,6 @@ fn sanitize_cidr_list(proto: &str, list: &mut Vec<String>) {
 /// The toml crate's Display impl already includes a line:column snippet with a
 /// caret pointing at the broken token; we prepend the file path so the message
 /// is unambiguous when multiple paths are searched.
-fn load_from_file(path: &str) -> Result<Config, String> {
-    let contents = std::fs::read_to_string(path).map_err(|e| format!("  {}: {}", path, e))?;
-    toml::from_str::<Config>(&contents).map_err(|e| format!("{}", e))
-}
-
 impl Config {
     pub fn load(path: Option<&str>) -> Self {
         // Note: tracing is initialised later (in run_server), so config-load
@@ -1367,22 +1520,52 @@ impl Config {
             (None, false)
         };
 
-        let mut config = match path.as_deref() {
-            Some(p) => match load_from_file(p) {
+        // Layer 1: defaults from TOML
+        let mut builder = config::Config::builder().add_source(config::File::from_str(
+            &default_toml(),
+            config::FileFormat::Toml,
+        ));
+
+        // Layer 2: config file (if exists). `required(false)` so a missing
+        // or unreadable file (e.g. /dev/null in CI) falls back to defaults
+        // instead of failing the whole build.
+        if let Some(ref p) = path {
+            builder =
+                builder.add_source(config::File::new(p, config::FileFormat::Toml).required(false));
+        }
+
+        // Layer 3: environment variables (PERSEA_ prefix, nested via __)
+        builder = builder.add_source(
+            config::Environment::with_prefix("PERSEA")
+                .separator("__")
+                .prefix_separator("_"),
+        );
+
+        let mut config = match builder.build() {
+            Ok(raw) => match raw.try_deserialize::<Config>() {
                 Ok(c) => {
-                    eprintln!("[config] Loaded config from {}", p);
+                    if let Some(ref p) = path {
+                        eprintln!("[config] Loaded config from {}", p);
+                    } else {
+                        eprintln!(
+                            "[config] No config file found; using built-in defaults + env vars"
+                        );
+                    }
                     c
                 }
-                Err(msg) => {
-                    eprintln!("[config] ERROR: failed to load {}:\n{}", p, msg);
+                Err(e) => {
+                    eprintln!("[config] ERROR: failed to deserialize config:\n{}", e);
                     if required {
                         std::process::exit(1);
                     }
                     Self::default()
                 }
             },
-            None => {
-                eprintln!("[config] No config file found; using built-in defaults");
+            Err(e) => {
+                eprintln!("[config] ERROR: failed to build config:\n{}", e);
+                if required {
+                    std::process::exit(1);
+                }
                 Self::default()
             }
         };
@@ -1695,6 +1878,116 @@ mod tests {
         assert_eq!(default_display_range_end(), 199);
         assert_eq!(default_cdp_port_range_start(), 9200);
         assert_eq!(default_cdp_port_range_end(), 9299);
+    }
+
+    #[test]
+    fn test_load_without_file_matches_previous_defaults() {
+        // R19 regression: default_toml() must emit every section/key the
+        // previous hand-rolled defaults covered, so the config crate's
+        // layered merge (defaults → file → env) reproduces them exactly.
+        // Loading with an empty path exercises the defaults layer alone.
+        let loaded = Config::load(Some(""));
+        let prev = Config::default();
+
+        // Every top-level field must match the previous defaults.
+        assert_eq!(loaded.listen_addr, prev.listen_addr);
+        assert_eq!(loaded.guacd_addr, prev.guacd_addr);
+        assert_eq!(loaded.recording_path, prev.recording_path);
+        assert_eq!(loaded.static_path, prev.static_path);
+        assert_eq!(loaded.db_path, prev.db_path);
+        assert_eq!(
+            loaded.session_pending_timeout_secs,
+            prev.session_pending_timeout_secs
+        );
+        assert_eq!(
+            loaded.session_max_duration_secs,
+            prev.session_max_duration_secs
+        );
+        assert_eq!(loaded.auth_session_ttl_secs, prev.auth_session_ttl_secs);
+        assert_eq!(
+            loaded.session_history_retention_days,
+            prev.session_history_retention_days
+        );
+        assert_eq!(loaded.xvnc_path, prev.xvnc_path);
+        assert_eq!(loaded.chromium_path, prev.chromium_path);
+        assert_eq!(loaded.display_range_start, prev.display_range_start);
+        assert_eq!(loaded.display_range_end, prev.display_range_end);
+        assert_eq!(loaded.cdp_port_range_start, prev.cdp_port_range_start);
+        assert_eq!(loaded.cdp_port_range_end, prev.cdp_port_range_end);
+        assert_eq!(
+            loaded.login_script_timeout_secs,
+            prev.login_script_timeout_secs
+        );
+        assert_eq!(loaded.login_scripts_dir, prev.login_scripts_dir);
+        assert_eq!(loaded.site_title, prev.site_title);
+        assert_eq!(loaded.ssh_scrollback, prev.ssh_scrollback);
+        assert_eq!(loaded.ssh_tmux_detach, prev.ssh_tmux_detach);
+        assert_eq!(loaded.ssh_allowed_networks, prev.ssh_allowed_networks);
+        assert_eq!(loaded.rdp_allowed_networks, prev.rdp_allowed_networks);
+        assert_eq!(loaded.vnc_allowed_networks, prev.vnc_allowed_networks);
+        assert_eq!(loaded.web_allowed_networks, prev.web_allowed_networks);
+        assert_eq!(loaded.max_sessions, prev.max_sessions);
+        assert_eq!(loaded.max_sessions_per_user, prev.max_sessions_per_user);
+        assert_eq!(loaded.max_viewers, prev.max_viewers);
+        assert_eq!(
+            loaded.session_cleanup_delay_secs,
+            prev.session_cleanup_delay_secs
+        );
+        assert_eq!(loaded.shutdown_timeout_secs, prev.shutdown_timeout_secs);
+        assert_eq!(loaded.rate_limit, prev.rate_limit);
+        assert_eq!(loaded.trusted_proxies, prev.trusted_proxies);
+        assert_eq!(
+            loaded.user_credentials_default_scope,
+            prev.user_credentials_default_scope
+        );
+        assert_eq!(loaded.db_url, prev.db_url);
+
+        // Sections whose previous default was None must stay absent —
+        // emitting them would flip is_some()-based behaviour (TLS UI flag,
+        // auth-chain path, OIDC client_secret validation, Vault/drive flags).
+        assert!(loaded.tls.is_none());
+        assert!(loaded.auth.is_none());
+        assert!(loaded.oidc.is_none());
+        assert!(loaded.vault.is_none());
+        assert!(loaded.vault_shared.is_none());
+        assert!(loaded.vault_local.is_none());
+        assert!(loaded.drive.is_none());
+        assert!(loaded.theme.is_none());
+        assert!(loaded.vdi.is_none());
+        assert!(loaded.vsphere.is_none());
+        assert!(loaded.rdp.is_none());
+
+        // [recording] must be materialised with the previous defaults.
+        let rec = loaded
+            .recording
+            .as_ref()
+            .expect("[recording] defaults must be emitted");
+        assert_eq!(rec.max_recordings, 1000);
+        assert_eq!(rec.max_disk_percent, 80);
+        assert!(rec.enabled);
+        assert_eq!(rec.path, PathBuf::from("./recordings"));
+        assert_eq!(rec.rotation_interval_secs, 300);
+        assert!(rec.typescript_path.is_none());
+        assert!(rec.typescript_name.is_none());
+        assert!(!rec.create_typescript_path);
+        assert!(rec.encrypt_at_rest.is_none());
+
+        // [storage] must be materialised with the previous defaults.
+        let st = loaded
+            .storage
+            .as_ref()
+            .expect("[storage] defaults must be emitted");
+        assert_eq!(st.backend, "db");
+        assert!(st.encryption_key.is_none());
+
+        // Accessor-level equivalence with the previous effective defaults.
+        assert_eq!(loaded.recording_config().max_recordings, 1000);
+        assert!(loaded.recording_enabled());
+        assert!(loaded.db_storage_backend());
+        assert_eq!(
+            loaded.effective_recording_path(),
+            std::path::Path::new("./recordings")
+        );
     }
 
     #[test]
@@ -2080,17 +2373,18 @@ mod tests {
     #[test]
     fn test_config_default_networks_use_private_ranges() {
         let config = Config::default();
-        // All network lists should use the expanded private-range defaults
+        // SSH, RDP, VNC should use the expanded private-range defaults
         for networks in [
             &config.ssh_allowed_networks,
             &config.rdp_allowed_networks,
             &config.vnc_allowed_networks,
-            &config.web_allowed_networks,
         ] {
             assert!(networks.contains(&"10.0.0.0/8".to_string()));
             assert!(networks.contains(&"172.16.0.0/12".to_string()));
             assert!(networks.contains(&"192.168.0.0/16".to_string()));
         }
+        // Web should default to loopback-only
+        assert_eq!(config.web_allowed_networks, vec!["127.0.0.0/8", "::1/128"]);
     }
 
     #[test]

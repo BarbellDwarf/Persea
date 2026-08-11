@@ -5,24 +5,18 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/>
             </svg>
         </button>
-        <div class="header-title">persea</div>
     </div>
     <div class="header-actions">
-        <button id="theme-toggle" class="btn btn-sm" style="padding:6px 10px" title="Toggle theme">
-            <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
-            </svg>
+        <button id="theme-toggle" class="btn btn-sm" style="padding:6px 10px;display:flex;align-items:center;gap:4px" title="Theme: Auto (click to cycle)">
+            <span class="theme-icon"></span>
         </button>
         <a href="/auth/logout" class="btn btn-sm btn-danger" style="padding:6px 12px;font-size:12px">Logout</a>
     </div>
 </header>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 document.getElementById('theme-toggle')?.addEventListener('click', function() {
-    var html = document.documentElement;
-    var isDark = html.classList.contains('dark');
-    html.className = isDark ? 'light' : 'dark';
-    localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    if (typeof toggleTheme === 'function') toggleTheme();
 });
 
 // ── Mobile hamburger menu ──
@@ -51,5 +45,34 @@ document.getElementById('theme-toggle')?.addEventListener('click', function() {
             if (window.innerWidth <= 768) closeSidebar();
         });
     });
+})();
+
+// ── Sidebar collapse toggle ──
+(function() {
+    var btn = document.getElementById('sidebar-toggle');
+    var sidebar = document.getElementById('app-sidebar');
+    if (btn && sidebar) {
+        var suppressHoverTimer = null;
+        btn.addEventListener('click', function() {
+            sidebar.classList.toggle('collapsed');
+            var icon = btn.querySelector('svg');
+            if (icon) icon.style.transform = sidebar.classList.contains('collapsed') ? 'rotate(180deg)' : '';
+            // R12: clicking collapse while the mouse is still over the sidebar
+            // would otherwise trigger :hover expansion in the same instant,
+            // making the click look like it did nothing. Briefly suppress
+            // hover-expand so the collapse is visible before hover can kick
+            // back in — the user has to actually move the mouse away and
+            // back for hover-to-peek to re-engage, same as most apps that
+            // use this pattern.
+            if (sidebar.classList.contains('collapsed')) {
+                sidebar.classList.add('just-collapsed');
+                clearTimeout(suppressHoverTimer);
+                suppressHoverTimer = setTimeout(function() {
+                    sidebar.classList.remove('just-collapsed');
+                }, 600);
+            }
+        });
+        if (window.innerWidth < 1400) sidebar.classList.add('collapsed');
+    }
 })();
 </script>

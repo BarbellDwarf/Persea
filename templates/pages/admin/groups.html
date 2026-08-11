@@ -6,10 +6,10 @@
 <div class="max-w-7xl mx-auto">
     <div class="flex items-center justify-between mb-6">
         <div>
-            <h1 class="text-2xl font-bold text-gray-100">Group Management</h1>
-            <p class="text-sm text-gray-500 mt-1">Manage local groups and map auth-provider groups to them</p>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)]">Group Management</h1>
+            <p class="text-sm text-[var(--text-muted)] mt-1">Manage local groups and map auth-provider groups to them</p>
         </div>
-        <button onclick="openCreateModal()" class="btn btn-primary btn-sm">
+        <button data-action="open-create-modal" class="btn btn-primary btn-sm">
             + Create Group
         </button>
     </div>
@@ -21,7 +21,7 @@
     <div class="card table-wrapper">
         <table class="w-full">
             <thead>
-                <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
+                <tr class="border-b border-[var(--border)] text-left text-xs text-[var(--text-muted)] uppercase tracking-wider">
                     <th>Name</th>
                     <th>Description</th>
                     <th>Mapped Provider Groups</th>
@@ -29,22 +29,22 @@
                     <th class="text-right">Actions</th>
                 </tr>
             </thead>
-            <tbody id="groups-tbody" class="divide-y divide-gray-800">
-                <tr><td colspan="5" class="px-4 py-8 text-center text-gray-500 text-sm">Loading groups...</td></tr>
+            <tbody id="groups-tbody" class="divide-y divide-[var(--border)]">
+                <tr><td colspan="5" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">Loading groups...</td></tr>
             </tbody>
         </table>
     </div>
 
-    <p class="text-xs text-gray-600 mt-3">
-        Folder access grants reference group names as plain strings. Renaming or deleting a group does
-        not rewrite folder <code>allowed_groups</code> — delete only removes the group's provider-group mappings.
+    <p class="text-xs text-[var(--text-muted)] mt-3">
+        Renaming or deleting a group won't automatically update folders that already
+        reference it — you'll need to update folder access manually afterward.
     </p>
 </div>
 
 <!-- Create Group Modal -->
 <div id="create-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="create-group-title">
     <div class="card w-full max-w-md">
-        <h2 id="create-group-title" class="text-lg font-bold text-gray-100 mb-4">Create Group</h2>
+        <h2 id="create-group-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Create Group</h2>
         <form id="create-group-form">
             <div class="space-y-4">
                 <div>
@@ -57,8 +57,8 @@
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
-                <button type="button" onclick="closeCreateModal()" class="btn btn-secondary btn-sm">Cancel</button>
-                <button type="submit" id="btn-create-group" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Create</button>
+                <button type="button" data-action="close-create-modal" class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="submit" id="btn-create-group" class="btn btn-primary">Create</button>
             </div>
         </form>
     </div>
@@ -67,7 +67,7 @@
 <!-- Edit Group Modal -->
 <div id="edit-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="edit-group-title">
     <div class="card w-full max-w-md">
-        <h2 id="edit-group-title" class="text-lg font-bold text-gray-100 mb-4">Edit Group</h2>
+        <h2 id="edit-group-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Edit Group</h2>
         <form id="edit-group-form">
             <input type="hidden" id="edit-group-id">
             <div class="space-y-4">
@@ -81,8 +81,8 @@
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
-                <button type="button" onclick="closeEditModal()" class="btn btn-secondary btn-sm">Cancel</button>
-                <button type="submit" id="btn-update-group" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">Save</button>
+                <button type="button" data-action="close-edit-modal" class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="submit" id="btn-update-group" class="btn btn-primary">Save</button>
             </div>
         </form>
     </div>
@@ -91,22 +91,22 @@
 <!-- Mappings Modal -->
 <div id="mappings-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="mappings-title">
     <div class="card w-full max-w-lg">
-        <h2 id="mappings-title" class="text-lg font-bold text-gray-100 mb-1">Provider Group Mappings</h2>
-        <p class="text-sm text-gray-500 mb-4">Group: <span id="mappings-group-name" class="text-gray-200"></span></p>
+        <h2 id="mappings-title" class="text-lg font-bold text-[var(--text-primary)] mb-1">Provider Group Mappings</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">Group: <span id="mappings-group-name" class="text-[var(--text-primary)]"></span></p>
 
         <label class="form-label">Add mapping</label>
         <div class="flex items-center gap-2 mb-4">
             <select id="mappings-select" class="form-input flex-1"></select>
-            <button onclick="addMapping()" class="btn btn-primary btn-sm whitespace-nowrap">Add</button>
+            <button data-action="add-mapping" class="btn btn-primary btn-sm whitespace-nowrap">Add</button>
         </div>
-        <p id="mappings-elsewhere" class="text-xs text-gray-500 mb-3 hidden"></p>
+        <p id="mappings-elsewhere" class="text-xs text-[var(--text-muted)] mb-3 hidden"></p>
 
-        <ul id="mappings-list" class="divide-y divide-gray-800 border border-gray-800 rounded-lg">
-            <li class="px-4 py-3 text-sm text-gray-500">No mappings yet.</li>
+        <ul id="mappings-list" class="divide-y divide-[var(--border)] border border-[var(--border)] rounded-lg">
+            <li class="px-4 py-3 text-sm text-[var(--text-muted)]">No mappings yet.</li>
         </ul>
 
         <div class="flex justify-end gap-3 mt-6">
-            <button type="button" onclick="closeMappingsModal()" class="btn btn-secondary btn-sm">Close</button>
+            <button type="button" data-action="close-mappings-modal" class="btn btn-secondary btn-sm">Close</button>
         </div>
     </div>
 </div>
@@ -114,20 +114,20 @@
 <!-- Delete Confirm Modal -->
 <div id="delete-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="delete-group-title">
     <div class="card w-full max-w-sm">
-        <h2 id="delete-group-title" class="text-lg font-bold text-gray-100 mb-2">Delete Group</h2>
-        <p class="text-sm text-gray-400 mb-4">
-            Group <span id="delete-group-name" class="text-gray-200"></span> and its provider-group mappings
-            will be removed. Folders that reference this group name keep it in their
-            <code class="text-gray-300">allowed_groups</code> — the name still grants access by itself.
+        <h2 id="delete-group-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Delete Group</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">
+            Group <span id="delete-group-name" class="text-[var(--text-primary)]"></span> and its auth-provider mappings
+            will be removed. Folders that already reference this group name will keep it — the name
+            still grants access on its own, so update folder access if needed.
         </p>
         <div class="flex justify-end gap-3">
-            <button type="button" onclick="closeDeleteModal()" class="btn btn-secondary btn-sm">Cancel</button>
-            <button type="button" onclick="confirmDelete()" class="btn btn-danger btn-sm">Delete</button>
+            <button type="button" data-action="close-delete-modal" class="btn btn-secondary btn-sm">Cancel</button>
+            <button type="button" data-action="confirm-delete" class="btn btn-danger btn-sm">Delete</button>
         </div>
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 function esc(s) {
     if (typeof escapeHtml === 'function') { return escapeHtml(s); }
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
@@ -163,16 +163,18 @@ function groupById(id) {
 function renderGroupRow(g) {
     var mapped = g.provider_group_count > 0
         ? '<span class="text-emerald-400">' + g.provider_group_count + ' mapped</span>'
-        : '<span class="text-gray-600">—</span>';
-    return '<tr class="hover:bg-gray-800/50">' +
-        '<td class="px-4 py-3 text-sm font-medium text-gray-200">' + esc(g.name) + '</td>' +
-        '<td class="px-4 py-3 text-sm text-gray-400">' + (g.description ? esc(g.description) : '—') + '</td>' +
+        : '<span class="text-[var(--text-muted)]">—</span>';
+    return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
+        '<td class="px-4 py-3 text-sm font-medium text-[var(--text-primary)]">' + esc(g.name) +
+            (g.auto_provisioned ? ' <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-blue-900/40 text-blue-300 border border-blue-800">auto</span>' : '') +
+        '</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (g.description ? esc(g.description) : '—') + '</td>' +
         '<td class="px-4 py-3 text-sm">' + mapped + '</td>' +
-        '<td class="px-4 py-3 text-sm text-gray-400">' + g.folder_count + '</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + g.folder_count + '</td>' +
         '<td class="px-4 py-3 text-right text-sm whitespace-nowrap">' +
-            '<button onclick="openMappingsModal(' + g.id + ')" class="text-gray-400 hover:text-blue-400 mr-3">Mappings</button>' +
-            '<button onclick="openEditModal(' + g.id + ')" class="text-gray-400 hover:text-emerald-400 mr-3">Edit</button>' +
-            '<button onclick="openDeleteModal(' + g.id + ')" class="text-gray-400 hover:text-red-400">Delete</button>' +
+            '<button data-action="open-mappings-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-blue-400 mr-3">Mappings</button>' +
+            '<button data-action="open-edit-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit</button>' +
+            '<button data-action="open-delete-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
         '</td></tr>';
 }
 
@@ -183,7 +185,7 @@ function loadGroups() {
             var groups = data.groups || [];
             groupsCache = groups;
             if (!groups.length) {
-                tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-gray-500 text-sm">No groups yet — create one to start mapping auth-provider groups.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">No groups yet — create one to start mapping auth-provider groups.</td></tr>';
                 return;
             }
             tbody.innerHTML = groups.map(renderGroupRow).join('');
@@ -286,19 +288,19 @@ window.openMappingsModal = function(id) {
     mappingsGroupId = g.id;
     document.getElementById('mappings-group-name').textContent = g.name;
     document.getElementById('mappings-modal').classList.remove('hidden');
-    document.getElementById('mappings-list').innerHTML = '<li class="px-4 py-3 text-sm text-gray-500">Loading...</li>';
+    document.getElementById('mappings-list').innerHTML = '<li class="px-4 py-3 text-sm text-[var(--text-muted)]">Loading...</li>';
     document.getElementById('mappings-select').innerHTML = '<option value="">Loading...</option>';
     api('/api/admin/groups/' + id)
         .then(function(data) {
             var list = document.getElementById('mappings-list');
             var mappings = data.mappings || [];
             if (!mappings.length) {
-                list.innerHTML = '<li class="px-4 py-3 text-sm text-gray-500">No mappings yet.</li>';
+                list.innerHTML = '<li class="px-4 py-3 text-sm text-[var(--text-muted)]">No mappings yet.</li>';
             } else {
                 list.innerHTML = mappings.map(function(m) {
                     return '<li class="flex items-center justify-between px-4 py-3 text-sm">' +
-                        '<span class="text-gray-200">' + esc(m.provider_group) + '</span>' +
-                        '<button onclick="removeMapping(' + m.id + ')" class="text-xs text-red-400 hover:text-red-300">Remove</button>' +
+                        '<span class="text-[var(--text-primary)]">' + esc(m.provider_group) + '</span>' +
+                        '<button data-action="remove-mapping" data-mapping-id="' + m.id + '" class="text-xs text-red-400 hover:text-red-300">Remove</button>' +
                     '</li>';
                 }).join('');
             }
@@ -359,6 +361,25 @@ window.removeMapping = function(mappingId) {
         })
         .catch(function(err) { showStatus(err.message, false); });
 };
+
+document.addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    var action = btn.getAttribute('data-action');
+    var id = btn.getAttribute('data-id');
+
+    if (action === 'open-create-modal') { openCreateModal(); }
+    else if (action === 'close-create-modal') { closeCreateModal(); }
+    else if (action === 'close-edit-modal') { closeEditModal(); }
+    else if (action === 'add-mapping') { addMapping(); }
+    else if (action === 'close-mappings-modal') { closeMappingsModal(); }
+    else if (action === 'close-delete-modal') { closeDeleteModal(); }
+    else if (action === 'confirm-delete') { confirmDelete(); }
+    else if (action === 'open-mappings-modal') { openMappingsModal(Number(id)); }
+    else if (action === 'open-edit-modal') { openEditModal(Number(id)); }
+    else if (action === 'open-delete-modal') { openDeleteModal(Number(id)); }
+    else if (action === 'remove-mapping') { removeMapping(Number(btn.getAttribute('data-mapping-id'))); }
+});
 
 loadGroups();
 </script>

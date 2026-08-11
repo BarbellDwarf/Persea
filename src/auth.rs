@@ -6,10 +6,9 @@ use axum::{
     extract::{ConnectInfo, Request},
     http::{HeaderMap, StatusCode},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
 };
 use ipnetwork::IpNetwork;
-use serde_json::json;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -81,9 +80,10 @@ pub struct TrustedProxies(pub Vec<String>);
 pub enum AuthIdentity {
     /// API key admin — always full admin access.
     ApiKey(String),
-    /// OIDC user with email, role, and group memberships.
+    /// OIDC user with email, display name, role, and group memberships.
     User {
         email: String,
+        name: String,
         role: String,
         groups: Vec<String>,
     },
@@ -93,7 +93,13 @@ impl AuthIdentity {
     pub fn display_name(&self) -> &str {
         match self {
             AuthIdentity::ApiKey(name) => name,
-            AuthIdentity::User { email, .. } => email,
+            AuthIdentity::User { email, name, .. } => {
+                if name.is_empty() {
+                    email
+                } else {
+                    name
+                }
+            }
         }
     }
 
@@ -155,20 +161,28 @@ pub fn client_ip(headers: &HeaderMap, socket_addr: IpAddr, trusted_proxies: &[St
 }
 
 /// Extract a cookie value from a HeaderMap.
+///
+/// Combines ALL `cookie` headers (HTTP/1.1 permits multiple Cookie headers;
+/// some clients and proxies split cookies across them) before parsing, so a
+/// cookie split across headers is still found.
 pub(crate) fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get("cookie")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                let c = c.trim();
-                if let Some(val) = c.strip_prefix(name) {
-                    val.strip_prefix('=').map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+    let combined: String = headers
+        .get_all("cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join("; ");
+    if combined.is_empty() {
+        return None;
+    }
+    combined.split(';').find_map(|c| {
+        let c = c.trim();
+        if let Some(val) = c.strip_prefix(name) {
+            val.strip_prefix('=').map(|v| v.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 /// Axum middleware that validates either API key or session cookie.
@@ -241,6 +255,7 @@ pub async fn require_auth(
                         let mut request = request;
                         request.extensions_mut().insert(AuthIdentity::User {
                             email: user.email,
+                            name: user.name,
                             role: effective_role,
                             groups,
                         });
@@ -248,21 +263,19 @@ pub async fn require_auth(
                     }
                     Err(_) => {
                         tracing::warn!(client_ip = %ip, "Authentication failed: invalid API key/token");
-                        return (
+                        return crate::error::AppError::error_response(
                             StatusCode::UNAUTHORIZED,
-                            axum::Json(json!({"error": "invalid API key or token"})),
-                        )
-                            .into_response();
+                            "invalid API key or token",
+                        );
                     }
                 }
             }
             Err(e) => {
                 tracing::warn!(client_ip = %ip, reason = %e, "Authentication failed");
-                return (
+                return crate::error::AppError::error_response(
                     StatusCode::FORBIDDEN,
-                    axum::Json(json!({"error": e.to_string()})),
-                )
-                    .into_response();
+                    e.to_string(),
+                );
             }
         }
     }
@@ -283,6 +296,7 @@ pub async fn require_auth(
                 let mut request = request;
                 request.extensions_mut().insert(AuthIdentity::User {
                     email: user.email,
+                    name: user.name,
                     role: user.role,
                     groups,
                 });
@@ -290,22 +304,36 @@ pub async fn require_auth(
             }
             Err(_) => {
                 tracing::warn!(client_ip = %ip, "Authentication failed: invalid session cookie");
-                (
+                crate::error::AppError::error_response(
                     StatusCode::UNAUTHORIZED,
-                    axum::Json(json!({"error": "invalid or expired session"})),
+                    "invalid or expired session",
                 )
-                    .into_response()
             }
         };
     }
 
     // Neither API key nor cookie
     tracing::warn!(client_ip = %ip, path = %path, "Authentication failed: no credentials");
-    (
+
+    // A browser navigating to a protected page with no session should land
+    // on the login screen, not a standalone "Unauthorized" error page —
+    // API/AJAX callers (which send a non-HTML Accept header, or hit /api/*)
+    // still get the JSON 401 so their own error handling can react to it.
+    let wants_html = !path.starts_with("/api/")
+        && request
+            .headers()
+            .get(axum::http::header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.contains("text/html"))
+            .unwrap_or(false);
+    if wants_html {
+        return Redirect::to("/?error=login_required").into_response();
+    }
+
+    crate::error::AppError::error_response(
         StatusCode::UNAUTHORIZED,
-        axum::Json(json!({"error": "authentication required — use API key or sign in via SSO"})),
+        "authentication required — use API key or sign in via SSO",
     )
-        .into_response()
 }
 
 /// Optional auth middleware — identical to `require_auth` but passes through
@@ -330,8 +358,11 @@ pub async fn optional_auth(
     let proxies = trusted.map(|t| t.0).unwrap_or_default();
     let ip = client_ip(request.headers(), addr.ip(), &proxies);
 
-    // Path 1: API key from Authorization header
-    let _api_key = request
+    // Path 1: API key from Authorization: Bearer <key> or X-API-Key: <key>.
+    // Mirrors require_auth's Path 1 (admin key, then user token), except a
+    // bad/missing key here just falls through unauthenticated instead of
+    // hard-failing — this middleware is "optional", not "required".
+    let api_key = request
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -343,6 +374,53 @@ pub async fn optional_auth(
                 .and_then(|v| v.to_str().ok())
         })
         .map(|k| k.to_string());
+
+    if let Some(key) = api_key {
+        let db_clone = db.clone();
+        let key_clone = key.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            db::validate_api_key(&db_clone, &key_clone, Some(ip))
+        })
+        .await
+        .unwrap_or(Err(AuthError::InvalidKey));
+
+        match result {
+            Ok(admin) => {
+                tracing::debug!(admin = %admin.name, "Optional auth: API key authenticated");
+                let mut request = request;
+                request
+                    .extensions_mut()
+                    .insert(AuthIdentity::ApiKey(admin.name));
+                return next.run(request).await;
+            }
+            Err(_) => {
+                // Not an admin key — try user API tokens before giving up.
+                let db_clone = db.clone();
+                let token_result =
+                    tokio::task::spawn_blocking(move || db::validate_user_token(&db_clone, &key))
+                        .await
+                        .unwrap_or(Err(AuthError::InvalidKey));
+
+                if let Ok((user, token_meta)) = token_result {
+                    let effective_role = compute_effective_role(&user.role, &token_meta.max_role);
+                    tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "Optional auth: user token authenticated");
+                    let groups = user.groups_vec();
+                    let mut request = request;
+                    request.extensions_mut().insert(AuthIdentity::User {
+                        email: user.email,
+                        name: user.name,
+                        role: effective_role,
+                        groups,
+                    });
+                    return next.run(request).await;
+                }
+                tracing::warn!(client_ip = %ip, "Optional auth: invalid API key/token, continuing unauthenticated");
+                // Fall through to the other auth paths below rather than
+                // returning — a bad key shouldn't block a cookie/ticket
+                // that might still be present.
+            }
+        }
+    }
 
     // Path 1b: Single-use WebSocket ticket from ?ticket= query parameter.
     // Tickets are created via POST /api/ws-ticket and consumed here.
@@ -385,6 +463,7 @@ pub async fn optional_auth(
                 let mut request = request;
                 request.extensions_mut().insert(AuthIdentity::User {
                     email: user.email,
+                    name: user.name,
                     role: user.role,
                     groups,
                 });
@@ -493,6 +572,7 @@ mod tests {
 
         let viewer = AuthIdentity::User {
             email: "test@test.com".into(),
+            name: "Test User".into(),
             role: "viewer".into(),
             groups: vec![],
         };

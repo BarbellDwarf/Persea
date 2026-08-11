@@ -25,6 +25,26 @@ See `config.example.toml` for a fully commented reference.
 | `max_sessions` | `500` | Maximum concurrent sessions (all types). 0 = unlimited |
 | `max_sessions_per_user` | `50` | Maximum concurrent sessions per user. 0 = unlimited |
 
+## License key
+
+persea ships in a free edition and an Enterprise edition. Enterprise features are unlocked by a commercial license key. See [Licensing](licensing.md) for the two-version model and the 30-day evaluation period.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `license_key` | — | Commercial license key (format: `PSEA-<base64>`). When absent, enterprise features are available during the 30-day evaluation period. |
+
+```toml
+license_key = "PSEA-XXXX-XXXX-XXXX-XXXX"
+```
+
+Or via environment variable:
+
+```bash
+PERSEA_LICENSE_KEY=PSEA-XXXX-XXXX-XXXX-XXXX
+```
+
+The license status is also visible in the admin UI (Admin → License, `/admin/license.html`).
+
 ## Session timeouts
 
 | Key | Default | Description |
@@ -549,6 +569,7 @@ home_base = "/vdi-homes"
 | `VAULT_SHARED_SECRET_ID` | Vault AppRole secret ID for `[vault_shared]` (only if configured) |
 | `VAULT_LOCAL_SECRET_ID` | Vault AppRole secret ID for `[vault_local]` (only if configured) |
 | `PERSEA_STORAGE_KEY` | 64-char hex encryption key for DB credential storage (alternative to `[storage].encryption_key`) |
+| `PERSEA_LICENSE_KEY` | Commercial license key (alternative to the `license_key` config option) |
 | `VSPHERE_PASSWORD` | VMware vSphere password — the default name of the env var referenced by `[vsphere].password_env` (override the name with `password_env` if you prefer another variable) |
 | `RUST_LOG` | Log level (e.g., `info`, `debug`, `persea=debug`) |
 | `RUST_LOG_FORMAT` | Log format: `text` (default) or `json` for JSON lines (structured logging). Equivalent to the `--log-format` CLI flag, which takes precedence. |

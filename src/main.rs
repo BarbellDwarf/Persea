@@ -27,6 +27,7 @@ mod error;
 mod guacd;
 mod handlers;
 mod import;
+mod license;
 mod metrics;
 mod migrate;
 mod oidc;
@@ -353,7 +354,8 @@ async fn main() {
             }
             // DB-first storage (ticket 026): credentials are encrypted at
             // rest in the DB — without a key they are stored/returned in
-            // plaintext. Warn loudly so operators notice.
+            // plaintext. Refuse to start so operators cannot accidentally
+            // run with plaintext credentials.
             if config
                 .storage
                 .as_ref()
@@ -362,7 +364,9 @@ async fn main() {
                 && config.storage_encryption_key().is_none()
             {
                 eprintln!(
-                    "WARNING: no [storage].encryption_key / PERSEA_STORAGE_KEY set —                      connection credentials stored in the DB will NOT be encrypted.                      Generate one with: openssl rand -hex 32"
+                    "WARNING: no [storage].encryption_key / PERSEA_STORAGE_KEY set — \
+                     connection credentials would be stored in plaintext. \
+                     Generate one with: openssl rand -hex 32"
                 );
             }
             // The credential encryption key is used in every DB-credential
@@ -372,8 +376,14 @@ async fn main() {
                     eprintln!(
                         "Error: [storage].encryption_key / PERSEA_STORAGE_KEY must be a 64-char hex string"
                     );
-                    std::process::exit(1);
                 }
+            }
+            // Warn when running without TLS — credentials travel unencrypted
+            if config.tls.is_none() && !config.listen_addr.contains("https") {
+                tracing::warn!(
+                    "Running without TLS — credentials and session tokens travel unencrypted. \
+                     Use [tls] or a reverse proxy for production."
+                );
             }
             run_server(config, database, log_format, settings_baseline).await
         }
@@ -707,9 +717,9 @@ fn cmd_delete_user(database: &Db, email: &str) {
     }
 }
 
+use crate::csrf::SecureCookies;
 /// Whether TLS is enabled (used by security headers middleware).
-#[derive(Clone)]
-struct TlsEnabled(bool);
+use crate::csrf::TlsEnabled;
 
 async fn security_headers(
     tls: Extension<TlsEnabled>,
@@ -741,13 +751,17 @@ async fn security_headers(
     );
     headers.insert(
         "Content-Security-Policy",
-        "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com"
+        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self'")
             .parse()
             .unwrap(),
     );
     let _ = headers;
     response.extensions_mut().insert(CspNonce(nonce));
-    if tls.0 .0 {
+    // HSTS is only sent when SecureCookies is enabled — i.e. a real/trusted
+    // certificate is in use. With a self-signed cert (secure_cookies=false),
+    // HSTS makes Chromium treat the origin as "not secure", which blocks
+    // Secure cookies even after the user clicks through the warning.
+    if crate::csrf::SecureCookies::enabled() {
         let headers = response.headers_mut();
         headers.insert(
             "Strict-Transport-Security",
@@ -1203,17 +1217,8 @@ async fn run_server(
         let logo = config.theme.as_ref().and_then(|t| t.logo_url.as_deref());
         let title = &config.site_title;
         let mut pages = std::collections::HashMap::new();
-        // Disk-served HTML pages
-        for name in &[
-            "index.html",
-            "connections.html",
-            "sessions.html",
-            "recordings.html",
-            "reports.html",
-            "admin.html",
-            "tokens.html",
-            "docs.html",
-        ] {
+        // Disk-served HTML pages (only index.html — all others use templates)
+        for name in &["index.html"] {
             let path = std::path::Path::new(&static_path).join(name);
             if let Ok(html) = std::fs::read_to_string(&path) {
                 pages.insert(name.to_string(), rewrite_branding(&html, title, logo));
@@ -1295,39 +1300,103 @@ async fn run_server(
         DbPool::None
     };
 
+    // Enterprise license: construct before `config` is moved into
+    // SessionManager, and before the SAML/TOTP blocks below since both
+    // gate on it. Previously this was never constructed at all — the
+    // license admin API/page extracted `Extension<Arc<LicenseManager>>`
+    // with no provider layered in anywhere, so those routes were broken.
+    crate::license::init_eval_period();
+    let license_manager = std::sync::Arc::new(crate::license::LicenseManager::new(
+        config.license_key.as_deref(),
+    ));
+    crate::license::set_global(license_manager.clone());
+    match license_manager.status() {
+        crate::license::LicenseStatus::Valid => {
+            tracing::info!("enterprise license: valid")
+        }
+        crate::license::LicenseStatus::Expired => {
+            tracing::warn!("enterprise license: expired — enterprise features disabled")
+        }
+        crate::license::LicenseStatus::Evaluating { days_remaining } => {
+            tracing::info!(days_remaining, "enterprise license: evaluation period")
+        }
+        crate::license::LicenseStatus::NoLicense => {
+            tracing::info!(
+                "enterprise license: none — enterprise features disabled (evaluation period ended)"
+            )
+        }
+    }
+
     // Extract SAML provider and TOTP enforcement before config is moved into SessionManager
-    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> = config
-        .auth
-        .as_ref()
-        .and_then(|a| {
-            a.saml
-                .as_ref()
-                .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone())))
-        })
-        .or_else(|| {
-            // A DB-configured SAML provider (admin auth page) also needs the
-            // ACS/metadata routes; build the provider from its stored config.
-            crate::providers_db::load_providers(&database)
-                .ok()
-                .and_then(|providers| {
-                    providers
-                        .iter()
-                        .find(|p| p.enabled && p.provider_type == "saml")
-                        .and_then(|p| {
-                            serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
-                                p.config.clone(),
-                            )
-                            .ok()
-                        })
-                        .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg)))
+    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> = if !license_manager
+        .has_feature(crate::license::FEAT_SAML)
+    {
+        if config.auth.as_ref().is_some_and(|a| a.saml.is_some()) {
+            tracing::warn!(
+                "auth.saml is configured but SAML SSO requires an enterprise license — SAML login is disabled"
+            );
+        }
+        None
+    } else {
+        config
+            .auth
+            .as_ref()
+            .and_then(|a| {
+                a.saml.as_ref().map(|cfg| {
+                    Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone()))
                 })
-        });
-    let totp_enforcement = config
+            })
+            .or_else(|| {
+                // A DB-configured SAML provider (admin auth page) also needs the
+                // ACS/metadata routes; build the provider from its stored config.
+                crate::providers_db::load_providers(&database)
+                    .ok()
+                    .and_then(|providers| {
+                        providers
+                            .iter()
+                            .find(|p| p.enabled && p.provider_type == "saml")
+                            .and_then(|p| {
+                                serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
+                                    p.config.clone(),
+                                )
+                                .ok()
+                            })
+                            .map(|cfg| {
+                                Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg))
+                            })
+                    })
+            })
+    };
+    let totp_enforcement_configured = config
         .auth
         .as_ref()
         .and_then(|a| a.totp.as_ref())
         .map(|t| t.enforcement)
         .unwrap_or(crate::totp::TotpEnforcement::Off);
+    let totp_enforcement = if totp_enforcement_configured != crate::totp::TotpEnforcement::Off
+        && !license_manager.has_feature(crate::license::FEAT_TOTP)
+    {
+        tracing::warn!(
+            configured = ?totp_enforcement_configured,
+            "TOTP enforcement requires an enterprise license — falling back to Off (users may still opt in to TOTP themselves)"
+        );
+        crate::totp::TotpEnforcement::Off
+    } else {
+        totp_enforcement_configured
+    };
+
+    // Save secure_cookies before config is moved into SessionManager
+    let secure_cookies_flag = config
+        .tls
+        .as_ref()
+        .map(|t| t.secure_cookies)
+        .unwrap_or(true);
+    SecureCookies::init(secure_cookies_flag);
+    if !secure_cookies_flag {
+        tracing::info!(
+            "secure_cookies = false — the Secure attribute will be omitted from all cookies (self-signed cert mode)"
+        );
+    }
 
     // Create session manager
     let manager: AppState = Arc::new(SessionManager::new_with_db(
@@ -1498,6 +1567,7 @@ async fn run_server(
             put(api::put_session_thumbnail).get(api::get_session_thumbnail),
         )
         .route("/api/sessions/{id}/shadow", post(api::shadow_session))
+        .route("/api/sessions/{id}/terminate", post(api::delete_session))
         .route(
             "/api/vdi/containers/{name}/thumbnail",
             get(api::get_vdi_container_thumbnail),
@@ -1515,6 +1585,7 @@ async fn run_server(
         )
         .route("/api/reports/top-users", get(api::report_top_users))
         .route("/api/reports/summary", get(api::report_summary))
+        .route("/api/reports/activity", get(api::report_activity))
         .route("/api/system/status", get(api::system_status))
         .route(
             "/api/system/settings",
@@ -1595,7 +1666,7 @@ async fn run_server(
             "/api/admin/group-mappings/{id}",
             delete(api::delete_group_mapping),
         )
-        .route("/api/me", get(api::me))
+        .route("/api/me", get(api::me).put(api::update_me))
         // User API token self-service
         .route("/api/me/tokens", get(api::list_my_tokens))
         .route("/api/me/tokens", post(api::create_my_token))
@@ -1603,6 +1674,14 @@ async fn run_server(
         // User credential variables
         .route("/api/me/credentials", get(api::get_my_credentials))
         .route("/api/me/credentials", put(api::put_my_credentials))
+        .route(
+            "/api/me/preset-credentials",
+            get(api::get_my_preset_credentials),
+        )
+        .route(
+            "/api/me/preset-credentials",
+            put(api::put_my_preset_credentials),
+        )
         .route(
             "/api/credential-variables",
             get(api::list_credential_variables),
@@ -1618,6 +1697,18 @@ async fn run_server(
         .route(
             "/api/admin/addressbook-audit",
             get(api::admin_addressbook_audit),
+        )
+        // Audit event log routes
+        .route("/api/audit/events", get(api::admin::audit_events))
+        .route("/api/audit/verify", get(api::admin::audit_verify))
+        .route("/api/audit/export", get(api::admin::audit_export))
+        // License management
+        .route("/api/admin/license", get(api::admin::get_license_status))
+        .route("/api/admin/license", post(api::admin::set_license_key))
+        .route(
+            "/api/admin/upload-logo",
+            post(api::settings::upload_logo)
+                .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         // Login scripts listing
         .route("/api/login-scripts", get(api::list_login_scripts))
@@ -1787,7 +1878,8 @@ async fn run_server(
     let health_route = Router::new()
         .route("/api/health", get(api::health))
         .with_state(manager.clone())
-        .layer(middleware::from_fn(auth::optional_auth));
+        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(database.clone()));
 
     // Prometheus metrics endpoint
     let metrics_route = Router::new().route("/metrics", get(api::metrics));
@@ -1807,13 +1899,25 @@ async fn run_server(
         .layer(Extension(database.clone()))
         .layer(Extension(site_title.clone()));
 
-    // Auth page routes (login, MFA)
-    let auth_pages = Router::new()
-        .route("/", get(handlers::auth::login_page))
+    // Auth page routes (login, MFA) — login POST always rate-limited
+    let login_rate_conf = GovernorConfigBuilder::default()
+        .per_second(5)
+        .burst_size(10)
+        .key_extractor(SmartIpKeyExtractor)
+        .finish()
+        .expect("Failed to build login rate limit config");
+
+    let login_rate_limited = Router::new()
         .route("/auth/login", post(handlers::auth::login_submit))
-        .route("/auth/mfa", get(handlers::auth::mfa_page))
         .route("/auth/mfa", post(handlers::auth::mfa_submit))
         .with_state(manager.clone())
+        .layer(GovernorLayer::new(login_rate_conf));
+
+    let auth_pages = Router::new()
+        .route("/", get(handlers::auth::login_page))
+        .route("/auth/mfa", get(handlers::auth::mfa_page))
+        .with_state(manager.clone())
+        .merge(login_rate_limited)
         .layer(csrf::CsrfLayer)
         .layer(Extension(database.clone()))
         .layer(Extension(oidc_enabled.clone()))
@@ -1828,16 +1932,18 @@ async fn run_server(
         saml_routes = Router::new()
             .route("/auth/saml/acs", post(handlers::auth::saml_acs))
             .route("/auth/saml/metadata", get(handlers::auth::saml_metadata))
+            .with_state(manager.clone())
             .layer(csrf::CsrfLayer)
             .layer(Extension(sp_acs))
             .layer(Extension(sp_meta))
             .layer(Extension(database.clone()))
-            .layer(Extension(trusted_proxies.clone()));
+            .layer(Extension(auth_chain.clone()))
+            .layer(Extension(trusted_proxies.clone()))
+            .layer(Extension(totp_enforcement));
     }
 
     // Branded HTML page routes (served from memory with site_title/logo baked in)
-    // Connections, sessions, and admin pages use templates for dynamic rendering
-    let html_routes = Router::new()
+    let protected_html_routes = Router::new()
         .route("/index.html", get(serve_branded_page))
         .route("/connections.html", get(handlers::pages::connections_page))
         // Legacy path — the page was renamed from Address Book → Connections.
@@ -1851,7 +1957,6 @@ async fn run_server(
         .route("/reports.html", get(handlers::pages::admin_reports_page))
         .route("/admin.html", get(handlers::pages::admin_users_page))
         .route("/tokens.html", get(handlers::account::tokens_page))
-        .route("/docs.html", get(handlers::account::docs_page))
         // Account pages (templates)
         .route(
             "/account/profile.html",
@@ -1859,7 +1964,6 @@ async fn run_server(
         )
         .route("/account/tokens.html", get(handlers::account::tokens_page))
         .route("/account/totp.html", get(handlers::account::totp_page))
-        .route("/docs", get(handlers::account::docs_page))
         // Admin sub-pages (templates)
         .route("/admin/users.html", get(handlers::pages::admin_users_page))
         .route("/admin/auth.html", get(handlers::pages::admin_auth_page))
@@ -1880,9 +1984,21 @@ async fn run_server(
             "/admin/tunnels.html",
             get(handlers::pages::admin_tunnels_page),
         )
-        .layer(middleware::from_fn(auth::optional_auth))
+        .route(
+            "/admin/license.html",
+            get(handlers::pages::admin_license_page),
+        )
+        .route(
+            "/admin/branding.html",
+            get(handlers::pages::admin_branding_page),
+        )
+        .route("/docs.html", get(handlers::account::docs_page))
+        .route("/docs", get(handlers::account::docs_page))
+        .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));
+
+    let html_routes = protected_html_routes;
 
     // Build full router (all Router<()> at this point)
     let mut app: Router<()> = Router::new()
@@ -1897,6 +2013,11 @@ async fn run_server(
         .merge(saml_routes)
         .merge(unauth_routes)
         .merge(html_routes);
+
+    // Logout route — always available (clears session, redirects to login)
+    let logout_route = Router::new()
+        .route("/auth/logout", get(oidc::logout))
+        .layer(Extension(database.clone()));
 
     // Add OIDC routes if configured (always rate-limited to prevent brute-force)
     if let Some(ref oidc_st) = oidc_state {
@@ -1915,12 +2036,10 @@ async fn run_server(
             .layer(Extension(totp_enforcement))
             .layer(GovernorLayer::new(auth_rate_conf));
 
-        let logout_route = Router::new()
-            .route("/auth/logout", get(oidc::logout))
-            .layer(Extension(database.clone()));
-
-        app = app.merge(oidc_routes).merge(logout_route);
+        app = app.merge(oidc_routes);
     }
+
+    app = app.merge(logout_route);
 
     // Add shared layers
     // Server HTTPS requires both cert_path and key_path in [tls]
@@ -1935,10 +2054,20 @@ async fn run_server(
         }
     });
     let tls_enabled = TlsEnabled(server_tls.is_some());
+    // SecureCookies::init was called before config was moved (see above)
+
+    // Unknown routes fall through to the static dir; missing files hand off
+    // to `not_found_handler`, which renders the styled error page. The
+    // fallback must be registered BEFORE the shared layers below so they
+    // also wrap it (Router::layer only covers already-registered routes).
+    let static_serve = ServeDir::new(&static_path)
+        .not_found_service(Router::new().fallback(not_found_handler).with_state(()));
     app = app
+        .fallback_service(static_serve)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(metrics::MetricsLayer)
         .layer(DefaultBodyLimit::max(64 * 1024)) // 64 KB max request body
+        .layer(middleware::from_fn(error_pages))
         .layer(middleware::from_fn(security_headers))
         .layer(Extension(tls_enabled))
         .layer(Extension(oidc_enabled))
@@ -1949,7 +2078,7 @@ async fn run_server(
         .layer(Extension(trusted_proxies))
         .layer(Extension(branded_pages))
         .layer(Extension(db_pool))
-        .fallback_service(ServeDir::new(&static_path));
+        .layer(Extension(license_manager));
 
     let scheme = if server_tls.is_some() {
         "https"
@@ -2126,6 +2255,45 @@ fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {
     Some(tokio_rustls::TlsConnector::from(Arc::new(tls_config)))
 }
 
+/// Error-page negotiation middleware: captures whether the request wants a
+/// styled HTML error page (browser) vs JSON (API client), plus the CSP
+/// nonce, so `AppError` responses and the 404 fallback can render the error
+/// template. Runs inside `security_headers`, which inserts the nonce into
+/// request extensions first.
+async fn error_pages(request: Request, next: middleware::Next) -> Response {
+    // /api/* always gets JSON errors; other paths get the styled page when
+    // the client accepts text/html (browsers).
+    let wants_html = !request.uri().path().starts_with("/api/")
+        && request
+            .headers()
+            .get(axum::http::header::ACCEPT)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.contains("text/html"))
+            .unwrap_or(false);
+    let csp_nonce = request
+        .extensions()
+        .get::<CspNonce>()
+        .map(|n| n.0.clone())
+        .unwrap_or_default();
+    crate::error::with_error_context(
+        crate::error::ErrorContext {
+            wants_html,
+            csp_nonce,
+        },
+        next.run(request),
+    )
+    .await
+}
+
+/// Fallback for unknown routes — renders the styled error page for browser
+/// requests, JSON for API paths.
+async fn not_found_handler() -> Response {
+    crate::error::AppError::error_response(
+        axum::http::StatusCode::NOT_FOUND,
+        "The page you requested could not be found",
+    )
+}
+
 /// Serve a branded HTML page from the pre-processed in-memory map.
 async fn serve_branded_page(
     Extension(pages): Extension<Arc<std::collections::HashMap<String, String>>>,
@@ -2146,10 +2314,12 @@ async fn serve_branded_page(
 /// Renders the new toolbar-based client template.
 async fn serve_client_page(
     Extension(site_title): Extension<SiteTitle>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let tmpl = templates::ClientTemplate {
         site_title: site_title.0.clone(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -2187,6 +2357,7 @@ fn rewrite_branding(html: &str, site_title: &str, logo_url: Option<&str>) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::http::StatusCode;
 
     #[test]
     fn test_rewrite_branding_title() {
@@ -2267,5 +2438,124 @@ mod tests {
             saw_429,
             "no requests were throttled — rate-limit not applied"
         );
+    }
+
+    // ── Error-page negotiation (R18) ───────────────────────────────────
+
+    #[tokio::test]
+    async fn error_page_renders_html_for_browsers_and_json_for_api() {
+        use axum::{body::Body, http::Request, routing::get, Router};
+        use tower::ServiceExt;
+
+        async fn failing() -> Result<(), crate::error::AppError> {
+            Err(crate::error::AppError::NotFound("missing resource".into()))
+        }
+
+        let app = Router::new()
+            .route("/page.html", get(failing))
+            .route("/api/data", get(failing))
+            .layer(middleware::from_fn(error_pages));
+
+        // Browser request → styled HTML error page with the right status.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/page.html")
+                    .header("accept", "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("Not Found"),
+            "expected styled page, got: {html}"
+        );
+        assert!(html.contains("missing resource"), "got: {html}");
+        assert!(html.contains("app.css"), "page must load the design system");
+
+        // API path → JSON even when the client accepts text/html.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/data")
+                    .header("accept", "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            resp.headers()["content-type"],
+            "application/json",
+            "API errors must stay JSON"
+        );
+    }
+
+    #[tokio::test]
+    async fn not_found_fallback_renders_error_page() {
+        use axum::{body::Body, http::Request};
+        use tower::ServiceExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "persea-notfound-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let app = Router::new()
+            .fallback_service(
+                ServeDir::new(&dir)
+                    .not_found_service(Router::new().fallback(not_found_handler).with_state(())),
+            )
+            .layer(middleware::from_fn(error_pages));
+
+        // Unknown page → styled 404.
+        let resp = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/missing.html")
+                    .header("accept", "text/html")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8(body.to_vec()).unwrap();
+        assert!(
+            html.contains("404"),
+            "expected styled 404 page, got: {html}"
+        );
+
+        // Unknown API path → JSON.
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/nope")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.headers()["content-type"], "application/json");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

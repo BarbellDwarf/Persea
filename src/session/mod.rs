@@ -367,6 +367,7 @@ mod tests {
             browser_session: None,
             deferred_params: None,
             drive_path: None,
+            drive_enabled: false,
             tunnels: Vec::new(),
             container_id: None,
             container_name: None,

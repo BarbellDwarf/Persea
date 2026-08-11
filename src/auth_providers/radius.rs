@@ -9,6 +9,7 @@ use sha2::Digest;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 use tokio::time::Duration;
 
@@ -228,7 +229,7 @@ fn verify_response_authenticator(
     let computed = hasher.finalize();
 
     // Compare against stored Response Authenticator (bytes 4..20)
-    computed[..] == response[4..20]
+    computed.as_slice().ct_eq(&response[4..20]).into()
 }
 
 /// Build an Access-Request packet.

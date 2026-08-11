@@ -90,6 +90,9 @@ impl SessionManager {
             );
         }
 
+        // Derive the known_hosts path for SSH trust-on-first-use persistence.
+        let known_hosts_path = self.config.db_path.parent().map(|p| p.join("known_hosts"));
+
         // Resolve jump hosts (SSH tunnel chain) up-front: the Proxmox branch
         // needs them to tunnel its PVE API + SPICE-proxy connections in-branch,
         // and the generic tunnel setup after the match uses them for the other
@@ -116,6 +119,8 @@ impl SessionManager {
         // proxy hops); merged into the session's tunnel list after the match.
         let mut proxmox_tunnels: Vec<tunnel::SshTunnel> = Vec::new();
 
+        let mut pending_net_check: Option<(String, u16, Vec<String>)> = None;
+
         let (
             mut conn_params,
             hostname,
@@ -134,7 +139,11 @@ impl SessionManager {
                 let port = req.port.unwrap_or(22);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.ssh_allowed_networks).await?;
+                pending_net_check = Some((
+                    hostname.clone(),
+                    port,
+                    self.config.ssh_allowed_networks.clone(),
+                ));
 
                 tracing::info!(
                     session_id = %session_id,
@@ -255,7 +264,11 @@ impl SessionManager {
                 let port = req.port.unwrap_or(3389);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.rdp_allowed_networks).await?;
+                pending_net_check = Some((
+                    hostname.clone(),
+                    port,
+                    self.config.rdp_allowed_networks.clone(),
+                ));
 
                 tracing::info!(
                     session_id = %session_id,
@@ -331,7 +344,7 @@ impl SessionManager {
                     remote_app_args: rdp.and_then(|s| s.remote_app_args.clone()),
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
-                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(false),
+                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(true),
                     enable_desktop_composition: rdp
                         .and_then(|s| s.enable_desktop_composition)
                         .unwrap_or(false),
@@ -341,7 +354,7 @@ impl SessionManager {
                         .and_then(|s| s.enable_full_window_drag)
                         .unwrap_or(false),
                     force_lossless: rdp.and_then(|s| s.force_lossless).unwrap_or(false),
-                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(false),
+                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(true),
                     secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                 }));
                 (
@@ -363,7 +376,11 @@ impl SessionManager {
                 let port = req.port.unwrap_or(5900);
                 let username = req.username.clone().unwrap_or_default();
 
-                check_allowed_network(&hostname, port, &self.config.vnc_allowed_networks).await?;
+                pending_net_check = Some((
+                    hostname.clone(),
+                    port,
+                    self.config.vnc_allowed_networks.clone(),
+                ));
 
                 tracing::info!(
                     session_id = %session_id,
@@ -439,13 +456,18 @@ impl SessionManager {
                 let pve_url = proxmox.and_then(|s| s.proxmox_url.clone()).ok_or_else(|| {
                     SessionError::ValidationError("Proxmox sessions require proxmox_url".into())
                 })?;
+
+                let (pve_host, pve_port) = parse_host_port(&pve_url, 8006)?;
+                check_allowed_network(&pve_host, pve_port, &self.config.web_allowed_networks)
+                    .await?;
+
                 let vmid = proxmox.and_then(|s| s.proxmox_vmid).unwrap_or(0);
                 if vmid == 0 {
                     return Err(SessionError::ValidationError(
                         "Proxmox sessions require proxmox_vmid".into(),
                     ));
                 }
-                let verify_tls = proxmox.and_then(|s| s.proxmox_verify_tls).unwrap_or(false);
+                let verify_tls = proxmox.and_then(|s| s.proxmox_verify_tls).unwrap_or(true);
 
                 // Join the token id and secret into PVE's "id=secret" form. If
                 // the secret is empty, treat the id as already-joined (lenient:
@@ -456,6 +478,16 @@ impl SessionManager {
                 let secret = proxmox
                     .and_then(|s| s.proxmox_token_secret.clone())
                     .unwrap_or_default();
+                if token_id.is_empty() {
+                    return Err(SessionError::ValidationError(
+                        "Proxmox API token ID is required (format user@realm!tokenid, e.g. root@pam!persea)".into(),
+                    ));
+                }
+                if secret.is_empty() {
+                    return Err(SessionError::ValidationError(
+                        "Proxmox API token secret is required".into(),
+                    ));
+                }
                 let api_token = if secret.is_empty() {
                     token_id
                 } else {
@@ -469,14 +501,16 @@ impl SessionManager {
                 // the transport). The SPICE server cert is still verified below.
                 let (broker_base, broker_verify) = if !jump_hops.is_empty() {
                     let (api_host, api_port) = parse_host_port(&pve_url, 8006)?;
-                    let (mut tuns, api_local) =
-                        tunnel::start_chain(&jump_hops, &api_host, api_port)
-                            .await
-                            .map_err(|e| {
-                                SessionError::ValidationError(format!(
-                                    "Proxmox API tunnel failed: {e}"
-                                ))
-                            })?;
+                    let (mut tuns, api_local) = tunnel::start_chain(
+                        &jump_hops,
+                        &api_host,
+                        api_port,
+                        known_hosts_path.clone(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        SessionError::ValidationError(format!("Proxmox API tunnel failed: {e}"))
+                    })?;
                     proxmox_tunnels.append(&mut tuns);
                     tracing::info!(
                         session_id = %session_id,
@@ -528,14 +562,18 @@ impl SessionManager {
                 // SPICE server cert still verifies.
                 if !jump_hops.is_empty() {
                     let (proxy_host, proxy_port) = parse_host_port(&cfg.proxy, 3128)?;
-                    let (mut tuns, proxy_local) =
-                        tunnel::start_chain(&jump_hops, &proxy_host, proxy_port)
-                            .await
-                            .map_err(|e| {
-                                SessionError::ValidationError(format!(
-                                    "Proxmox SPICE proxy tunnel failed: {e}"
-                                ))
-                            })?;
+                    let (mut tuns, proxy_local) = tunnel::start_chain(
+                        &jump_hops,
+                        &proxy_host,
+                        proxy_port,
+                        known_hosts_path.clone(),
+                    )
+                    .await
+                    .map_err(|e| {
+                        SessionError::ValidationError(format!(
+                            "Proxmox SPICE proxy tunnel failed: {e}"
+                        ))
+                    })?;
                     proxmox_tunnels.append(&mut tuns);
                     tracing::info!(
                         session_id = %session_id,
@@ -636,6 +674,18 @@ impl SessionManager {
 
                 check_allowed_network(url_host, url_port, &self.config.web_allowed_networks)
                     .await?;
+
+                if url_host == "169.254.169.254"
+                    || url_host.parse::<std::net::IpAddr>().map_or(false, |ip| {
+                        "169.254.0.0/16"
+                            .parse::<ipnetwork::IpNetwork>()
+                            .map_or(false, |net| net.contains(ip))
+                    })
+                {
+                    return Err(SessionError::ValidationError(
+                        "access to link-local / cloud metadata (169.254.0.0/16) is blocked".into(),
+                    ));
+                }
 
                 tracing::info!(
                     session_id = %session_id,
@@ -862,9 +912,12 @@ impl SessionManager {
                 }
             };
 
-            let (tunnels, final_addr) = tunnel::start_chain(&jump_hops, &target_host, target_port)
-                .await
-                .map_err(|e| SessionError::ValidationError(format!("SSH tunnel failed: {}", e)))?;
+            let (tunnels, final_addr) =
+                tunnel::start_chain(&jump_hops, &target_host, target_port, known_hosts_path)
+                    .await
+                    .map_err(|e| {
+                        SessionError::ValidationError(format!("SSH tunnel failed: {}", e))
+                    })?;
 
             if !is_web {
                 // Override connection params to point at the final tunnel endpoint
@@ -974,6 +1027,15 @@ impl SessionManager {
             browser_session = Some(browser);
         }
 
+        // Determine if drive/file transfer is available for this session.
+        // For SSH: guacd enables SFTP when enable_sftp is set.
+        // For RDP: guacd enables drive when session_drive_path is set.
+        let drive_enabled = match &conn_params {
+            guacd::ConnectionParams::Ssh(p) => p.enable_sftp,
+            guacd::ConnectionParams::Rdp(_) => session_drive_path.is_some(),
+            _ => false,
+        };
+
         let mut ssh_tunnels = ssh_tunnels.map(|(t, _)| t).unwrap_or_default();
         // Fold in any tunnels the Proxmox branch established in-branch.
         ssh_tunnels.append(&mut proxmox_tunnels);
@@ -985,31 +1047,36 @@ impl SessionManager {
         let deferred = banner_override.is_some();
 
         let (guacd_stream, connection_id, deferred_params) = if deferred {
+            if let Some((h, p, nets)) = pending_net_check.take() {
+                check_allowed_network(&h, p, &nets).await?;
+            }
             tracing::info!(
                 session_id = %session_id,
                 "Deferring guacd connection (ephemeral keypair — waiting for user to add public key)"
             );
             (None, String::new(), Some(conn_params))
         } else {
-            // Connect to guacd and perform handshake
-            let handshake_result = guacd::connect_and_handshake(
-                &self.config.guacd_addr,
-                &conn_params,
-                self.guacd_tls.as_ref(),
-            )
-            .await;
+            let guacd_addr = self.config.guacd_addr.clone();
+            let guacd_tls = self.guacd_tls.clone();
 
-            // If handshake fails, clean up browser processes
-            let (stream, connection_id) = match handshake_result {
-                Ok(result) => result,
-                Err(e) => {
-                    if let Some(mut bs) = browser_session {
-                        self.browser_manager.kill(&mut bs).await;
+            // Parallelise DNS validation with guacd connect
+            let ((), (stream, connection_id)) = tokio::try_join!(
+                async {
+                    if let Some((h, p, nets)) = pending_net_check.take() {
+                        check_allowed_network(&h, p, &nets)
+                            .await
+                            .map_err(|e| e.to_string())
+                    } else {
+                        Ok(())
                     }
-                    tracing::error!(session_id = %session_id, error = %e, "Failed to connect to guacd");
-                    return Err(SessionError::GuacdConnection(e.to_string()));
+                },
+                async {
+                    guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
+                        .await
+                        .map_err(|e| e.to_string())
                 }
-            };
+            )
+            .map_err(|e| SessionError::GuacdConnection(e))?;
 
             tracing::info!(
                 session_id = %session_id,
@@ -1089,6 +1156,7 @@ impl SessionManager {
             browser_session,
             deferred_params,
             drive_path: session_drive_path,
+            drive_enabled,
             tunnels: ssh_tunnels,
             container_id,
             container_name,
@@ -1117,23 +1185,33 @@ impl SessionManager {
 
         crate::metrics::session_total_inc();
 
-        // Record in session history
+        // Record in session history (non-blocking)
         if let Some(ref db) = self.db {
+            let db = db.clone();
+            let session_id_str = session_id.to_string();
             let st = format!("{:?}", info.session_type).to_lowercase();
-            if let Err(e) = crate::db::insert_session_history(
-                db,
-                &session_id.to_string(),
-                &st,
-                &info.hostname,
-                None,
-                &info.username,
-                &info.created_by,
-                info.address_book_entry.as_deref(),
-                info.address_book_folder.as_deref(),
-                info.entry_display_name.as_deref(),
-            ) {
-                tracing::warn!(session_id = %session_id, error = %e, "Failed to record session history");
-            }
+            let hostname = info.hostname.clone();
+            let username = info.username.clone();
+            let created_by = info.created_by.clone();
+            let address_book_entry = info.address_book_entry.clone();
+            let address_book_folder = info.address_book_folder.clone();
+            let entry_display_name = info.entry_display_name.clone();
+            tokio::task::spawn_blocking(move || {
+                crate::db::insert_session_history(
+                    &db,
+                    &session_id_str,
+                    &st,
+                    &hostname,
+                    None,
+                    &username,
+                    &created_by,
+                    address_book_entry.as_deref(),
+                    address_book_folder.as_deref(),
+                    entry_display_name.as_deref(),
+                )
+            })
+            .await
+            .ok();
         }
 
         // Spawn timeout task for pending sessions
@@ -1294,6 +1372,12 @@ async fn check_allowed_network(
     port: u16,
     allowed: &[String],
 ) -> Result<(), SessionError> {
+    if host.contains("://") || host.starts_with("http") {
+        return Err(SessionError::ValidationError(
+            "hostname must be a host or IP address, not a URL (use a Web entry for browser sessions)".into(),
+        ));
+    }
+
     let networks: Vec<IpNetwork> = allowed
         .iter()
         .filter_map(|s| s.parse::<IpNetwork>().ok())
@@ -1448,7 +1532,7 @@ mod tests {
         // OIDC email username must reduce to a safe basename.
         let got = expand_typescript_name(
             "{connection}-{user}",
-            "alice@sol1.com.au",
+            "alice@example.com",
             "h",
             "../../etc/cron.d/evil",
             &ts_id(),
@@ -1456,7 +1540,7 @@ mod tests {
         );
         assert!(!got.contains('/'), "no path separators: {got}");
         assert!(!got.contains(".."), "no traversal: {got}");
-        assert_eq!(got, "etc-cron-d-evil-alice-sol1-com-au");
+        assert_eq!(got, "etc-cron-d-evil-alice-example-com");
     }
 
     #[test]

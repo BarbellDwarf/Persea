@@ -1,20 +1,128 @@
-//! Double-submit cookie CSRF protection middleware.
-//!
-//! On state-changing methods (POST, PUT, DELETE, PATCH), the `X-CSRF-Token`
-//! request header must match the `csrf_token` cookie. GET/HEAD/OPTIONS are
-//! exempt. A random token cookie is set on every response that doesn't already
-//! carry one.
-
+/// Double-submit cookie CSRF protection middleware.
+///
+/// On state-changing methods (POST, PUT, DELETE, PATCH), the `X-CSRF-Token`
+/// request header must match the `csrf_token` cookie. GET/HEAD/OPTIONS are
+/// exempt. A random token cookie is set on every response.
+///
+/// Fallback: if the header is missing, the middleware peeks at form bodies
+/// for a `csrf_token` field. This handles cases where JavaScript cannot
+/// read the cookie (browser extensions, network timing, device quirks).
 use std::future::Future;
+use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use axum::body::Body;
+use axum::extract::ConnectInfo;
 use axum::http::{header, HeaderMap, Method, Request, Response, StatusCode};
 use tower::{Layer, Service};
 
+use crate::auth::TrustedProxies;
+
 pub const CSRF_COOKIE: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 32;
+
+/// Whether Persea terminates TLS itself (set at startup from the server
+/// config). The process runs exactly one listener mode, so this is a
+/// reliable, non-spoofable signal for direct (no-proxy) deployments.
+#[derive(Clone)]
+pub struct TlsEnabled(pub bool);
+
+/// Whether to set the `Secure` attribute on cookies. Defaults to true when TLS
+/// is enabled. Set to false for self-signed certs — browsers block Secure
+/// cookies over connections with invalid certificates.
+///
+/// Stored as a process-global once set at startup, so `cookie_secure_attr` can
+/// read it without threading the value through every handler.
+pub struct SecureCookies(pub bool);
+
+static SECURE_COOKIES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+impl SecureCookies {
+    /// Initialize the global secure-cookies flag (call once at startup).
+    pub fn init(secure: bool) {
+        let _ = SECURE_COOKIES.set(secure);
+    }
+
+    /// Read the global flag. Returns true (default) if not yet initialized.
+    pub fn enabled() -> bool {
+        SECURE_COOKIES.get().copied().unwrap_or(true)
+    }
+}
+
+/// Is the connection HTTPS? True when Persea terminated TLS itself, or when
+/// a trusted proxy reports `X-Forwarded-Proto: https`. The proxy header is
+/// only honoured when the immediate peer is in `trusted_proxies` — matching
+/// the gate `client_ip()` applies to `X-Forwarded-For`.
+pub fn is_https(
+    headers: &HeaderMap,
+    tls_enabled: bool,
+    trusted_proxies: Option<&TrustedProxies>,
+    peer_ip: Option<IpAddr>,
+) -> bool {
+    if tls_enabled {
+        return true;
+    }
+    let peer_trusted = match (trusted_proxies, peer_ip) {
+        (Some(proxies), Some(ip)) => proxies.0.iter().any(|cidr| {
+            cidr.parse::<ipnetwork::IpNetwork>()
+                .map(|net| net.contains(ip))
+                .unwrap_or(false)
+        }),
+        _ => false,
+    };
+    if !peer_trusted {
+        return false;
+    }
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(',').next().unwrap_or("").trim() == "https")
+        .unwrap_or(false)
+}
+
+/// `is_https` for code that holds the full request: reads `TlsEnabled`,
+/// `TrustedProxies`, and `ConnectInfo` from the request extensions.
+pub fn is_https_request(req: &Request<Body>) -> bool {
+    // If SecureCookies is disabled (e.g. self-signed cert), skip the Secure
+    // attribute on all cookies.
+    if !SecureCookies::enabled() {
+        return false;
+    }
+    let tls_enabled = req
+        .extensions()
+        .get::<TlsEnabled>()
+        .map(|t| t.0)
+        .unwrap_or(false);
+    let trusted_proxies = req.extensions().get::<TrustedProxies>();
+    let peer_ip = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    is_https(req.headers(), tls_enabled, trusted_proxies, peer_ip)
+}
+
+/// `" Secure;"` when the request arrived over HTTPS (Persea's own TLS or a
+/// trusted proxy), empty otherwise. Set-Cookie builders use this so session
+/// cookies are not dropped by browsers when serving plain HTTP (e.g. LAN
+/// access without TLS).
+///
+/// The value is designed to be interpolated into `HttpOnly;{} SameSite=Lax`
+/// so the result is `HttpOnly; Secure; SameSite=Lax` (HTTPS) or
+/// `HttpOnly; SameSite=Lax` (HTTP) — no double semicolons, always a space
+/// before SameSite so Chromium parses the attribute correctly.
+pub fn cookie_secure_attr(
+    headers: &HeaderMap,
+    tls_enabled: bool,
+    trusted_proxies: Option<&TrustedProxies>,
+    peer_ip: Option<IpAddr>,
+) -> &'static str {
+    if SecureCookies::enabled() && is_https(headers, tls_enabled, trusted_proxies, peer_ip) {
+        " Secure;"
+    } else {
+        ""
+    }
+}
 
 fn generate_token() -> String {
     use rand::RngExt;
@@ -24,19 +132,25 @@ fn generate_token() -> String {
 }
 
 fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                let c = c.trim();
-                if let Some(val) = c.strip_prefix(name) {
-                    val.strip_prefix('=').map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+    // Combine ALL cookie headers before parsing — some clients split cookies
+    // across multiple Cookie headers, and `get()` would only see the first.
+    let combined: String = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join("; ");
+    if combined.is_empty() {
+        return None;
+    }
+    combined.split(';').find_map(|c| {
+        let c = c.trim();
+        if let Some(val) = c.strip_prefix(name) {
+            val.strip_prefix('=').map(|v| v.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 fn is_state_changing(method: &Method) -> bool {
@@ -77,62 +191,127 @@ where
 
     fn call(&mut self, req: Request<Body>) -> Self::Future {
         let method = req.method().clone();
-        // Secure cookie attribute only over HTTPS. Hyper sets the URI scheme
-        // on TLS connections; behind a reverse proxy, honour X-Forwarded-Proto.
-        let is_https = req
-            .uri()
-            .scheme()
-            .map(|s| s.as_str() == "https")
-            .unwrap_or(false)
-            || req
-                .headers()
-                .get("x-forwarded-proto")
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.split(',').next().unwrap_or("").trim() == "https")
-                .unwrap_or(false);
-
-        // Check CSRF for state-changing methods
-        if is_state_changing(&method) {
-            let cookie_token = extract_cookie(req.headers(), CSRF_COOKIE);
-            let header_token = req
-                .headers()
-                .get("x-csrf-token")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-
-            match (cookie_token, header_token) {
-                (Some(cookie), Some(header)) if cookie == header => {
-                    // Valid — proceed
-                }
-                _ => {
-                    return Box::pin(async {
-                        let body_text =
-                            serde_json::json!({"error": "CSRF token missing or invalid"})
-                                .to_string();
-                        let resp = Response::builder()
-                            .status(StatusCode::FORBIDDEN)
-                            .header(header::CONTENT_TYPE, "application/json")
-                            .body(Body::from(body_text))
-                            .unwrap_or_else(|_| Response::new(Body::empty()));
-                        Ok(resp)
-                    });
-                }
-            }
-        }
+        // Secure cookie attribute only over HTTPS: Persea's own TLS, or a
+        // trusted proxy's X-Forwarded-Proto (gated on the peer address).
+        // Also gated on `SecureCookies::enabled()` — same as the session
+        // cookie's `cookie_secure_attr()` — so a self-signed cert (which
+        // browsers refuse to send Secure-flagged cookies over, even after
+        // clicking through the warning) doesn't silently drop this cookie
+        // too. This was missed when that fix landed: this is a separate,
+        // parallel code path that never consulted the flag at all.
+        let is_https = SecureCookies::enabled() && is_https_request(&req);
 
         let mut inner = self.inner.clone();
         Box::pin(async move {
+            // ── CSRF double-submit check ─────────────────────────────
+            // Check X-CSRF-Token header first. If header is missing,
+            // peek at form bodies (application/x-www-form-urlencoded)
+            // for a csrf_token field. This covers devices where JS
+            // cannot read the CSRF cookie.
+            let mut req = req;
+            // Capture the incoming CSRF cookie before `req` is moved into
+            // the inner service.  Used both for the double-submit check
+            // (state-changing methods) and to re-set the cookie on the
+            // response without generating a fresh token each time.
+            let incoming_cookie = extract_cookie(&req.headers(), CSRF_COOKIE);
+
+            if is_state_changing(&method) {
+                let header_token = req
+                    .headers()
+                    .get("x-csrf-token")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+
+                let form_token = if header_token.is_none() {
+                    let ct = req
+                        .headers()
+                        .get(header::CONTENT_TYPE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("");
+                    if ct.contains("application/x-www-form-urlencoded") {
+                        let (parts, body) = req.into_parts();
+                        let (bytes_result, token) = match axum::body::to_bytes(body, usize::MAX)
+                            .await
+                        {
+                            Ok(bytes) => {
+                                let form = std::str::from_utf8(&bytes).unwrap_or("");
+                                let tok = form.split('&').find_map(|pair| {
+                                    let (k, v) = pair.split_once('=')?;
+                                    if k == CSRF_COOKIE {
+                                        Some(urlencoding::decode(v).unwrap_or_default().to_string())
+                                    } else {
+                                        None
+                                    }
+                                });
+                                (Some(bytes), tok)
+                            }
+                            Err(_) => (None, None),
+                        };
+                        // Always restore the request — either with original bytes or empty
+                        let body = match bytes_result {
+                            Some(b) => Body::from(b),
+                            None => Body::empty(),
+                        };
+                        req = Request::from_parts(parts, body);
+                        token
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let effective = header_token.or(form_token);
+                match (&incoming_cookie, &effective) {
+                    (Some(c), Some(h)) if c == h => { /* valid */ }
+                    _ => {
+                        let path = req.uri().path().to_string();
+                        tracing::warn!(
+                            expected = %incoming_cookie.as_deref().unwrap_or("none"),
+                            received = %effective.as_deref().unwrap_or("none"),
+                            path = %path,
+                            "CSRF token mismatch"
+                        );
+                        // The login form is a plain (non-fetch) POST — see
+                        // R70 — so a raw JSON body here would navigate the
+                        // browser straight to it instead of showing on the
+                        // login page. Redirect back with a friendly error
+                        // instead, matching how every other login failure
+                        // is surfaced. All other endpoints (admin UI, API)
+                        // are fetch/htmx-driven and expect JSON.
+                        if path == "/auth/login" {
+                            return Ok(Response::builder()
+                                .status(StatusCode::SEE_OTHER)
+                                .header(header::LOCATION, "/?error=csrf_failed")
+                                .body(Body::empty())
+                                .unwrap_or_else(|_| Response::new(Body::empty())));
+                        }
+                        let body_text =
+                            serde_json::json!({"error": "CSRF token missing or invalid"})
+                                .to_string();
+                        return Ok(Response::builder()
+                            .status(StatusCode::FORBIDDEN)
+                            .header(header::CONTENT_TYPE, "application/json")
+                            .body(Body::from(body_text))
+                            .unwrap_or_else(|_| Response::new(Body::empty())));
+                    }
+                }
+            }
+
             let mut resp = inner.call(req).await?;
 
-            // Set csrf_token cookie on responses that don't have one yet.
-            // Not HttpOnly: the double-submit pattern needs JS (htmx/fetch)
-            // to read the token and echo it back as X-CSRF-Token.
-            if !resp.headers().contains_key(header::SET_COOKIE) {
-                let token = generate_token();
-                let secure = if is_https { "; Secure" } else { "" };
+            // Reuse the incoming cookie token if present; only generate a
+            // fresh one when the request had none (first visit / expired).
+            // Generating a new token on *every* response caused race
+            // conditions: concurrent AJAX calls would each receive a new
+            // token, and whichever Set-Cookie arrived last "won", leaving
+            // earlier callers with a stale cookie value.
+            {
+                let token = incoming_cookie.unwrap_or_else(|| generate_token());
+                let secure = if is_https { " Secure" } else { "" };
                 let cookie = format!("{}={}; Path=/; SameSite=Lax;{}", CSRF_COOKIE, token, secure);
                 resp.headers_mut()
-                    .insert(header::SET_COOKIE, cookie.parse().unwrap());
+                    .append(header::SET_COOKIE, cookie.parse().unwrap());
             }
             Ok(resp)
         })
@@ -190,8 +369,28 @@ mod tests {
 
     #[tokio::test]
     async fn secure_flag_set_over_https_scheme() {
+        let mut req = Request::builder()
+            .uri("https://persea.test/")
+            .body(Body::empty())
+            .unwrap();
+        // Persea's own TLS termination is the HTTPS signal (the URI scheme
+        // alone is client-supplied and not trusted).
+        req.extensions_mut().insert(TlsEnabled(true));
+        let resp = run(req).await;
+        let set_cookie = resp
+            .headers()
+            .get(header::SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(set_cookie.contains("Secure"), "got {set_cookie}");
+    }
+
+    #[tokio::test]
+    async fn secure_flag_not_set_without_tls_or_trusted_proxy() {
         let resp = run(Request::builder()
             .uri("https://persea.test/")
+            .header("x-forwarded-proto", "https")
             .body(Body::empty())
             .unwrap())
         .await;
@@ -201,7 +400,10 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert!(set_cookie.contains("Secure"), "got {set_cookie}");
+        assert!(
+            !set_cookie.contains("Secure"),
+            "client-supplied X-Forwarded-Proto must not set Secure: {set_cookie}"
+        );
     }
 
     #[tokio::test]
@@ -242,5 +444,43 @@ mod tests {
     async fn get_requests_are_exempt() {
         let resp = run(Request::get("/").body(Body::empty()).unwrap()).await;
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn cookie_format_no_double_semicolons() {
+        let secure = " Secure;";
+        let cookie = format!(
+            "persea_session=test123; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=86400",
+            secure
+        );
+        assert!(
+            !cookie.contains(";;"),
+            "double semicolons in cookie: {cookie}"
+        );
+        assert!(
+            cookie.contains("HttpOnly; Secure; SameSite=Lax"),
+            "expected clean format: {cookie}"
+        );
+    }
+
+    #[test]
+    fn cookie_format_http_no_secure() {
+        let secure = "";
+        let cookie = format!(
+            "persea_session=test123; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=86400",
+            secure
+        );
+        assert!(
+            !cookie.contains(";;"),
+            "double semicolons in cookie: {cookie}"
+        );
+        assert!(
+            cookie.contains("HttpOnly; SameSite=Lax"),
+            "expected no-secure format: {cookie}"
+        );
+        assert!(
+            !cookie.contains("Secure"),
+            "should not have Secure on HTTP: {cookie}"
+        );
     }
 }

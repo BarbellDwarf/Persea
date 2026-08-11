@@ -2,7 +2,8 @@
 
 [![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
-[![License](https://img.shields.io/github/license/BarbellDwarf/persea)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+[![Commercial License](https://img.shields.io/badge/License-Commercial-green.svg)](COMMERCIAL_LICENSE.md)
 
 A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
 
@@ -27,6 +28,15 @@ This is a side project alongside a day job. Progress comes in bursts.
 If you get use out of this, star Sol1's repo too. They built the base layer.
 
 Found something broken? Open an issue with logs and screenshots.
+
+## Free vs Enterprise
+
+persea ships in two versions:
+
+- **Free (self-hosted)** — the open-source edition, licensed under AGPL-3.0. Runs without a license key.
+- **Enterprise** — the free edition plus enterprise features, unlocked by a commercial license key (`PSEA-<base64>`): SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, and high availability / clustering.
+
+Enterprise features are marked **Enterprise** in the feature lists below. Without a license key, they are available during a 30-day evaluation period from first start. See [Licensing](docs/licensing.md) for how to obtain and install a license key.
 
 ## Architecture
 
@@ -69,11 +79,13 @@ guacd (C, from guacamole-server)
 
 - **OIDC single sign-on**: Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
 - **LDAP / Active Directory**: bind + search authentication
-- **SAML 2.0**: service provider with signature verification
+- **SAML 2.0**: service provider with signature verification — **Enterprise**
 - **RADIUS**: PAP authentication for network equipment integration
 - **Database auth**: local password accounts with Argon2id hashing
-- **TOTP two-factor**: enrollment, QR codes, recovery codes, admin enforcement
+- **TOTP two-factor**: enrollment, QR codes, recovery codes
+- **TOTP / MFA enforcement**: mandatory two-factor policies — **Enterprise**
 - **4-tier role system**: admin, poweruser, operator, viewer with OIDC group mapping
+- **Fine-grained RBAC**: connection-level permissions and group inheritance — **Enterprise**
 - **API key auth**: SHA-256 hashed keys with IP allowlists and expiry
 - **Vault-backed connections**: credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
 - **TLS everywhere**: HTTPS for clients, TLS between persea and guacd
@@ -81,7 +93,10 @@ guacd (C, from guacamole-server)
 - **Per-entry clipboard control**: disable copy and/or paste for data loss prevention
 - **Rate limiting**: per-IP, per-endpoint via tower_governor
 - **Session recording**: Guacamole format with playback UI, disk rotation, per-entry limits
+- **Encrypted session recording**: recordings encrypted at rest — **Enterprise**
 - **Audit logging**: SHA-256 hash chain with tamper evidence
+- **Audit log retention and compliance exports** — **Enterprise**
+- **High availability / clustering**: multi-instance deployments behind a load balancer — **Enterprise**
 
 ### Connectivity
 
@@ -196,6 +211,16 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 - [API Reference](docs/api.md): REST API endpoints, the session connection flow, and headless ws-ticket integration
 - [Migration from Apache Guacamole](docs/migration.md): MySQL/MariaDB to Vault
 
+### Licensing
+- [Licensing](docs/licensing.md): free vs enterprise editions, the 30-day evaluation period, and how to install a license key
+
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+persea ships in two versions:
+
+- **Free (self-hosted)** — the open-source edition, licensed under AGPL-3.0. Runs without a license key. Free for self-hosted use, including commercial use, provided all modifications are also released under AGPL-3.0. See [LICENSE](LICENSE).
+- **Enterprise** — the free edition plus enterprise features (SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, high availability / clustering), unlocked by a commercial license key (`PSEA-<base64>`). See [Licensing](docs/licensing.md).
+
+A separate **Commercial License** is available for organizations that need to modify persea without open-sourcing their changes. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) or email licensing@persea.dev.
+
+By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md).

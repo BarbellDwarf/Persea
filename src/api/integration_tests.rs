@@ -29,6 +29,18 @@ fn guacd_reachable() -> bool {
     .is_ok()
 }
 
+/// The quick-connect tests seed an SSH entry pointing at 127.0.0.1 (default
+/// SSH port 22), so they also need a local SSH server — otherwise guacd
+/// accepts the connection but session creation fails with 502. Skip instead
+/// of failing when the target isn't present.
+fn ssh_target_reachable() -> bool {
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:22".parse().unwrap(),
+        std::time::Duration::from_millis(300),
+    )
+    .is_ok()
+}
+
 fn insert_test_admin(db: &Db, name: &str) -> String {
     let key = format!("test-key-{}", name);
     let key_hash = {
@@ -165,6 +177,10 @@ fn build_test_router_with_vault_and_backend(
             "/api/addressbook/folders/{scope}/{folder}/entries/{entry}",
             delete(super::ab_delete_entry),
         )
+        .route(
+            "/api/vsphere/vms/{vm_id}/power",
+            post(super::vsphere::power_action),
+        )
         .with_state(());
 
     let mut api_routes = api_routes
@@ -175,7 +191,8 @@ fn build_test_router_with_vault_and_backend(
         .layer(Extension(OidcEnabled(false)))
         .layer(Extension(DriveConfigured(false)))
         .layer(Extension(CredentialDefaultScope("local".into())))
-        .layer(Extension(SiteTitle("Test".into())));
+        .layer(Extension(SiteTitle("Test".into())))
+        .layer(Extension(super::vsphere::VsphereState::None));
     if let Some(b) = backend {
         api_routes = api_routes.layer(Extension(StorageBackend(b.into())));
     }
@@ -1252,8 +1269,8 @@ async fn test_quick_connect_prompts_when_no_credentials() {
 
 #[tokio::test]
 async fn test_quick_connect_reads_credentials_from_db() {
-    if !guacd_reachable() {
-        eprintln!("skipping: no guacd on 127.0.0.1:4822");
+    if !guacd_reachable() || !ssh_target_reachable() {
+        eprintln!("skipping: no guacd on 127.0.0.1:4822 or SSH target on 127.0.0.1:22");
         return;
     }
     let db = test_db();
@@ -1302,8 +1319,8 @@ async fn test_quick_connect_reads_credentials_from_db() {
 
 #[tokio::test]
 async fn test_quick_connect_reads_credentials_from_vault() {
-    if !guacd_reachable() {
-        eprintln!("skipping: no guacd on 127.0.0.1:4822");
+    if !guacd_reachable() || !ssh_target_reachable() {
+        eprintln!("skipping: no guacd on 127.0.0.1:4822 or SSH target on 127.0.0.1:22");
         return;
     }
     let db = test_db();
@@ -1464,4 +1481,52 @@ async fn test_ab_create_entry_db_fallback_missing_folder_fails() {
         .unwrap();
     // Missing folder is a client error, not a server error.
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+// ── vSphere power action authorization (R07 / C03) ──
+// `power_action` requires `operator` role or above. This regression test was
+// missing — the role check was correct, but nothing exercised it.
+
+#[tokio::test]
+async fn test_vsphere_power_action_viewer_denied() {
+    let db = test_db();
+    insert_test_user(&db, "viewer@test.com", "Viewer", "viewer");
+    let user = db::get_user_by_email(&db, "viewer@test.com").unwrap();
+    let session = db::create_auth_session(&db, user.id, 3600).unwrap();
+
+    let app = build_test_router(db);
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/api/vsphere/vms/vm-01/power")
+        .header("cookie", format!("persea_session={}", session))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&json!({"action": "on"})).unwrap(),
+        ))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(test_addr()));
+    let response = app.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn test_vsphere_power_action_operator_passes_role_check() {
+    let db = test_db();
+    let key = insert_test_admin(&db, "admin");
+    let app = build_test_router(db);
+    let response = app
+        .oneshot(make_json_request(
+            "POST",
+            "/api/vsphere/vms/vm-01/power",
+            &key,
+            json!({"action": "on"}),
+        ))
+        .await
+        .unwrap();
+    // The test router's VsphereState is always None (unconfigured) — the
+    // point here is that an authorized role clears the 403 gate and reaches
+    // the "not configured" error (502, via the collapsed infra-error arm in
+    // error.rs) instead of being rejected for role, proving the check above
+    // is a role gate and not a blanket rejection.
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
 }

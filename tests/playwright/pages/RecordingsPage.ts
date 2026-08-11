@@ -22,12 +22,7 @@ export class RecordingsPage {
   // List
   readonly recSearch: Locator;
   readonly recordingList: Locator;
-  readonly recPagination: Locator;
-
-  // Typescripts
-  readonly typescriptSection: Locator;
-  readonly typescriptList: Locator;
-  readonly typescriptPagination: Locator;
+  readonly recordingEmpty: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -45,13 +40,9 @@ export class RecordingsPage {
     this.seekSlider = page.locator(S.seekSlider);
     this.playerTime = page.locator(S.playerTime);
 
-    this.recSearch = page.locator(S.recSearch);
-    this.recordingList = page.locator(S.recordingList);
-    this.recPagination = page.locator(S.recPagination);
-
-    this.typescriptSection = page.locator(S.typescriptSection);
-    this.typescriptList = page.locator(S.typescriptList);
-    this.typescriptPagination = page.locator(S.typescriptPagination);
+    this.recSearch = page.locator('#recordings-search');
+    this.recordingList = page.locator('#recordings-content');
+    this.recordingEmpty = page.locator('#recordings-empty');
   }
 
   async goto(): Promise<void> {
@@ -71,11 +62,11 @@ export class RecordingsPage {
   }
 
   async getRecordingRowCount(): Promise<number> {
-    return this.page.locator(`${S.recordingList} tbody tr`).count();
+    return this.page.locator('#recordings-list tr').count();
   }
 
   async playFirstRecording(): Promise<void> {
-    const playBtn = this.page.locator(`${S.recordingList} button[data-play]`).first();
+    const playBtn = this.page.locator('#recordings-list .rec-play').first();
     await playBtn.click();
     await this.playerSection.waitFor({ state: 'visible' });
   }
@@ -83,9 +74,5 @@ export class RecordingsPage {
   async closePlayer(): Promise<void> {
     await this.playerClose.click();
     await this.playerSection.waitFor({ state: 'hidden' });
-  }
-
-  async isTypescriptSectionVisible(): Promise<boolean> {
-    return this.typescriptSection.isVisible();
   }
 }

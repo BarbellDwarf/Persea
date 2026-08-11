@@ -6,8 +6,8 @@
 <div class="max-w-7xl mx-auto">
     <div class="flex items-center justify-between mb-6">
         <div>
-            <h1 class="text-2xl font-bold text-gray-100">Recordings</h1>
-            <p class="text-sm text-gray-500 mt-1">Session recordings and audit playback</p>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)]">Recordings</h1>
+            <p class="text-sm text-[var(--text-muted)] mt-1">Session recordings and audit playback</p>
         </div>
         <div class="flex items-center gap-3">
             <input type="search" id="recordings-search" placeholder="Search recordings..."
@@ -16,18 +16,18 @@
     </div>
 
     <div id="recordings-empty" class="hidden text-center py-16">
-        <svg class="mx-auto h-12 w-12 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="mx-auto h-12 w-12 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/>
         </svg>
-        <h3 class="mt-3 text-lg font-medium text-gray-400">No recordings</h3>
-        <p class="mt-1 text-sm text-gray-500">No session recordings found.</p>
+        <h3 class="mt-3 text-lg font-medium text-[var(--text-muted)]">No recordings</h3>
+        <p class="mt-1 text-sm text-[var(--text-muted)]">No session recordings found.</p>
     </div>
 
     <div id="recordings-content" class="hidden">
         <div class="card table-wrapper">
             <table class="w-full">
                 <thead>
-                    <tr class="border-b border-gray-800 text-left text-xs text-gray-500 uppercase tracking-wider">
+                    <tr class="border-b border-[var(--border)] text-left text-xs text-[var(--text-muted)] uppercase tracking-wider">
                         <th>Name</th>
                         <th>Protocol</th>
                         <th>User</th>
@@ -36,32 +36,77 @@
                         <th></th>
                     </tr>
                 </thead>
-                <tbody id="recordings-list" class="divide-y divide-gray-800"></tbody>
+                <tbody id="recordings-list" class="divide-y divide-[var(--border)]"></tbody>
             </table>
         </div>
     </div>
 
     <!-- Player modal -->
     <div id="player-section" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-6">
-        <div class="bg-gray-900 border border-gray-800 rounded-xl w-full max-w-6xl max-h-[90vh] flex flex-col">
-            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-800">
-                <span id="player-title" class="text-sm font-medium text-gray-300">Playback</span>
-                <button id="player-close" class="btn btn-sm text-gray-400 hover:text-gray-200 p-1" aria-label="Close player">
+        <div class="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl w-full max-w-7xl max-h-[90vh] flex flex-col">
+            <div id="player-header" class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
+                <span id="player-title" class="text-sm font-medium text-[var(--text-secondary)]">Playback</span>
+                <button id="player-close" class="btn btn-sm text-[var(--text-muted)] hover:text-[var(--text-primary)] p-1" aria-label="Close player">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
             <div id="player-display" class="flex-1 bg-black m-2 rounded overflow-auto" style="min-height:400px"></div>
-            <div id="player-controls" class="flex items-center gap-3 px-4 py-3 border-t border-gray-800">
-                <button id="player-play" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-medium transition-colors">Play</button>
-                <button id="player-pause" class="hidden px-4 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded text-sm transition-colors">Pause</button>
-                <div class="flex-1"></div>
-                <span id="player-time" class="text-xs text-gray-500">0:00</span>
+            <div id="player-controls" class="flex items-center gap-3 px-4 py-3 border-t border-[var(--border)]">
+                <button id="play-btn" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-[var(--text-primary)] rounded text-sm font-medium transition-colors">Play</button>
+                <button id="fullscreen-btn" class="p-1.5 text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded transition-colors" title="Toggle fullscreen" aria-label="Toggle fullscreen">
+                    <svg id="fs-icon-enter" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+                    <svg id="fs-icon-exit" class="w-5 h-5 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4m0 0h4M4 4v4m16-4h-4m4 0v4M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+                </button>
+                <input type="range" id="seek-slider" min="0" max="1000" value="0" class="flex-1" style="accent-color:#10b981">
+                <span id="player-time" class="text-xs text-[var(--text-muted)]">0:00 / 0:00</span>
             </div>
         </div>
     </div>
 </div>
 
-<script>
+<style>
+    .player-fullscreen { position: fixed; inset: 0; z-index: 9999; background: #000; }
+    .player-fullscreen #player-header { display: none; }
+    .player-fullscreen #player-display { margin: 0; border-radius: 0; min-height: 0; height: 100%; }
+    .player-fullscreen .player-controls { position: absolute; bottom: 0; left: 0; right: 0; }
+</style>
+
+<!-- Guacamole JS modules (playback) -->
+<script src="/guac/Namespace.js"></script>
+<script src="/guac/Client.js"></script>
+<script src="/guac/Display.js"></script>
+<script src="/guac/Event.js"></script>
+<script src="/guac/InputSink.js"></script>
+<script src="/guac/IntegerPool.js"></script>
+<script src="/guac/Keyboard.js"></script>
+<script src="/guac/KeyEventInterpreter.js"></script>
+<script src="/guac/Layer.js"></script>
+<script src="/guac/Mouse.js"></script>
+<script src="/guac/Parser.js"></script>
+<script src="/guac/Position.js"></script>
+<script src="/guac/Status.js"></script>
+<script src="/guac/Touch.js"></script>
+<script src="/guac/Tunnel.js"></script>
+<script src="/guac/UTF8Parser.js"></script>
+<script src="/guac/InputStream.js"></script>
+<script src="/guac/OutputStream.js"></script>
+<script src="/guac/StringReader.js"></script>
+<script src="/guac/StringWriter.js"></script>
+<script src="/guac/ArrayBufferReader.js"></script>
+<script src="/guac/ArrayBufferWriter.js"></script>
+<script src="/guac/BlobReader.js"></script>
+<script src="/guac/BlobWriter.js"></script>
+<script src="/guac/DataURIReader.js"></script>
+<script src="/guac/AudioContextFactory.js"></script>
+<script src="/guac/AudioPlayer.js"></script>
+<script src="/guac/AudioRecorder.js"></script>
+<script src="/guac/VideoPlayer.js"></script>
+<script src="/guac/JSONReader.js"></script>
+<script src="/guac/Object.js"></script>
+<script src="/guac/RawAudioFormat.js"></script>
+<script src="/guac/SessionRecording.js"></script>
+
+<script nonce="{{ csp_nonce }}">
 (function() {
     var searchInput = document.getElementById('recordings-search');
     var searchTimer = null;
@@ -83,12 +128,19 @@
                 }
                 empty.classList.add('hidden');
                 content.classList.remove('hidden');
+                function formatDuration(secs) {
+                    var s = Math.floor(secs);
+                    var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+                    if (h > 0) return h + 'h ' + m + 'm';
+                    if (m > 0) return m + 'm ' + sec + 's';
+                    return sec + 's';
+                }
                 list.innerHTML = items.map(function(rec) {
                     var name = rec.name || rec.filename || 'Unknown';
-                    var protocol = (rec.protocol || '').toUpperCase();
+                    var protocol = (rec.session_type || rec.protocol || '').toUpperCase();
                     var user = rec.user || rec.created_by || '—';
-                    var duration = rec.duration || '—';
-                    var date = rec.date || rec.created_at || '—';
+                    var duration = rec.duration_secs != null ? formatDuration(rec.duration_secs) : '—';
+                    var date = (rec.modified || rec.created_at || '').replace('T', ' ').slice(0, 19) || '—';
                     var protoColors = {
                         SSH: 'bg-green-900/50 text-green-300 border-green-800',
                         RDP: 'bg-blue-900/50 text-blue-300 border-blue-800',
@@ -96,30 +148,151 @@
                         SPICE: 'bg-purple-900/50 text-purple-300 border-purple-800',
                         WEB: 'bg-teal-900/50 text-teal-300 border-teal-800',
                     };
-                    var colorClass = protoColors[protocol] || 'bg-gray-800 text-gray-400 border-gray-700';
-                    return '<tr class="hover:bg-gray-800/50 transition-colors">' +
-                        '<td class="px-4 py-3 text-sm text-gray-200">' + escapeHtml(name) + '</td>' +
+                    var colorClass = protoColors[protocol] || 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]';
+                    return '<tr class="hover:bg-[var(--bg-hover)]/50 transition-colors">' +
+                        '<td class="px-4 py-3 text-sm text-[var(--text-primary)]">' + escapeHtml(name) + '</td>' +
                         '<td class="px-4 py-3"><span class="px-2 py-0.5 text-xs font-medium rounded border ' + colorClass + '">' + escapeHtml(protocol) + '</span></td>' +
-                        '<td class="px-4 py-3 text-sm text-gray-400">' + escapeHtml(user) + '</td>' +
-                        '<td class="px-4 py-3 text-sm text-gray-400">' + escapeHtml(String(duration)) + '</td>' +
-                        '<td class="px-4 py-3 text-sm text-gray-500">' + escapeHtml(String(date)) + '</td>' +
+                        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + escapeHtml(user) + '</td>' +
+                        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + escapeHtml(String(duration)) + '</td>' +
+                        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + escapeHtml(String(date)) + '</td>' +
                         '<td class="px-4 py-3 text-right">' +
-                            '<button onclick="playRecording(\'' + escapeHtml(name) + '\')" class="text-emerald-400 hover:text-emerald-300 text-sm mr-3">Play</button>' +
-                            '<button onclick="deleteRecording(\'' + escapeHtml(name) + '\')" class="text-red-400 hover:text-red-300 text-sm">Delete</button>' +
+                            '<button class="rec-play text-emerald-400 hover:text-emerald-300 text-sm mr-3" data-name="' + escapeAttr(name) + '">Play</button>' +
+                            '<button class="rec-delete text-red-400 hover:text-red-300 text-sm" data-name="' + escapeAttr(name) + '">Delete</button>' +
                         '</td>' +
                         '</tr>';
                 }).join('');
+
+                // Event delegation for play/delete buttons
+                list.addEventListener('click', function(ev) {
+                    var btn = ev.target.closest('.rec-play, .rec-delete');
+                    if (!btn) return;
+                    var name = btn.getAttribute('data-name');
+                    if (btn.classList.contains('rec-play')) playRecording(name);
+                    else if (btn.classList.contains('rec-delete')) deleteRecording(name);
+                });
             })
             .catch(function() {});
     }
 
+    // ── Player (Guacamole SessionRecording over StaticHTTPTunnel) ─────
+    var currentRecording = null;
+    var playerDisplayEl = document.getElementById('player-display');
+    var playBtn = document.getElementById('play-btn');
+    var seekSlider = document.getElementById('seek-slider');
+    var timeEl = document.getElementById('player-time');
+
+    function formatTime(millis) {
+        var s = Math.max(0, Math.floor((millis || 0) / 1000));
+        var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        var mm = String(m).padStart(2, '0'), ss = String(sec).padStart(2, '0');
+        return h > 0 ? h + ':' + mm + ':' + ss : mm + ':' + ss;
+    }
+
+    function closePlayer() {
+        if (currentRecording) {
+            try { currentRecording.pause(); } catch (e) {}
+            currentRecording = null;
+        }
+        // Exit browser fullscreen if active
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+            var exit = document.exitFullscreen || document.webkitExitFullscreen;
+            if (exit) try { exit.call(document); } catch (e) {}
+        }
+        playerDisplayEl.innerHTML = '';
+        document.getElementById('player-section').classList.add('hidden');
+        document.getElementById('player-section').classList.remove('player-fullscreen');
+        fsEnterIcon.classList.remove('hidden');
+        fsExitIcon.classList.add('hidden');
+        playBtn.textContent = 'Play';
+        seekSlider.value = 0;
+        timeEl.textContent = '0:00 / 0:00';
+    }
+
+    // ── Fullscreen toggle ──
+    var fsEnterIcon = document.getElementById('fs-icon-enter');
+    var fsExitIcon = document.getElementById('fs-icon-exit');
+    var playerSection = document.getElementById('player-section');
+    var playerDisplayContainer = document.getElementById('player-display');
+
+    function updateFullscreenUI() {
+        var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+        var inFs = !!fsEl;
+        fsEnterIcon.classList.toggle('hidden', inFs);
+        fsExitIcon.classList.toggle('hidden', !inFs);
+        playerSection.classList.toggle('player-fullscreen', inFs);
+    }
+
+    document.getElementById('fullscreen-btn').addEventListener('click', function() {
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+            var exit = document.exitFullscreen || document.webkitExitFullscreen;
+            if (exit) exit.call(document);
+        } else {
+            var req = playerDisplayContainer.requestFullscreen || playerDisplayContainer.webkitRequestFullscreen;
+            if (req) req.call(playerDisplayContainer);
+        }
+    });
+
+    document.addEventListener('fullscreenchange', updateFullscreenUI);
+    document.addEventListener('webkitfullscreenchange', updateFullscreenUI);
+
     window.playRecording = function(name) {
+        closePlayer();
+
+        document.getElementById('player-title').textContent = 'Playback: ' + name;
         var section = document.getElementById('player-section');
-        var title = document.getElementById('player-title');
-        var display = document.getElementById('player-display');
         section.classList.remove('hidden');
-        title.textContent = 'Playback: ' + name;
-        display.innerHTML = '<iframe src="/api/recordings/' + encodeURIComponent(name) + '/player" class="w-full h-full border-0" style="min-height:400px"></iframe>';
+
+        var tunnel = new Guacamole.StaticHTTPTunnel(
+            '/api/recordings/' + encodeURIComponent(name),
+            false,
+            apiHeaders()
+        );
+        var recording = new Guacamole.SessionRecording(tunnel);
+        currentRecording = recording;
+
+        var display = recording.getDisplay();
+        playerDisplayEl.appendChild(display.getElement());
+
+        function scaleRecordingDisplay() {
+            var w = display.getWidth();
+            var h = display.getHeight();
+            if (w > 0 && h > 0) {
+                var containerWidth = playerDisplayEl.clientWidth || 1080;
+                var scale = Math.min(containerWidth / w, 1);
+                display.scale(scale);
+            }
+        }
+        display.onresize = function() { scaleRecordingDisplay(); };
+
+        var duration = 0;
+        var currentPos = 0;
+        var seeking = false;
+
+        recording.onprogress = function(millis) {
+            duration = millis;
+            timeEl.textContent = formatTime(currentPos) + ' / ' + formatTime(duration);
+        };
+
+        recording.onplay = function() { playBtn.textContent = 'Pause'; };
+        recording.onpause = function() { playBtn.textContent = 'Play'; };
+        recording.onseek = function(position) {
+            currentPos = position;
+            if (!seeking && duration > 0) seekSlider.value = Math.round((position / duration) * 1000);
+            timeEl.textContent = formatTime(position) + ' / ' + formatTime(duration);
+        };
+
+        playBtn.onclick = function() {
+            if (recording.isPlaying()) recording.pause();
+            else recording.play();
+        };
+
+        seekSlider.addEventListener('mousedown', function() { seeking = true; });
+        seekSlider.addEventListener('mouseup', function() { seeking = false; });
+        seekSlider.addEventListener('input', function() {
+            if (duration > 0) recording.seek((seekSlider.value / 1000) * duration);
+        });
+
+        recording.connect();
     };
 
     window.deleteRecording = function(name) {
@@ -130,12 +303,9 @@
         }).then(function() { loadRecordings(); });
     };
 
-    document.getElementById('player-close')?.addEventListener('click', function() {
-        document.getElementById('player-section').classList.add('hidden');
-        document.getElementById('player-display').innerHTML = '';
-    });
+    document.getElementById('player-close').addEventListener('click', closePlayer);
 
-    searchInput?.addEventListener('input', function() {
+    searchInput.addEventListener('input', function() {
         clearTimeout(searchTimer);
         searchTimer = setTimeout(function() { loadRecordings(searchInput.value); }, 300);
     });

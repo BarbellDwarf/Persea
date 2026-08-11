@@ -384,7 +384,21 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_ab_entries_folder ON address_book_entries(folder_id);
-        CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);",
+        CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);
+
+        CREATE TABLE IF NOT EXISTS user_preset_credentials (
+            user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            username    TEXT NOT NULL DEFAULT '',
+            password_enc TEXT NOT NULL DEFAULT '',
+            updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS login_credentials (
+            user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+            username    TEXT NOT NULL DEFAULT '',
+            password_enc TEXT NOT NULL DEFAULT '',
+            expires_at  TEXT NOT NULL
+        );",
     )?;
 
     // Folder-level ACLs (wayfinder ticket 027): columns added after the
@@ -410,10 +424,11 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
     // `PRAGMA foreign_keys`, so delete_local_group removes mappings explicitly.
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS local_groups (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            name        TEXT NOT NULL UNIQUE,
-            description TEXT NOT NULL DEFAULT '',
-            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            name            TEXT NOT NULL UNIQUE,
+            description     TEXT NOT NULL DEFAULT '',
+            auto_provisioned INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now'))
         );
 
         CREATE TABLE IF NOT EXISTS group_mappings (
@@ -422,6 +437,19 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             provider_group TEXT NOT NULL UNIQUE,
             created_at     TEXT NOT NULL DEFAULT (datetime('now'))
         );",
+    )?;
+
+    // Migration: failed login attempt tracking (H07)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS failed_login_attempts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            username    TEXT NOT NULL,
+            ip_address  TEXT NOT NULL,
+            attempted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            success     BOOLEAN DEFAULT FALSE
+        );
+        CREATE INDEX IF NOT EXISTS idx_failed_login_username ON failed_login_attempts(username);
+        CREATE INDEX IF NOT EXISTS idx_failed_login_ip ON failed_login_attempts(ip_address);",
     )?;
 
     let db = Arc::new(Mutex::new(conn));
@@ -779,6 +807,100 @@ pub fn get_user_auth_source(db: &Db, email: &str) -> rusqlite::Result<String> {
     )
 }
 
+/// Per-user preset credentials (username + encrypted password) used as a
+/// fallback for address book entries without their own credentials.
+pub fn upsert_user_preset_credentials(
+    db: &Db,
+    user_id: i64,
+    username: &str,
+    password_enc: &str,
+) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO user_preset_credentials (user_id, username, password_enc, updated_at)
+         VALUES (?1, ?2, ?3, datetime('now'))
+         ON CONFLICT(user_id) DO UPDATE SET
+            username = excluded.username,
+            password_enc = excluded.password_enc,
+            updated_at = datetime('now')",
+        params![user_id, username, password_enc],
+    )?;
+    Ok(())
+}
+
+/// Fetch a user's preset credentials: (username, password_enc).
+pub fn get_user_preset_credentials(
+    db: &Db,
+    user_id: i64,
+) -> rusqlite::Result<Option<(String, String)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn
+        .prepare("SELECT username, password_enc FROM user_preset_credentials WHERE user_id = ?1")?;
+    let mut rows = stmt.query_map(params![user_id], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    match rows.next() {
+        Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
+}
+
+/// Remove a user's preset credentials.
+pub fn clear_user_preset_credentials(db: &Db, user_id: i64) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "DELETE FROM user_preset_credentials WHERE user_id = ?1",
+        params![user_id],
+    )?;
+    Ok(())
+}
+
+/// Store the credentials from a password-based login for pass-through reuse
+/// (config `[auth] pass_login_credentials`). Encrypted password, TTL-bounded.
+pub fn upsert_login_credentials(
+    db: &Db,
+    user_id: i64,
+    username: &str,
+    password_enc: &str,
+    expires_at: &str,
+) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO login_credentials (user_id, username, password_enc, expires_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(user_id) DO UPDATE SET
+            username = excluded.username,
+            password_enc = excluded.password_enc,
+            expires_at = excluded.expires_at",
+        params![user_id, username, password_enc, expires_at],
+    )?;
+    Ok(())
+}
+
+/// Fetch a user's stored login credentials: (username, password_enc, expires_at).
+pub fn get_login_credentials(
+    db: &Db,
+    user_id: i64,
+) -> rusqlite::Result<Option<(String, String, String)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT username, password_enc, expires_at FROM login_credentials WHERE user_id = ?1",
+    )?;
+    let mut rows = stmt.query_map(params![user_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    match rows.next() {
+        Some(Ok(v)) => Ok(Some(v)),
+        Some(Err(e)) => Err(e),
+        None => Ok(None),
+    }
+}
+
 /// Validate an auth session token. Returns the user if valid and not expired/disabled.
 /// The token is hashed before lookup — only hashes are stored in the database.
 pub fn validate_auth_session(db: &Db, token: &str) -> Result<User, AuthError> {
@@ -834,6 +956,51 @@ pub fn cleanup_expired_sessions(db: &Db) -> rusqlite::Result<usize> {
     )
 }
 
+/// Record a failed login attempt (H07).
+pub fn record_failed_login_attempt(db: &Db, username: &str, ip: &str) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO failed_login_attempts (username, ip_address, success) VALUES (?1, ?2, FALSE)",
+        params![username, ip],
+    )?;
+    Ok(())
+}
+
+/// Record a successful login — marks recent failures for the same user+IP as success.
+pub fn record_successful_login(db: &Db, username: &str, ip: &str) -> rusqlite::Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE failed_login_attempts SET success = TRUE
+         WHERE username = ?1 AND ip_address = ?2 AND success = FALSE",
+        params![username, ip],
+    )?;
+    Ok(())
+}
+
+/// Count failed login attempts for a user+IP within the given time window (seconds).
+pub fn count_recent_failures(
+    db: &Db,
+    username: &str,
+    ip: &str,
+    window_secs: u64,
+) -> rusqlite::Result<u32> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT COUNT(*) FROM failed_login_attempts
+         WHERE username = ?1 AND ip_address = ?2 AND success = FALSE
+           AND attempted_at >= datetime('now', ?3)",
+    )?;
+    let window_param = format!("-{} seconds", window_secs);
+    let count: u32 = stmt.query_row(params![username, ip, window_param], |row| row.get(0))?;
+    Ok(count)
+}
+
+/// Check if a user+IP is locked out (>5 failures in the last 15 minutes).
+pub fn is_locked_out(db: &Db, username: &str, ip: &str) -> rusqlite::Result<bool> {
+    let failures = count_recent_failures(db, username, ip, 15 * 60)?;
+    Ok(failures > 5)
+}
+
 /// List all users.
 pub fn list_users(db: &Db) -> rusqlite::Result<Vec<User>> {
     let conn = db.lock().unwrap();
@@ -863,6 +1030,16 @@ pub fn set_user_role(db: &Db, email: &str, role: &str) -> rusqlite::Result<bool>
     let changed = conn.execute(
         "UPDATE users SET role = ?1 WHERE email = ?2",
         params![role, email],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Update a user's display name by email.
+pub fn update_user_name(db: &Db, email: &str, name: &str) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE users SET name = ?1 WHERE email = ?2",
+        params![name, email],
     )?;
     Ok(changed > 0)
 }
@@ -1015,8 +1192,8 @@ pub fn ensure_local_groups(db: &Db, groups: &[String]) -> rusqlite::Result<usize
     let mut created = 0usize;
     {
         let mut stmt = conn.prepare(
-            "INSERT OR IGNORE INTO local_groups (name, description)
-             VALUES (?1, 'Auto-provisioned from auth provider groups')",
+            "INSERT OR IGNORE INTO local_groups (name, description, auto_provisioned)
+             VALUES (?1, 'Auto-provisioned from auth provider groups', 1)",
         )?;
         for g in groups {
             let trimmed = g.trim();
@@ -1661,10 +1838,28 @@ pub fn stream_session_history_csv(
     Ok(count)
 }
 
-fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<()> {
-    if field.contains(',') || field.contains('"') || field.contains('\n') {
+/// OWASP CSV-injection escaping for a single field — `pub` so regression
+/// tests in `tests/security_regression.rs` exercise the real implementation
+/// instead of a hand-maintained copy that could silently diverge from it.
+pub fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<()> {
+    // OWASP CSV injection prevention: prefix formula-triggering characters
+    let safe_field = if let Some(first) = field.chars().next() {
+        if matches!(first, '=' | '+' | '-' | '@' | '\t' | '\r') {
+            format!("'{}", field)
+        } else {
+            field.to_string()
+        }
+    } else {
+        field.to_string()
+    };
+
+    if safe_field.contains(',')
+        || safe_field.contains('"')
+        || safe_field.contains('\n')
+        || safe_field.contains('\r')
+    {
         write!(w, "\"")?;
-        for ch in field.chars() {
+        for ch in safe_field.chars() {
             if ch == '"' {
                 write!(w, "\"\"")?;
             } else {
@@ -1673,7 +1868,7 @@ fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<
         }
         write!(w, "\"")?;
     } else {
-        write!(w, "{}", field)?;
+        write!(w, "{}", safe_field)?;
     }
     Ok(())
 }
@@ -1737,21 +1932,47 @@ pub fn top_users(db: &Db, limit: u32) -> rusqlite::Result<Vec<serde_json::Value>
 /// Summary statistics.
 pub fn session_summary(db: &Db) -> rusqlite::Result<serde_json::Value> {
     let conn = db.lock().unwrap();
-    let mut stmt = conn.prepare(
-        "SELECT COUNT(*) AS total_sessions,
-                COALESCE(SUM(duration_secs), 0) AS total_secs,
-                COUNT(DISTINCT created_by) AS unique_users,
-                COALESCE(SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END), 0) AS active_now
-         FROM session_history",
+    let total_sessions: i64 =
+        conn.query_row("SELECT COUNT(*) FROM session_history", [], |row| row.get(0))?;
+    let active_sessions: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM session_history WHERE status = 'active'",
+        [],
+        |row| row.get(0),
     )?;
-    stmt.query_row([], |row| {
-        Ok(serde_json::json!({
-            "total_sessions": row.get::<_, i64>(0)?,
-            "total_hours": row.get::<_, i64>(1)? as f64 / 3600.0,
-            "unique_users": row.get::<_, i64>(2)?,
-            "active_now": row.get::<_, i64>(3)?,
-        }))
-    })
+    let total_users: i64 = conn
+        .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+        .unwrap_or(0);
+    let uptime_secs = crate::metrics::uptime_seconds();
+    Ok(serde_json::json!({
+        "total_sessions": total_sessions,
+        "active_sessions": active_sessions,
+        "total_users": total_users,
+        "uptime_secs": uptime_secs,
+    }))
+}
+
+/// Return session counts grouped by hour for the last N hours.
+pub fn session_activity_by_hour(db: &Db, hours: i32) -> rusqlite::Result<Vec<serde_json::Value>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT strftime('%Y-%m-%d %H:00:00', started_at) AS hour,
+                COUNT(*) AS count
+         FROM session_history
+         WHERE started_at >= datetime('now', ?1)
+         GROUP BY hour
+         ORDER BY hour ASC",
+    )?;
+    let modifier = format!("-{} hours", hours);
+    let rows = stmt
+        .query_map(rusqlite::params![modifier], |row| {
+            Ok(serde_json::json!({
+                "hour": row.get::<_, String>(0)?,
+                "count": row.get::<_, i64>(1)?,
+            }))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(rows)
 }
 
 /// Clean up old session history entries (retain last N days). Returns rows deleted.
@@ -2592,7 +2813,7 @@ mod tests {
             "10.0.0.1",
             Some(3389),
             "bench01",
-            "dave@sol1.com.au",
+            "dave@example.com",
             Some("shared/prod/rdp-host-1"),
             Some("prod"),
             Some("RDP Host 1"),
@@ -2605,7 +2826,7 @@ mod tests {
             "10.0.0.2",
             Some(22),
             "bench02",
-            "andy@sol1.com.au",
+            "andy@example.com",
             None,
             None,
             None,
@@ -2631,7 +2852,7 @@ mod tests {
             "h1",
             None,
             "",
-            "dave@sol1.com.au",
+            "dave@example.com",
             None,
             None,
             None,
@@ -2644,7 +2865,7 @@ mod tests {
             "h2",
             None,
             "",
-            "andy@sol1.com.au",
+            "andy@example.com",
             None,
             None,
             None,
@@ -2654,7 +2875,7 @@ mod tests {
         let (rows, total) =
             query_session_history(&db, Some("dave"), None, None, None, None, 100, 0).unwrap();
         assert_eq!(total, 1);
-        assert_eq!(rows[0]["created_by"], "dave@sol1.com.au");
+        assert_eq!(rows[0]["created_by"], "dave@example.com");
     }
 
     #[test]
@@ -2777,12 +2998,14 @@ mod tests {
         end_session_history(&db, "s1", "completed", 7200, None).unwrap();
         insert_session_history(&db, "s2", "ssh", "h", None, "", "bob", None, None, None).unwrap();
         // s2 still active
+        upsert_user(&db, "alice@co.com", "alice", None, "admin", &[]).unwrap();
+        upsert_user(&db, "bob@co.com", "bob", None, "viewer", &[]).unwrap();
 
         let summary = session_summary(&db).unwrap();
         assert_eq!(summary["total_sessions"], 2);
-        assert_eq!(summary["unique_users"], 2);
-        assert_eq!(summary["active_now"], 1);
-        assert_eq!(summary["total_hours"], 7200.0 / 3600.0);
+        assert_eq!(summary["total_users"], 2);
+        assert_eq!(summary["active_sessions"], 1);
+        assert_eq!(summary["uptime_secs"], crate::metrics::uptime_seconds());
     }
 
     #[test]
@@ -2965,11 +3188,13 @@ pub struct LocalGroup {
     pub id: i64,
     pub name: String,
     pub description: String,
+    pub auto_provisioned: bool,
     pub created_at: String,
     /// Number of auth-provider groups mapped to this local group.
     pub provider_group_count: i64,
-    /// Number of address-book folders whose entries list this group name in
-    /// `allowed_groups` (vault-side folder configs are not scanned).
+    /// Number of address-book folders whose own `allowed_groups` or entries'
+    /// `allowed_groups` reference this group name (vault-side folder configs
+    /// are not scanned).
     pub folder_count: i64,
 }
 
@@ -2987,20 +3212,28 @@ fn local_group_row(row: &rusqlite::Row) -> rusqlite::Result<LocalGroup> {
         id: row.get(0)?,
         name: row.get(1)?,
         description: row.get(2)?,
-        created_at: row.get(3)?,
-        provider_group_count: row.get(4)?,
-        folder_count: row.get(5)?,
+        auto_provisioned: row.get::<_, i64>(3)? != 0,
+        created_at: row.get(4)?,
+        provider_group_count: row.get(5)?,
+        folder_count: row.get(6)?,
     })
 }
 
 /// COUNTs computed for every local group listing. `folder_count` counts
-/// address-book folders whose entries carry the group name in their
-/// comma-separated `allowed_groups` (INSTR is case-sensitive, matching the
-/// exact-match semantics of `resolve_folder_access`).
-const LOCAL_GROUP_COLUMNS: &str = "lg.id, lg.name, lg.description, lg.created_at, \
+/// distinct address-book folders referenced by both the folder's own
+/// `allowed_groups` and its entries' `allowed_groups` (INSTR is
+/// case-sensitive, matching the exact-match semantics of
+/// `resolve_folder_access`).
+const LOCAL_GROUP_COLUMNS: &str =
+    "lg.id, lg.name, lg.description, lg.auto_provisioned, lg.created_at, \
      (SELECT COUNT(*) FROM group_mappings gm WHERE gm.group_id = lg.id), \
-     (SELECT COUNT(DISTINCT e.folder_id) FROM address_book_entries e \
-       WHERE INSTR(',' || e.allowed_groups || ',', ',' || lg.name || ',') > 0)";
+     (SELECT COUNT(DISTINCT x.id) FROM (\
+       SELECT f.id FROM address_book_folders f \
+         WHERE INSTR(',' || f.allowed_groups || ',', ',' || lg.name || ',') > 0 \
+       UNION \
+       SELECT e.folder_id FROM address_book_entries e \
+         WHERE INSTR(',' || e.allowed_groups || ',', ',' || lg.name || ',') > 0 \
+     ) x)";
 
 /// List all local groups with usage counts, ordered by name.
 pub fn list_local_groups(db: &Db) -> rusqlite::Result<Vec<LocalGroup>> {
@@ -3043,6 +3276,22 @@ pub fn create_local_group(db: &Db, name: &str, description: &str) -> rusqlite::R
         LOCAL_GROUP_COLUMNS
     );
     conn.query_row(&sql, params![id], local_group_row)
+}
+
+/// Count how many address_book_folders and address_book_entries reference
+/// `group_name` in their `allowed_groups` column. Used to block renames
+/// that would leave stale ACL references.
+pub fn count_group_name_references(db: &Db, group_name: &str) -> rusqlite::Result<i64> {
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT
+           (SELECT COUNT(*) FROM address_book_folders
+              WHERE INSTR(',' || allowed_groups || ',', ',' || ?1 || ',') > 0)
+         + (SELECT COUNT(*) FROM address_book_entries
+              WHERE INSTR(',' || allowed_groups || ',', ',' || ?1 || ',') > 0)",
+        params![group_name],
+        |row| row.get(0),
+    )
 }
 
 /// Update a local group (rename / re-describe). `None` fields keep their

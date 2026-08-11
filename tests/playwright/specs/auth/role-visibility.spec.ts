@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ storageState: '.auth/user.json' });
 
 test.describe('Role-based navigation visibility', () => {
   test.describe('unauthenticated user', () => {
@@ -49,17 +50,21 @@ test.describe('Role-based navigation visibility', () => {
   });
 
   test.describe('theme preferences', () => {
-    test('settings menu opens on click', async ({ page }) => {
+    test('theme toggle in header cycles dark/light/auto on click', async ({ page }) => {
       await page.goto('/');
       await page.evaluate((key) => {
         sessionStorage.setItem('persea_api_key', key);
       }, process.env.ADMIN_API_KEY || '');
       await page.goto('/sessions.html');
-      const settingsBtn = page.locator('#user-menu-btn');
-      await expect(settingsBtn).toBeVisible();
-      await settingsBtn.click();
-      const menu = page.locator('#user-menu');
-      await expect(menu).toBeVisible();
+      // The old settings dropdown (#user-menu-btn/#user-menu) was replaced by
+      // a header theme-toggle button that cycles dark -> light -> auto.
+      const toggle = page.locator('#theme-toggle');
+      await expect(toggle).toBeVisible();
+      // Fresh context: theme defaults to 'auto'
+      await expect(toggle).toHaveAttribute('title', 'Theme: Auto (click to cycle)');
+      await toggle.click();
+      // One click must advance the cycle (Auto -> Dark) and update the label
+      await expect(toggle).toHaveAttribute('title', 'Theme: Dark (click to cycle)');
     });
 
     test('theme list is populated', async ({ page }) => {
@@ -67,12 +72,23 @@ test.describe('Role-based navigation visibility', () => {
       await page.evaluate((key) => {
         sessionStorage.setItem('persea_api_key', key);
       }, process.env.ADMIN_API_KEY || '');
-      await page.goto('/sessions.html');
-      await page.locator('#user-menu-btn').click();
+      // The color-accent theme list now lives on the profile page (was a
+      // dropdown in the header). initTheme() populates it from
+      // /api/auth/status -> theme.presets (server-side built-in catalog).
+      await page.goto('/account/profile.html');
       const themeList = page.locator('#um-theme-list');
       await expect(themeList).toBeVisible();
-      // Theme items are populated by JS from /api/auth/status
-      // With no server, it might be empty but the container should exist
+      const items = themeList.locator('.um-item');
+      // "default" item is always rendered first, followed by the presets
+      await expect(items.first().locator('.um-theme-name')).toHaveText('default');
+      // Built-in presets come from the server catalog (aurora, dark, light,
+      // high-contrast, terminal, nord, corporate, jaguar) plus any user
+      // themes dropped into static/themes/*.toml (catppuccin-macchiato here)
+      await expect(items.locator('.um-theme-name', { hasText: 'aurora' })).toBeVisible();
+      await expect(items.locator('.um-theme-name', { hasText: 'jaguar' })).toBeVisible();
+      await expect(items.locator('.um-theme-name', { hasText: 'catppuccin-macchiato' })).toBeVisible();
+      // default item + 9 presets served by /api/auth/status
+      await expect(items).toHaveCount(10);
     });
   });
 });

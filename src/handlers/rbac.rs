@@ -8,6 +8,7 @@ use crate::rbac;
 use axum::{extract::Path, http::StatusCode, Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
+use std::sync::Arc;
 
 // ── Request types ──
 
@@ -37,8 +38,10 @@ pub struct GrantPermissionRequest {
 pub async fn list_rbac_groups(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&identity)?;
+    require_rbac_license(&license_manager)?;
 
     let db_clone = database.clone();
     let groups = tokio::task::spawn_blocking(move || rbac::list_groups(&db_clone))
@@ -51,9 +54,11 @@ pub async fn list_rbac_groups(
 pub async fn create_rbac_group(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     Json(req): Json<CreateGroupRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&identity)?;
+    require_rbac_license(&license_manager)?;
 
     let db_clone = database.clone();
     let name = req.name.clone();
@@ -97,9 +102,11 @@ pub async fn create_rbac_group(
 pub async fn delete_rbac_group(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     Path(group_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
     require_admin(&identity)?;
+    require_rbac_license(&license_manager)?;
 
     let db_clone = database.clone();
     let gid = group_id.clone();
@@ -140,10 +147,12 @@ pub async fn delete_rbac_group(
 pub async fn add_group_member(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     Path(group_id): Path<String>,
     Json(req): Json<AddMemberRequest>,
 ) -> Result<StatusCode, AppError> {
     require_admin(&identity)?;
+    require_rbac_license(&license_manager)?;
 
     let db_clone = database.clone();
     let gid = group_id.clone();
@@ -181,9 +190,11 @@ pub async fn add_group_member(
 pub async fn remove_group_member(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     Path((group_id, user_id)): Path<(String, i64)>,
 ) -> Result<StatusCode, AppError> {
     require_admin(&identity)?;
+    require_rbac_license(&license_manager)?;
 
     let db_clone = database.clone();
     let gid = group_id.clone();
@@ -221,9 +232,11 @@ pub async fn remove_group_member(
 pub async fn list_connection_permissions(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     Path(connection_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_admin(&identity)?;
+    require_rbac_license(&license_manager)?;
 
     let db_clone = database.clone();
     let cid = connection_id.clone();
@@ -238,10 +251,12 @@ pub async fn list_connection_permissions(
 pub async fn grant_connection_permission(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     Path(connection_id): Path<String>,
     Json(req): Json<GrantPermissionRequest>,
 ) -> Result<StatusCode, AppError> {
     require_admin(&identity)?;
+    require_rbac_license(&license_manager)?;
 
     let permission = rbac::ObjectPermission::parse(&req.permission)
         .ok_or_else(|| AppError::Internal(format!("invalid permission: {}", req.permission)))?;
@@ -286,10 +301,12 @@ pub async fn grant_connection_permission(
 pub async fn revoke_connection_permission(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     Path(connection_id): Path<String>,
     Json(req): Json<GrantPermissionRequest>,
 ) -> Result<StatusCode, AppError> {
     require_admin(&identity)?;
+    require_rbac_license(&license_manager)?;
 
     let permission = rbac::ObjectPermission::parse(&req.permission)
         .ok_or_else(|| AppError::Internal(format!("invalid permission: {}", req.permission)))?;
@@ -337,5 +354,18 @@ fn require_admin(identity: &Option<Extension<AuthIdentity>>) -> Result<(), AppEr
     match identity {
         Some(Extension(id)) if id.has_role("admin") => Ok(()),
         _ => Err(AppError::Forbidden("admin role required".into())),
+    }
+}
+
+/// Fine-grained RBAC (object-level permissions, recursive group membership)
+/// is an enterprise feature — see wayfinder R43. The base 4-tier role
+/// hierarchy (admin/poweruser/operator/viewer) stays free regardless.
+fn require_rbac_license(license_manager: &crate::license::LicenseManager) -> Result<(), AppError> {
+    if license_manager.has_feature(crate::license::FEAT_RBAC) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "fine-grained RBAC requires an enterprise license".into(),
+        ))
     }
 }

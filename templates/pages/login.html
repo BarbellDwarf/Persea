@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Sign In — persea{% endblock %}
+{% block title %}Sign In — Persea{% endblock %}
 
 {% block body %}
 <div class="login-wrapper">
@@ -8,18 +8,39 @@
         <!-- Logo -->
         <div class="login-logo">
             {% if logo_url %}
-            <img src="{{ logo_url }}" alt="persea" style="height:40px">
+            <img src="{{ logo_url }}" alt="Persea" style="height:40px">
             {% else %}
             <div class="login-logo-icon">ps</div>
             {% endif %}
         </div>
 
-        <h1 class="login-title">persea</h1>
+        <h1 class="login-title">Persea</h1>
         <p class="login-subtitle">Sign in to your account</p>
 
         <!-- Error -->
         {% if error %}
-        <div class="alert alert-error">{{ error | escape }}</div>
+        <div class="alert alert-error" role="alert">
+            <svg class="alert-icon" viewBox="0 0 20 20" fill="currentColor" width="18" height="18">
+                <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
+            </svg>
+            <span>
+            {% if error == 'invalid_credentials' %}Invalid email or password. Please try again.
+            {% elif error == 'account_locked' %}Account temporarily locked due to too many failed attempts. Please try again later.
+            {% elif error == 'account_disabled' %}This account has been disabled. Contact your administrator.
+            {% elif error == 'user_lookup_failed' %}User account not found. Please contact support.
+            {% elif error == 'session_failed' %}Could not create session. Please try again.
+            {% elif error == 'mfa_setup_failed' %}MFA setup failed. Please try again.
+            {% elif error == 'auth_unavailable' %}Authentication service is unavailable. Please try again later.
+            {% elif error == 'saml_not_configured' %}SAML authentication is not configured.
+            {% elif error == 'saml_not_licensed' %}SAML single sign-on requires an enterprise license.
+            {% elif error == 'login_failed' %}Login failed. Please try again.
+            {% elif error == 'csrf_failed' %}Your session expired. Please try signing in again.
+            {% elif error == 'login_required' %}Please sign in to continue.
+            {% elif error == 'network_error' %}Network error. Please check your connection.
+            {% else %}An error occurred. Please try again.
+            {% endif %}
+            </span>
+        </div>
         {% endif %}
 
         <!-- SSO Buttons -->
@@ -61,6 +82,7 @@
 
         <!-- Form -->
         <form method="POST" action="/auth/login" id="login-form">
+            <input type="hidden" name="csrf_token" value="">
             <div class="form-group">
                 <label class="form-label" for="username">Email</label>
                 <input type="text" id="username" name="username" autocomplete="username" required
@@ -71,34 +93,25 @@
                 <input type="password" id="password" name="password" autocomplete="current-password" required
                        class="form-input" placeholder="Password">
             </div>
-            <button type="submit" class="btn btn-primary mt-4" id="login-submit">Sign In</button>
+            <button type="submit" class="btn btn-primary btn-block mt-4" id="login-submit">Sign In</button>
         </form>
 
-        <script>
-        // CSRF: the csrf_token cookie is readable by JS (not HttpOnly), so
-        // submit the login via fetch with the X-CSRF-Token header. The server
-        // always answers with a redirect; follow it to the final page.
-        document.getElementById('login-form').addEventListener('submit', function(evt) {
-            evt.preventDefault();
-            var btn = document.getElementById('login-submit');
-            btn.disabled = true;
+        <script nonce="{{ csp_nonce }}">
+        // CSRF: set hidden input value from cookie as fallback, and send via header
+        (function() {
             var csrf = readCookie('csrf_token');
-            fetch('/auth/login', {
-                method: 'POST',
-                headers: csrf ? { 'X-CSRF-Token': csrf } : {},
-                body: new URLSearchParams(new FormData(evt.target)),
-                credentials: 'same-origin',
-                redirect: 'follow'
-            }).then(function(resp) {
-                if (resp.redirected) { location.href = resp.url; }
-                else if (resp.ok) { location.href = '/'; }
-                else { location.href = '/?error=login_failed'; }
-            }).catch(function() {
-                btn.disabled = false;
-                location.href = '/?error=network_error';
-            });
-        });
+            var hiddenInput = document.querySelector('input[name="csrf_token"]');
+            if (hiddenInput && csrf) hiddenInput.value = csrf;
+        })();
+        // Form submits normally — the browser handles the 303 redirect
+        // and sends cookies correctly. Using fetch() with redirect:'follow'
+        // causes Chromium to skip sending cookies on the redirect follow-up,
+        // which breaks session establishment over HTTPS.
         </script>
+
+        <div style="text-align:center;margin-top:12px">
+            <a href="#" onclick="localStorage.clear();location.reload();return false" style="font-size:11px;color:var(--text-muted);text-decoration:none">Reset theme</a>
+        </div>
 
     </div>
 </div>

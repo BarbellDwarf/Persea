@@ -171,11 +171,13 @@
             .tb-left { gap: 6px; }
             .tb-right { gap: 2px; }
             .tb-btn { padding: 4px 4px; }
+            #btn-disconnect { margin-left: 8px; }
         }
     </style>
     <script>(function(){var c=localStorage.getItem('persea_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);}catch(e){}}})();</script>
 
     <!-- Guacamole JS modules -->
+    <script src="/js/utils.js?v=1.1.1"></script>
     <script src="/guac/Namespace.js"></script>
     <script src="/guac/Client.js"></script>
     <script src="/guac/Display.js"></script>
@@ -230,6 +232,12 @@
             <button class="tb-btn" id="btn-screenshot" title="Save screenshot" aria-label="Save screenshot">
                 <svg viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>
             </button>
+            <button class="tb-btn" id="btn-file-transfer" title="Upload file to remote" aria-label="Upload file" style="display:none">
+                <svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h12v2H5v-2z"/></svg>
+                <span>Upload</span>
+            </button>
+            <input type="file" id="file-transfer-input" multiple style="display:none">
+            <div id="file-transfer-status" style="display:none;position:fixed;bottom:60px;right:16px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:12px;color:var(--text);z-index:1600;box-shadow:0 4px 12px rgba(0,0,0,0.4);max-width:280px;"></div>
             <div class="tb-settings-wrap">
                 <button class="tb-btn" id="btn-settings" title="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settings-dropdown">
                     <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>
@@ -247,7 +255,11 @@
                     </label>
                 </div>
             </div>
-            <button class="tb-btn danger" id="btn-disconnect" title="Disconnect" aria-label="Disconnect session">
+            <button class="tb-btn danger" id="btn-logout" title="Log Out — destroy session" aria-label="Log out and destroy session">
+                <svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
+                <span>Log Out</span>
+            </button>
+            <button class="tb-btn" id="btn-disconnect" title="Disconnect — keep session for reconnection" aria-label="Disconnect session">
                 <svg viewBox="0 0 24 24"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.13.94-4.05 2.42-5.36L6 5.17A8.94 8.94 0 0 0 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9a8.94 8.94 0 0 0-3.17-6.83z"/></svg>
             </button>
         </div>
@@ -289,7 +301,7 @@
     <!-- ── Display ────────────────────────────────────────── -->
     <div id="display"></div>
 
-    <script>
+    <script nonce="{{ csp_nonce }}">
     (function() {
         'use strict';
 
@@ -310,6 +322,7 @@
         var wantAutohideTabs = false;
         var protocol = '';
         var targetHost = '';
+        var driveEnabled = false;
 
         // ── CSRF: this page is standalone (no base.html), so patch fetch()
         // here to carry the X-CSRF-Token header on state-changing requests.
@@ -386,6 +399,8 @@
         var reconnectAttempts = 0;
         var maxReconnectAttempts = 5;
         var reconnectDelays = [1000, 2000, 4000, 8000, 16000];
+        var reconnectTimer = null;
+        var lastSessionError = null;
 
         // ── Toolbar auto-hide ──
         var toolbarEl = document.getElementById('toolbar');
@@ -471,11 +486,33 @@
             }
         });
 
-        // ── Disconnect ──
+        // ── Disconnect (keep session for reconnection) ──
         document.getElementById('btn-disconnect').addEventListener('click', function() {
+            if (!confirm('Disconnect from this session? The session will remain active and you can reconnect later.')) return;
             userDisconnected = true;
             try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
             window.location.href = '/connections.html';
+        });
+
+        // ── Log Out (destroy session entirely) ──
+        document.getElementById('btn-logout').addEventListener('click', function() {
+            if (!confirm('Log out and destroy this session? You will not be able to reconnect.')) return;
+            userDisconnected = true;
+            var headers = {};
+            if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+            var csrfToken = readCookie('csrf_token');
+            if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+            fetch('/api/sessions/' + sessionId + '/terminate', {
+                method: 'POST',
+                headers: headers,
+                credentials: 'same-origin'
+            }).then(function() {
+                try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
+                window.location.href = '/connections.html';
+            }).catch(function() {
+                try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
+                window.location.href = '/connections.html';
+            });
         });
 
         // ── Paste modal ──
@@ -560,8 +597,9 @@
                 if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
+                if (session && session.drive_enabled) { driveEnabled = true; document.getElementById('btn-file-transfer').style.display = ''; }
                 // Set protocol badge from session metadata
-                if (session && session.protocol) setProtocolBadge(session.protocol, session.address || session.address_book_folder || '');
+                if (session && (session.session_type || session.protocol)) setProtocolBadge(session.session_type || session.protocol, session.address || session.address_book_folder || '');
                 else if (entryName) setProtocolBadge('SSH', entryName);
                 return showBanner(session.banner);
             })
@@ -570,6 +608,9 @@
         }
 
         function attemptReconnect() {
+            // The tunnel close fires through both the tunnel and client state
+            // handlers — only ever schedule one reconnect at a time.
+            if (reconnectTimer) return;
             if (reconnectAttempts >= maxReconnectAttempts) {
                 document.getElementById('disconnected-title').textContent = 'Session Ended';
                 document.getElementById('disconnected-message').textContent = 'Connection lost after ' + maxReconnectAttempts + ' attempts.';
@@ -581,10 +622,49 @@
             statusEl.textContent = 'Reconnecting... (attempt ' + reconnectAttempts + '/' + maxReconnectAttempts + ')';
             statusEl.className = '';
             document.getElementById('disconnected-overlay').classList.remove('visible');
-            setTimeout(function() { connectWebSocket(urlTicket); }, delay);
+            reconnectTimer = setTimeout(function() {
+                reconnectTimer = null;
+                connectWebSocket(urlTicket);
+            }, delay);
+        }
+
+        // Distinguish "the session actually ended" (user typed exit, remote
+        // closed, auth failed) from "the connection dropped". Reconnecting
+        // into a dead session is pointless and confusing, so check the
+        // server-side session status before scheduling a reconnect.
+        function checkSessionEnded() {
+            var headers = {};
+            if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+            fetch('/api/sessions/' + sessionId, { headers: headers, credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : null; })
+                .then(function(s) {
+                    if (!s) { attemptReconnect(); return; }
+                    if (s.status === 'completed' || s.status === 'error' || s.status === 'expired') {
+                        statusEl.textContent = 'Session ended';
+                        document.getElementById('disconnected-title').textContent = 'Session Ended';
+                        if (lastSessionError) {
+                            // Surface the specific reason from guacd (e.g.
+                            // "Authentication failure (invalid credentials?)")
+                            // no matter how the server classified the end.
+                            document.getElementById('disconnected-message').textContent =
+                                'The session ended: ' + lastSessionError;
+                        } else if (s.status === 'error') {
+                            document.getElementById('disconnected-message').textContent =
+                                'The session ended with an error. Check the connection details and try again.';
+                        } else {
+                            document.getElementById('disconnected-message').textContent =
+                                'The remote session has ended.';
+                        }
+                        document.getElementById('disconnected-overlay').className = 'visible';
+                    } else {
+                        attemptReconnect();
+                    }
+                })
+                .catch(function() { attemptReconnect(); });
         }
 
         function connectWebSocket(ticketParam) {
+            lastSessionError = null;
             var wsProtocol = (window.location.protocol === 'https:') ? 'wss:' : 'ws:';
             var wsUrl = wsProtocol + '//' + window.location.host + '/ws/' + sessionId;
             if (ticketParam) wsUrl += '?ticket=' + encodeURIComponent(ticketParam);
@@ -656,6 +736,49 @@
                 };
             };
 
+            // ── File transfer (upload) ──
+            var fileTransferStatus = document.getElementById('file-transfer-status');
+            var fileTransferInput = document.getElementById('file-transfer-input');
+            var fileTransferBtn = document.getElementById('btn-file-transfer');
+            function showTransferStatus(html) { fileTransferStatus.innerHTML = html; fileTransferStatus.style.display = ''; }
+            function hideTransferStatus() { fileTransferStatus.style.display = 'none'; fileTransferStatus.innerHTML = ''; }
+
+            fileTransferBtn.addEventListener('click', function() { fileTransferInput.value = ''; fileTransferInput.click(); });
+            fileTransferInput.addEventListener('change', function() {
+                var files = this.files;
+                if (!files || !files.length) return;
+                for (var i = 0; i < files.length; i++) { uploadFile(files[i]); }
+            });
+            function uploadFile(file) {
+                showTransferStatus('<span style="color:var(--accent);">Uploading:</span> ' + escapeHtml(file.name) + ' <span style="color:var(--text-dim);">(' + formatBytes(file.size) + ')</span>');
+                var reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        var stream = client.createFileStream(file.type || 'application/octet-stream', file.name);
+                        var writer = new Guacamole.ArrayBufferWriter(stream);
+                        writer.onack = function(status) {
+                            if (status.code && status.code !== 0x0000) {
+                                showTransferStatus('<span style="color:var(--primary);">Error:</span> ' + escapeHtml(file.name));
+                                setTimeout(hideTransferStatus, 3000);
+                            }
+                        };
+                        writer.sendData(e.target.result);
+                        writer.sendEnd();
+                        showTransferStatus('<span style="color:var(--accent);">Sent:</span> ' + escapeHtml(file.name));
+                        setTimeout(hideTransferStatus, 2000);
+                    } catch (err) {
+                        showTransferStatus('<span style="color:var(--primary);">Failed:</span> ' + escapeHtml(file.name));
+                        setTimeout(hideTransferStatus, 3000);
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            }
+            function formatBytes(bytes) {
+                if (bytes < 1024) return bytes + ' B';
+                if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+                return (bytes / 1048576).toFixed(1) + ' MB';
+            }
+
             // ── State ──
             var _thumbInterval = null;
             function captureThumbnail() {
@@ -715,13 +838,14 @@
                             document.getElementById('disconnected-title').textContent = 'Session Ended';
                             document.getElementById('disconnected-message').textContent = 'The remote session has been disconnected.';
                             document.getElementById('disconnected-overlay').className = 'visible';
-                        } else { attemptReconnect(); }
+                        } else { checkSessionEnded(); }
                         if (rgFullscreenEl()) rgExitFullscreen();
                         break;
                 }
             };
 
             client.onerror = function(status) {
+                lastSessionError = (status && status.message) ? status.message : null;
                 statusEl.textContent = 'Error: ' + (status.message || 'Unknown error');
                 statusEl.className = '';
                 if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
@@ -736,8 +860,7 @@
             };
             tunnel.onstatechange = function(state) {
                 if (state === Guacamole.Tunnel.State.CLOSED) {
-                    if (!userDisconnected) attemptReconnect();
-                    else if (client.onerror) client.onerror({ code: 519, message: 'Connection lost' });
+                    checkSessionEnded();
                 } else if (state === Guacamole.Tunnel.State.UNSTABLE) {
                     statusEl.textContent = 'Connection unstable...';
                 }

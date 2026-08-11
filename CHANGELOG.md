@@ -7,6 +7,159 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **License: Apache 2.0 → AGPL-3.0** — persea is now dual-licensed under AGPL-3.0 (open source) with a commercial license exception for organizations that need proprietary modifications. This protects the project from proprietary forks while allowing free self-hosted use. See [LICENSE](LICENSE), [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md), and [CLA.md](CLA.md).
+- All contributors must sign the Contributor License Agreement (CLA) — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## [1.1.0] - 2026-08-09
+
+### Added
+
+- **Release hardening (R70–R79)**
+  - Admin branding page (`/admin/branding.html`) — white-label title/logo/colors (R78)
+  - Sidebar now highlights the active admin page on all 9 admin sections (was broken on 7)
+  - Docs: light/dark UI screenshots in `docs/overview.md`; persistent TLS cert volume (`persea-tls`) in all Docker examples (R77)
+  - `PERSEA_TLS__SECURE_COOKIES` documented in the env-var reference
+  - HSTS (`Strict-Transport-Security`) sent when a real/trusted certificate is in use (gated on `SecureCookies`)
+
+- **Session Management**
+  - Disconnect vs Logout split: disconnect keeps session for reconnection, logout terminates
+  - Recent connections section on Connections page
+  - Sessions open in new browser tabs instead of navigating away
+  - File transfer for RDP and SSH sessions (admin-toggleable)
+  - Connection reason field (dropdown + free text, admin-toggleable)
+  - Session toolbar fixes: protocol badge reads actual session type, disconnect confirmation
+
+- **Security Hardening**
+  - Three comprehensive security audits with 30+ findings remediated
+  - SAML XML-DSig: real Exclusive C14N, digest verification, InResponseTo + Audience checks
+  - SSH Trust-On-First-Use: auto-pin first use, verify subsequent, persistent known_hosts
+  - CSRF double-submit protection on all requests
+  - WebSocket Origin validation and connection rate limiting
+  - Per-session concurrent viewer limits
+  - Login rate limiting (always-on, independent of global rate_limit)
+  - Failed login attempt tracking with progressive lockout
+  - MFA lockout bypass fixed — TOTP verification now checks lockout state
+  - Cookie format: all 15 Set-Cookie sites emit correct `HttpOnly; Secure; SameSite=Lax` (was double-semicolon on 10 sites)
+
+- **Admin Features**
+  - Admin settings page with feature toggles for every protocol (RDP, SSH, Web, VDI, Proxmox, VMware)
+  - Auth provider management API (OIDC/LDAP/SAML/RADIUS/database)
+  - Group management with folder permission counts
+  - CSV connection import with downloadable template
+
+- **UI/UX**
+  - Dark/Light/Auto theme toggle with OS preference detection
+  - Theme presets (aurora, nord, jaguar, etc.) selectable from Profile → Appearance
+  - Connections page redesigned with sidebar folders and detail panel
+  - Recordings fullscreen playback with larger player
+  - Admin pages: Auth Providers, Groups, Reports buttons wired and functional
+  - Styled error pages (404/401/403/500) with professional design
+  - Login/setup error messages: human-readable with warning icon and polished alert styling
+
+- **Configuration**
+  - Migrated to `config` crate with layered loading: defaults → TOML file → `PERSEA_` env vars
+  - Every config option settable via environment variable (`PERSEA_` prefix, nested via `__`)
+  - Full reference in `docs/deployment-guide.md` and `config.example.toml`
+
+- **Infrastructure**
+  - High availability architecture documented
+  - CSP nonce wired into all inline scripts
+  - Docker: TLS cert generated at runtime, admin key saved to file (chmod 600)
+  - 50+ regression tests for security findings
+  - Password-login Playwright E2E test (HTTP + HTTPS with self-signed certs)
+  - CI: `playwright-auth` job runs auth E2E over both HTTP and HTTPS
+  - `AGENTS.md` replaces `CLAUDE.md` as the canonical agent instruction file
+  - Subagent work contract: edits-first, single-verifier model for parallel implementation
+
+### Fixed
+
+- **Release hardening (R70–R79)**
+  - **HTTP/2 cookie splitting**: `extract_cookie` only read the first `Cookie` header — Chromium splits cookies across multiple headers for HPACK compression (RFC 7540 §8.1.2.5), so `persea_session` was silently dropped and logins looped back to the login page. Now combines all headers (`get_all` + `"; "` join) in both `auth.rs` and `csrf.rs`
+  - **`SecureCookies::init()` was written as a comment, never as code** (R70) — `secure_cookies = false` was silently ignored on self-signed-cert deployments, breaking login over HTTPS. Now called at startup
+  - **Login returned 500**: `Extension<LicenseManager>` was added to `login_submit`/`saml_acs` but never provided by the router (axum resolves extractors at runtime — compiles clean, 500s at runtime). `LicenseManager` is now constructed and layered (R75); CI `playwright-auth` was red until this landed
+  - **CSRF token rotation race** — the CSRF middleware regenerated the token cookie on every response, so concurrent AJAX could end up with a mismatched token. Token is now reused from the incoming request; `/auth/login` CSRF failures redirect to `/?error=csrf_failed` instead of returning raw JSON
+  - **Admin branding page rendered "template does not exist"** — template was on disk and wired but never registered in `templates.rs` (R78)
+  - **SAML SSO button shown on unlicensed instances** — routes are dropped without a license, so the button pointed at a 404; now gated on the license
+  - **DOM XSS in branding preview** — logo URL accepted `javascript:` URIs (CodeQL high); restricted to http(s)
+  - **Sidebar admin active state** — `active_page: "users"` etc. never matched the sidebar's `admin-*` conditions; all 9 admin pages now highlight correctly
+  - **Playwright suite was unrunnable** — 62/115 specs failed because no authentication setup existed (only `login.spec.ts` was CI-wired since R21). Added `global-setup.ts` (logs in via the real form, saves `storageState`), wired `test.use({ storageState })` into 16 spec files, regenerated visual snapshots, masked dynamic regions — full suite now **110 passed / 1 skipped / 0 failed** (R79)
+  - **Quick-connect integration tests 502'd spuriously** — seeded SSH entries point at `127.0.0.1:22`; tests now skip cleanly unless both guacd and the SSH target are reachable
+
+- **Critical Security**
+  - Stored XSS in admin Users page — all user data now escaped
+  - vSphere power_action had no role check + unsanitized vm_id — now requires operator role + charset validation
+  - Token admin endpoints (list/audit) were fail-open — now fail-closed
+  - MFA brute-force — lockout check added before TOTP verification
+  - RADIUS response authenticator comparison now uses constant-time equality
+  - LDAP filter injection — escape applied at all 3 interpolation sites
+
+- **High Security**
+  - CSP `style-src` now allows inline styles (enterprise-standard, `unsafe-inline` for styles only)
+  - 6 static pages migrated to templates (sessions, recordings, admin, tokens, reports, docs)
+  - Connections page served from template instead of broken static file
+  - Proxmox TLS verification defaults to true
+  - Browser network allowlist defaults to loopback-only
+  - Failed login lockout wired into auth handlers
+  - Chromium Login Data store no longer populated in VDI sessions
+  - Error responses sanitized to prevent information leakage
+  - Admin API key no longer printed to stdout in Docker
+
+- **Login Flow**
+  - Login JS reverted to `redirect: 'follow'` + `resp.redirected` + `resp.url` — full error specificity from final URL (was broken by R17's `redirect: 'manual'` which produces opaque responses with status 0)
+  - Setup page login flow fixed (same pattern)
+
+- **Theme Toggle**
+  - Toggle persists across page refresh (localStorage + CSS class restoration)
+  - Toggle shows Persea green (#10b981), not aurora cyan (#22d3ee)
+  - Toggle uses user's selected preset, not admin default
+  - Color presets moved from emoji button in header to Profile → Appearance section
+  - "default" preset option clears stale state and restores CSS green defaults
+  - Login page has "Reset theme" link for stuck users
+
+- **Error Display**
+  - Login page shows human-readable messages ("Invalid email or password") instead of raw codes ("invalid_credentials")
+  - MFA page handles `account_locked` with specific message (was falling through to generic)
+  - Alert styling polished: left accent border, warning icon, 14px font, flex layout
+
+- **htmx Crash**
+  - base.html htmx config script moved from `<head>` to end of `<body>` — fixes `document.body` TypeError on every page load
+
+- **UI Fixes**
+  - Dark mode toggle now properly applies theme colors for each mode
+  - Sidebar minimize button functional
+  - Connections page gap between sidebar and content eliminated
+  - Session toolbar protocol badge reads actual session type
+  - Modal drag-to-select no longer closes the modal and loses form progress
+  - Auth Providers, Groups, Reports admin pages buttons wired correctly
+
+- **Tests**
+  - `config_defaults` LDAP test restored (was corrupted by M01)
+  - `session_summary` test assertions updated to match current function
+  - `boundary_partial` protocol test fixed (fast-path false positive removed)
+  - `settings_api_tests` updated for current `enable_vdi` default
+
+### Changed
+
+- **Release hardening (R70–R79)**
+  - Cookie format normalized to `HttpOnly; Secure; SameSite=Lax` (space before SameSite) across all Set-Cookie sites — Chromium mis-parses the no-space variant
+  - `extract_cookie` in both `auth.rs` and `csrf.rs` combines all Cookie headers before parsing
+  - Docker/install: `secure_cookies = false` auto-appended when a self-signed cert is generated, without breaking existing `[tls]` sections
+  - Code scanning: 25 stale alerts dismissed (17 false positives — Argon2 params/test fixtures; 8 resolved by R51/R52 deletions and permissions)
+
+- Connection credentials encryption now enforced (warns loudly if no key set)
+- Recording retention defaults to 1000 (was unlimited)
+- Error responses return generic messages, full details logged server-side
+- Browser sessions block `file://` and metadata IP ranges by default
+- Admin settings feature toggles default: VDI enabled, file transfer disabled
+
+### Security
+
+See `docs/high-availability.md` for architecture details and
+`wayfinder/security-audit-round3/` for the full audit trail.
+
+
 ## [1.0.3] - 2026-08-06
 
 ### Added

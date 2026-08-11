@@ -6,8 +6,8 @@
 <div class="max-w-4xl mx-auto">
     <div class="flex items-center justify-between mb-6">
         <div>
-            <h1 class="text-2xl font-bold text-gray-100">API Tokens</h1>
-            <p class="text-sm text-gray-500 mt-1">Manage personal API tokens for scripting and integrations</p>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)]">API Tokens</h1>
+            <p class="text-sm text-[var(--text-muted)] mt-1">Manage personal API tokens for scripting and integrations</p>
         </div>
         <button id="btn-create-token" class="btn btn-primary btn-sm">
             + Create Token
@@ -18,7 +18,7 @@
     <div class="card table-wrapper">
         <table class="w-full text-sm">
             <thead>
-                <tr class="border-b border-gray-800 text-left">
+                <tr class="border-b border-[var(--border)] text-left">
                     <th>Name</th>
                     <th>Max Role</th>
                     <th>Status</th>
@@ -29,7 +29,7 @@
             </thead>
             <tbody id="tokens-tbody">
                 <tr>
-                    <td colspan="6" class="px-4 py-8 text-center text-gray-500">Loading tokens...</td>
+                    <td colspan="6" class="px-4 py-8 text-center text-[var(--text-muted)]">Loading tokens...</td>
                 </tr>
             </tbody>
         </table>
@@ -37,9 +37,9 @@
 
     <!-- Empty State -->
     <div id="empty-state" class="hidden text-center py-12">
-        <svg class="w-12 h-12 mx-auto text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-        <p class="text-gray-400 mb-2">No API tokens yet</p>
-        <p class="text-gray-500 text-sm mb-4">Create a token to use the API from scripts or integrations.</p>
+        <svg class="w-12 h-12 mx-auto text-[var(--text-muted)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+        <p class="text-[var(--text-muted)] mb-2">No API tokens yet</p>
+        <p class="text-[var(--text-muted)] text-sm mb-4">Create a token to use the API from scripts or integrations.</p>
         <button onclick="openCreateModal()" class="btn btn-primary btn-sm">
             Create First Token
         </button>
@@ -52,13 +52,13 @@
                 <h3 class="text-sm font-semibold text-emerald-300 mb-1">Token Created</h3>
                 <p class="text-xs text-emerald-400/70 mb-3">Copy this token now — it won't be shown again.</p>
                 <div class="flex items-center gap-2">
-                    <code id="new-token-value" class="px-3 py-1.5 bg-gray-800 rounded text-sm text-emerald-300 font-mono select-all break-all"></code>
+                    <code id="new-token-value" class="px-3 py-1.5 bg-[var(--bg-card)] rounded text-sm text-emerald-300 font-mono select-all break-all"></code>
                     <button id="btn-copy-token" class="btn btn-secondary btn-sm shrink-0">
                         Copy
                     </button>
                 </div>
             </div>
-            <button onclick="dismissNewToken()" class="text-gray-500 hover:text-gray-300 ml-4" aria-label="Dismiss">
+            <button onclick="dismissNewToken()" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] ml-4" aria-label="Dismiss">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
         </div>
@@ -69,7 +69,7 @@
 <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
     <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
     <div class="relative card w-full max-w-md shadow-xl">
-        <h2 class="text-lg font-semibold text-gray-100 mb-4">Create API Token</h2>
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Create API Token</h2>
         <form id="create-token-form" class="space-y-4">
             <div>
                 <label for="token-name" class="form-label">Name</label>
@@ -87,7 +87,7 @@
                     <option value="operator">Operator</option>
                     <option value="viewer">Viewer</option>
                 </select>
-                <p class="text-xs text-gray-600 mt-1">Limit this token's permissions to at most this role</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Limit this token's permissions to at most this role</p>
             </div>
             <div>
                 <label for="token-expiry" class="form-label">Expiry</label>
@@ -102,7 +102,7 @@
                 </select>
             </div>
             <div class="flex items-center justify-end gap-3 pt-2">
-                <button type="button" onclick="closeCreateModal()" class="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm transition-colors">
+                <button type="button" onclick="closeCreateModal()" class="px-4 py-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] text-sm transition-colors">
                     Cancel
                 </button>
                 <button type="submit" id="btn-submit-token"
@@ -114,13 +114,13 @@
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
     (function() {
         var roleColors = {
             admin: 'bg-red-900/50 text-red-300 border-red-800',
             poweruser: 'bg-purple-900/50 text-purple-300 border-purple-800',
             operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
-            viewer: 'bg-gray-700/50 text-gray-400 border-gray-600'
+            viewer: 'bg-[var(--bg-hover)]/50 text-[var(--text-muted)] border-[var(--border)]'
         };
 
         function formatDate(d) {
@@ -145,15 +145,15 @@
                     tokens.forEach(function(t) {
                         var roleBadge = t.max_role
                             ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ' + (roleColors[t.max_role] || roleColors.viewer) + '">' + escapeHtml(t.max_role) + '</span>'
-                            : '<span class="text-gray-500">—</span>';
+                            : '<span class="text-[var(--text-muted)]">—</span>';
                         var statusClass = t.disabled ? 'bg-red-900/50 text-red-300' : 'bg-emerald-900/50 text-emerald-300';
                         var statusText = t.disabled ? 'Revoked' : 'Active';
-                        html += '<tr class="border-b border-gray-800/50 hover:bg-gray-800/30">';
-                        html += '<td class="px-4 py-3 text-gray-200 font-medium">' + escapeHtml(t.name) + '</td>';
+                        html += '<tr class="border-b border-[var(--border)]/50 hover:bg-[var(--bg-hover)]/30">';
+                        html += '<td class="px-4 py-3 text-[var(--text-primary)] font-medium">' + escapeHtml(t.name) + '</td>';
                         html += '<td class="px-4 py-3">' + roleBadge + '</td>';
                         html += '<td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ' + statusClass + '">' + statusText + '</span></td>';
-                        html += '<td class="px-4 py-3 text-gray-400 text-xs">' + formatDate(t.created_at) + '</td>';
-                        html += '<td class="px-4 py-3 text-gray-400 text-xs">' + formatDate(t.last_used_at) + '</td>';
+                        html += '<td class="px-4 py-3 text-[var(--text-muted)] text-xs">' + formatDate(t.created_at) + '</td>';
+                        html += '<td class="px-4 py-3 text-[var(--text-muted)] text-xs">' + formatDate(t.last_used_at) + '</td>';
                         html += '<td class="px-4 py-3 text-right">';
                         if (!t.disabled) {
                             html += '<button onclick="revokeToken(' + t.id + ')" class="text-xs text-red-400 hover:text-red-300 transition-colors">Revoke</button>';

@@ -1,10 +1,12 @@
 name: CI
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
@@ -14,7 +16,7 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
@@ -24,7 +26,7 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
@@ -37,7 +39,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
@@ -47,7 +49,7 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
@@ -58,7 +60,7 @@ jobs:
   integration:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt, clippy
@@ -80,3 +82,181 @@ jobs:
           done
           kill $SERVER_PID 2>/dev/null
           [ "$READY" = "1" ] || { echo "server failed to become healthy" >&2; exit 1; }
+
+  # Multi-DB backend smoke test — verify persea starts against Postgres, MySQL, and SQLite
+  db-backends:
+    runs-on: ubuntu-latest
+    needs: [check]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - backend: postgres
+            db_url: "postgres://test:test@localhost:5432/persea_test"
+          - backend: mysql
+            db_url: "mysql://root:test@localhost:3306/persea_test"
+          - backend: sqlite
+            db_url: "sqlite:///tmp/persea-ci-test.db?mode=rwc"
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: persea_test
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: persea_test
+        ports:
+          - 3306:3306
+        options: --health-cmd "mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          rustflags: ""
+      - run: cargo build
+      - name: Start persea with ${{ matrix.backend }} and verify the pool is actually reachable
+        run: |
+          cat > /tmp/persea-db-ci.toml <<EOF
+          db_url = "${{ matrix.db_url }}"
+          db_path = "/tmp/persea-db-ci-admin.db"
+          EOF
+
+          # Run migrations for this backend + create an admin key so the
+          # health check below can hit the *authenticated* (deep) path —
+          # the unauthenticated one never touches db_pool at all.
+          API_KEY=$(./target/debug/persea --config /tmp/persea-db-ci.toml add-admin --name ci-check | grep "API Key:" | awk '{print $3}')
+          [ -n "$API_KEY" ] || { echo "failed to create admin key for ${{ matrix.backend }}" >&2; exit 1; }
+
+          ./target/debug/persea --config /tmp/persea-db-ci.toml &
+          SERVER_PID=$!
+          READY=0
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8089/api/health >/dev/null 2>&1; then
+              echo "server healthy after ${i}s against ${{ matrix.backend }}"
+              READY=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$READY" != "1" ]; then
+            kill $SERVER_PID 2>/dev/null
+            echo "server failed to become healthy against ${{ matrix.backend }}" >&2
+            exit 1
+          fi
+
+          # Deep check: authenticated /api/health actually queries db_pool
+          # (SELECT 1 against the real backend), not just the always-SQLite
+          # admin DB. This is what R50 was filed to close — the previous
+          # version of this job only confirmed the server process started.
+          HEALTH_JSON=$(curl -sf -H "Authorization: Bearer $API_KEY" http://localhost:8089/api/health)
+          kill $SERVER_PID 2>/dev/null
+
+          echo "$HEALTH_JSON" | jq .
+          DB_POOL_STATUS=$(echo "$HEALTH_JSON" | jq -r '.checks.db_pool.status')
+          ACTUAL_BACKEND=$(echo "$HEALTH_JSON" | jq -r '.checks.db_pool.backend')
+          if [ "$DB_POOL_STATUS" != "up" ]; then
+            echo "db_pool health check failed for ${{ matrix.backend }}: status=$DB_POOL_STATUS" >&2
+            exit 1
+          fi
+          # DbKind's Display prints "postgresql" for the postgres backend
+          # (matrix.backend uses "postgres"); mysql/sqlite match verbatim.
+          case "${{ matrix.backend }}" in
+            postgres) EXPECTED_BACKEND="postgresql" ;;
+            *) EXPECTED_BACKEND="${{ matrix.backend }}" ;;
+          esac
+          if [ "$ACTUAL_BACKEND" != "$EXPECTED_BACKEND" ]; then
+            echo "expected backend $EXPECTED_BACKEND, db_pool reports $ACTUAL_BACKEND" >&2
+            exit 1
+          fi
+          echo "db_pool confirmed up and reachable for ${{ matrix.backend }} (reported: $ACTUAL_BACKEND)"
+
+  # Playwright auth E2E — tests password login over HTTP and HTTPS
+  playwright-auth:
+    runs-on: ubuntu-latest
+    needs: [test, check]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          rustflags: ""
+      - name: Build persea (release)
+        run: cargo build --release
+      - name: Generate self-signed cert
+        run: |
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj "/CN=localhost" \
+            -keyout /tmp/persea-test-key.pem \
+            -out /tmp/persea-test-cert.pem
+      - name: Install Playwright dependencies
+        run: npm ci
+        working-directory: tests/playwright
+      - name: Install Playwright browsers
+        run: npx playwright install chromium
+        working-directory: tests/playwright
+      - name: Start persea (HTTP)
+        run: |
+          ./target/release/persea --config /dev/null &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8089/api/health >/dev/null 2>&1; then
+              echo "server healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
+      - name: Seed admin user
+        run: npx tsx setup-helper.ts
+        working-directory: tests/playwright
+        env:
+          BASE_URL: http://localhost:8089
+      - name: Run login spec (HTTP)
+        run: npx playwright test specs/auth/login.spec.ts --project="Desktop Chrome"
+        working-directory: tests/playwright
+        env:
+          BASE_URL: http://localhost:8089
+      - name: Stop HTTP server
+        run: kill "$SERVER_PID" 2>/dev/null || true
+      - name: Start persea (HTTPS)
+        run: |
+          cat > /tmp/persea-test-config.toml <<EOF
+          listen_addr = "127.0.0.1:8443"
+          db_path = "/tmp/persea-test-https.db"
+          [tls]
+          cert_path = "/tmp/persea-test-cert.pem"
+          key_path = "/tmp/persea-test-key.pem"
+          EOF
+          ./target/release/persea --config /tmp/persea-test-config.toml &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sfk https://localhost:8443/api/health >/dev/null 2>&1; then
+              echo "server healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
+      - name: Seed admin user (HTTPS)
+        run: npx tsx setup-helper.ts
+        working-directory: tests/playwright
+        env:
+          BASE_URL: https://localhost:8443
+      - name: Run login spec (HTTPS)
+        run: npx playwright test specs/auth/login.spec.ts --project="Desktop Chrome (HTTPS)"
+        working-directory: tests/playwright
+        env:
+          HTTPS_BASE_URL: https://localhost:8443
+      - name: Stop HTTPS server
+        run: kill "$SERVER_PID" 2>/dev/null || true

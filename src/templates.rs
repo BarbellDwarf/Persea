@@ -92,6 +92,16 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     )
     .expect("Failed to register pages/admin/tunnels.html");
     env.add_template(
+        "pages/admin/license.html",
+        include_str!("../templates/pages/admin/license.html"),
+    )
+    .expect("Failed to register pages/admin/license.html");
+    env.add_template(
+        "pages/admin/branding.html",
+        include_str!("../templates/pages/admin/branding.html"),
+    )
+    .expect("Failed to register pages/admin/branding.html");
+    env.add_template(
         "pages/account/profile.html",
         include_str!("../templates/pages/account/profile.html"),
     )
@@ -111,6 +121,11 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
         include_str!("../templates/pages/docs.html"),
     )
     .expect("Failed to register pages/docs.html");
+    env.add_template(
+        "pages/error.html",
+        include_str!("../templates/pages/error.html"),
+    )
+    .expect("Failed to register pages/error.html");
 
     Arc::new(env)
 });
@@ -158,6 +173,7 @@ pub struct LoginTemplate {
     pub oidc_providers: Vec<String>,
     /// Error message from a failed login redirect (`/?error=...`).
     pub error: Option<String>,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for LoginTemplate {
@@ -174,6 +190,7 @@ pub struct AppLayoutTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl AppLayoutTemplate {
@@ -190,6 +207,7 @@ pub struct ConnectionsPageTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for ConnectionsPageTemplate {
@@ -205,6 +223,7 @@ pub struct SessionsPageTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for SessionsPageTemplate {
@@ -222,6 +241,7 @@ pub struct AdminUsersTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminUsersTemplate {
@@ -237,6 +257,7 @@ pub struct AdminAuthTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminAuthTemplate {
@@ -252,6 +273,7 @@ pub struct AdminGroupsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminGroupsTemplate {
@@ -267,6 +289,7 @@ pub struct AdminAuditTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminAuditTemplate {
@@ -282,6 +305,7 @@ pub struct AdminSettingsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminSettingsTemplate {
@@ -297,6 +321,7 @@ pub struct AdminReportsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminReportsTemplate {
@@ -312,6 +337,7 @@ pub struct AdminTunnelsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AdminTunnelsTemplate {
@@ -320,10 +346,43 @@ impl IntoResponse for AdminTunnelsTemplate {
     }
 }
 
+/// Admin branding page template context.
+#[derive(Serialize)]
+pub struct AdminBrandingTemplate {
+    pub site_title: String,
+    pub logo_url: String,
+    pub is_admin: bool,
+    pub active_page: String,
+    pub csp_nonce: String,
+}
+
+impl IntoResponse for AdminBrandingTemplate {
+    fn into_response(self) -> Response {
+        render_template("pages/admin/branding.html", &self)
+    }
+}
+
+/// Admin license page template context.
+#[derive(Serialize)]
+pub struct AdminLicenseTemplate {
+    pub site_title: String,
+    pub logo_url: String,
+    pub is_admin: bool,
+    pub active_page: String,
+    pub csp_nonce: String,
+}
+
+impl IntoResponse for AdminLicenseTemplate {
+    fn into_response(self) -> Response {
+        render_template("pages/admin/license.html", &self)
+    }
+}
+
 /// Client (remote desktop) page template context.
 #[derive(Serialize)]
 pub struct ClientTemplate {
     pub site_title: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for ClientTemplate {
@@ -339,6 +398,7 @@ pub struct RecordingsPageTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for RecordingsPageTemplate {
@@ -354,6 +414,7 @@ pub struct ProfileTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for ProfileTemplate {
@@ -369,6 +430,7 @@ pub struct AccountTokensTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AccountTokensTemplate {
@@ -384,6 +446,7 @@ pub struct AccountTotpTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for AccountTotpTemplate {
@@ -399,12 +462,44 @@ pub struct DocsTemplate {
     pub logo_url: String,
     pub is_admin: bool,
     pub active_page: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for DocsTemplate {
     fn into_response(self) -> Response {
         render_template("pages/docs.html", &self)
     }
+}
+
+/// Styled error page template context.
+#[derive(Serialize)]
+pub struct ErrorPageTemplate {
+    pub status_code: u16,
+    pub title: String,
+    pub message: String,
+    pub csp_nonce: String,
+}
+
+impl IntoResponse for ErrorPageTemplate {
+    fn into_response(self) -> Response {
+        let status =
+            StatusCode::from_u16(self.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let mut response = render_template("pages/error.html", &self);
+        *response.status_mut() = status;
+        response
+    }
+}
+
+/// Render the styled error page for `status` with the given message.
+/// The page carries the HTTP status so it works as a fallback service too.
+pub fn render_error_page(status: StatusCode, message: &str, csp_nonce: &str) -> Response {
+    ErrorPageTemplate {
+        status_code: status.as_u16(),
+        title: status.canonical_reason().unwrap_or("Error").to_string(),
+        message: message.to_string(),
+        csp_nonce: csp_nonce.to_string(),
+    }
+    .into_response()
 }
 
 // Re-export old name for backward compatibility
@@ -421,6 +516,7 @@ pub struct SetupTemplate {
     pub guacd_path: String,
     pub admin_email: String,
     pub admin_name: String,
+    pub csp_nonce: String,
 }
 
 impl IntoResponse for SetupTemplate {

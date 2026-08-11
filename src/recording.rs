@@ -8,6 +8,7 @@
 //! - Rotate recordings per address-book entry
 
 use crate::config::RecordingConfig;
+use crate::crypto;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -62,7 +63,7 @@ pub fn disk_usage_percent(path: &Path) -> std::io::Result<f64> {
     }
 }
 
-/// List all `.guac` recordings in `dir`, sorted oldest-first.
+/// List all `.guac` (and `.guac.enc`) recordings in `dir`, sorted oldest-first.
 /// Returns `(path, modified_time, size_bytes)`.
 pub fn list_recordings_by_age(dir: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
     let mut recordings = Vec::new();
@@ -74,7 +75,13 @@ pub fn list_recordings_by_age(dir: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("guac") {
+        let is_guac = path.extension().and_then(|e| e.to_str()) == Some("guac");
+        let is_enc = path.extension().and_then(|e| e.to_str()) == Some("enc")
+            && path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.ends_with(".guac"));
+        if !is_guac && !is_enc {
             continue;
         }
         if let Ok(meta) = std::fs::metadata(&path) {
@@ -87,9 +94,17 @@ pub fn list_recordings_by_age(dir: &Path) -> Vec<(PathBuf, SystemTime, u64)> {
     recordings
 }
 
-/// Read the sidecar `.meta` JSON for a `.guac` file.
+/// Read the sidecar `.meta` JSON for a `.guac` or `.guac.enc` file.
 pub fn read_meta(guac_path: &Path) -> Option<RecordingMeta> {
-    let meta_path = guac_path.with_extension("meta");
+    // For `.guac.enc`, the stem is `foo.guac`; the meta lives alongside `foo.meta`.
+    let meta_path = if guac_path.extension().and_then(|e| e.to_str()) == Some("enc") {
+        let stem = guac_path.file_stem().and_then(|s| s.to_str())?;
+        // stem is "<session>.guac" → strip the ".guac" suffix to get the base name
+        let base = stem.strip_suffix(".guac").unwrap_or(stem);
+        guac_path.with_file_name(format!("{base}.meta"))
+    } else {
+        guac_path.with_extension("meta")
+    };
     let data = std::fs::read_to_string(&meta_path).ok()?;
     serde_json::from_str(&data).ok()
 }
@@ -111,15 +126,31 @@ pub fn write_meta(guac_path: &Path, meta: &RecordingMeta) -> std::io::Result<()>
 }
 
 /// Delete a recording and its sidecar `.meta` file.
+/// Handles both `.guac` and `.guac.enc` variants.
 fn delete_recording(path: &Path) {
     if let Err(e) = std::fs::remove_file(path) {
         tracing::warn!("Failed to delete recording {}: {}", path.display(), e);
     } else {
         tracing::info!("Rotated recording: {}", path.display());
     }
-    // Also remove sidecar meta
-    let meta_path = path.with_extension("meta");
+    // Also remove sidecar meta (stem may contain ".guac" or ".guac.enc")
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let meta_path = if stem.ends_with(".guac") {
+        // .guac.enc → meta is <stem-without-guac>.meta
+        path.with_file_name(format!("{}.meta", stem))
+    } else {
+        path.with_extension("meta")
+    };
     let _ = std::fs::remove_file(&meta_path);
+    // If we deleted a .guac.enc, also remove the stale .guac (and vice versa).
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext == "enc" {
+        let plaintext = path.with_extension("guac");
+        let _ = std::fs::remove_file(&plaintext);
+    } else if ext == "guac" {
+        let encrypted = path.with_extension("guac.enc");
+        let _ = std::fs::remove_file(&encrypted);
+    }
 }
 
 /// Run global rotation based on `RecordingConfig`.
@@ -214,6 +245,64 @@ pub fn rotate_per_entry(recording_dir: &Path, entry_key: &str, max: u32) -> usiz
         );
     }
     deleted
+}
+
+/// Whether recordings should be encrypted at rest.
+///
+/// Returns `true` when `encrypt_at_rest` is explicitly `Some(true)`, or when
+/// it is `None` (auto) and an encryption key is configured.
+pub fn should_encrypt_at_rest(config: &RecordingConfig, encryption_key_hex: Option<&str>) -> bool {
+    match config.encrypt_at_rest {
+        Some(v) => v,
+        None => encryption_key_hex.is_some_and(|k| !k.is_empty()),
+    }
+}
+
+/// Encrypt a `.guac` file in place: reads the plaintext, writes `<path>.enc`,
+/// then removes the original plaintext file.
+pub fn encrypt_recording_file(
+    guac_path: &Path,
+    encryption_key_hex: &str,
+) -> Result<(), std::io::Error> {
+    let key = crypto::EncryptionKey::from_hex(encryption_key_hex)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+
+    let plaintext = std::fs::read(guac_path)?;
+    let encrypted = crypto::encrypt_bytes(&key, &plaintext)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+    let enc_path = guac_path.with_extension("guac.enc");
+    std::fs::write(&enc_path, &encrypted)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&enc_path, std::fs::Permissions::from_mode(0o640));
+    }
+
+    std::fs::remove_file(guac_path)?;
+    Ok(())
+}
+
+/// Decrypt a `.guac.enc` file into an in-memory buffer.
+///
+/// If `guac_path` has no `.enc` counterpart, falls back to reading the
+/// plaintext `.guac` file directly (for unencrypted recordings).
+pub fn decrypt_recording(
+    guac_path: &Path,
+    encryption_key_hex: &str,
+) -> Result<Vec<u8>, std::io::Error> {
+    let enc_path = guac_path.with_extension("guac.enc");
+    if enc_path.exists() {
+        let key = crypto::EncryptionKey::from_hex(encryption_key_hex)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        let encrypted = std::fs::read(&enc_path)?;
+        crypto::decrypt_bytes(&key, &encrypted)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    } else {
+        // Legacy unencrypted recording
+        std::fs::read(guac_path)
+    }
 }
 
 #[cfg(test)]

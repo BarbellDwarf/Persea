@@ -3,76 +3,28 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}persea{% endblock %}</title>
+    <title>{% block title %}Persea{% endblock %}</title>
 
     <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
 
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <!-- Google Fonts (vendored) -->
+    <style>
+    @font-face { font-family: 'Inter'; font-style: normal; font-weight: 300 700; font-display: swap; src: url('/fonts/inter-latin.woff2') format('woff2'); }
+    @font-face { font-family: 'JetBrains Mono'; font-style: normal; font-weight: 400 500; font-display: swap; src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2'); }
+    </style>
 
-    <!-- Tailwind CSS v3 CDN with inline config -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-    tailwind.config = {
-        darkMode: 'class',
-        theme: {
-            extend: {
-                fontFamily: {
-                    sans: ['Inter', 'system-ui', 'sans-serif'],
-                    mono: ['JetBrains Mono', 'monospace'],
-                },
-                colors: {
-                    brand: {
-                        50:'#ecfdf5',100:'#d1fae5',200:'#a7f3d0',300:'#6ee7b7',
-                        400:'#34d399',500:'#10b981',600:'#059669',700:'#047857',
-                        800:'#065f46',900:'#064e3b',950:'#022c22',
-                    },
-                    surface: {
-                        50:'#f8fafc',100:'#f1f5f9',200:'#e2e8f0',300:'#cbd5e1',
-                        400:'#94a3b8',500:'#64748b',600:'#475569',700:'#334155',
-                        800:'#1e293b',900:'#0f172a',950:'#020617',
-                    },
-                },
-            },
-        },
-    }
-    </script>
+    <!-- Tailwind CSS (pre-built) -->
+    <link rel="stylesheet" href="/css/tailwind.min.css">
 
     <!-- htmx -->
-    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
-    <script>
-    // Configure htmx to send API key + CSRF token on every request
-    htmx.config.defaultHeaders = {
-        'Authorization': 'Bearer ' + (sessionStorage.getItem('persea_api_key') || ''),
-        'X-CSRF-Token': (function() {
-            var parts = document.cookie.split(';');
-            for (var i = 0; i < parts.length; i++) {
-                var part = parts[i].trim();
-                if (part.indexOf('csrf_token=') === 0) return decodeURIComponent(part.substring(11));
-            }
-            return '';
-        })()
-    };
-    document.body.addEventListener('htmx:configRequest', function(evt) {
-        var key = sessionStorage.getItem('persea_api_key');
-        if (key) {
-            evt.detail.headers['Authorization'] = 'Bearer ' + key;
-        }
-        var csrf = readCookie('csrf_token');
-        if (csrf) {
-            evt.detail.headers['X-CSRF-Token'] = csrf;
-        }
-    });
-    </script>
+    <script src="/vendor/htmx.min.js"></script>
 
     <!-- API auth helper (defines apiHeaders, readCookie) -->
     <script src="/js/auth.js"></script>
 
     <!-- CSRF: patch fetch() so every XHR carries the X-CSRF-Token header -->
-    <script>
+    <script nonce="{{ csp_nonce }}">
     (function() {
         var origFetch = window.fetch;
         window.fetch = function(input, init) {
@@ -100,11 +52,15 @@
     </script>
 
     <!-- Theme detection -->
-    <script>
+    <script nonce="{{ csp_nonce }}">
     (function() {
         var s = localStorage.getItem('theme');
-        var d = s || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
-        document.documentElement.className = d;
+        var mq = window.matchMedia('(prefers-color-scheme: dark)');
+        if (!s || s === 'auto') {
+            document.documentElement.classList.add(mq.matches ? 'dark' : 'light');
+        } else {
+            document.documentElement.classList.add(s);
+        }
     })();
     </script>
 
@@ -117,16 +73,45 @@
     </style>
 
     <!-- App CSS -->
-    <link rel="stylesheet" href="/css/app.css">
+    <link rel="stylesheet" href="/css/app.css?v=1.1.1">
 
     {% block head %}{% endblock %}
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen antialiased">
+<body class="min-h-screen antialiased">
     {% block body %}{% endblock %}
 
     <!-- Shared JS utilities -->
-    <script src="/js/theme.js"></script>
-    <script src="/js/utils.js"></script>
-    <script>initTheme();</script>
+    <script src="/js/theme.js?v=1.1.1"></script>
+    <script src="/js/utils.js?v=1.1.1"></script>
+    <script nonce="{{ csp_nonce }}">
+    // Configure htmx to send API key + CSRF token on every request
+    htmx.config.defaultHeaders = {
+        'Authorization': 'Bearer ' + (sessionStorage.getItem('persea_api_key') || ''),
+        'X-CSRF-Token': (function() {
+            var parts = document.cookie.split(';');
+            for (var i = 0; i < parts.length; i++) {
+                var part = parts[i].trim();
+                if (part.indexOf('csrf_token=') === 0) return decodeURIComponent(part.substring(11));
+            }
+            return '';
+        })()
+    };
+    document.body.addEventListener('htmx:configRequest', function(evt) {
+        var key = sessionStorage.getItem('persea_api_key');
+        if (key) {
+            evt.detail.headers['Authorization'] = 'Bearer ' + key;
+        }
+        var csrf = readCookie('csrf_token');
+        if (csrf) {
+            evt.detail.headers['X-CSRF-Token'] = csrf;
+        }
+    });
+    </script>
+    <script nonce="{{ csp_nonce }}">
+    fetch('/api/auth/status', { credentials: 'same-origin' })
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) { if (d && d.theme) initTheme(d.theme); })
+        .catch(function() {});
+    </script>
 </body>
 </html>

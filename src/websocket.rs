@@ -116,8 +116,9 @@ pub async fn ws_handler(
             .into_response();
     }
 
-    // Check if this is an owner connection (session is Pending)
-    let is_owner = manager.is_session_pending(session_id).await;
+    // Check if this is an owner connection (session is Pending or Disconnected)
+    let is_owner = manager.is_session_pending(session_id).await
+        || manager.is_session_disconnected(session_id).await;
 
     if is_owner {
         // Owner path: require authenticated identity with operator+ role
@@ -172,6 +173,10 @@ async fn handle_ws(
         let identity_str = identity_name.as_deref().unwrap_or("unknown");
         tracing::info!(session_id = %session_id, client_ip = %client_addr, identity = %identity_str, "Session owner connected");
         (stream, cancel)
+    } else if let Some((stream, cancel)) = manager.reconnect_session(session_id).await {
+        let identity_str = identity_name.as_deref().unwrap_or("unknown");
+        tracing::info!(session_id = %session_id, client_ip = %client_addr, identity = %identity_str, "Session owner reconnected");
+        (stream, cancel)
     } else {
         // Not pending — try to join an active session
         // Joining requires a valid share token
@@ -220,6 +225,28 @@ async fn handle_ws(
                     issued_by = %issued_by,
                     "Shadow token consumed"
                 );
+            }
+        }
+
+        // Per-session concurrent viewer limit (H02).
+        // The owner connection is not counted (active_connections starts at 0
+        // for a Pending session).  max_viewers == 0 means unlimited.
+        {
+            let max_viewers = manager.config().max_viewers;
+            if max_viewers > 0 {
+                let session = manager.get_session(session_id).await;
+                if let Some(info) = session {
+                    if info.active_connections >= max_viewers {
+                        tracing::warn!(
+                            session_id = %session_id,
+                            client_ip = %client_addr,
+                            active = info.active_connections,
+                            max = max_viewers,
+                            "Rejecting viewer: per-session concurrent viewer limit reached"
+                        );
+                        return;
+                    }
+                }
             }
         }
 
@@ -344,13 +371,18 @@ async fn handle_ws(
     if mark_error {
         manager.error_session(session_id).await;
         status_str = "error";
+    } else if server_disconnected {
+        // Server-side end (user logout / crash) — terminal, cannot reconnect
+        manager.complete_session(session_id).await;
+        status_str = "completed";
     } else {
-        // Only mark completed if no more active connections
+        // Browser disconnected or network drop — session stays in manager
+        // for reconnection. Only set Disconnected if no more active connections.
         let info = manager.get_session(session_id).await;
         if let Some(info) = info {
             if info.active_connections == 0 {
-                manager.complete_session(session_id).await;
-                status_str = "completed";
+                manager.disconnect_session(session_id).await;
+                status_str = "disconnected";
             } else {
                 status_str = "active";
             }
@@ -376,6 +408,32 @@ async fn handle_ws(
                 let vdi_thumb = manager.vdi_thumbnail_path(&container_name);
                 if session_thumb.exists() {
                     let _ = tokio::fs::copy(&session_thumb, &vdi_thumb).await;
+                }
+            }
+        }
+    }
+
+    // Encrypt recording at rest (file is closed after proxy_ws_guacd returns).
+    // Enterprise-gated (R43) — checked via the process-global handle since
+    // this isn't an axum handler and can't take an `Extension<T>`.
+    if is_recording_enabled && recording_path.exists() {
+        let rec_config = manager.recording_config();
+        let enc_key = manager.config().storage_encryption_key();
+        if crate::recording::should_encrypt_at_rest(&rec_config, enc_key.as_deref()) {
+            let licensed = crate::license::global()
+                .map(|lm| lm.has_feature(crate::license::FEAT_ENCRYPTED_RECORDING))
+                .unwrap_or(false);
+            if !licensed {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "Recording encryption at rest is configured but requires an enterprise license — this recording was saved unencrypted"
+                );
+            } else if let Some(ref key_hex) = enc_key {
+                if let Err(e) = crate::recording::encrypt_recording_file(&recording_path, key_hex) {
+                    tracing::error!(
+                        session_id = %session_id, error = %e,
+                        "Failed to encrypt recording at rest"
+                    );
                 }
             }
         }
@@ -494,7 +552,7 @@ async fn guacd_to_ws(
     server_disconnected: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
-    let mut carry: Vec<u8> = Vec::new();
+    let mut carry = bytes::BytesMut::new();
 
     loop {
         let n = guacd.read(&mut buf).await?;
@@ -514,8 +572,8 @@ async fn guacd_to_ws(
 
         // Flush up to the last complete instruction boundary in the carry.
         // Anything past that is held over for the next read.
-        let to_send_bytes: Vec<u8> = match last_instruction_boundary(&carry) {
-            Some(end) => carry.drain(..end).collect(),
+        let carry_data: bytes::BytesMut = match last_instruction_boundary(&carry) {
+            Some(end) => carry.split_to(end),
             None if carry.len() > MAX_GUACD_CARRY => {
                 tracing::warn!(
                     len = carry.len(),
@@ -530,7 +588,7 @@ async fn guacd_to_ws(
         // The boundary scanner only advances over valid UTF-8, so this
         // String::from_utf8 should never fail in practice; defensive in
         // case a force-flush above happened mid-multibyte char.
-        let text = String::from_utf8(to_send_bytes).map_err(
+        let text = String::from_utf8(carry_data.to_vec()).map_err(
             |e| -> Box<dyn std::error::Error + Send + Sync> {
                 format!("invalid UTF-8 from guacd: {}", e).into()
             },

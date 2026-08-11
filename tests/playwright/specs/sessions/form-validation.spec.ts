@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ storageState: '.auth/user.json' });
 import { SessionsPage } from '../../pages/SessionsPage';
 
 test.describe('Sessions form validation', () => {
@@ -6,13 +7,12 @@ test.describe('Sessions form validation', () => {
 
   test.beforeEach(async ({ page }) => {
     sessions = new SessionsPage(page);
-    await page.goto('/');
-    await page.evaluate((key) => {
-      sessionStorage.setItem('persea_api_key', key);
-    }, process.env.ADMIN_API_KEY || '');
-    await page.goto('/sessions.html');
-    await expect(sessions.sessionForm).toBeVisible();
-    await sessions.toggleNewSession();
+    await sessions.goto();
+    // The form starts hidden — it is revealed via the "+ New Session" button,
+    // which appears once the /api/me role check resolves for admin/poweruser.
+    await expect(sessions.newSessionBtn).toBeVisible();
+    await sessions.openNewSession();
+    await expect(sessions.newSessionFields).toBeVisible();
   });
 
   test('SSH form has correct default port', async () => {
@@ -29,15 +29,10 @@ test.describe('Sessions form validation', () => {
     await expect(sessions.vncPort).toHaveValue('5900');
   });
 
-  test('generate keypair checkbox disables password', async () => {
-    await sessions.generateKeypair.check();
-    await expect(sessions.password).toBeDisabled();
-    // Private key field should be hidden
-    await expect(sessions.page.locator('#private-key-field')).toBeHidden();
-
-    await sessions.generateKeypair.uncheck();
-    await expect(sessions.password).toBeEnabled();
-    await expect(sessions.page.locator('#private-key-field')).toBeVisible();
+  test('SSH connect shows validation error when host is empty', async () => {
+    await sessions.submitConnect();
+    await expect(sessions.error).toBeVisible();
+    await expect(sessions.error).toHaveText(/Host is required/);
   });
 
   test('connect button is clickable', async () => {
@@ -89,29 +84,5 @@ test.describe('Sessions form validation', () => {
     const body = JSON.parse(request.postData() || '{}');
     expect(body.session_type).toBe('vdi');
     expect(body.container_image).toBe('myregistry/xrdp:latest');
-  });
-
-  test('jump section visibility toggles', async () => {
-    // Jump section is hidden for VDI
-    await sessions.selectSessionType('vdi');
-    await expect(sessions.jumpSection).toBeHidden();
-
-    // Jump section is visible for SSH
-    await sessions.selectSessionType('ssh');
-    await expect(sessions.jumpSection).toBeVisible();
-  });
-
-  test('add hop button creates hop card', async () => {
-    // Jump section is only visible for non-VDI session types
-    await sessions.selectSessionType('ssh');
-    await expect(sessions.jumpSection).toBeVisible();
-    // The jump fields (containing the add-hop-btn) are collapsed by default — expand them
-    await sessions.page.click('#jump-toggle');
-    await expect(sessions.page.locator('#jump-fields')).toBeVisible();
-    await expect(sessions.page.locator('.hop-card')).toHaveCount(0);
-    await sessions.addHopBtn.click();
-    await expect(sessions.page.locator('.hop-card')).toHaveCount(1);
-    await sessions.addHopBtn.click();
-    await expect(sessions.page.locator('.hop-card')).toHaveCount(2);
   });
 });

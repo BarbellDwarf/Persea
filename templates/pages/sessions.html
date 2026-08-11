@@ -4,7 +4,7 @@
 <div class="max-w-7xl mx-auto">
     <div class="flex items-center justify-between mb-6">
         <div>
-            <h1 class="text-2xl font-bold text-gray-100">Sessions</h1>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)]">Sessions</h1>
             <p class="text-sm text-muted mt-1"><span id="session-counts"></span></p>
         </div>
         <div class="flex items-center gap-3">
@@ -21,9 +21,10 @@
                 <option value="">All Status</option>
                 <option value="active">Active</option>
                 <option value="pending">Pending</option>
+                <option value="disconnected">Disconnected</option>
                 <option value="expired">Expired</option>
             </select>
-            <button id="btn-new-session" class="poweruser-only hidden btn btn-primary btn-sm">+ New Session</button>
+            <button id="btn-new-session" class="hidden btn btn-primary btn-sm">+ New Session</button>
         </div>
     </div>
     <div id="session-form" class="hidden mb-6 card">
@@ -52,32 +53,206 @@
             </div>
             <div id="web-fields" class="hidden"><div class="form-group"><label class="form-label">URL</label><input type="text" id="url" placeholder="https://example.com" class="form-input"></div></div>
             <div id="vdi-fields" class="hidden"><div class="form-group"><label class="form-label">Container Image</label><input type="text" id="vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest" class="form-input"></div></div>
-            <div id="error" class="alert alert-error" aria-live="polite"></div>
+            <div id="error" class="alert alert-error hidden" aria-live="polite"></div>
             <button type="button" id="connect-btn" class="btn btn-primary">Connect</button>
         </div>
     </div>
-    <div id="sessions" class="card table-wrapper" hx-get="/api/sessions" hx-trigger="load, every 5s" hx-swap="innerHTML" hx-target="#session-list">
-        <table class="w-full"><thead><tr><th class="w-8"></th><th>User</th><th>Protocol</th><th>Target</th><th>Duration</th><th>Actions</th></tr></thead><tbody id="session-list"></tbody></table>
-        <p id="session-empty" class="hidden text-center py-12 text-muted text-sm">No active sessions</p>
+    <div id="sessions" class="card table-wrapper">
+        <table class="w-full"><thead><tr><th class="w-8"></th><th>User</th><th>Protocol</th><th>Target</th><th>Status</th><th>Duration</th><th>Actions</th></tr></thead><tbody id="session-list"></tbody></table>
+        <p id="session-empty" class="hidden text-center py-12 text-muted text-sm">No sessions yet — open the form above to start an ad-hoc session.</p>
     </div>
 </div>
-<style>.proto-ssh{background:rgba(34,197,94,.15);color:#4ade80;border-color:rgba(34,197,94,.3)}.proto-rdp{background:rgba(59,130,246,.15);color:#60a5fa;border-color:rgba(59,130,246,.3)}.proto-vnc{background:rgba(249,115,22,.15);color:#fb923c;border-color:rgba(249,115,22,.3)}.proto-spice{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}.proto-web,.proto-vmware{background:rgba(20,184,166,.15);color:#2dd4bf;border-color:rgba(20,184,166,.3)}.proto-proxmox{background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.3)}.proto-vdi{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}</style>
-<script>
+<style>.proto-ssh{background:rgba(34,197,94,.15);color:#4ade80;border-color:rgba(34,197,94,.3)}.proto-rdp{background:rgba(59,130,246,.15);color:#60a5fa;border-color:rgba(59,130,246,.3)}.proto-vnc{background:rgba(249,115,22,.15);color:#fb923c;border-color:rgba(249,115,22,.3)}.proto-spice{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}.proto-web,.proto-vmware{background:rgba(20,184,166,.15);color:#2dd4bf;border-color:rgba(20,184,166,.3)}.proto-proxmox{background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.3)}.proto-vdi{background:rgba(236,72,153,.15);color:#f472b6;border-color:rgba(236,72,153,.3)}.status-pill{padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid}.status-active{background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3)}.status-pending{background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3)}.status-disconnected{background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3)}.status-completed,.status-expired,.status-error{background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3)}</style>
+<script nonce="{{ csp_nonce }}">
 (function() {
     var toggle = document.getElementById('new-session-toggle');
+    var btnNew = document.getElementById('btn-new-session');
     var fields = document.getElementById('new-session-fields');
+    var formWrap = document.getElementById('session-form');
     var arrow = document.getElementById('new-session-arrow');
     var expanded = false;
     function doToggle() {
         expanded = !expanded;
         fields.classList.toggle('hidden', !expanded);
+        formWrap.classList.toggle('hidden', !expanded);
         toggle.setAttribute('aria-expanded', String(expanded));
         if (arrow) arrow.style.transform = expanded ? 'rotate(90deg)' : '';
+        if (expanded) updateTypeFields();
     }
     toggle.addEventListener('click', doToggle);
     toggle.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); doToggle(); }
     });
+    if (btnNew) btnNew.addEventListener('click', function() {
+        if (!expanded) doToggle();
+        fields.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+
+    // ── Type field visibility ──────────────────────────────────────
+    var protoFields = { ssh: 'ssh-fields', rdp: 'rdp-fields', vnc: 'vnc-fields', web: 'web-fields', vdi: 'vdi-fields' };
+    function updateTypeFields() {
+        var type = document.getElementById('session-type').value;
+        Object.keys(protoFields).forEach(function(t) {
+            document.getElementById(protoFields[t]).classList.toggle('hidden', t !== type);
+        });
+    }
+    document.getElementById('session-type').addEventListener('change', updateTypeFields);
+
+    // ── Connect ────────────────────────────────────────────────────
+    var errEl = document.getElementById('error');
+    var connectBtn = document.getElementById('connect-btn');
+    function showError(msg) {
+        errEl.textContent = msg;
+        errEl.classList.remove('hidden');
+    }
+    connectBtn.addEventListener('click', function() {
+        var type = document.getElementById('session-type').value;
+        var payload = { session_type: type };
+        var req = {};
+        if (type === 'web') {
+            var url = document.getElementById('url').value.trim();
+            if (!url) { showError('URL is required for Web sessions.'); return; }
+            req.url = url;
+        } else if (type === 'vdi') {
+            var image = document.getElementById('vdi-image').value.trim();
+            if (!image) { showError('Container image is required for VDI sessions.'); return; }
+            req.container_image = image;
+        } else {
+            var host = document.getElementById(type === 'rdp' ? 'rdp-hostname' : (type === 'vnc' ? 'vnc-hostname' : 'hostname')).value.trim();
+            if (!host) { showError('Host is required.'); return; }
+            var port = parseInt(document.getElementById(type === 'rdp' ? 'rdp-port' : (type === 'vnc' ? 'vnc-port' : 'port')).value, 10);
+            req.hostname = host;
+            if (!isNaN(port) && port > 0) req.port = port;
+            var user = document.getElementById(type === 'rdp' ? 'rdp-username' : 'username').value.trim();
+            var pass = document.getElementById(type === 'rdp' ? 'rdp-password' : 'password').value;
+            if (user) req.username = user;
+            if (pass) req.password = pass;
+        }
+        payload.hostname = req.hostname;
+        payload.port = req.port;
+        payload.username = req.username;
+        payload.password = req.password;
+        if (req.url) payload.url = req.url;
+        if (req.container_image) payload.container_image = req.container_image;
+
+        errEl.classList.add('hidden');
+        connectBtn.disabled = true;
+        connectBtn.textContent = 'Connecting\u2026';
+        fetch('/api/sessions', {
+            method: 'POST',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify(payload)
+        }).then(function(r) {
+            return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+        }).then(function(res) {
+            connectBtn.disabled = false;
+            connectBtn.textContent = 'Connect';
+            if (!res.ok && res.data.code === 401) { window.location.href = '/'; return; }
+            if (res.ok && res.data.session_id) {
+                window.open('/client/' + encodeURIComponent(res.data.session_id), '_blank');
+                return;
+            }
+            showError(res.data.error || 'Failed to start session.');
+        }).catch(function(e) {
+            connectBtn.disabled = false;
+            connectBtn.textContent = 'Connect';
+            showError(e.message || 'Connection failed.');
+        });
+    });
+
+    // ── Role visibility + live session list ────────────────────────
+    var isAdmin = false;
+    var listEl = document.getElementById('session-list');
+    var emptyEl = document.getElementById('session-empty');
+    var countsEl = document.getElementById('session-counts');
+    function durationStr(createdAt) {
+        var secs = Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000));
+        if (secs < 60) return secs + 's';
+        var mins = Math.floor(secs / 60);
+        if (mins < 60) return mins + 'm ' + (secs % 60) + 's';
+        var hrs = Math.floor(mins / 60);
+        return hrs + 'h ' + (mins % 60) + 'm';
+    }
+    function statusPill(s) {
+        var cls = { active: 'status-active', pending: 'status-pending', disconnected: 'status-disconnected' }[s] || 'status-completed';
+        return '<span class="status-pill ' + cls + '">' + escapeHtml((s || 'unknown').toUpperCase()) + '</span>';
+    }
+    function renderSessions(sessions) {
+        var protocolFilter = document.getElementById('filter-protocol').value;
+        var statusFilter = document.getElementById('filter-status').value;
+        var shown = sessions.filter(function(s) {
+            if (protocolFilter && s.session_type !== protocolFilter) return false;
+            if (statusFilter && s.status !== statusFilter) return false;
+            return true;
+        });
+        var active = sessions.filter(function(s) { return s.status === 'active'; }).length;
+        var pending = sessions.filter(function(s) { return s.status === 'pending'; }).length;
+        var disconnected = sessions.filter(function(s) { return s.status === 'disconnected'; }).length;
+        var parts = [];
+        if (active) parts.push(active + ' active');
+        if (pending) parts.push(pending + ' pending');
+        if (disconnected) parts.push(disconnected + ' disconnected');
+        parts.push(sessions.length + ' total');
+        countsEl.textContent = parts.join(' \u00B7 ');
+        emptyEl.classList.toggle('hidden', shown.length > 0);
+        listEl.innerHTML = shown.map(function(s) {
+            var proto = (s.session_type || '').toLowerCase();
+            var target = s.url || s.hostname || '\u2014';
+            var actions = '';
+            if (s.status === 'active' || s.status === 'pending' || s.status === 'disconnected') {
+                actions = '<a href="' + escapeAttr(s.client_url || '/client/' + encodeURIComponent(s.session_id)) + '" class="btn btn-primary btn-sm" style="width:auto">Open</a>'
+                    + ' <button type="button" class="btn btn-danger btn-sm session-terminate" data-id="' + escapeAttr(s.session_id) + '" style="width:auto">Terminate</button>';
+            }
+            return '<tr>'
+                + '<td><span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml(proto.toUpperCase()) + '</span></td>'
+                + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(s.created_by || '') + '</td>'
+                + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(proto) + '</td>'
+                + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(target) + (s.entry_display_name ? ' <span class="text-[var(--text-muted)]">\u00B7 ' + escapeHtml(s.entry_display_name) + '</span>' : '') + '</td>'
+                + '<td>' + statusPill(s.status) + '</td>'
+                + '<td class="text-sm text-[var(--text-muted)]">' + durationStr(s.created_at) + '</td>'
+                + '<td class="text-sm">' + actions + '</td>'
+                + '</tr>';
+        }).join('');
+        listEl.querySelectorAll('.session-terminate').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var id = btn.getAttribute('data-id');
+                if (!confirm('Terminate session ' + id.slice(0, 8) + '?')) return;
+                fetch('/api/sessions/' + encodeURIComponent(id), {
+                    method: 'DELETE',
+                    headers: apiHeaders(),
+                    credentials: 'same-origin'
+                }).then(function(r) {
+                    if (r.status === 401) { window.location.href = '/'; return; }
+                    if (!r.ok) return r.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + r.status); });
+                    loadSessions();
+                }).catch(function(e) { showError(e.message || 'Failed to terminate session.'); });
+            });
+        });
+    }
+    function loadSessions() {
+        fetch('/api/sessions' + (isAdmin ? '?all=true' : ''), { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(sessions) { renderSessions(sessions || []); })
+            .catch(function() {});
+    }
+    function protoClass(p) {
+        return { ssh: 'proto-ssh', rdp: 'proto-rdp', vnc: 'proto-vnc', spice: 'proto-spice', web: 'proto-web', vdi: 'proto-vdi', proxmox: 'proto-proxmox' }[p] || '';
+    }
+    document.getElementById('filter-protocol').addEventListener('change', loadSessions);
+    document.getElementById('filter-status').addEventListener('change', loadSessions);
+
+    fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
+        .then(function(res) { return res.ok ? res.json() : null; })
+        .then(function(me) {
+            if (me && (me.role === 'admin' || me.role === 'poweruser')) {
+                btnNew.classList.remove('hidden');
+            }
+            if (me) isAdmin = me.role === 'admin';
+            loadSessions();
+        })
+        .catch(function() { loadSessions(); });
+    setInterval(loadSessions, 5000);
 })();
 </script>
 {% endblock %}

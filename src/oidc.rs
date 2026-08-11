@@ -1,11 +1,12 @@
 //! OIDC authentication — login, callback, logout handlers.
 
-use crate::auth::extract_cookie;
+use crate::auth::{extract_cookie, TrustedProxies};
 use crate::config::OidcConfig;
+use crate::csrf::TlsEnabled;
 use crate::db::{self, Db};
 use crate::totp::TotpEnforcement;
 use axum::{
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
     http::{header, StatusCode},
     response::{AppendHeaders, IntoResponse, Redirect, Response},
     Extension,
@@ -18,6 +19,7 @@ use openidconnect::{
 };
 use serde::Deserialize;
 use serde_json::json;
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
@@ -148,6 +150,9 @@ pub struct LoginParams {
 /// GET /auth/login — redirect user to OIDC provider.
 pub async fn login(
     State(registry): State<std::sync::Arc<OidcRegistry>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Extension(trusted_proxies): Extension<TrustedProxies>,
+    Extension(tls_enabled): Extension<TlsEnabled>,
     Query(params): Query<LoginParams>,
     headers: axum::http::HeaderMap,
 ) -> Response {
@@ -188,34 +193,42 @@ pub async fn login(
 
     // Set state in a cookie so we can verify on callback, then redirect
     // Bind state to client fingerprint (IP + User-Agent) to prevent CSRF
+    // Using HMAC-SHA256 with state_key as the key for cryptographic integrity
     let fingerprint = {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        headers
+        use ring::hmac;
+        let key = hmac::Key::new(hmac::HMAC_SHA256, state_key.as_bytes());
+        let mut data = Vec::new();
+        let ip = headers
             .get("x-forwarded-for")
             .or_else(|| headers.get("x-real-ip"))
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown")
-            .hash(&mut h);
-        headers
+            .unwrap_or("unknown");
+        data.extend_from_slice(ip.as_bytes());
+        let ua = headers
             .get(header::USER_AGENT)
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown")
-            .hash(&mut h);
-        format!("{:x}", h.finish())
+            .unwrap_or("unknown");
+        data.extend_from_slice(ua.as_bytes());
+        let tag = hmac::sign(&key, &data);
+        hex::encode(tag.as_ref())
     };
     let cookie_value = format!("{}:{}", state_key, fingerprint);
 
+    let sec = crate::csrf::cookie_secure_attr(
+        &headers,
+        tls_enabled.0,
+        Some(&trusted_proxies),
+        Some(addr.ip()),
+    );
     let state_cookie = format!(
-        "persea_oidc_state={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
-        cookie_value
+        "persea_oidc_state={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+        cookie_value, sec
     );
     // The provider name lives in its own cookie (names may contain colons,
     // which would be ambiguous inside the state cookie).
     let provider_cookie = format!(
-        "persea_oidc_provider={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
-        provider.name
+        "persea_oidc_provider={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+        provider.name, sec
     );
 
     let mut cookies = vec![
@@ -227,8 +240,8 @@ pub async fn login(
     if let Some(ref next) = params.next {
         if next.starts_with('/') && !next.starts_with("//") && !next.contains("://") {
             let next_cookie = format!(
-                "persea_next={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
-                next
+                "persea_next={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+                next, sec
             );
             cookies.push((header::SET_COOKIE, next_cookie));
         }
@@ -252,8 +265,11 @@ pub struct CallbackParams {
 /// GET /auth/callback — exchange code for tokens, create session.
 pub async fn callback(
     State(registry): State<std::sync::Arc<OidcRegistry>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Extension(database): Extension<Db>,
     Extension(totp_enforcement): Extension<TotpEnforcement>,
+    Extension(trusted_proxies): Extension<TrustedProxies>,
+    Extension(tls_enabled): Extension<TlsEnabled>,
     headers: axum::http::HeaderMap,
     Query(params): Query<CallbackParams>,
 ) -> Response {
@@ -309,21 +325,22 @@ pub async fn callback(
                     false
                 } else {
                     // Verify fingerprint matches current request
-                    use std::collections::hash_map::DefaultHasher;
-                    use std::hash::{Hash, Hasher};
-                    let mut h = DefaultHasher::new();
-                    headers
+                    use ring::hmac;
+                    let key = hmac::Key::new(hmac::HMAC_SHA256, cookie_state.as_bytes());
+                    let mut data = Vec::new();
+                    let ip = headers
                         .get("x-forwarded-for")
                         .or_else(|| headers.get("x-real-ip"))
                         .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown")
-                        .hash(&mut h);
-                    headers
+                        .unwrap_or("unknown");
+                    data.extend_from_slice(ip.as_bytes());
+                    let ua = headers
                         .get(header::USER_AGENT)
                         .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown")
-                        .hash(&mut h);
-                    let current_fp = format!("{:x}", h.finish());
+                        .unwrap_or("unknown");
+                    data.extend_from_slice(ua.as_bytes());
+                    let tag = hmac::sign(&key, &data);
+                    let current_fp = hex::encode(tag.as_ref());
                     cookie_fingerprint == current_fp
                 }
             }
@@ -565,14 +582,24 @@ pub async fn callback(
 
         tracing::info!(email = %email, "OIDC login requires TOTP — redirecting to MFA");
 
-        let mfa_cookie = format!(
-            "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
-            pending_token, ttl_secs
+        let sec = crate::csrf::cookie_secure_attr(
+            &headers,
+            tls_enabled.0,
+            Some(&trusted_proxies),
+            Some(addr.ip()),
         );
-        let clear_state_cookie =
-            "persea_oidc_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
-        let clear_next_cookie =
-            "persea_next=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+        let mfa_cookie = format!(
+            "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age={}",
+            pending_token, sec, ttl_secs
+        );
+        let clear_state_cookie = format!(
+            "persea_oidc_state=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+            sec
+        );
+        let clear_next_cookie = format!(
+            "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+            sec
+        );
 
         return (
             AppendHeaders([
@@ -627,14 +654,24 @@ pub async fn callback(
         .unwrap_or_else(|| "/addressbook.html".to_string());
 
     // Set session cookie and redirect; clear OIDC state and next cookies
-    let session_cookie = format!(
-        "persea_session={}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={}",
-        session_token, ttl_secs
+    let sec = crate::csrf::cookie_secure_attr(
+        &headers,
+        tls_enabled.0,
+        Some(&trusted_proxies),
+        Some(addr.ip()),
     );
-    let clear_state_cookie =
-        "persea_oidc_state=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
-    let clear_next_cookie =
-        "persea_next=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+    let session_cookie = format!(
+        "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
+        session_token, sec, ttl_secs
+    );
+    let clear_state_cookie = format!(
+        "persea_oidc_state=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        sec
+    );
+    let clear_next_cookie = format!(
+        "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        sec
+    );
 
     (
         AppendHeaders([
@@ -659,8 +696,11 @@ pub async fn logout(
             tokio::task::spawn_blocking(move || db::delete_auth_session(&db_clone, &token)).await;
     }
 
-    let clear_cookie =
-        "persea_session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0".to_string();
+    let secure = crate::csrf::is_https_request(&request);
+    let clear_cookie = format!(
+        "persea_session=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        if secure { " Secure;" } else { "" }
+    );
 
     (
         [(header::SET_COOKIE, clear_cookie)],

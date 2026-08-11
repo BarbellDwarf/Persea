@@ -3,10 +3,54 @@
 {% block title %}{{ site_title }} — Settings{% endblock %}
 
 {% block content %}
+<style>
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+}
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+.toggle-slider {
+    position: absolute;
+    inset: 0;
+    background: #374151;
+    border-radius: 24px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.toggle-slider::before {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 3px;
+    width: 18px;
+    height: 18px;
+    background: #e5e7eb;
+    border-radius: 50%;
+    transition: transform 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider {
+    background: #10b981;
+}
+.toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(20px);
+}
+.toggle-switch input:focus-visible + .toggle-slider {
+    outline: 2px solid #10b981;
+    outline-offset: 2px;
+}
+</style>
+
 <div class="max-w-4xl mx-auto">
     <div class="mb-6">
-        <h1 class="text-2xl font-bold text-gray-100">System Settings</h1>
-        <p class="text-sm text-gray-500 mt-1">Configure server, session, and feature settings</p>
+        <h1 class="text-2xl font-bold text-[var(--text-primary)]">System Settings</h1>
+        <p class="text-sm text-[var(--text-muted)] mt-1">Configure server, session, and feature settings</p>
     </div>
 
     <form id="settings-form" hx-put="/api/system/settings" hx-ext="json-enc" hx-swap="none"
@@ -15,11 +59,11 @@
 
         <!-- Server Settings -->
         <div class="card">
-            <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
                 <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
                 Server
             </h2>
-            <div class="grid grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="form-label">Listen Address</label>
                     <input type="text" name="listen_addr" value="0.0.0.0:8089" class="form-input">
@@ -31,8 +75,8 @@
                 <div>
                     <label class="form-label">TLS Certificate</label>
                     <div class="flex items-center gap-2">
-                        <input type="text" name="tls_cert_path" placeholder="Not configured" class="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-gray-200 text-sm">
-                        <span id="tls-status" class="px-2 py-0.5 text-xs rounded border bg-gray-800 text-gray-500 border-gray-700">Not Set</span>
+                        <input type="text" name="tls_cert_path" placeholder="Not configured" class="flex-1 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] text-sm">
+                        <span id="tls-status" class="px-2 py-0.5 text-xs rounded border bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]">Not Set</span>
                     </div>
                 </div>
                 <div>
@@ -44,20 +88,20 @@
 
         <!-- Session Settings -->
         <div class="card">
-            <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
                 <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                 Session
             </h2>
-            <div class="grid grid-cols-2 gap-4">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                     <label class="form-label">Max Duration (seconds)</label>
                     <input type="number" name="session_max_duration_secs" value="28800" class="form-input">
-                    <p class="text-xs text-gray-600 mt-1">8 hours default</p>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">8 hours default</p>
                 </div>
                 <div>
                     <label class="form-label">Concurrent Session Limit</label>
                     <input type="number" name="max_concurrent_sessions" value="0" class="form-input">
-                    <p class="text-xs text-gray-600 mt-1">0 = unlimited</p>
+                    <p class="text-xs text-[var(--text-muted)] mt-1">0 = unlimited</p>
                 </div>
                 <div>
                     <label class="form-label">History Retention (days)</label>
@@ -68,49 +112,172 @@
 
         <!-- Features -->
         <div class="card">
-            <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
                 <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 Features
             </h2>
             <div class="space-y-3">
-                <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
                     <div>
-                        <span class="text-sm text-gray-200">VDI (Docker)</span>
-                        <p class="text-xs text-gray-500">Per-user Docker desktop containers</p>
+                        <span class="text-sm text-[var(--text-primary)]">RDP</span>
+                        <p class="text-xs text-[var(--text-muted)]">Remote Desktop Protocol connections via guacd</p>
                     </div>
-                    <input type="checkbox" id="enable_vdi" value="true"
-                           onchange="syncCheckbox('enable_vdi')"
-                           class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_rdp" name="enable_rdp"
+                               onchange="syncToggle('enable_rdp')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_rdp" id="enable_rdp-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">SSH Tunnels</span>
+                        <p class="text-xs text-[var(--text-muted)]">SSH tunnel management for secure remote access</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_ssh_tunnels" name="enable_ssh_tunnels"
+                               onchange="syncToggle('enable_ssh_tunnels')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_ssh_tunnels" id="enable_ssh_tunnels-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">API Keys</span>
+                        <p class="text-xs text-[var(--text-muted)]">User-managed API key generation and revocation</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_api_keys" name="enable_api_keys"
+                               onchange="syncToggle('enable_api_keys')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_api_keys" id="enable_api_keys-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">Recordings</span>
+                        <p class="text-xs text-[var(--text-muted)]">Session recording and playback for audit</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_recordings" name="enable_recordings"
+                               onchange="syncToggle('enable_recordings')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_recordings" id="enable_recordings-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">Web Sessions</span>
+                        <p class="text-xs text-[var(--text-muted)]">Browser-based web proxy sessions</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_web_sessions" name="enable_web_sessions"
+                               onchange="syncToggle('enable_web_sessions')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_web_sessions" id="enable_web_sessions-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">SPICE</span>
+                        <p class="text-xs text-[var(--text-muted)]">SPICE protocol for KVM/QEMU virtual machines</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_spice" name="enable_spice"
+                               onchange="syncToggle('enable_spice')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_spice" id="enable_spice-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">Proxmox</span>
+                        <p class="text-xs text-[var(--text-muted)]">Proxmox VE integration for VM management</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_proxmox" name="enable_proxmox"
+                               onchange="syncToggle('enable_proxmox')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_proxmox" id="enable_proxmox-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">VMware</span>
+                        <p class="text-xs text-[var(--text-muted)]">VMware vSphere/ESXi integration</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_vmware" name="enable_vmware"
+                               onchange="syncToggle('enable_vmware')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_vmware" id="enable_vmware-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">VDI (Docker)</span>
+                        <p class="text-xs text-[var(--text-muted)]">Per-user Docker desktop containers</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_vdi" name="enable_vdi"
+                               onchange="syncToggle('enable_vdi')">
+                        <span class="toggle-slider"></span>
+                    </div>
                 </label>
                 <input type="hidden" name="enable_vdi" id="enable_vdi-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">File Transfer</span>
+                        <p class="text-xs text-[var(--text-muted)]">Upload and download files via RDP drive and SSH SFTP</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="enable_file_transfer" name="enable_file_transfer"
+                               onchange="syncToggle('enable_file_transfer')">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="enable_file_transfer" id="enable_file_transfer-hidden" value="false">
             </div>
         </div>
 
         <!-- Storage -->
         <div class="card">
-            <h2 class="text-lg font-semibold text-gray-100 mb-4 flex items-center gap-2">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
                 <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
                 Storage
             </h2>
             <div class="space-y-3">
-                <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
                     <div>
-                        <span class="text-sm text-gray-200">Vault Address Book</span>
-                        <p class="text-xs text-gray-500">Use Vault/OpenBao for connection storage</p>
+                        <span class="text-sm text-[var(--text-primary)]">Vault Address Book</span>
+                        <p class="text-xs text-[var(--text-muted)]">Use Vault/OpenBao for connection storage</p>
                     </div>
-                    <input type="checkbox" id="vault_enabled" value="true"
-                           onchange="syncCheckbox('vault_enabled')"
-                           class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="vault_enabled" name="vault_enabled"
+                               onchange="syncToggle('vault_enabled')">
+                        <span class="toggle-slider"></span>
+                    </div>
                 </label>
                 <input type="hidden" name="vault_enabled" id="vault_enabled-hidden" value="false">
-                <label class="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg">
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
                     <div>
-                        <span class="text-sm text-gray-200">DB-Only Mode</span>
-                        <p class="text-xs text-gray-500">Store connections in SQLite (no Vault required)</p>
+                        <span class="text-sm text-[var(--text-primary)]">DB-Only Mode</span>
+                        <p class="text-xs text-[var(--text-muted)]">Store connections in SQLite (no Vault required)</p>
                     </div>
-                    <input type="checkbox" id="db_only_mode" value="true"
-                           onchange="syncCheckbox('db_only_mode')"
-                           class="w-5 h-5 rounded bg-gray-800 border-gray-700 text-emerald-500 focus:ring-emerald-500">
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="db_only_mode" name="db_only_mode"
+                               onchange="syncToggle('db_only_mode')">
+                        <span class="toggle-slider"></span>
+                    </div>
                 </label>
                 <input type="hidden" name="db_only_mode" id="db_only_mode-hidden" value="false">
             </div>
@@ -133,15 +300,15 @@
         <div class="w-12 h-12 mx-auto mb-4 rounded-full bg-emerald-900/50 flex items-center justify-center">
             <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
         </div>
-        <h2 id="save-confirm-title" class="text-lg font-bold text-gray-100 mb-2">Settings Saved</h2>
-        <p class="text-sm text-gray-500 mb-4">Changes will take effect on the next request.</p>
+        <h2 id="save-confirm-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Settings Saved</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">Changes will take effect on the next request.</p>
         <button onclick="document.getElementById('save-confirm').classList.add('hidden')"
                 class="btn btn-secondary btn-sm">OK</button>
     </div>
 </div>
 
-<script src="https://unpkg.com/htmx.org@2.0.4/dist/ext/json-enc.js"></script>
-<script>
+<script src="/vendor/htmx-json-enc.js"></script>
+<script nonce="{{ csp_nonce }}">
 function showError(message) {
     var feedback = document.getElementById('settings-feedback');
     feedback.innerHTML = '';
@@ -167,15 +334,11 @@ function showSaveConfirmation(evt) {
     showError(message);
 }
 
-// Keep the hidden boolean inputs (the ones actually submitted) in sync with
-// their checkboxes. Unchecked checkboxes are omitted by form serialization,
-// so without this an unchecked feature would be silently left unchanged.
-function syncCheckbox(name) {
+function syncToggle(name) {
     var box = document.getElementById(name);
     document.getElementById(name + '-hidden').value = box.checked ? 'true' : 'false';
 }
 
-// Load saved settings on page load
 (function() {
     fetch('/api/system/settings', { headers: apiHeaders(), credentials: 'same-origin' })
         .then(function(r) {
@@ -195,13 +358,16 @@ function syncCheckbox(name) {
                 }
             });
             var boxes = [
-                'enable_vdi', 'vault_enabled', 'db_only_mode'
+                'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
+                'enable_recordings', 'enable_web_sessions', 'enable_spice',
+                'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_file_transfer',
+                'vault_enabled', 'db_only_mode'
             ];
             boxes.forEach(function(name) {
                 var box = document.getElementById(name);
                 if (box) {
                     box.checked = s[name] === true;
-                    syncCheckbox(name);
+                    syncToggle(name);
                 }
             });
             if (s.tls_cert_path) {

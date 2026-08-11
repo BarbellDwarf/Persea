@@ -7,7 +7,7 @@
     <!-- Table of Contents Sidebar -->
     <aside class="w-56 shrink-0 hidden lg:block">
         <div class="sticky top-6">
-            <h3 class="text-xs font-medium text-gray-500 uppercase tracking-wider mb-3">On this page</h3>
+            <h3 class="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider mb-3">On this page</h3>
             <nav id="toc" class="space-y-1" role="navigation" aria-label="Table of contents">
                 <a href="#getting-started" class="toc-link active">Getting Started</a>
                 <a href="#configuration" class="toc-link">Configuration</a>
@@ -21,12 +21,12 @@
     <div class="flex-1 min-w-0 prose prose-invert max-w-none">
         <!-- Getting Started -->
         <section id="getting-started" class="mb-12">
-            <h1 class="text-2xl font-bold text-gray-100 mb-4">Getting Started</h1>
-            <p class="text-gray-400 mb-4">persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd.</p>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)] mb-4">Getting Started</h1>
+            <p class="text-[var(--text-muted)] mb-4">Persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd.</p>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Quick Start</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Quick Start</h2>
             <div class="card mb-4">
-                <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code># Clone and build
+                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code># Clone and build
 git clone https://github.com/your-org/persea.git
 cd persea
 cargo build --release
@@ -35,8 +35,8 @@ cargo build --release
 ./target/release/persea --config config.toml serve</code></pre>
             </div>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Requirements</h2>
-            <ul class="text-gray-400 space-y-2 text-sm">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Requirements</h2>
+            <ul class="text-[var(--text-muted)] space-y-2 text-sm">
                 <li>Rust 1.75+ (for building)</li>
                 <li>guacd (Apache guacamole-server) running on port 4822</li>
                 <li>SQLite database (auto-created)</li>
@@ -44,21 +44,21 @@ cargo build --release
                 <li>Optional: OIDC provider for SSO authentication</li>
             </ul>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Docker</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Docker</h2>
             <div class="card">
-                <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>docker build -t persea .
+                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>docker build -t persea .
 docker run -p 8089:8089 persea</code></pre>
             </div>
         </section>
 
         <!-- Configuration -->
         <section id="configuration" class="mb-12">
-            <h1 class="text-2xl font-bold text-gray-100 mb-4">Configuration</h1>
-            <p class="text-gray-400 mb-4">persea uses a TOML configuration file. Key settings:</p>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)] mb-4">Configuration</h1>
+            <p class="text-[var(--text-muted)] mb-4">Persea uses a TOML configuration file. Key settings:</p>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Core Settings</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Core Settings</h2>
             <div class="card mb-4">
-                <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[server]
+                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[server]
 listen_addr = "0.0.0.0:8089"
 guacd_addr = "127.0.0.1:4822"
 
@@ -75,17 +75,17 @@ max_disk_percent = 80
 max_recordings = 1000</code></pre>
             </div>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">TLS</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">TLS</h2>
             <div class="card mb-4">
-                <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[tls]
+                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[tls]
 cert_path = "/etc/persea/cert.pem"
 key_path = "/etc/persea/key.pem"
 guacd_cert_path = "/etc/guacd/ca.pem"  # Optional</code></pre>
             </div>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Vault Integration</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Vault Integration</h2>
             <div class="card mb-4">
-                <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[vault]
+                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[vault]
 addr = "https://vault.example.com:8200"
 mount = "secret"
 base_path = "persea"
@@ -93,38 +93,38 @@ role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # VAULT_SECRET_ID env var provides the secret ID</code></pre>
             </div>
 
-            <p class="text-gray-400 text-sm">For multi-Vault DR deployments, see <code>[vault_shared]</code> and <code>[vault_local]</code> sections in the full config reference.</p>
+            <p class="text-[var(--text-muted)] text-sm">For multi-Vault DR deployments, see <code>[vault_shared]</code> and <code>[vault_local]</code> sections in the full config reference.</p>
         </section>
 
         <!-- Auth Methods -->
         <section id="auth-methods" class="mb-12">
-            <h1 class="text-2xl font-bold text-gray-100 mb-4">Authentication Methods</h1>
-            <p class="text-gray-400 mb-4">persea supports multiple authentication backends.</p>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)] mb-4">Authentication Methods</h1>
+            <p class="text-[var(--text-muted)] mb-4">Persea supports multiple authentication backends.</p>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">OIDC (OpenID Connect)</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">OIDC (OpenID Connect)</h2>
             <div class="card mb-4">
-                <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[oidc]
+                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[oidc]
 issuer_url = "https://auth.example.com"
 client_id = "persea"
 client_secret = "..."
 redirect_uri = "https://persea.example.com/auth/callback"
 groups_claim = "groups"</code></pre>
             </div>
-            <p class="text-gray-400 text-sm mb-4">OIDC provides SSO with group-based role mapping via <code>[admin.group_mappings]</code>.</p>
+            <p class="text-[var(--text-muted)] text-sm mb-4">OIDC provides SSO with group-based role mapping via <code>[admin.group_mappings]</code>.</p>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Database (Password)</h2>
-            <p class="text-gray-400 text-sm mb-4">Local password authentication. Users are managed via the admin UI or CLI commands.</p>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Database (Password)</h2>
+            <p class="text-[var(--text-muted)] text-sm mb-4">Local password authentication. Users are managed via the admin UI or CLI commands.</p>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">LDAP / RADIUS</h2>
-            <p class="text-gray-400 text-sm mb-4">External directory authentication. Configured via auth provider chain in <code>[auth]</code> section.</p>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">LDAP / RADIUS</h2>
+            <p class="text-[var(--text-muted)] text-sm mb-4">External directory authentication. Configured via auth provider chain in <code>[auth]</code> section.</p>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">API Keys</h2>
-            <p class="text-gray-400 text-sm mb-4">API key authentication for programmatic access. Create via CLI: <code>persea add-admin --name mykey</code>.</p>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">API Keys</h2>
+            <p class="text-[var(--text-muted)] text-sm mb-4">API key authentication for programmatic access. Create via CLI: <code>persea add-admin --name mykey</code>.</p>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">TOTP (Two-Factor)</h2>
-            <p class="text-gray-400 text-sm">Optional TOTP 2FA. Users can enroll from the account settings page. Configure enforcement in <code>[totp]</code>:</p>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">TOTP (Two-Factor)</h2>
+            <p class="text-[var(--text-muted)] text-sm">Optional TOTP 2FA. Users can enroll from the account settings page. Configure enforcement in <code>[totp]</code>:</p>
             <div class="card mt-3">
-                <pre class="text-sm text-gray-300 font-mono overflow-x-auto"><code>[totp]
+                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[totp]
 enabled = true
 issuer = "persea"
 enforcement = "All"   # Off | AdminsOnly | All</code></pre>
@@ -133,101 +133,101 @@ enforcement = "All"   # Off | AdminsOnly | All</code></pre>
 
         <!-- API Reference -->
         <section id="api-reference" class="mb-12">
-            <h1 class="text-2xl font-bold text-gray-100 mb-4">API Reference</h1>
-            <p class="text-gray-400 mb-4">All API endpoints require authentication unless noted. Responses are JSON.</p>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)] mb-4">API Reference</h1>
+            <p class="text-[var(--text-muted)] mb-4">All API endpoints require authentication unless noted. Responses are JSON.</p>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Sessions</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Sessions</h2>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
-                        <tr class="border-b border-gray-800 text-left">
-                            <th class="px-3 py-2 text-gray-400 font-medium">Method</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Path</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Description</th>
+                        <tr class="border-b border-[var(--border)] text-left">
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
                         </tr>
                     </thead>
-                    <tbody class="text-gray-300">
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/sessions</td><td class="px-3 py-2">Create a new session</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/sessions</td><td class="px-3 py-2">List active sessions</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/sessions/{id}</td><td class="px-3 py-2">Get session details</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-red-400">DELETE</code></td><td class="px-3 py-2">/api/sessions/{id}</td><td class="px-3 py-2">Terminate session</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-amber-400">PUT</code></td><td class="px-3 py-2">/api/sessions/{id}/thumbnail</td><td class="px-3 py-2">Upload session thumbnail</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/sessions/{id}/thumbnail</td><td class="px-3 py-2">Get session thumbnail</td></tr>
+                    <tbody class="text-[var(--text-secondary)]">
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/sessions</td><td class="px-3 py-2">Create a new session</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/sessions</td><td class="px-3 py-2">List active sessions</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/sessions/{id}</td><td class="px-3 py-2">Get session details</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-red-400">DELETE</code></td><td class="px-3 py-2">/api/sessions/{id}</td><td class="px-3 py-2">Terminate session</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-amber-400">PUT</code></td><td class="px-3 py-2">/api/sessions/{id}/thumbnail</td><td class="px-3 py-2">Upload session thumbnail</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/sessions/{id}/thumbnail</td><td class="px-3 py-2">Get session thumbnail</td></tr>
                     </tbody>
                 </table>
             </div>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Address Book</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Address Book</h2>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
-                        <tr class="border-b border-gray-800 text-left">
-                            <th class="px-3 py-2 text-gray-400 font-medium">Method</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Path</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Description</th>
+                        <tr class="border-b border-[var(--border)] text-left">
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
                         </tr>
                     </thead>
-                    <tbody class="text-gray-300">
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/addressbook/folders</td><td class="px-3 py-2">List all folders</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/addressbook/folders</td><td class="px-3 py-2">Create folder</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/addressbook/folders/{scope}/{folder}/entries</td><td class="px-3 py-2">List entries in folder</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/addressbook/folders/{scope}/{folder}/entries</td><td class="px-3 py-2">Create entry</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect</td><td class="px-3 py-2">Connect to entry</td></tr>
+                    <tbody class="text-[var(--text-secondary)]">
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/addressbook/folders</td><td class="px-3 py-2">List all folders</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/addressbook/folders</td><td class="px-3 py-2">Create folder</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/addressbook/folders/{scope}/{folder}/entries</td><td class="px-3 py-2">List entries in folder</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/addressbook/folders/{scope}/{folder}/entries</td><td class="px-3 py-2">Create entry</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect</td><td class="px-3 py-2">Connect to entry</td></tr>
                     </tbody>
                 </table>
             </div>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">Recordings</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Recordings</h2>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
-                        <tr class="border-b border-gray-800 text-left">
-                            <th class="px-3 py-2 text-gray-400 font-medium">Method</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Path</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Description</th>
+                        <tr class="border-b border-[var(--border)] text-left">
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
                         </tr>
                     </thead>
-                    <tbody class="text-gray-300">
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/recordings</td><td class="px-3 py-2">List recordings</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/recordings/{name}</td><td class="px-3 py-2">Download recording</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-red-400">DELETE</code></td><td class="px-3 py-2">/api/recordings/{name}</td><td class="px-3 py-2">Delete recording</td></tr>
+                    <tbody class="text-[var(--text-secondary)]">
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/recordings</td><td class="px-3 py-2">List recordings</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/recordings/{name}</td><td class="px-3 py-2">Download recording</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-red-400">DELETE</code></td><td class="px-3 py-2">/api/recordings/{name}</td><td class="px-3 py-2">Delete recording</td></tr>
                     </tbody>
                 </table>
             </div>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">User Tokens (Self-Service)</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">User Tokens (Self-Service)</h2>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
-                        <tr class="border-b border-gray-800 text-left">
-                            <th class="px-3 py-2 text-gray-400 font-medium">Method</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Path</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Description</th>
+                        <tr class="border-b border-[var(--border)] text-left">
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
                         </tr>
                     </thead>
-                    <tbody class="text-gray-300">
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/me/tokens</td><td class="px-3 py-2">List your tokens</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/me/tokens</td><td class="px-3 py-2">Create a new token</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-red-400">DELETE</code></td><td class="px-3 py-2">/api/me/tokens/{id}</td><td class="px-3 py-2">Revoke a token</td></tr>
+                    <tbody class="text-[var(--text-secondary)]">
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/me/tokens</td><td class="px-3 py-2">List your tokens</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/me/tokens</td><td class="px-3 py-2">Create a new token</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-red-400">DELETE</code></td><td class="px-3 py-2">/api/me/tokens/{id}</td><td class="px-3 py-2">Revoke a token</td></tr>
                     </tbody>
                 </table>
             </div>
 
-            <h2 class="text-lg font-semibold text-gray-200 mt-6 mb-3">System</h2>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">System</h2>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
-                        <tr class="border-b border-gray-800 text-left">
-                            <th class="px-3 py-2 text-gray-400 font-medium">Method</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Path</th>
-                            <th class="px-3 py-2 text-gray-400 font-medium">Description</th>
+                        <tr class="border-b border-[var(--border)] text-left">
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
+                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
                         </tr>
                     </thead>
-                    <tbody class="text-gray-300">
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/health</td><td class="px-3 py-2">Health check (deep when authenticated)</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/system/status</td><td class="px-3 py-2">System status (admin only)</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/auth/status</td><td class="px-3 py-2">Auth status check</td></tr>
-                        <tr class="border-b border-gray-800/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/metrics</td><td class="px-3 py-2">Prometheus metrics</td></tr>
+                    <tbody class="text-[var(--text-secondary)]">
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/health</td><td class="px-3 py-2">Health check (deep when authenticated)</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/system/status</td><td class="px-3 py-2">System status (admin only)</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/auth/status</td><td class="px-3 py-2">Auth status check</td></tr>
+                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/metrics</td><td class="px-3 py-2">Prometheus metrics</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -236,24 +236,12 @@ enforcement = "All"   # Off | AdminsOnly | All</code></pre>
 </div>
 
 <style>
-    .toc-link {
-        display: block;
-        padding: 0.375rem 0.75rem;
-        border-radius: 0.375rem;
-        font-size: 0.8125rem;
-        color: #6b7280;
-        text-decoration: none;
-        transition: all 0.15s;
-    }
-    .toc-link:hover { background: #1e293b; color: #d1d5db; }
-    .toc-link.active { background: #065f46; color: #d1fae5; }
-
     /* Prose-like styling for docs sections */
     section h1 { scroll-margin-top: 2rem; }
     section h2 { scroll-margin-top: 2rem; }
 </style>
 
-<script>
+<script nonce="{{ csp_nonce }}">
     (function() {
         // TOC active state on scroll
         var sections = ['getting-started', 'configuration', 'auth-methods', 'api-reference'];

@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+test.use({ storageState: '.auth/user.json' });
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
 const ADMIN_KEY = process.env.ADMIN_API_KEY || '';
@@ -38,9 +39,21 @@ test.describe('Health & System Endpoints', () => {
     expect(typeof body.oidc_enabled).toBe('boolean');
   });
 
-  test('unauthenticated /api/users returns 401', async ({ request }) => {
-    const res = await request.get(`${BASE_URL}/api/users`);
-    expect(res.status()).toBe(401);
+  test('unauthenticated /api/users returns 401', async ({ playwright }) => {
+    // Fresh context without the storageState session cookie: the runner's
+    // request contexts inherit the test storage state, so an explicit empty
+    // storageState is required. Otherwise the admin session cookie passes
+    // require_auth and the handler runs (200) instead of the 401.
+    const anon = await playwright.request.newContext({
+      ignoreHTTPSErrors: true,
+      storageState: { cookies: [], origins: [] },
+    });
+    try {
+      const res = await anon.get(`${BASE_URL}/api/users`);
+      expect(res.status()).toBe(401);
+    } finally {
+      await anon.dispose();
+    }
   });
 
   test('invalid API key returns 401', async ({ request }) => {

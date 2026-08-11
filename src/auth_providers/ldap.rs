@@ -78,6 +78,18 @@ fn default_email_attr() -> String {
     "mail".into()
 }
 
+/// Escape LDAP filter special characters (RFC 4515) — `pub` so regression
+/// tests in `tests/security_regression.rs` exercise the real implementation
+/// instead of a hand-maintained copy that could silently diverge from it.
+pub fn ldap_escape(input: &str) -> String {
+    input
+        .replace('\\', "\\5c")
+        .replace('*', "\\2a")
+        .replace('(', "\\28")
+        .replace(')', "\\29")
+        .replace('\0', "\\00")
+}
+
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
@@ -133,7 +145,10 @@ impl LdapProvider {
         conn: &mut LdapConn,
         username: &str,
     ) -> Result<(String, SearchEntry), String> {
-        let filter = self.config.user_search_filter.replace("{}", username);
+        let filter = self
+            .config
+            .user_search_filter
+            .replace("{}", &ldap_escape(username));
         debug!(
             "LDAP user search: base={}, filter={}",
             self.config.user_search_base, filter
@@ -193,7 +208,7 @@ impl LdapProvider {
             None => return vec![],
         };
         let filter = match &self.config.group_search_filter {
-            Some(f) => f.replace("{}", user_dn),
+            Some(f) => f.replace("{}", &ldap_escape(user_dn)),
             None => return vec![],
         };
 
@@ -320,7 +335,10 @@ impl AuthProvider for LdapProvider {
         let mut conn = self.connect().ok()?;
         self.bind_service_account(&mut conn).ok()?;
 
-        let filter = &self.config.user_search_filter.replace("{}", subject);
+        let filter = &self
+            .config
+            .user_search_filter
+            .replace("{}", &ldap_escape(subject));
         let search_result = conn
             .search(
                 subject,

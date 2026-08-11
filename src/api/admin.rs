@@ -5,11 +5,13 @@ use crate::error::AppError;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{extract::State, Extension, Json};
+use serde::Deserialize;
 use serde_json::json;
 
 pub async fn health(
     State(state): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
+    db_pool: Extension<crate::db_pool::DbPool>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Shallow check (no auth)
     let Some(Extension(identity)) = identity else {
@@ -46,8 +48,14 @@ pub async fn health(
     // Check database
     let db_start = std::time::Instant::now();
     let db_status = if let Some(db) = state.db() {
-        match db.lock().unwrap().execute("SELECT 1", []) {
-            Ok(_) => "up",
+        // rusqlite's `execute()` rejects statements that return rows (a
+        // hard error, not just a lint) — `query_row` is the correct call
+        // for a SELECT. This is a bug fix: this path always reported
+        // "down" for a perfectly healthy connection, it just had never
+        // been reachable before now (optional_auth API-key auth and this
+        // route's Db extension were both broken until this same change).
+        match db.lock().unwrap().query_row("SELECT 1", [], |_| Ok(())) {
+            Ok(()) => "up",
             Err(e) => {
                 tracing::warn!(error = %e, "health: database error");
                 "down"
@@ -61,6 +69,31 @@ pub async fn health(
         json!({
             "status": db_status,
             "latency_ms": db_start.elapsed().as_millis(),
+        }),
+    );
+
+    // Check the SQLx multi-backend pool (Postgres/MySQL/SQLite via `db_url`)
+    // — distinct from the rusqlite admin DB checked above. Actually issues a
+    // query rather than just confirming the pool object exists, so a
+    // backend-specific regression (e.g. a bad query for one SQL dialect)
+    // shows up here instead of only at first real use.
+    let db_pool_start = std::time::Instant::now();
+    let db_pool_status = match db_pool.0.kind() {
+        None => "unavailable",
+        Some(kind) => match db_pool.0.ping().await {
+            Ok(()) => "up",
+            Err(e) => {
+                tracing::warn!(error = %e, backend = %kind, "health: db_pool error");
+                "down"
+            }
+        },
+    };
+    checks.insert(
+        "db_pool".to_string(),
+        json!({
+            "status": db_pool_status,
+            "backend": db_pool.0.kind().map(|k| k.to_string()),
+            "latency_ms": db_pool_start.elapsed().as_millis(),
         }),
     );
 
@@ -135,10 +168,12 @@ pub async fn health(
         .filter(|s| s.status == crate::session::SessionStatus::Active)
         .count();
 
-    let status = if checks
-        .values()
-        .all(|c| c["status"] == "up" || c["status"] == "ok")
-    {
+    let status = if checks.values().all(|c| {
+        matches!(
+            c["status"].as_str(),
+            Some("up") | Some("ok") | Some("unavailable")
+        )
+    }) {
         "healthy"
     } else {
         "degraded"
@@ -297,4 +332,292 @@ pub async fn metrics() -> impl IntoResponse {
         [("Content-Type", "text/plain; version=0.0.4")],
         crate::metrics::render_prometheus(),
     )
+}
+
+/// HTMX fragment: table rows for audit events.
+pub async fn audit_events(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, AppError> {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50);
+    let offset = params
+        .get("offset")
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let filters = crate::audit::AuditFilters {
+        user_id: params.get("user").cloned().filter(|s| !s.is_empty()),
+        event_type: params.get("event_type").cloned().filter(|s| !s.is_empty()),
+        outcome: params.get("outcome").cloned().filter(|s| !s.is_empty()),
+        from: params.get("from").cloned().filter(|s| !s.is_empty()),
+        to: params.get("to").cloned().filter(|s| !s.is_empty()),
+    };
+
+    let total = crate::audit::count_events(&database, &filters).unwrap_or(0);
+    let events = crate::audit::list_events(&database, limit, offset, &filters).unwrap_or_default();
+
+    let mut html = String::new();
+    for event in &events {
+        let short_hash = if event.event_hash.len() >= 8 {
+            &event.event_hash[..8]
+        } else {
+            &event.event_hash
+        };
+        let details = if event.details.is_null() {
+            "-".to_string()
+        } else if let Some(obj) = event.details.as_object() {
+            obj.iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            event.details.to_string()
+        };
+        let outcome_class = match event.outcome.as_str() {
+            "failure" | "error" => "bg-red-900/50 text-red-300 border-red-800",
+            _ => "bg-emerald-900/50 text-emerald-300 border-emerald-800",
+        };
+        let escaped_details = html_escape(&details);
+        let escaped_hash = html_escape(&event.event_hash);
+        html.push_str(&format!(
+            r#"<tr class="hover:bg-[var(--bg-hover)]/50">
+<td class="px-4 py-3 text-sm text-[var(--text-muted)] whitespace-nowrap">{}</td>
+<td class="px-4 py-3 text-sm text-[var(--text-primary)]">{}</td>
+<td class="px-4 py-3 text-sm text-[var(--text-muted)]">{}</td>
+<td class="px-4 py-3 text-sm text-[var(--text-muted)]">{}</td>
+<td class="px-4 py-3"><span class="inline-block px-2 py-0.5 text-xs rounded border {}">{}</span></td>
+<td class="px-4 py-3 text-sm text-[var(--text-muted)] max-w-xs truncate" title="{}">{}</td>
+<td class="px-4 py-3 text-sm text-[var(--text-muted)] font-mono text-right" title="{}">{}</td>
+</tr>"#,
+            event.timestamp.to_rfc3339(),
+            event.event_type,
+            event.user_id.as_deref().unwrap_or("-"),
+            event.source_ip.as_deref().unwrap_or("-"),
+            outcome_class,
+            event.outcome,
+            escaped_details,
+            escaped_details,
+            escaped_hash,
+            format!("{}…", short_hash),
+        ));
+    }
+
+    // Append pagination info as hx-headers so the client can update pagination controls
+    let total_pages = (total + limit - 1) / limit;
+    let current_page = offset / limit + 1;
+    html.push_str(&format!(
+        r#"<tr id="audit-pagination-data" data-total="{}" data-pages="{}" data-current="{}" data-limit="{}" style="display:none"></tr>"#,
+        total, total_pages, current_page, limit,
+    ));
+
+    Ok((
+        [
+            // After-Swap (not plain HX-Trigger, which fires as soon as the
+            // response arrives — before the new rows, including the
+            // pagination-data row below, actually land in the DOM).
+            ("HX-Trigger-After-Swap", "auditEventsLoaded"),
+            ("Content-Type", "text/html; charset=utf-8"),
+        ],
+        html,
+    ))
+}
+
+/// JSON: hash chain verification result.
+pub async fn audit_verify(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+
+    let verification =
+        tokio::task::spawn_blocking(move || crate::audit::verify_chain(&database, None, None))
+            .await
+            .map_err(|e| AppError::Internal(format!("task join error: {}", e)))?
+            .map_err(|e| AppError::Internal(format!("verify error: {}", e)))?;
+
+    let status_str = match verification.status {
+        crate::audit::ChainStatus::Verified => "verified",
+        crate::audit::ChainStatus::Broken => "broken",
+    };
+
+    Ok(Json(json!({
+        "status": status_str,
+        "events_scanned": verification.events_scanned,
+        "errors": verification.errors.iter().map(|e| json!({
+            "event_id": e.event_id,
+            "message": e.message,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+/// CSV download: audit event export with filters.
+pub async fn audit_export(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<std::sync::Arc<crate::license::LicenseManager>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, AppError> {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+    // Basic audit logging/viewing/verification stays free; compliance
+    // export (CSV/JSON download) is the enterprise-gated part — R43.
+    if !license_manager.has_feature(crate::license::FEAT_AUDIT_RETENTION) {
+        return Err(AppError::Forbidden(
+            "audit log export requires an enterprise license".into(),
+        ));
+    }
+
+    let filters = crate::audit::AuditFilters {
+        user_id: params.get("user").cloned().filter(|s| !s.is_empty()),
+        event_type: params.get("event_type").cloned().filter(|s| !s.is_empty()),
+        outcome: params.get("outcome").cloned().filter(|s| !s.is_empty()),
+        from: params.get("from").cloned().filter(|s| !s.is_empty()),
+        to: params.get("to").cloned().filter(|s| !s.is_empty()),
+    };
+
+    let format = params.get("format").map(|s| s.as_str()).unwrap_or("csv");
+
+    if format == "json" {
+        let events = tokio::task::spawn_blocking(move || {
+            crate::audit::list_events(&database, 100_000, 0, &filters)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("task join error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("export error: {}", e)))?;
+
+        let json_data = serde_json::to_string_pretty(&events)
+            .map_err(|e| AppError::Internal(format!("JSON serialization error: {}", e)))?;
+
+        return Ok((
+            [
+                ("Content-Type", "application/json; charset=utf-8"),
+                (
+                    "Content-Disposition",
+                    "attachment; filename=\"audit-export.json\"",
+                ),
+            ],
+            json_data,
+        ));
+    }
+
+    let csv_data =
+        tokio::task::spawn_blocking(move || crate::audit::export_events_csv(&database, &filters))
+            .await
+            .map_err(|e| AppError::Internal(format!("task join error: {}", e)))?
+            .map_err(|e| AppError::Internal(format!("export error: {}", e)))?;
+
+    Ok((
+        [
+            ("Content-Type", "text/csv; charset=utf-8"),
+            (
+                "Content-Disposition",
+                "attachment; filename=\"audit-export.csv\"",
+            ),
+        ],
+        csv_data,
+    ))
+}
+
+/// Escape HTML special characters to prevent XSS.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+// ── License API ──
+
+/// `GET /api/admin/license` — return current license status as JSON.
+pub async fn get_license_status(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(license_mgr): Extension<std::sync::Arc<crate::license::LicenseManager>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+
+    let status = license_mgr.status();
+    let license = license_mgr.license();
+
+    let status_str = match &status {
+        crate::license::LicenseStatus::Valid => "valid",
+        crate::license::LicenseStatus::Expired => "expired",
+        crate::license::LicenseStatus::Evaluating { .. } => "evaluating",
+        crate::license::LicenseStatus::NoLicense => "no_license",
+    };
+
+    let mut resp = json!({
+        "status": status_str,
+        "customer_name": license.as_ref().map(|l| l.customer_name.as_str()).unwrap_or(""),
+        "expiry": license.as_ref().map(|l| l.expiry.to_rfc3339()),
+        "features": license.as_ref().map(|l| &l.features).cloned().unwrap_or_default(),
+        "raw_key": license_mgr.raw_key(),
+    });
+
+    if let crate::license::LicenseStatus::Evaluating { days_remaining } = &status {
+        resp["eval_days_remaining"] = json!(days_remaining);
+    }
+
+    Ok(Json(resp))
+}
+
+/// Request body for license key submission.
+#[derive(Deserialize)]
+pub struct SetLicenseRequest {
+    /// The license key string (PSEA-...).
+    license_key: String,
+}
+
+/// `POST /api/admin/license` — validate and save a new license key.
+pub async fn set_license_key(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(license_mgr): Extension<std::sync::Arc<crate::license::LicenseManager>>,
+    Json(req): Json<SetLicenseRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+
+    match license_mgr.set_key(&req.license_key) {
+        Ok(()) => Ok(Json(json!({
+            "ok": true,
+            "message": "License key validated and activated for this session",
+        }))),
+        Err(e) => Ok(Json(json!({
+            "ok": false,
+            "error": e.to_string(),
+        }))),
+    }
 }

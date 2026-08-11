@@ -41,6 +41,15 @@ impl SessionManager {
         mgr
     }
 
+    /// Whether the given enterprise feature is licensed. Delegates to the
+    /// process-global license handle (`crate::license::set_global`, set
+    /// once at startup) since callers of this method (e.g. the WebSocket
+    /// recording-encryption check) aren't axum handlers and can't take an
+    /// `Extension<LicenseManager>` directly.
+    pub fn has_feature(&self, feature: &str) -> bool {
+        crate::license::global().is_some_and(|lm| lm.has_feature(feature))
+    }
+
     pub fn new(config: Config, guacd_tls: Option<TlsConnector>) -> Self {
         // Ensure recording directory exists with restrictive permissions
         let recording_dir = config.effective_recording_path().into_owned();
@@ -314,12 +323,14 @@ impl SessionManager {
         }
     }
 
-    /// Mark a session as completed.
+    /// Mark a session as completed (terminal — cannot be reconnected).
     pub async fn complete_session(&self, id: Uuid) {
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(&id) {
             let mut session = session.lock().await;
-            if session.status == SessionStatus::Active {
+            if session.status == SessionStatus::Active
+                || session.status == SessionStatus::Disconnected
+            {
                 session.status = SessionStatus::Completed;
                 crate::metrics::session_active_dec();
                 let (c, r) = super::drive_cleanup_settings(&self.config.drive);
@@ -327,6 +338,63 @@ impl SessionManager {
                 tracing::info!(session_id = %id, "Session completed");
             }
         }
+    }
+
+    /// Mark a session as disconnected — the browser closed the WebSocket but the
+    /// session remains in the manager and can be reconnected.
+    pub async fn disconnect_session(&self, id: Uuid) {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(&id) {
+            let mut session = session.lock().await;
+            if session.status == SessionStatus::Active {
+                session.status = SessionStatus::Disconnected;
+                session.guacd_stream = None;
+                crate::metrics::session_active_dec();
+                let (c, r) = super::drive_cleanup_settings(&self.config.drive);
+                super::cleanup_browser(&self.browser_manager, &mut session, c, r).await;
+                tracing::info!(session_id = %id, "Session disconnected (reconnectable)");
+            }
+        }
+    }
+
+    /// Attempt to reconnect an owner to a disconnected session. Returns the
+    /// guacd stream and cancellation token if the session has reconnect data.
+    pub async fn reconnect_session(&self, id: Uuid) -> Option<(GuacdStream, CancellationToken)> {
+        let sessions = self.sessions.read().await;
+        let session_arc = sessions.get(&id)?;
+        let mut session = session_arc.lock().await;
+        if session.status != SessionStatus::Disconnected {
+            return None;
+        }
+
+        if let Some(params) = session.deferred_params.take() {
+            tracing::info!(session_id = %id, "Re-establishing deferred guacd connection for reconnect");
+            match guacd::connect_and_handshake(
+                &self.config.guacd_addr,
+                &params,
+                self.guacd_tls.as_ref(),
+            )
+            .await
+            {
+                Ok((stream, connection_id)) => {
+                    session.guacd_stream = Some(stream);
+                    session.connection_id = connection_id;
+                }
+                Err(e) => {
+                    tracing::error!(session_id = %id, error = %e, "Reconnect: deferred guacd connection failed");
+                    session.status = SessionStatus::Error;
+                    return None;
+                }
+            }
+        }
+
+        let stream = session.guacd_stream.take()?;
+        let cancel = session.cancel.clone();
+        session.status = SessionStatus::Active;
+        session.active_connections += 1;
+        crate::metrics::session_active_inc();
+        tracing::info!(session_id = %id, "Session reconnected (owner)");
+        Some((stream, cancel))
     }
 
     /// Mark a session as errored.
@@ -370,6 +438,17 @@ impl SessionManager {
         if let Some(session) = sessions.get(&id) {
             let session = session.lock().await;
             session.status == SessionStatus::Pending
+        } else {
+            false
+        }
+    }
+
+    /// Check if a session is in Disconnected status (browser disconnected, reconnection possible).
+    pub async fn is_session_disconnected(&self, id: Uuid) -> bool {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(&id) {
+            let session = session.lock().await;
+            session.status == SessionStatus::Disconnected
         } else {
             false
         }
@@ -484,7 +563,10 @@ impl SessionManager {
             for (id, session) in sessions.iter() {
                 let session = session.lock().await;
                 match session.status {
-                    SessionStatus::Completed | SessionStatus::Error | SessionStatus::Expired => {
+                    SessionStatus::Completed
+                    | SessionStatus::Error
+                    | SessionStatus::Expired
+                    | SessionStatus::Disconnected => {
                         let age = now.signed_duration_since(session.created_at);
                         if age.to_std().unwrap_or_default() > delay {
                             to_remove.push(*id);

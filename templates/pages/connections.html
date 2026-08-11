@@ -2,12 +2,12 @@
 {% block title %}{{ site_title }} — Connections{% endblock %}
 
 {% block content %}
-<div style="max-width:1200px;margin:0 auto">
+<div style="margin:0">
 
     <!-- Top bar -->
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
         <div>
-            <h1 style="font-size:22px;font-weight:600;color:white;margin:0">Connections</h1>
+            <h1 style="font-size:22px;font-weight:600;color:var(--text-primary);margin:0">Connections</h1>
             <p style="font-size:13px;color:var(--text-muted);margin-top:4px">Manage your server address book</p>
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -41,6 +41,15 @@
     <!-- Main content (hidden by default) -->
     <div id="main-content" class="hidden">
 
+        <!-- Recent sessions -->
+        <div id="recent-sessions" class="hidden" style="margin-bottom:24px">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Recent</p>
+                <span id="recent-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
+            </div>
+            <div id="recent-list" style="display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+
         <!-- Active sessions bar -->
         <div id="active-sessions" class="hidden" style="margin-bottom:24px">
             <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Active Sessions</p>
@@ -48,40 +57,49 @@
         </div>
 
         <!-- Two-panel layout -->
-        <div style="display:flex;gap:24px;align-items:flex-start" class="detail-panel-mobile-stack">
+        <div style="display:flex;gap:24px;align-items:flex-start;width:100%" class="detail-panel-mobile-stack">
 
-            <!-- Left panel: Folder tree + entries -->
-            <div style="flex:7;min-width:0">
+            <!-- Left sidebar: Folder tree -->
+            <div class="conn-sidebar">
                 <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Folders</p>
                 <div id="folder-tree"></div>
+            </div>
 
-                <div id="entries-header" class="hidden" style="margin-top:24px;margin-bottom:16px">
+            <!-- Right: Entries / content area -->
+            <div class="conn-content">
+                <div id="no-folder-selected" style="text-align:center;padding:48px 0">
+                    <p style="color:var(--text-muted);font-size:14px">Select a folder from the sidebar</p>
+                </div>
+
+                <div id="entries-header" class="hidden" style="margin-bottom:16px">
                     <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-                        <h2 id="entries-title" style="font-size:16px;font-weight:600;color:white;margin:0"></h2>
+                        <h2 id="entries-title" style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0"></h2>
                         <span id="entries-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
                         <span id="entries-desc" style="font-size:13px;color:var(--text-muted);font-style:italic"></span>
                         <div style="flex:1"></div>
                         <button id="btn-new-entry" class="btn btn-primary btn-sm admin-only" style="width:auto">+ Add Entry</button>
                         <button id="btn-edit-entry" class="btn btn-secondary btn-sm admin-only" style="width:auto" disabled>Edit Entry</button>
                         <button id="btn-delete-entry" class="btn btn-danger btn-sm admin-only" style="width:auto" disabled>Delete Entry</button>
-                        <button id="btn-edit-folder" class="btn btn-secondary btn-sm admin-only" style="width:auto">Edit</button>
-                        <button id="btn-delete-folder" class="btn btn-danger btn-sm admin-only" style="width:auto">Delete</button>
                     </div>
                 </div>
                 <div id="entries-content">
-                    <p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">Select a folder to view entries.</p>
+                    <p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center"></p>
                 </div>
             </div>
 
             <!-- Right panel: Connection details -->
-            <div id="detail-panel" class="hidden" style="flex:3;min-width:0">
+            <div id="detail-panel" class="hidden" style="flex:0 0 320px;min-width:0;max-height:calc(100vh - 120px);overflow-y:auto">
                 <div class="card" style="position:sticky;top:24px">
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-                        <h3 id="detail-name" style="font-size:16px;font-weight:600;color:white;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></h3>
+                        <h3 id="detail-name" style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></h3>
                         <span id="detail-protocol" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid"></span>
                     </div>
                     <div id="detail-host" style="font-size:13px;color:var(--text-secondary);margin-bottom:16px"></div>
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
+                    <button id="detail-rotate-cred" class="btn btn-sm admin-only" style="width:100%;margin-bottom:16px;background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);display:none">
+                        <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-8.243a.75.75 0 00.219-.53V3.253a.75.75 0 00-1.5 0V5.23l-.312-.312A7 7 0 003.398 8.073a.75.75 0 101.449.39A5.5 5.5 0 0114.5 5.648l.312.311h-2.433a.75.75 0 000 1.5h3.634a.75.75 0 00.53-.219z" clip-rule="evenodd"/></svg>
+                        Rotate Credential
+                    </button>
                     <div id="detail-error" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:16px"></div>
                     <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
                         <p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Parameters</p>
@@ -89,7 +107,7 @@
                     </div>
                     <div id="detail-sessions" class="hidden" style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
                         <p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Active Sessions</p>
-                        <div id="detail-sessions-avatars" style="display:flex;gap:-8px"></div>
+                        <div id="detail-sessions-avatars" style="display:flex"></div>
                         <span id="detail-sessions-count" style="font-size:12px;color:var(--text-muted);margin-top:4px"></span>
                     </div>
                 </div>
@@ -100,30 +118,37 @@
     <!-- vSphere virtual machines (hidden when vSphere is not configured) -->
     <div id="vsphere-section" class="hidden" style="max-width:1200px;margin:36px auto 0;padding-top:28px;border-top:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-            <h2 style="font-size:16px;font-weight:600;color:white;margin:0">vSphere Virtual Machines</h2>
+            <h2 style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0">vSphere Virtual Machines</h2>
             <span id="vsphere-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
             <div style="flex:1"></div>
             <button id="btn-vsphere-refresh" class="btn btn-secondary btn-sm">Refresh</button>
         </div>
         <div id="vsphere-error" class="hidden" role="alert" style="padding:12px 16px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:16px"></div>
         <div id="vsphere-empty" class="hidden" style="text-align:center;padding:32px 0;color:var(--text-muted);font-size:13px">No virtual machines found in vCenter.</div>
-        <div id="vsphere-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px"></div>
+        <div id="vsphere-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr));gap:12px"></div>
     </div>
 </div>
 
 <!-- Folder create/edit modal -->
 <div id="folder-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
     <div class="card w-full max-w-md" style="max-height:90vh;overflow-y:auto">
-        <h2 id="folder-modal-title" class="text-lg font-bold text-gray-100 mb-4">New Folder</h2>
+        <h2 id="folder-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">New Folder</h2>
         <div class="space-y-4">
             <div>
                 <label class="form-label" for="fm-name">Name</label>
                 <input type="text" id="fm-name" class="form-input" placeholder="e.g. infra-servers" pattern="[a-zA-Z0-9_.-]+" maxlength="64" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores, dots only.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Alphanumeric, hyphens, underscores, dots only.</p>
             </div>
             <div>
                 <label class="form-label" for="fm-desc">Description</label>
                 <input type="text" id="fm-desc" class="form-input" placeholder="e.g. Infrastructure servers" autocomplete="off">
+            </div>
+            <div id="fm-parent-field">
+                <label class="form-label" for="fm-parent">Parent folder</label>
+                <select id="fm-parent" class="form-input">
+                    <option value="">(root)</option>
+                </select>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Create this folder inside another folder. Scope is inherited from the parent.</p>
             </div>
             <div>
                 <label class="form-label" for="fm-scope">Scope</label>
@@ -131,6 +156,7 @@
                     <option value="shared">shared (all instances)</option>
                     <option value="instance">instance (this server only)</option>
                 </select>
+                <p class="text-xs text-[var(--text-muted)] mt-1">shared = visible on every Persea server in a fleet (a central address book). instance = only on this server. On a single server, either works — shared is the default.</p>
             </div>
             <div>
                 <label class="form-label">Allowed groups</label>
@@ -144,13 +170,13 @@
                         <button type="button" class="btn btn-secondary btn-sm" id="fm-groups-add" style="width:auto">Add</button>
                     </div>
                 </div>
-                <p class="text-xs text-gray-500 mt-1">OIDC groups that can see this folder. Leave empty for admin-only access.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">OIDC groups that can see this folder. Leave empty for admin-only access.</p>
             </div>
-            <label class="flex items-center gap-2 text-sm text-gray-300 cursor-pointer" style="cursor:pointer">
-                <input type="checkbox" id="fm-inherit" class="rounded bg-gray-800 border-gray-700 text-emerald-500">
+            <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)] cursor-pointer" style="cursor:pointer">
+                <input type="checkbox" id="fm-inherit" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
                 Inherit permissions from parent folder
             </label>
-            <p class="text-xs text-gray-500">When ticked, access falls back to the parent folder's groups when this folder's own list doesn't grant access.</p>
+            <p class="text-xs text-[var(--text-muted)]">When ticked, access falls back to the parent folder's groups when this folder's own list doesn't grant access.</p>
             <div id="fm-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
         </div>
         <div class="flex justify-end gap-3 mt-6">
@@ -163,12 +189,12 @@
 <!-- Entry create/edit modal -->
 <div id="entry-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title">
     <div class="card w-full max-w-md" style="max-height:90vh;overflow-y:auto">
-        <h2 id="entry-modal-title" class="text-lg font-bold text-gray-100 mb-4">New Entry</h2>
+        <h2 id="entry-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">New Entry</h2>
         <div class="space-y-4">
             <div>
                 <label class="form-label" for="em-name">Name</label>
                 <input type="text" id="em-name" class="form-input" placeholder="e.g. web-server-01" pattern="[a-zA-Z0-9_.-]+" maxlength="64" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Alphanumeric, hyphens, underscores, dots. Used as the Vault key.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Alphanumeric, hyphens, underscores, dots. Used as the Vault key.</p>
             </div>
             <div>
                 <label class="form-label" for="em-display-name">Display name</label>
@@ -185,51 +211,64 @@
                     <option value="vdi">VDI (Docker)</option>
                     <option value="proxmox">Proxmox VE console</option>
                 </select>
+                <div id="em-type-help" class="text-xs text-[var(--text-muted)] mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
             </div>
             <div>
                 <label class="form-label" for="em-hostname">Hostname</label>
                 <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">The server's IP or hostname — no http:// and no port here (port has its own field). Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
             </div>
             <div id="em-url-field" style="display:none">
                 <label class="form-label" for="em-url">URL</label>
                 <input type="text" id="em-url" class="form-input" placeholder="https://10.0.1.5:8080" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Required for Web entries — the browser session opens this URL.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Required for Web entries — the browser session opens this URL.</p>
             </div>
             <div id="em-container-field" style="display:none">
                 <label class="form-label" for="em-container-image">Container image</label>
                 <input type="text" id="em-container-image" class="form-input" placeholder="registry.example.com/desktop:latest" autocomplete="off">
-                <p class="text-xs text-gray-500 mt-1">Required for VDI entries — the Docker image to run.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Required for VDI entries — the Docker image to run.</p>
             </div>
             <div id="em-proxmox-fields" style="display:none">
                 <div>
                     <label class="form-label" for="em-proxmox-url">Proxmox API URL</label>
                     <input type="text" id="em-proxmox-url" class="form-input" placeholder="https://pve.example.com:8006" autocomplete="off">
+                    <p class="text-xs text-[var(--text-muted)] mt-1">The address of your Proxmox web interface (the API is the same server, port 8006).</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-vmid">VM ID</label>
                     <input type="number" id="em-proxmox-vmid" class="form-input" min="100" max="999999" autocomplete="off">
+                    <p class="text-xs text-[var(--text-muted)] mt-1">The numeric VM ID — shown in the PVE web UI next to the VM name (e.g. 105).</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-node">Node</label>
                     <input type="text" id="em-proxmox-node" class="form-input" placeholder="pve1" autocomplete="off">
+                    <p class="text-xs text-[var(--text-muted)] mt-1">Optional — leave blank to auto-detect which node the VM runs on.</p>
                 </div>
                 <div>
                     <label class="form-label" for="em-proxmox-token-id">API token ID</label>
                     <input type="text" id="em-proxmox-token-id" class="form-input" placeholder="root@pam!persea" autocomplete="off">
+                    <p class="text-xs text-[var(--text-muted)] mt-1">Format: user@realm!tokenname (e.g. root@pam!persea). Create it in PVE under Datacenter → Permissions → API Tokens.</p>
                 </div>
-                <label class="flex items-center gap-2 text-sm text-gray-300" style="margin-top:8px">
-                    <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-gray-800 border-gray-700 text-emerald-500">
+                <div>
+                    <label class="form-label" for="em-proxmox-token-secret">API token secret</label>
+                    <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
+                    <p class="text-xs text-[var(--text-muted)] mt-1">The UUID shown once when you created the token. The token needs Sys.Audit on / and VM.Audit + VM.Console on the VM (Datacenter → Permissions → Add).</p>
+                </div>
+                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="margin-top:8px">
+                    <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
                     Verify TLS certificate
                 </label>
+                <p class="text-xs text-[var(--text-muted)]" style="margin-top:6px">Leave unchecked if PVE uses its default self-signed certificate.</p>
             </div>
             <div>
                 <label class="form-label" for="em-port">Port</label>
                 <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
+                <p class="text-xs text-[var(--text-muted)] mt-1">Defaults are filled in for you: SSH 22, RDP 3389, VNC/SPICE 5900. Leave as-is unless the server listens elsewhere.</p>
             </div>
             <div>
                 <label class="form-label" for="em-username">Username</label>
                 <input type="text" id="em-username" class="form-input" autocomplete="off">
+                <p class="text-xs text-[var(--text-muted)] mt-1">The account on the target server (e.g. root, Administrator, or DOMAIN\user for RDP). Leave blank to fall back to your preset (My Profile → My Credentials) or to be asked at connect time.</p>
             </div>
             <div>
                 <div style="display:flex;justify-content:space-between;align-items:center">
@@ -240,11 +279,19 @@
                     </div>
                 </div>
                 <input type="password" id="em-password" class="form-input" autocomplete="new-password">
-                <p class="text-xs text-gray-500 mt-1" id="em-password-hint">Saving with an empty password field keeps the stored value.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1" id="em-password-hint">Saving with an empty password field keeps the stored value.</p>
             </div>
             <div>
                 <label class="form-label" for="em-private-key">Private key (PEM)</label>
                 <textarea id="em-private-key" class="form-input" rows="3" style="resize:vertical;font-family:var(--font-mono);font-size:13px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+                <p class="text-xs text-[var(--text-muted)] mt-1">SSH only. Alternative to a password — paste the full key including the BEGIN/END lines. If both are set, the key is used.</p>
+            </div>
+            <div id="em-ignore-cert-field" style="display:none">
+                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                    <input type="checkbox" id="em-ignore-cert" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                    Ignore TLS certificate errors
+                </label>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
             </div>
             <div id="em-proxmox-secret-field" style="display:none">
                 <label class="form-label" for="em-proxmox-token-secret">Proxmox token secret</label>
@@ -253,7 +300,7 @@
             <div id="em-container-password-field" style="display:none">
                 <label class="form-label" for="em-container-password">Container password</label>
                 <input type="password" id="em-container-password" class="form-input" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
-                <p class="text-xs text-gray-500 mt-1">Only for VDI images with a baked-in account. Leave blank to keep the stored value when editing.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Only for VDI images with a baked-in account. Leave blank to keep the stored value when editing.</p>
             </div>
             <div>
                 <label class="form-label">Allowed groups</label>
@@ -267,6 +314,21 @@
                         <button type="button" class="btn btn-secondary btn-sm" id="em-groups-add" style="width:auto">Add</button>
                     </div>
                 </div>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Which groups may <em>see</em> this entry in the address book. Leave empty for admin-only. Connect permission is separate — grant it under "Connect permissions" below.</p>
+            </div>
+            <div id="em-rbac-field" style="display:none">
+                <label class="form-label">Connect permissions (RBAC)</label>
+                <p class="text-xs text-[var(--text-muted)]" style="margin:4px 0 8px">Who may connect to this entry. Denied by default unless granted here or inherited via connection groups (Admin → Groups).</p>
+                <div class="chip-picker">
+                    <div class="chip-list" id="em-rbac-chips"></div>
+                    <div class="chip-input-wrap">
+                        <div class="combo" id="em-rbac-combo">
+                            <input type="text" id="em-rbac-input" placeholder="Type or pick a group or user..." autocomplete="off" spellcheck="false">
+                            <div class="combo-menu" id="em-rbac-menu" role="listbox"></div>
+                        </div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="em-rbac-add" style="width:auto">Add</button>
+                    </div>
+                </div>
             </div>
             <div id="em-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
         </div>
@@ -277,15 +339,38 @@
     </div>
 </div>
 
+<!-- Connect credentials prompt modal -->
+<div id="prompt-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="prompt-modal-title">
+    <div class="card w-full max-w-sm">
+        <h2 id="prompt-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-1">Enter credentials</h2>
+        <p class="text-xs text-[var(--text-muted)] mb-4">This entry has no stored credentials. Use your own (e.g. a rotating password). You can save a preset under <strong>My Profile</strong> so you aren't asked each time.</p>
+        <div class="space-y-4">
+            <div>
+                <label class="form-label" for="pm-username">Username</label>
+                <input type="text" id="pm-username" class="form-input" autocomplete="off">
+            </div>
+            <div>
+                <label class="form-label" for="pm-password">Password</label>
+                <input type="password" id="pm-password" class="form-input" autocomplete="new-password">
+            </div>
+            <div id="pm-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+        </div>
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" id="pm-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
+            <button type="button" id="pm-connect" class="btn btn-primary btn-sm" style="width:auto">Connect</button>
+        </div>
+    </div>
+</div>
+
 <!-- Import CSV modal -->
 <div id="import-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
     <div class="card w-full max-w-md">
-        <h2 id="import-modal-title" class="text-lg font-bold text-gray-100 mb-4">Import Connections (CSV)</h2>
+        <h2 id="import-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Import Connections (CSV)</h2>
         <div class="space-y-4">
             <div>
                 <label class="form-label" for="import-file">CSV file</label>
                 <input type="file" id="import-file" accept=".csv,text/csv" class="form-input">
-                <p class="text-xs text-gray-500 mt-1">Columns: name, protocol, hostname, port, username, password, folder, display_name, allowed_groups. Quoted fields with commas are supported.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Columns: name, protocol, hostname, port, username, password, folder, display_name, allowed_groups. Quoted fields with commas are supported.</p>
             </div>
             <div>
                 <a href="/api/addressbook/import-template" class="text-sm text-emerald-400 hover:text-emerald-300">Download CSV template</a>
@@ -309,7 +394,7 @@
     .proto-proxmox { background: rgba(99,102,241,0.15); color: #818cf8; border-color: rgba(99,102,241,0.3); }
     .proto-vdi { background: rgba(236,72,153,0.15); color: #f472b6; border-color: rgba(236,72,153,0.3); }
     .folder-item { display:flex;align-items:center;padding:8px 12px;border-radius:8px;font-size:13px;color:var(--text-secondary);cursor:pointer;transition:all 0.15s }
-    .folder-item:hover { background:var(--bg-hover);color:white }
+    .folder-item:hover { background:var(--bg-hover);color:var(--text-primary) }
     .folder-item.active { background:rgba(16,185,129,0.1);color:#34d399 }
     .entry-row { display:flex;align-items:center;padding:10px 12px;border-radius:8px;cursor:pointer;transition:all 0.15s }
     .entry-row:hover { background:var(--bg-hover) }
@@ -321,6 +406,22 @@
     .vm-unknown { background:#9ca3af }
     .admin-only { display: none; }
     .admin-only.admin-visible { display: inline-flex; }
+    .recent-row { display:flex;align-items:center;padding:10px 12px;border-radius:8px;background:var(--bg-card);border:1px solid var(--border);gap:12px;transition:all 0.15s }
+    .recent-row:hover { background:var(--bg-hover);border-color:var(--border-focus) }
+    .status-pill { padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid }
+    .status-active { background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3) }
+    .status-pending { background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3) }
+    .status-disconnected { background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3) }
+    .status-completed,.status-expired,.status-error { background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3) }
+    .conn-sidebar {
+        flex: 0 0 200px; min-width:0; max-height:80vh; overflow-y:auto;
+        border-right:1px solid var(--border); padding-right:12px;
+    }
+    .conn-content { flex:1; min-width:0; padding-left:24px; }
+    .folder-actions { display:none; gap:2px; margin-left:8px; flex-shrink:0; }
+    .folder-item:hover .folder-actions.is-admin { display:flex; }
+    .folder-actions svg { width:14px; height:14px; cursor:pointer; color:var(--text-muted); border-radius:4px; padding:2px; box-sizing:content-box; }
+    .folder-actions svg:hover { color:var(--text-primary); background:var(--bg-input); }
     .chip-picker {
         margin-top:8px; border:1px solid var(--border); border-radius:var(--radius);
         background:var(--bg-input); padding:8px; display:flex; flex-direction:column; gap:8px;
@@ -353,9 +454,23 @@
     .combo-item:hover, .combo-item.active { background:var(--bg-input); color:var(--accent); }
     .combo-item.empty { color:var(--text-muted); cursor:default; font-style:italic; }
     .combo-item.empty:hover { background:transparent; color:var(--text-muted); }
+    .rotate-toast {
+        position:fixed; bottom:24px; left:50%; transform:translateX(-50%); z-index:200;
+        background:var(--bg-card); border:1px solid rgba(245,158,11,0.3); border-radius:10px;
+        padding:16px 24px; box-shadow:0 8px 32px rgba(0,0,0,0.5); max-width:420px; width:90%;
+        font-size:13px; color:var(--text-primary); animation:fadeInUp 0.2s ease;
+    }
+    .rotate-toast .toast-label { font-size:11px;font-weight:600;color:#fbbf24;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px; }
+    .rotate-toast .toast-pw {
+        font-family:var(--font-mono); font-size:15px; color:#34d399; background:var(--bg-input);
+        border:1px solid var(--border); border-radius:6px; padding:10px 12px; word-break:break-all;
+        user-select:all; cursor:text;
+    }
+    .rotate-toast .toast-timer { font-size:11px;color:var(--text-muted);margin-top:8px;text-align:right; }
+    @keyframes fadeInUp { from { opacity:0; transform:translateX(-50%) translateY(12px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
 </style>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 (function() {
     var protoClasses = {
         ssh:'proto-ssh',rdp:'proto-rdp',vnc:'proto-vnc',
@@ -382,6 +497,11 @@
     var emComboActive = -1;
     var folderEditMode = null;
     var entryEditMode = null;
+    var expandedKeys = new Set();
+    var rbacGroups = null;
+    var rbacUsers = null;
+    var emRbac = [];
+    var emRbacOrig = [];
 
     function folderKey(scope, path) {
         return scope + '\u0000' + path;
@@ -457,6 +577,7 @@
                 });
                 folderMap = new Map();
                 folders.forEach(function(f) { folderMap.set(folderKey(f.scope, f.path), f); });
+                folders.forEach(function(f) { expandedKeys.add(folderKey(f.scope, f.path)); });
                 if (folders.length === 0) {
                     if (isAdmin) {
                         document.getElementById('main-content').classList.add('hidden');
@@ -513,6 +634,51 @@
         }
         return null;
     }
+    function folderChildren(visible, parentPath) {
+        if (!parentPath) return visible.filter(function(f) { return f.path.indexOf('/') === -1; });
+        var prefix = parentPath + '/';
+        return visible.filter(function(f) {
+            return f.path.startsWith(prefix) && f.path.slice(prefix.length).indexOf('/') === -1;
+        });
+    }
+    function folderLabel(path) {
+        var parts = String(path).split('/');
+        return parts[parts.length - 1];
+    }
+    function ensureExpanded(f) {
+        var parts = f.path.split('/');
+        var cur = '';
+        for (var i = 0; i < parts.length; i++) {
+            cur = cur ? cur + '/' + parts[i] : parts[i];
+            var m = folderMap.get(folderKey(f.scope, cur));
+            if (m) expandedKeys.add(folderKey(f.scope, cur));
+        }
+    }
+    function renderFolderLevel(visible, parentPath, depth) {
+        var kids = folderChildren(visible, parentPath);
+        var out = '';
+        kids.forEach(function(f) {
+            var key = folderKey(f.scope, f.path);
+            var count = (entriesByFolder.get(key) || []).length;
+            var active = selectedFolder && selectedFolder.scope === f.scope && selectedFolder.path === f.path ? ' active' : '';
+            var expanded = expandedKeys.has(key);
+            var chevron = f.has_children
+                ? '<span class="folder-chevron" data-key="' + escapeAttr(key) + '" title="' + (expanded ? 'Collapse' : 'Expand') + '" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex-shrink:0;color:var(--text-muted);font-size:10px;cursor:pointer;user-select:none">' + (expanded ? '\u25BE' : '\u25B8') + '</span>'
+                : '<span style="width:16px;flex-shrink:0"></span>';
+            out += '<div class="folder-item' + active + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '" style="padding-left:' + (12 + depth * 20) + 'px" title="' + escapeAttr(f.path) + '">'
+                + chevron
+                + '<span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg-input);color:var(--text-muted);margin-right:8px">' + escapeHtml(f.scope) + '</span>'
+                + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(folderLabel(f.path)) + '</span>'
+                + '<span style="font-size:11px;color:var(--text-muted);margin-left:8px">' + count + '</span>'
+                + '<span class="folder-actions admin-only is-admin" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '">'
+                + '<svg class="folder-edit-btn" viewBox="0 0 20 20" fill="currentColor" title="Edit folder"><path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/></svg>'
+                + '<svg class="folder-delete-btn" viewBox="0 0 20 20" fill="currentColor" title="Delete folder"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>'
+                + '</span>'
+                + '</div>';
+            if (expanded) out += renderFolderLevel(visible, f.path, depth + 1);
+        });
+        return out;
+    }
     function renderFolders() {
         var tree = document.getElementById('folder-tree');
         var scopeFilter = document.getElementById('scope-filter').value;
@@ -521,26 +687,51 @@
             tree.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders in this scope.</p>';
             return;
         }
-        tree.innerHTML = visible.map(function(f) {
-            var count = (entriesByFolder.get(folderKey(f.scope, f.path)) || []).length;
-            var active = selectedFolder && selectedFolder.scope === f.scope && selectedFolder.path === f.path ? ' active' : '';
-            return '<div class="folder-item' + active + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '">'
-                + '<span style="font-size:11px;padding:1px 6px;border-radius:8px;background:var(--bg-input);color:var(--text-muted);margin-right:8px">' + escapeHtml(f.scope) + '</span>'
-                + '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(f.name) + '</span>'
-                + '<span style="font-size:11px;color:var(--text-muted);margin-left:8px">' + count + '</span>'
-                + '</div>';
-        }).join('');
+        tree.innerHTML = renderFolderLevel(visible, null, 0);
         tree.querySelectorAll('.folder-item').forEach(function(el) {
-            el.addEventListener('click', function() {
+            el.addEventListener('click', function(ev) {
+                if (ev.target.closest('.folder-chevron')) return;
                 var f = folderMap.get(folderKey(el.getAttribute('data-scope'), el.getAttribute('data-path')));
                 if (f) selectFolder(f);
             });
         });
+        tree.querySelectorAll('.folder-chevron').forEach(function(el) {
+            el.addEventListener('click', function() {
+                var key = el.getAttribute('data-key');
+                if (expandedKeys.has(key)) expandedKeys.delete(key);
+                else expandedKeys.add(key);
+                renderFolders();
+            });
+        });
+        tree.querySelectorAll('.folder-actions').forEach(function(el) {
+            el.addEventListener('click', function(ev) {
+                ev.stopPropagation();
+                var scope = el.getAttribute('data-scope');
+                var path = el.getAttribute('data-path');
+                var folder = folderMap.get(folderKey(scope, path));
+                if (!folder) return;
+                if (ev.target.closest('.folder-edit-btn')) {
+                    selectedFolder = folder;
+                    renderFolders();
+                    openEditFolder();
+                } else if (ev.target.closest('.folder-delete-btn')) {
+                    selectedFolder = folder;
+                    renderFolders();
+                    deleteFolder();
+                }
+            });
+        });
+    }
+    function syncPlaceholder() {
+        var ph = document.getElementById('no-folder-selected');
+        var hdr = document.getElementById('entries-header');
+        if (ph) ph.classList.toggle('hidden', !hdr.classList.contains('hidden') || !!searchQuery);
     }
     function selectFolder(f) {
         searchQuery = '';
         document.getElementById('connections-search').value = '';
         selectedFolder = f;
+        ensureExpanded(f);
         clearEntrySelection();
         renderFolders();
         document.getElementById('entries-header').classList.remove('hidden');
@@ -549,6 +740,7 @@
             String((entriesByFolder.get(folderKey(f.scope, f.path)) || []).length);
         document.getElementById('entries-desc').textContent = f.description || '';
         renderEntries();
+        syncPlaceholder();
     }
     function clearEntrySelection() {
         selectedEntry = null;
@@ -557,6 +749,7 @@
         var rows = document.querySelectorAll('.entry-row.selected');
         for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
         updateEntryActionButtons();
+        updateDetailRotateButton();
     }
     function wireEntryRows(container) {
         container.querySelectorAll('.entry-row').forEach(function(row) {
@@ -569,7 +762,7 @@
             });
             row.querySelector('.entry-connect').addEventListener('click', function() {
                 selectConnection(scope, path, name, row);
-                connectEntry(scope, path, name);
+                maybePromptConnect(scope, path, name);
             });
         });
     }
@@ -580,7 +773,7 @@
         return '<div class="entry-row' + selected + '" data-scope="' + escapeAttr(scope) + '" data-path="' + escapeAttr(path) + '" data-name="' + escapeAttr(e.name) + '" style="display:flex;align-items:center;gap:12px">'
             + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
             + '<div style="flex:1;min-width:0">'
-            + '<div style="font-size:13px;color:white;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(e.display_name || e.name) + '</div>'
+            + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(e.display_name || e.name) + '</div>'
             + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(entryHost(e) || '\u2014') + (folderName ? ' <span style="color:var(--text-muted)">\u00B7 ' + escapeHtml(folderName) + '</span>' : '') + '</div>'
             + '</div>'
             + '<button class="btn btn-primary btn-sm entry-connect" style="width:auto">Connect</button>'
@@ -620,6 +813,7 @@
             });
         });
         header.classList.remove('hidden');
+        syncPlaceholder();
         document.getElementById('entries-title').textContent = 'Search results';
         document.getElementById('entries-count').textContent = String(results.length);
         document.getElementById('entries-desc').textContent = 'matching "' + q + '"';
@@ -642,16 +836,21 @@
                 else if (selectedFolder) selectFolder(selectedFolder);
             });
     }
-    function connectEntry(scope, folder, entry) {
+    function connectEntry(scope, folder, entry, creds) {
         var btn = document.getElementById('detail-connect');
         var err = document.getElementById('detail-error');
         if (btn) { btn.disabled = true; btn.textContent = 'Connecting\u2026'; }
         if (err) err.classList.add('hidden');
+        var body = { width: window.innerWidth, height: window.innerHeight };
+        if (creds) {
+            if (creds.username) body.username = creds.username;
+            if (creds.password) body.password = creds.password;
+        }
         fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(entry) + '/connect', {
             method: 'POST',
             headers: apiHeaders(),
             credentials: 'same-origin',
-            body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight })
+            body: JSON.stringify(body)
         })
             .then(function(r) {
                 return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
@@ -668,7 +867,7 @@
                     var e = findByName(list, entry);
                     var displayName = e ? (e.display_name || '') : '';
                     if (displayName) url += '?name=' + encodeURIComponent(displayName);
-                    window.location.href = url;
+                    window.open(url, '_blank');
                     return;
                 }
                 if (err) {
@@ -681,6 +880,28 @@
                 if (err) { err.textContent = e.message || 'Connection failed.'; err.classList.remove('hidden'); }
             });
     }
+    var promptTarget = null;
+    function openConnectPrompt(scope, folder, entry) {
+        promptTarget = { scope: scope, folder: folder, entry: entry };
+        document.getElementById('pm-username').value = '';
+        document.getElementById('pm-password').value = '';
+        document.getElementById('pm-error').textContent = '';
+        document.getElementById('pm-error').classList.add('hidden');
+        openModal('prompt-modal');
+        document.getElementById('pm-username').focus();
+    }
+    function maybePromptConnect(scope, folder, entry) {
+        var list = entriesByFolder.get(folderKey(scope, folder)) || [];
+        var e = findByName(list, entry);
+        if (e && e.has_credentials) { connectEntry(scope, folder, entry); return; }
+        fetch('/api/me/preset-credentials', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(p) {
+                if (p && (p.has_password || p.has_username)) { connectEntry(scope, folder, entry); return; }
+                openConnectPrompt(scope, folder, entry);
+            })
+            .catch(function() { connectEntry(scope, folder, entry); });
+    }
     function selectConnection(scope, folder, entry, el) {
         var rows = document.querySelectorAll('.entry-row.selected');
         for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
@@ -691,6 +912,7 @@
             if (!e) return;
             selectedEntry = e;
             updateEntryActionButtons();
+            updateDetailRotateButton();
             var panel = document.getElementById('detail-panel');
             panel.classList.remove('hidden');
             document.getElementById('detail-name').textContent = e.display_name || e.name;
@@ -699,7 +921,7 @@
             badge.textContent = proto.toUpperCase();
             badge.className = 'px-2 py-0.5 text-xs font-medium rounded border ' + protoClass(proto);
             document.getElementById('detail-host').textContent = entryHost(e) || '\u2014';
-            document.getElementById('detail-connect').onclick = function() { connectEntry(scope, folder, entry); };
+            document.getElementById('detail-connect').onclick = function() { maybePromptConnect(scope, folder, entry); };
             var params = document.getElementById('detail-params');
             var fields = [['Port', e.port], ['Username', e.username], ['Domain', e.domain], ['Security', e.security], ['Recording', e.enable_recording ? 'On' : null]];
             params.innerHTML = fields.filter(function(f) { return f[1]; }).map(function(f) {
@@ -887,15 +1109,43 @@
     }
 
     // ── Folder modal ─────────────────────────────────────────────────
+    function populateFolderParents() {
+        var sel = document.getElementById('fm-parent');
+        sel.innerHTML = '<option value="">(root)</option>';
+        var sf = document.getElementById('scope-filter').value;
+        folders.forEach(function(f) {
+            if (sf && f.scope !== sf) return;
+            var opt = document.createElement('option');
+            opt.value = f.scope + '|' + f.path;
+            opt.textContent = f.path + (f.scope === 'instance' ? ' (instance)' : '');
+            sel.appendChild(opt);
+        });
+        if (selectedFolder) sel.value = selectedFolder.scope + '|' + selectedFolder.path;
+        updateFolderParentScope();
+    }
+    function updateFolderParentScope() {
+        var sel = document.getElementById('fm-parent');
+        var scopeEl = document.getElementById('fm-scope');
+        var v = sel.value;
+        if (v) {
+            scopeEl.value = v.split('|')[0];
+            scopeEl.disabled = true;
+        } else {
+            var scopeFilter = document.getElementById('scope-filter').value;
+            scopeEl.value = scopeFilter === 'instance' ? 'instance' : 'shared';
+            scopeEl.disabled = false;
+        }
+    }
     function openNewFolder() {
         folderEditMode = null;
         document.getElementById('folder-modal-title').textContent = 'New Folder';
         document.getElementById('fm-name').value = '';
         document.getElementById('fm-name').disabled = false;
         document.getElementById('fm-desc').value = '';
+        document.getElementById('fm-parent-field').style.display = '';
+        populateFolderParents();
         var scopeFilter = document.getElementById('scope-filter').value;
         document.getElementById('fm-scope').value = scopeFilter === 'instance' ? 'instance' : 'shared';
-        document.getElementById('fm-scope').disabled = false;
         document.getElementById('fm-inherit').checked = true;
         document.getElementById('fm-error').textContent = '';
         document.getElementById('fm-error').classList.add('hidden');
@@ -911,6 +1161,7 @@
         var reqId = ++folderEditReqId;
         folderEditMode = { scope: selectedFolder.scope, path: selectedFolder.path, name: selectedFolder.name };
         document.getElementById('folder-modal-title').textContent = 'Edit Folder: ' + selectedFolder.path;
+        document.getElementById('fm-parent-field').style.display = 'none';
         document.getElementById('fm-name').value = selectedFolder.name;
         document.getElementById('fm-name').disabled = true;
         document.getElementById('fm-desc').value = selectedFolder.description || '';
@@ -976,11 +1227,13 @@
                 body: JSON.stringify({ allowed_groups: groups, description: desc, inherit_from_parent: inherit })
             });
         } else {
+            var parentVal = document.getElementById('fm-parent').value;
+            var fullPath = parentVal ? parentVal.split('|')[1] + '/' + name : name;
             req = fetch('/api/addressbook/folders', {
                 method: 'POST',
                 headers: apiHeaders(),
                 credentials: 'same-origin',
-                body: JSON.stringify({ name: name, allowed_groups: groups, description: desc, scope: scope, inherit_from_parent: inherit })
+                body: JSON.stringify({ name: fullPath, allowed_groups: groups, description: desc, scope: scope, inherit_from_parent: inherit })
             });
         }
         req.then(function(res) {
@@ -989,7 +1242,8 @@
             if (!folderEditMode) {
                 var sf = document.getElementById('scope-filter').value;
                 if (!sf || sf === scope) {
-                    selectedFolder = { name: name, scope: scope, description: desc, path: name, has_children: false };
+                    selectedFolder = { name: name, scope: scope, description: desc, path: parentVal ? parentVal.split('|')[1] + '/' + name : name, has_children: false };
+                    ensureExpanded(selectedFolder);
                     clearEntrySelection();
                 }
             } else if (selectedFolder) {
@@ -1023,7 +1277,8 @@
             selectedFolder = null;
             clearEntrySelection();
             document.getElementById('entries-header').classList.add('hidden');
-            document.getElementById('entries-content').innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">Select a folder to view entries.</p>';
+            document.getElementById('entries-content').innerHTML = '';
+            syncPlaceholder();
             loadFolders();
         }).catch(function(err) {
             if (err && err.message === 'redirect') return;
@@ -1033,6 +1288,20 @@
 
     // ── Entry modal ──────────────────────────────────────────────────
     var entryTypeDefaults = { ssh: '22', rdp: '3389', vnc: '5900', spice: '5900' };
+    var entryTypeHelp = {
+        ssh: 'Opens a terminal to a Linux/Unix server. <strong>Hostname</strong>: the server IP (e.g. 192.168.50.11) — no http://. <strong>Username/Password</strong>: the login account on that server, or paste a <strong>private key</strong> and leave the password blank.',
+        rdp: 'Remote desktop to a Windows machine (or xrdp server). <strong>Hostname</strong>: its IP. <strong>Username</strong>: e.g. DOMAIN\\user. <strong>Password</strong>: the Windows account password.',
+        vnc: 'Connects to a VNC server — VM consoles, IPMI/KVM, or another desktop. <strong>Hostname</strong>: its IP. <strong>Password</strong>: the VNC password, if one is set.',
+        spice: 'Direct SPICE display for KVM/QEMU consoles. <strong>Hostname/Port</strong>: the SPICE endpoint. Usually only used via a Proxmox entry instead.',
+        web: 'Opens a headless Chromium browser session inside your browser. <strong>URL</strong>: the full address, e.g. https://192.168.50.11:8006. Optional <strong>Username/Password</strong> can be injected into the page with $RUSTGUAC_USERNAME / $RUSTGUAC_PASSWORD placeholders in the URL.',
+        vdi: 'Starts an ephemeral Docker desktop container for the user (requires VDI enabled on the server). <strong>Container image</strong>: any Docker image with an RDP server, e.g. myregistry/desktop:latest.',
+        proxmox: 'Streams a Proxmox VM console through the PVE API. <strong>API URL</strong>: https://&lt;pve-host&gt;:8006. <strong>VM ID</strong>: shown in the PVE UI next to the VM name. <strong>Token</strong>: create one in PVE under Datacenter → Permissions → API Tokens — ID format user@realm!tokenname, and grant it Sys.Audit on / plus VM.Audit and VM.Console on the VM. <strong>Node</strong> is auto-detected; leave blank.'
+    };
+    function updateTypeHelp() {
+        var type = document.getElementById('em-type').value;
+        var el = document.getElementById('em-type-help');
+        if (el) el.innerHTML = entryTypeHelp[type] || '';
+    }
     function updateEntryTypeFields() {
         var type = document.getElementById('em-type').value;
         document.getElementById('em-proxmox-secret-field').style.display = type === 'proxmox' ? '' : 'none';
@@ -1040,8 +1309,10 @@
         document.getElementById('em-url-field').style.display = type === 'web' ? '' : 'none';
         document.getElementById('em-container-field').style.display = type === 'vdi' ? '' : 'none';
         document.getElementById('em-proxmox-fields').style.display = type === 'proxmox' ? '' : 'none';
+        document.getElementById('em-ignore-cert-field').style.display = (type === 'rdp' || type === 'spice') ? '' : 'none';
         var portEl = document.getElementById('em-port');
         if (!portEl.value && entryTypeDefaults[type]) portEl.value = entryTypeDefaults[type];
+        updateTypeHelp();
     }
     function clearEntryFields() {
         var ids = ['em-display-name', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id'];
@@ -1069,6 +1340,8 @@
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
+        document.getElementById('em-rbac-field').style.display = isAdmin ? '' : 'none';
+        resetEntryRbac();
         openModal('entry-modal');
     }
     function openEditEntry() {
@@ -1107,6 +1380,7 @@
         document.getElementById('em-proxmox-node').value = selectedEntry.proxmox_node || '';
         document.getElementById('em-proxmox-token-id').value = selectedEntry.proxmox_token_id || '';
         document.getElementById('em-proxmox-verify-tls').checked = !!selectedEntry.proxmox_verify_tls;
+        document.getElementById('em-ignore-cert').checked = !!selectedEntry.ignore_cert;
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
@@ -1115,6 +1389,11 @@
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
+        document.getElementById('em-rbac-field').style.display = isAdmin ? '' : 'none';
+        resetEntryRbac();
+        loadRbacRefs(function() {
+            loadEntryRbac();
+        });
         openModal('entry-modal');
     }
     var passwordClearArmed = false;
@@ -1173,6 +1452,11 @@
             errEl.classList.remove('hidden');
             return;
         }
+        if (hostname && hostname.indexOf('://') !== -1) {
+            errEl.textContent = 'Hostname must be a host or IP address (e.g. 192.168.50.11) — not a URL. Use type "Web" to open a browser session, or "Proxmox" for a VM console.';
+            errEl.classList.remove('hidden');
+            return;
+        }
         var entry = { type: type };
         if (displayName) entry.display_name = displayName;
         if (hostname) entry.hostname = hostname;
@@ -1184,6 +1468,9 @@
         else if (passwordClearArmed) entry.password = '';
         var privateKey = document.getElementById('em-private-key').value.trim();
         if (privateKey) entry.private_key = privateKey;
+        if (type === 'rdp' || type === 'spice') {
+            entry.ignore_cert = document.getElementById('em-ignore-cert').checked;
+        }
         var ts = document.getElementById('em-proxmox-token-secret').value.trim();
         if (ts) entry.proxmox_token_secret = ts;
         var cp = document.getElementById('em-container-password').value;
@@ -1209,17 +1496,24 @@
         if (type === 'proxmox') {
             var pveUrl = document.getElementById('em-proxmox-url').value.trim();
             var vmid = document.getElementById('em-proxmox-vmid').value.trim();
+            var tokenId = document.getElementById('em-proxmox-token-id').value.trim();
+            var tokenSecret = document.getElementById('em-proxmox-token-secret').value.trim();
             if (!pveUrl || !vmid) {
                 errEl.textContent = 'Proxmox API URL and VM ID are required.';
                 errEl.classList.remove('hidden');
                 return;
             }
+            if (!tokenId || !tokenSecret) {
+                errEl.textContent = 'Proxmox API token ID and token secret are required (create one in PVE: Datacenter → Permissions → API Tokens).';
+                errEl.classList.remove('hidden');
+                return;
+            }
             entry.proxmox_url = pveUrl;
             entry.proxmox_vmid = parseInt(vmid, 10);
+            entry.proxmox_token_id = tokenId;
+            entry.proxmox_token_secret = tokenSecret;
             var node = document.getElementById('em-proxmox-node').value.trim();
             if (node) entry.proxmox_node = node;
-            var tokenId = document.getElementById('em-proxmox-token-id').value.trim();
-            if (tokenId) entry.proxmox_token_id = tokenId;
             entry.proxmox_verify_tls = document.getElementById('em-proxmox-verify-tls').checked;
         }
         if (cp) entry.container_password = cp;
@@ -1252,8 +1546,16 @@
         req.then(function(res) {
             if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
             if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
-            closeModal('entry-modal');
-            reloadSelectedEntries();
+            var afterSave = function() {
+                closeModal('entry-modal');
+                reloadSelectedEntries();
+            };
+            if (!isAdmin) { afterSave(); return; }
+            return applyRbacDiffs(rbacConnId()).then(afterSave, function(grantErr) {
+                errEl.textContent = 'Entry saved, but permissions failed: ' + (grantErr && grantErr.message ? grantErr.message : 'unknown error');
+                errEl.classList.remove('hidden');
+                reloadSelectedEntries();
+            });
         }).catch(function(err) {
             if (err && err.message === 'redirect') return;
             errEl.textContent = err.message || 'Save failed.';
@@ -1280,6 +1582,74 @@
             if (err && err.message === 'redirect') return;
             showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
         });
+    }
+
+    // ── Credential rotation ───────────────────────────────────────────
+    function rotateCredential() {
+        if (!selectedFolder || !selectedEntry) return;
+        var entryName = selectedEntry.name;
+        var displayName = selectedEntry.display_name || entryName;
+        if (!confirm('Generate new credential for "' + displayName + '"?\nThe old credential will be replaced.')) return;
+        var newPw = generatePassword();
+        var url = '/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries/' + encodeURIComponent(entryName);
+        fetch(url, {
+            method: 'PUT',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({ password: newPw })
+        }).then(function(res) {
+            if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
+            if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
+            showRotateToast(newPw, displayName);
+            selectedEntry.has_credentials = true;
+            updateDetailRotateButton();
+            reloadSelectedEntries();
+        }).catch(function(err) {
+            if (err && err.message === 'redirect') return;
+            showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">Rotation failed: ' + escapeHtml(err.message || 'unknown error') + '</p>');
+        });
+    }
+    function showRotateToast(pw, entryName) {
+        var existing = document.querySelector('.rotate-toast');
+        if (existing) existing.remove();
+        var toast = document.createElement('div');
+        toast.className = 'rotate-toast';
+        toast.innerHTML = '<div class="toast-label">New credential for ' + escapeHtml(entryName) + '</div>'
+            + '<div class="toast-pw" id="rotate-toast-pw">' + escapeHtml(pw) + '</div>'
+            + '<div class="toast-timer" id="rotate-toast-timer">Copies automatically in 10 seconds. Memorize or copy now\u2014this is shown only once.</div>';
+        document.body.appendChild(toast);
+        var copyBtn = document.createElement('button');
+        copyBtn.textContent = 'Copy to clipboard';
+        copyBtn.className = 'btn btn-secondary btn-sm';
+        copyBtn.style.cssText = 'margin-top:8px;width:auto';
+        copyBtn.addEventListener('click', function() {
+            if (navigator.clipboard) navigator.clipboard.writeText(pw);
+            copyBtn.textContent = 'Copied!';
+            setTimeout(function() { copyBtn.textContent = 'Copy to clipboard'; }, 1500);
+        });
+        toast.appendChild(copyBtn);
+        var remaining = 10;
+        var timerEl = toast.querySelector('#rotate-toast-timer');
+        var interval = setInterval(function() {
+            remaining--;
+            if (timerEl) timerEl.textContent = remaining + 's \u2014 copy the credential now.';
+            if (remaining <= 0) {
+                clearInterval(interval);
+                toast.remove();
+            }
+        }, 1000);
+        toast.addEventListener('click', function(ev) {
+            if (ev.target === toast) { clearInterval(interval); toast.remove(); }
+        });
+    }
+    function updateDetailRotateButton() {
+        var btn = document.getElementById('detail-rotate-cred');
+        if (!btn) return;
+        if (selectedEntry && selectedEntry.has_credentials) {
+            btn.style.display = '';
+        } else {
+            btn.style.display = 'none';
+        }
     }
 
     // ── Import CSV modal ─────────────────────────────────────────────
@@ -1432,6 +1802,196 @@
         reader.readAsText(file);
     }
 
+    // ── RBAC connect permissions (entry modal) ───────────────────────
+    function rbacConnId() {
+        var scope = entryEditMode ? entryEditMode.scope : selectedFolder.scope;
+        var folder = entryEditMode ? entryEditMode.folder : selectedFolder.path;
+        var name = entryEditMode ? entryEditMode.name : document.getElementById('em-name').value.trim();
+        return scope + '/' + folder + '/' + name;
+    }
+    function loadRbacRefs(cb) {
+        var need = [];
+        if (rbacGroups === null) need.push('groups');
+        if (rbacUsers === null) need.push('users');
+        if (!need.length) { if (cb) cb(); return; }
+        var pending = need.length;
+        var done = function() { if (--pending === 0 && cb) cb(); };
+        if (need.indexOf('groups') !== -1) {
+            fetch('/api/admin/rbac/groups', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(d) { rbacGroups = d || []; done(); })
+                .catch(function() { rbacGroups = []; done(); });
+        }
+        if (need.indexOf('users') !== -1) {
+            fetch('/api/users', { headers: apiHeaders(), credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .then(function(d) { rbacUsers = d || []; done(); })
+                .catch(function() { rbacUsers = []; done(); });
+        }
+    }
+    function rbacLabelFor(type, id) {
+        if (type === 'group') {
+            var g = (rbacGroups || []).filter(function(x) { return String(x.id) === String(id); })[0];
+            return g ? g.name : ('group #' + id);
+        }
+        var u = (rbacUsers || []).filter(function(x) { return String(x.id) === String(id); })[0];
+        return u ? (u.name || u.email || ('user #' + id)) : ('user #' + id);
+    }
+    function loadEntryRbac() {
+        fetch('/api/admin/rbac/connections/' + encodeURIComponent(rbacConnId()) + '/permissions', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(perms) {
+                emRbac = (perms || []).map(function(p) {
+                    var type = p.entity_type === 'group' ? 'group' : 'user';
+                    return { type: type, id: p.entity_id, label: rbacLabelFor(type, p.entity_id) };
+                });
+                emRbacOrig = emRbac.map(function(x) { return JSON.stringify([x.type, x.id]); });
+                renderRbacChips();
+                populateRbacOptions();
+            })
+            .catch(function() { emRbac = []; emRbacOrig = []; renderRbacChips(); });
+    }
+    function resetEntryRbac() {
+        emRbac = [];
+        emRbacOrig = [];
+        renderRbacChips();
+        loadRbacRefs(function() { populateRbacOptions(); });
+    }
+    function renderRbacChips() {
+        var list = document.getElementById('em-rbac-chips');
+        list.innerHTML = '';
+        emRbac.forEach(function(g) {
+            var chip = document.createElement('span');
+            chip.className = 'chip';
+            chip.textContent = g.label + (g.type === 'group' ? ' (group)' : '');
+            var rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'chip-remove';
+            rm.textContent = '\u00D7';
+            rm.title = 'Remove grant';
+            rm.setAttribute('aria-label', 'Remove ' + g.label);
+            rm.addEventListener('click', function() {
+                var idx = emRbac.indexOf(g);
+                if (idx !== -1) emRbac.splice(idx, 1);
+                renderRbacChips();
+                populateRbacOptions();
+            });
+            chip.appendChild(rm);
+            list.appendChild(chip);
+        });
+    }
+    function rbacOptionsFiltered() {
+        var q = (document.getElementById('em-rbac-input').value || '').trim().toLowerCase();
+        var out = [];
+        (rbacGroups || []).forEach(function(g) {
+            if (!q || g.name.toLowerCase().indexOf(q) !== -1) out.push({ type: 'group', id: String(g.id), label: g.name });
+        });
+        (rbacUsers || []).forEach(function(u) {
+            var label = u.name || u.email;
+            if (label && (!q || label.toLowerCase().indexOf(q) !== -1)) out.push({ type: 'user', id: String(u.id), label: label });
+        });
+        return out.filter(function(o) {
+            return !emRbac.some(function(e) { return e.type === o.type && e.id === o.id; });
+        });
+    }
+    var rbacComboActive = -1;
+    function populateRbacOptions() {
+        var menu = document.getElementById('em-rbac-menu');
+        var opts = rbacOptionsFiltered();
+        menu.innerHTML = '';
+        rbacComboActive = opts.length > 0 ? 0 : -1;
+        var q = (document.getElementById('em-rbac-input').value || '').trim();
+        if (opts.length === 0 && !q) {
+            var empty = document.createElement('div');
+            empty.className = 'combo-item empty';
+            empty.textContent = (rbacGroups && rbacUsers && rbacGroups.length === 0 && rbacUsers.length === 0)
+                ? 'No groups or users yet — create groups under Admin → Groups.'
+                : 'All known groups and users already granted.';
+            menu.appendChild(empty);
+            return;
+        }
+        opts.forEach(function(o, i) {
+            var item = document.createElement('div');
+            item.className = 'combo-item' + (i === rbacComboActive ? ' active' : '');
+            item.setAttribute('role', 'option');
+            item.textContent = o.label + (o.type === 'group' ? ' (group)' : '');
+            item.addEventListener('mousedown', function(ev) {
+                ev.preventDefault();
+                pickRbac(o);
+            });
+            item.addEventListener('mouseenter', function() {
+                rbacComboActive = i;
+                updateRbacComboActive();
+            });
+            menu.appendChild(item);
+        });
+        if (q && !opts.length) {
+            var hint = document.createElement('div');
+            hint.className = 'combo-item empty';
+            hint.textContent = 'No group or user named "' + q + '" — create it under Admin first.';
+            menu.appendChild(hint);
+        }
+    }
+    function updateRbacComboActive() {
+        var items = document.querySelectorAll('#em-rbac-menu .combo-item');
+        for (var i = 0; i < items.length; i++) items[i].classList.toggle('active', i === rbacComboActive);
+    }
+    function pickRbac(o) {
+        if (!emRbac.some(function(e) { return e.type === o.type && e.id === o.id; })) emRbac.push({ type: o.type, id: o.id, label: o.label });
+        document.getElementById('em-rbac-input').value = '';
+        renderRbacChips();
+        populateRbacOptions();
+        document.getElementById('em-rbac-input').focus();
+    }
+    function addRbacFromInput() {
+        var raw = (document.getElementById('em-rbac-input').value || '').trim();
+        if (!raw) return;
+        var q = raw.toLowerCase();
+        var match = null;
+        (rbacGroups || []).forEach(function(g) {
+            if (!match && g.name.toLowerCase() === q) match = { type: 'group', id: String(g.id), label: g.name };
+        });
+        if (!match) (rbacUsers || []).forEach(function(u) {
+            var l = u.name || u.email;
+            if (!match && l && l.toLowerCase() === q) match = { type: 'user', id: String(u.id), label: l };
+        });
+        if (match) pickRbac(match);
+        else {
+            var errEl = document.getElementById('em-error');
+            errEl.textContent = '"' + raw + '" is not a known group or user. Groups are created under Admin → Groups.';
+            errEl.classList.remove('hidden');
+        }
+    }
+    function applyRbacDiffs(connId) {
+        var origKeys = emRbacOrig;
+        var nextKeys = emRbac.map(function(x) { return JSON.stringify([x.type, x.id]); });
+        var adds = emRbac.filter(function(e) { return origKeys.indexOf(JSON.stringify([e.type, e.id])) === -1; });
+        var removals = origKeys.filter(function(k) { return nextKeys.indexOf(k) === -1; });
+        var chain = Promise.resolve();
+        adds.forEach(function(a) {
+            chain = chain.then(function() {
+                return fetch('/api/admin/rbac/connections/' + encodeURIComponent(connId) + '/permissions', {
+                    method: 'POST',
+                    headers: apiHeaders(),
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ entity_id: (a.type === 'group' ? 'g:' : 'u:') + a.id, permission: 'connect' })
+                }).then(function(r) { if (!r.ok) throw new Error('Failed to grant ' + a.label + ': HTTP ' + r.status); });
+            });
+        });
+        removals.forEach(function(k) {
+            var parts = JSON.parse(k);
+            chain = chain.then(function() {
+                return fetch('/api/admin/rbac/connections/' + encodeURIComponent(connId) + '/permissions', {
+                    method: 'DELETE',
+                    headers: apiHeaders(),
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ entity_id: (parts[0] === 'group' ? 'g:' : 'u:') + parts[1], permission: 'connect' })
+                }).then(function(r) { if (!r.ok) throw new Error('Failed to revoke permission: HTTP ' + r.status); });
+            });
+        });
+        return chain;
+    }
+
     // ── Modal helpers ────────────────────────────────────────────────
     function openModal(id) {
         var el = document.getElementById(id);
@@ -1477,7 +2037,7 @@
             return '<div class="card" style="padding:14px 16px">'
                 + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
                 + '<span class="vm-state ' + vmStateClass(vm.power_state) + '"></span>'
-                + '<strong style="font-size:14px;color:white;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(vm.name) + '</strong>'
+                + '<strong style="font-size:14px;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(vm.name) + '</strong>'
                 + '<span class="proto-vmware" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + proto + '</span>'
                 + '</div>'
                 + '<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px"><span style="color:var(--text-muted)">Guest OS</span><span style="color:var(--text-secondary);max-width:60%;text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(vm.guest_os || 'Unknown') + '</span></div>'
@@ -1495,6 +2055,11 @@
             if (isAdmin) els[i].classList.add('admin-visible');
             else els[i].classList.remove('admin-visible');
         }
+        var folderActions = document.querySelectorAll('.folder-actions');
+        for (var i = 0; i < folderActions.length; i++) {
+            if (isAdmin) folderActions[i].classList.add('is-admin');
+            else folderActions[i].classList.remove('is-admin');
+        }
         updateEntryActionButtons();
     }
     function onScopeChange() {
@@ -1503,7 +2068,8 @@
             selectedFolder = null;
             clearEntrySelection();
             document.getElementById('entries-header').classList.add('hidden');
-            document.getElementById('entries-content').innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">Select a folder to view entries.</p>';
+            document.getElementById('entries-content').innerHTML = '';
+            syncPlaceholder();
         }
         if (searchQuery) runSearch();
         else renderFolders();
@@ -1518,12 +2084,11 @@
     // ── Wire up ──────────────────────────────────────────────────────
     document.getElementById('btn-new-folder').addEventListener('click', openNewFolder);
     document.getElementById('btn-empty-create-folder').addEventListener('click', openNewFolder);
-    document.getElementById('btn-edit-folder').addEventListener('click', openEditFolder);
-    document.getElementById('btn-delete-folder').addEventListener('click', deleteFolder);
     document.getElementById('btn-new-entry').addEventListener('click', openNewEntry);
     document.getElementById('btn-edit-entry').addEventListener('click', openEditEntry);
     document.getElementById('btn-delete-entry').addEventListener('click', deleteEntry);
     document.getElementById('btn-import').addEventListener('click', openImportModal);
+    document.getElementById('detail-rotate-cred').addEventListener('click', rotateCredential);
 
     document.getElementById('fm-cancel').addEventListener('click', function() { closeModal('folder-modal'); });
     document.getElementById('fm-save').addEventListener('click', saveFolder);
@@ -1544,17 +2109,77 @@
     wireGroupCombo('em');
     document.getElementById('em-type').addEventListener('change', updateEntryTypeFields);
 
+    var rbacComboEl = document.getElementById('em-rbac-combo');
+    var rbacInputEl = document.getElementById('em-rbac-input');
+    document.getElementById('em-rbac-add').addEventListener('click', addRbacFromInput);
+    rbacInputEl.addEventListener('focus', function() {
+        rbacComboEl.classList.add('open');
+        populateRbacOptions();
+    });
+    rbacInputEl.addEventListener('input', function() { populateRbacOptions(); });
+    rbacInputEl.addEventListener('keydown', function(ev) {
+        var opts = rbacOptionsFiltered();
+        if (ev.key === 'ArrowDown') {
+            ev.preventDefault();
+            rbacComboEl.classList.add('open');
+            if (rbacComboActive < opts.length - 1) rbacComboActive++;
+            updateRbacComboActive();
+        } else if (ev.key === 'ArrowUp') {
+            ev.preventDefault();
+            if (rbacComboActive > 0) rbacComboActive--;
+            updateRbacComboActive();
+        } else if (ev.key === 'Enter') {
+            ev.preventDefault();
+            if (rbacInputEl.value.trim()) addRbacFromInput();
+            else if (rbacComboActive >= 0 && rbacComboActive < opts.length) pickRbac(opts[rbacComboActive]);
+        } else if (ev.key === 'Escape') {
+            rbacComboEl.classList.remove('open');
+            rbacInputEl.blur();
+        }
+    });
+    document.getElementById('fm-parent').addEventListener('change', updateFolderParentScope);
+
     document.getElementById('import-cancel').addEventListener('click', function() { closeModal('import-modal'); });
     document.getElementById('import-submit').addEventListener('click', runImport);
 
+    document.getElementById('pm-cancel').addEventListener('click', function() { closeModal('prompt-modal'); });
+    document.getElementById('pm-connect').addEventListener('click', function() {
+        if (!promptTarget) return;
+        var username = document.getElementById('pm-username').value.trim();
+        var password = document.getElementById('pm-password').value;
+        if (!username && !password) {
+            var perr = document.getElementById('pm-error');
+            perr.textContent = 'Enter at least a username or a password.';
+            perr.classList.remove('hidden');
+            return;
+        }
+        connectEntry(promptTarget.scope, promptTarget.folder, promptTarget.entry, { username: username, password: password });
+    });
+    document.getElementById('pm-password').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') document.getElementById('pm-connect').click();
+    });
+
     document.querySelectorAll('.modal-overlay').forEach(function(el) {
-        el.addEventListener('click', function(e) { if (e.target === el) el.classList.add('hidden'); });
+        var _dragStart = null;
+        el.addEventListener('mousedown', function(e) { _dragStart = { x: e.clientX, y: e.clientY, target: e.target }; });
+        el.addEventListener('click', function(e) {
+            if (e.target !== el) return;
+            if (_dragStart && _dragStart.target !== el) return;
+            if (_dragStart) {
+                var dx = Math.abs(e.clientX - _dragStart.x);
+                var dy = Math.abs(e.clientY - _dragStart.y);
+                if (dx > 5 || dy > 5) return;
+            }
+            el.classList.add('hidden');
+        });
     });
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
-            ['folder-modal', 'entry-modal', 'import-modal'].forEach(function(id) {
+            ['folder-modal', 'entry-modal', 'import-modal', 'prompt-modal'].forEach(function(id) {
                 document.getElementById(id).classList.add('hidden');
             });
+            var rotateToast = document.querySelector('.rotate-toast');
+            if (rotateToast) rotateToast.remove();
         }
     });
     document.addEventListener('mousedown', function(ev) {
@@ -1562,12 +2187,52 @@
             var combo = document.getElementById(prefix + '-groups-combo');
             if (combo && !combo.contains(ev.target)) closeCombo(prefix);
         });
+        var rbacCombo = document.getElementById('em-rbac-combo');
+        if (rbacCombo && !rbacCombo.contains(ev.target)) rbacCombo.classList.remove('open');
     });
 
     document.getElementById('connections-search').addEventListener('input', debounce(runSearch, 250));
     document.getElementById('scope-filter').addEventListener('change', onScopeChange);
     document.getElementById('btn-vsphere-refresh').addEventListener('click', loadVSphere);
     loadVSphere();
+
+    // ── Recent sessions ──────────────────────────────────────────────
+    function loadRecentSessions() {
+        fetch('/api/sessions?limit=5', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(sessions) {
+                var list = document.getElementById('recent-list');
+                var section = document.getElementById('recent-sessions');
+                var countEl = document.getElementById('recent-count');
+                if (!sessions || sessions.length === 0) {
+                    section.classList.add('hidden');
+                    return;
+                }
+                section.classList.remove('hidden');
+                countEl.textContent = sessions.length;
+                var statusClass = {
+                    active: 'status-active', pending: 'status-pending',
+                    disconnected: 'status-disconnected'
+                };
+                list.innerHTML = sessions.map(function(s) {
+                    var proto = (s.session_type || '').toLowerCase();
+                    var target = s.url || s.hostname || '\u2014';
+                    var sc = statusClass[s.status] || 'status-completed';
+                    return '<div class="recent-row">'
+                        + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
+                        + '<div style="flex:1;min-width:0">'
+                        + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(s.entry_display_name || s.hostname || s.session_id) + '</div>'
+                        + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(target) + '</div>'
+                        + '</div>'
+                        + '<span class="status-pill ' + sc + '">' + escapeHtml((s.status || 'unknown').toUpperCase()) + '</span>'
+                        + '<button class="btn btn-primary btn-sm" onclick="window.open(\'/client/' + encodeURIComponent(s.session_id) + '\',\'_blank\')" style="width:auto">Reconnect</button>'
+                        + '</div>';
+                }).join('');
+            })
+            .catch(function() {
+                document.getElementById('recent-sessions').classList.add('hidden');
+            });
+    }
 
     // ── Address book init ────────────────────────────────────────────
     fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
@@ -1576,6 +2241,7 @@
             if (me) isAdmin = me.role === 'admin';
             applyAdminVisibility();
             loadFolders();
+            loadRecentSessions();
         })
         .catch(function() { loadFolders(); });
 })();

@@ -1,0 +1,181 @@
+{% extends "layouts/app.html" %}
+
+{% block title %}{{ site_title }} — License{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-[var(--text-primary)]">Enterprise License</h1>
+        <p class="text-sm text-[var(--text-muted)] mt-1">Manage your commercial license key and view feature status</p>
+    </div>
+
+    <!-- Status Card -->
+    <div class="card mb-6">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+            <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
+            License Status
+        </h2>
+        <div id="license-status" class="space-y-4">
+            <div class="flex items-center gap-3">
+                <span id="status-badge" class="px-3 py-1 text-sm rounded border">Loading...</span>
+                <span id="status-text" class="text-sm text-[var(--text-muted)]"></span>
+            </div>
+            <div id="customer-info" class="hidden space-y-2">
+                <div class="flex items-center gap-2 text-sm">
+                    <span class="text-[var(--text-muted)]">Customer:</span>
+                    <span id="customer-name" class="text-[var(--text-primary)] font-medium"></span>
+                </div>
+                <div class="flex items-center gap-2 text-sm">
+                    <span class="text-[var(--text-muted)]">Expires:</span>
+                    <span id="expiry-date" class="text-[var(--text-primary)]"></span>
+                </div>
+            </div>
+            <div id="eval-info" class="hidden p-3 rounded-lg bg-amber-900/30 border border-amber-700/50">
+                <div class="flex items-center gap-2">
+                    <svg class="w-5 h-5 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"/></svg>
+                    <span id="eval-text" class="text-sm text-amber-200"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Features Card -->
+    <div class="card mb-6">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+            <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Enterprise Features
+        </h2>
+        <div id="features-list" class="space-y-2">
+            <p class="text-sm text-[var(--text-muted)]">Loading...</p>
+        </div>
+    </div>
+
+    <!-- License Key Form -->
+    <div class="card">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+            <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.75 5.25a3 3 0 013 3m3 0a6 6 0 01-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1121.75 8.25z"/></svg>
+            Update License Key
+        </h2>
+        <form id="license-form" hx-post="/api/admin/license" hx-ext="json-enc" hx-swap="none"
+              hx-on::after-request="handleLicenseSubmit(event)" class="space-y-4">
+            <div>
+                <label class="form-label">License Key</label>
+                <input type="text" name="license_key" id="license-key-input"
+                       placeholder="PSEA-XXXX-XXXX-XXXX-XXXX"
+                       class="form-input font-mono text-sm"
+                       required>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Enter your commercial license key in the format PSEA-&lt;base64&gt;</p>
+            </div>
+            <div class="flex justify-end">
+                <button type="submit" class="btn btn-primary">
+                    Validate &amp; Save
+                </button>
+            </div>
+        </form>
+        <div id="license-feedback" class="mt-4" aria-live="polite"></div>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+var FEATURES = {
+    'saml': { name: 'SAML SSO', desc: 'SAML 2.0 single sign-on integration' },
+    'rbac': { name: 'RBAC', desc: 'Fine-grained role-based access control' },
+    'totp': { name: 'TOTP / MFA', desc: 'Time-based one-time password enforcement' },
+    'audit_retention': { name: 'Audit Retention', desc: 'Audit log retention and compliance exports' },
+    'encrypted_recording': { name: 'Encrypted Recording', desc: 'Encrypted session recordings at rest' },
+    'ha': { name: 'HA / Clustering', desc: 'High availability and clustering support' }
+};
+
+function handleLicenseSubmit(evt) {
+    var fb = document.getElementById('license-feedback');
+    if (evt && evt.detail && evt.detail.successful) {
+        fb.innerHTML = '<div class="p-3 rounded-lg bg-emerald-900/40 border border-emerald-800 text-emerald-300 text-sm">License updated successfully</div>';
+        loadLicenseStatus();
+        return;
+    }
+    var msg = 'Failed to update license';
+    if (evt && evt.detail && evt.detail.xhr) {
+        try {
+            var data = JSON.parse(evt.detail.xhr.responseText);
+            if (data && data.error) msg = data.error;
+        } catch(e) {}
+    }
+    fb.innerHTML = '<div class="p-3 rounded-lg bg-red-900/40 border border-red-800 text-red-300 text-sm">' + msg + '</div>';
+}
+
+function loadLicenseStatus() {
+    fetch('/api/admin/license', { headers: apiHeaders(), credentials: 'same-origin' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var badge = document.getElementById('status-badge');
+            var statusText = document.getElementById('status-text');
+            var customerInfo = document.getElementById('customer-info');
+            var evalInfo = document.getElementById('eval-info');
+            var featuresList = document.getElementById('features-list');
+
+            // Status badge
+            var statusMap = {
+                'valid': { cls: 'bg-emerald-900/50 text-emerald-300 border-emerald-800', label: 'Valid' },
+                'expired': { cls: 'bg-red-900/50 text-red-300 border-red-800', label: 'Expired' },
+                'evaluating': { cls: 'bg-amber-900/50 text-amber-300 border-amber-800', label: 'Evaluating' },
+                'no_license': { cls: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]', label: 'No License' }
+            };
+            var s = statusMap[data.status] || statusMap['no_license'];
+            badge.className = 'px-3 py-1 text-sm rounded border ' + s.cls;
+            badge.textContent = s.label;
+
+            if (data.status === 'valid') {
+                statusText.textContent = 'Commercial license active';
+                customerInfo.classList.remove('hidden');
+                document.getElementById('customer-name').textContent = data.customer_name || '-';
+                document.getElementById('expiry-date').textContent = data.expiry ? new Date(data.expiry).toLocaleDateString() : '-';
+                evalInfo.classList.add('hidden');
+            } else if (data.status === 'expired') {
+                statusText.textContent = 'License expired — please renew';
+                customerInfo.classList.remove('hidden');
+                document.getElementById('customer-name').textContent = data.customer_name || '-';
+                document.getElementById('expiry-date').textContent = data.expiry ? new Date(data.expiry).toLocaleDateString() : '-';
+                evalInfo.classList.add('hidden');
+            } else if (data.status === 'evaluating') {
+                statusText.textContent = '';
+                customerInfo.classList.add('hidden');
+                evalInfo.classList.remove('hidden');
+                document.getElementById('eval-text').textContent =
+                    'Evaluation period: ' + (data.eval_days_remaining || 0) + ' days remaining. Enterprise features are available during evaluation.';
+            } else {
+                statusText.textContent = 'No license key configured';
+                customerInfo.classList.add('hidden');
+                evalInfo.classList.add('hidden');
+            }
+
+            // Features list
+            var html = '';
+            var enabled = data.features || [];
+            var allFeatures = Object.keys(FEATURES);
+            for (var i = 0; i < allFeatures.length; i++) {
+                var fid = allFeatures[i];
+                var finfo = FEATURES[fid];
+                var isEnabled = enabled.indexOf(fid) !== -1 || data.status === 'evaluating';
+                var iconCls = isEnabled ? 'text-emerald-400' : 'text-[var(--text-muted)]';
+                var txtCls = isEnabled ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]';
+                html += '<div class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">' +
+                    '<div class="flex items-center gap-3">' +
+                    '<svg class="w-5 h-5 ' + iconCls + '" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="' +
+                    (isEnabled ? 'M5 13l4 4L19 7' : 'M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636') +
+                    '"/></svg>' +
+                    '<div><span class="text-sm ' + txtCls + '">' + finfo.name + '</span>' +
+                    '<p class="text-xs text-[var(--text-muted)]">' + finfo.desc + '</p></div></div>' +
+                    '<span class="text-xs ' + (isEnabled ? 'text-emerald-400' : 'text-[var(--text-muted)]') + '">' +
+                    (isEnabled ? 'Enabled' : 'Locked') + '</span></div>';
+            }
+            featuresList.innerHTML = html;
+        })
+        .catch(function(e) {
+            document.getElementById('features-list').innerHTML =
+                '<p class="text-sm text-red-400">Failed to load: ' + (e.message || e) + '</p>';
+        });
+}
+
+loadLicenseStatus();
+</script>
+{% endblock %}

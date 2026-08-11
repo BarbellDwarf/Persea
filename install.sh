@@ -327,6 +327,26 @@ setup_tls() {
     info "TLS certificate generated at $PREFIX/tls/"
     warn "This is a self-signed certificate for dev/testing."
     warn "For production, replace with real certificates from your CA."
+
+    # Self-signed certs cause browsers to block Secure cookies even after
+    # clicking through the cert warning — disable the Secure attribute so
+    # login actually works. Mirrors the Docker entrypoint's behavior.
+    if ! grep -q 'secure_cookies' "$PREFIX/config.toml" 2>/dev/null; then
+        if grep -q '^\[tls\]' "$PREFIX/config.toml" 2>/dev/null; then
+            # A [tls] section already exists (cert_path/key_path/
+            # guacd_cert_path, written earlier in this script) — insert
+            # into it. A second [tls] header is invalid TOML ("duplicate
+            # key") and breaks config loading entirely on first boot.
+            sed -i '/^\[tls\]/a secure_cookies = false  # self-signed cert — browsers block Secure cookies' "$PREFIX/config.toml"
+        else
+            {
+                echo ""
+                echo "[tls]"
+                echo "secure_cookies = false  # self-signed cert — browsers block Secure cookies"
+            } >> "$PREFIX/config.toml"
+        fi
+        info "Added secure_cookies = false to $PREFIX/config.toml for the self-signed cert."
+    fi
 }
 
 setup_tls

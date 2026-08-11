@@ -12,7 +12,6 @@ export class ConnectionsPage {
 
   // Layout
   readonly mainContent: Locator;
-  readonly noVault: Locator;
   readonly vaultUnavailable: Locator;
   readonly emptyState: Locator;
   readonly btnEmptyCreateFolder: Locator;
@@ -26,9 +25,6 @@ export class ConnectionsPage {
   readonly entriesContent: Locator;
   readonly connectionsSearch: Locator;
   readonly btnNewEntry: Locator;
-  readonly btnNewSubfolder: Locator;
-  readonly btnEditFolder: Locator;
-  readonly btnDeleteFolder: Locator;
 
   // Active sessions
   readonly activeSessions: Locator;
@@ -65,21 +61,17 @@ export class ConnectionsPage {
     this.navTokens = page.locator(S.navTokens);
 
     this.mainContent = page.locator(S.mainContent);
-    this.noVault = page.locator(S.noVault);
     this.vaultUnavailable = page.locator(S.vaultUnavailable);
     this.emptyState = page.locator(S.emptyState);
     this.btnEmptyCreateFolder = page.locator(S.btnEmptyCreateFolder);
 
-    this.folderList = page.locator(S.folderList);
+    this.folderList = page.locator('#folder-tree');
     this.btnNewFolder = page.locator(S.btnNewFolder);
 
     this.entriesTitle = page.locator(S.entriesTitle);
     this.entriesContent = page.locator(S.entriesContent);
     this.connectionsSearch = page.locator(S.connectionsSearch);
     this.btnNewEntry = page.locator(S.btnNewEntry);
-    this.btnNewSubfolder = page.locator(S.btnNewSubfolder);
-    this.btnEditFolder = page.locator(S.btnEditFolder);
-    this.btnDeleteFolder = page.locator(S.btnDeleteFolder);
 
     this.activeSessions = page.locator(S.activeSessions);
     this.activeSessionsGrid = page.locator(S.activeSessionsGrid);
@@ -114,11 +106,11 @@ export class ConnectionsPage {
   }
 
   async getFolderCount(): Promise<number> {
-    return this.page.locator(`${S.folderList} > li`).count();
+    return this.page.locator('#folder-tree .folder-item').count();
   }
 
   async selectFolder(index: number): Promise<void> {
-    await this.page.locator(`${S.folderList} > li`).nth(index).click();
+    await this.page.locator('#folder-tree .folder-item').nth(index).click();
   }
 
   async openNewFolderModal(): Promise<void> {
@@ -141,10 +133,6 @@ export class ConnectionsPage {
 
   async selectEntryType(type: string): Promise<void> {
     await this.emType.selectOption(type);
-  }
-
-  async hasVaultNotConfigured(): Promise<boolean> {
-    return this.noVault.isVisible();
   }
 
   async hasVaultUnavailable(): Promise<boolean> {

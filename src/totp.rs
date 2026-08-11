@@ -1,7 +1,7 @@
 //! TOTP management module — enrollment, verification, and DB persistence.
 
 use crate::db::{self, Db};
-use totp_rs::{Algorithm, Secret, TOTP};
+use totp_rs::{Algorithm, Builder, Secret};
 
 /// TOTP configuration parameters.
 #[derive(Debug, Clone)]
@@ -18,7 +18,7 @@ pub struct TotpConfig {
 impl Default for TotpConfig {
     fn default() -> Self {
         Self {
-            issuer: "persea".into(),
+            issuer: "Persea".into(),
             digits: 6,
             period: 30,
             algorithm: Algorithm::SHA1,
@@ -62,25 +62,27 @@ pub struct TotpEnrollment {
 /// Generate a TOTP enrollment for a user: create a secret, build the
 /// otpauth:// URL, and render a QR code as PNG bytes.
 pub fn generate_enrollment(user_email: &str, issuer: &str) -> Result<TotpEnrollment, TotpError> {
-    let secret = Secret::generate_secret();
-    let secret_b32 = secret.to_encoded().to_string();
+    let secret = Secret::generate();
+    let secret_b32 = secret.to_base32();
 
-    let totp = TOTP::new(
-        Algorithm::SHA1,
-        6,
-        1, // skew
-        30,
-        secret
-            .to_bytes()
-            .map_err(|e| TotpError::Generation(e.to_string()))?,
-        Some(issuer.to_string()),
-        user_email.to_string(),
-    )
-    .map_err(|e| TotpError::Generation(e.to_string()))?;
+    let totp = Builder::new()
+        .with_algorithm(Algorithm::SHA1)
+        .with_digits(6)
+        .with_skew(1)
+        .with_step_duration(30)
+        .with_secret(secret)
+        .with_issuer(Some(issuer))
+        .with_account_name(user_email)
+        .build()
+        .map_err(|e| TotpError::Generation(e.to_string()))?;
 
-    let otpauth_url = totp.get_url().to_string();
+    let otpauth_url = totp
+        .to_url()
+        .map_err(|e| TotpError::Generation(e.to_string()))?;
 
-    let qr_png = totp.get_qr_png().map_err(TotpError::QrCode)?;
+    let qr_png = totp
+        .to_qr_png()
+        .map_err(|e| TotpError::QrCode(e.to_string()))?;
 
     Ok(TotpEnrollment {
         secret_b32,
@@ -98,25 +100,24 @@ pub fn verify_code(
     period: u16,
     skew: u8,
 ) -> bool {
-    let secret = Secret::Encoded(secret_b32.to_string());
+    let secret = match Secret::try_from_base32(secret_b32) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
 
-    let totp = match TOTP::new(
-        algorithm,
-        digits.into(),
-        skew,
-        period.into(),
-        match secret.to_bytes() {
-            Ok(b) => b,
-            Err(_) => return false,
-        },
-        None,
-        String::new(),
-    ) {
+    let totp = match Builder::new()
+        .with_algorithm(algorithm)
+        .with_digits(digits)
+        .with_skew(skew as u16)
+        .with_step_duration(period as u64)
+        .with_secret(secret)
+        .build()
+    {
         Ok(t) => t,
         Err(_) => return false,
     };
 
-    totp.check_current(code).unwrap_or(false)
+    totp.check_current(code).is_some()
 }
 
 /// Verify a TOTP code for a user by looking up their stored secret in the DB.
@@ -184,26 +185,32 @@ mod tests {
 
     #[test]
     fn verify_code_roundtrip() {
-        let secret = Secret::generate_secret();
-        let secret_b32 = secret.to_encoded().to_string();
-        let secret_bytes = secret.to_bytes().unwrap();
+        let secret = Secret::generate();
+        let secret_b32 = secret.to_base32();
+        let secret_bytes = secret.as_bytes().to_vec();
 
-        let totp = TOTP::new(
+        let totp = Builder::new()
+            .with_algorithm(Algorithm::SHA1)
+            .with_digits(6)
+            .with_skew(1)
+            .with_step_duration(30)
+            .with_secret(secret_bytes)
+            .build()
+            .unwrap();
+
+        let code = totp.generate_current();
+        let code_str = code.to_string();
+        // Use the same TOTP instance to avoid timing issues across 30s boundaries.
+        assert!(totp.check_current(&code_str).is_some());
+        // verify_code (creates a new instance) should also work with generous skew.
+        assert!(verify_code(
+            &secret_b32,
+            &code_str,
             Algorithm::SHA1,
             6,
-            1, // skew
             30,
-            secret_bytes,
-            None,
-            String::new(),
-        )
-        .unwrap();
-
-        let code = totp.generate_current().unwrap();
-        // Use the same TOTP instance to avoid timing issues across 30s boundaries.
-        assert!(totp.check_current(&code).unwrap());
-        // verify_code (creates a new instance) should also work with generous skew.
-        assert!(verify_code(&secret_b32, &code, Algorithm::SHA1, 6, 30, 5));
+            5
+        ));
         // Wrong code should fail
         assert!(!verify_code(
             &secret_b32,

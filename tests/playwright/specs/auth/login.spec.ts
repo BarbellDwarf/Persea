@@ -1,48 +1,60 @@
 import { test, expect } from '@playwright/test';
-import { loginWithApiKey, logout } from '../../fixtures/auth';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
-const ADMIN_KEY = process.env.ADMIN_API_KEY || '';
+const USERNAME = process.env.LOGIN_USERNAME || 'admin@local.test';
+const PASSWORD = process.env.LOGIN_PASSWORD || 'AdminPass123!';
 
-test.describe('Authentication Flow', () => {
-  test('login page renders without auth', async ({ page }) => {
-    await logout(page);
-    await page.goto(`${BASE_URL}/`);
-    await page.waitForTimeout(1000);
+// Regression test for wayfinder R15: on a fresh instance / brand-new client
+// (no session cookie at all), `/auth/login` must be reachable WITHOUT first
+// being authenticated. It previously sat inside the same router layer as
+// `require_auth`, so every login attempt was rejected with "authentication
+// required" before the credentials were ever checked. Uses the `request`
+// fixture (not `page`) specifically so this makes zero requests with any
+// cookie jar — it isolates the routing/middleware behavior from the login
+// form's own JS.
+test.describe('Fresh-instance login routing (R15)', () => {
+  test('POST /auth/login is reachable with no prior session cookie', async ({ request }) => {
+    // Real clients get a csrf_token cookie from any GET before they can POST
+    // — fetch that the same way a fresh browser would, so this test isolates
+    // require_auth (the R15 concern) from CSRF protection (a separate,
+    // correctly-enforced check, not what this test is guarding against).
+    await request.get(`${BASE_URL}/`);
+    const cookies = await request.storageState();
+    const csrfToken = cookies.cookies.find((c) => c.name === 'csrf_token')?.value || '';
 
-    const loginForm = page.locator('#api-key, input[type="password"], .login-card, .login-wrapper');
-    const count = await loginForm.count();
-    expect(count).toBeGreaterThanOrEqual(1);
+    const res = await request.post(`${BASE_URL}/auth/login`, {
+      form: { username: USERNAME, password: PASSWORD, csrf_token: csrfToken },
+      maxRedirects: 0,
+    });
+    // A 401/403 here means the login route itself is gated by auth
+    // middleware — the exact R15 regression. A redirect (whether to the
+    // dashboard on success or to an error URL on bad credentials) proves
+    // the route was reached and evaluated on its own merits — only "not
+    // gated by auth" matters for this test.
+    expect([301, 302, 303, 307, 308]).toContain(res.status());
+  });
+});
+
+test.describe('Password login', () => {
+  test('logs in with valid credentials', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('#username');
+    await page.fill('#username', USERNAME);
+    await page.fill('#password', PASSWORD);
+    await page.click('#login-submit');
+    await expect(page).toHaveURL(/connections|sessions/);
+    const cookies = await page.context().cookies();
+    const session = cookies.find(c => c.name === 'persea_session');
+    expect(session).toBeTruthy();
+    expect(session!.value).toBeTruthy();
   });
 
-  test('authenticated user sees connections page', async ({ page }) => {
-    await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/connections.html`);
-    await page.waitForTimeout(1000);
-    expect(page.url()).toContain('connections');
-  });
-
-  test('admin user sees admin nav link', async ({ page }) => {
-    await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/connections.html`);
-    await page.waitForTimeout(1000);
-
-    const adminNav = page.locator('a[href*="admin"], .nav-item:has-text("Admin")');
-    const count = await adminNav.count();
-    expect(count).toBeGreaterThanOrEqual(1);
-  });
-
-  test('session storage API key persists across navigation', async ({ page }) => {
-    await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/connections.html`);
-    await page.waitForTimeout(500);
-
-    const storedKey = await page.evaluate(() => sessionStorage.getItem('persea_api_key'));
-    expect(storedKey).toBe(ADMIN_KEY);
-
-    await page.goto(`${BASE_URL}/sessions.html`);
-    await page.waitForTimeout(500);
-    const keyAfterNav = await page.evaluate(() => sessionStorage.getItem('persea_api_key'));
-    expect(keyAfterNav).toBe(ADMIN_KEY);
+  test('shows error for wrong password', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForSelector('#username');
+    await page.fill('#username', USERNAME);
+    await page.fill('#password', 'wrongpassword');
+    await page.click('#login-submit');
+    await expect(page).toHaveURL(/error=/);
   });
 });

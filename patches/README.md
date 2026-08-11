@@ -99,7 +99,7 @@ This approach avoids the socket contention issue that occurred when H.264 was se
 until something repaints them. `guac_rdp_gdi_desktop_resize()` resizes the
 FreeRDP GDI buffer and the guac display layer but never marks the layer dirty,
 so `guac_display_layer_close_raw()` flushes nothing and the client keeps its
-stale/blank canvas for the resized layer. See [sol1/persea#118](https://github.com/sol1/persea/issues/118) (reported by @Bails309, who diagnosed the root cause and supplied the fix).
+stale/blank canvas for the resized layer. See [BarbellDwarf/persea#118](https://github.com/BarbellDwarf/persea/issues/118) (reported by @Bails309, who diagnosed the root cause and supplied the fix).
 
 **Fix:** In `guac_rdp_gdi_desktop_resize()`, after the layer resize and before
 `guac_display_layer_close_raw()`:
@@ -145,7 +145,7 @@ Ported from [pletch/guacamole-server@b28bdac](https://github.com/pletch/guacamol
 
 **Feature:** Adds native SPICE protocol support (`libguac-client-spice`), vendored from the upstream PR [apache/guacamole-server#688](https://github.com/apache/guacamole-server/pull/688) ([GUACAMOLE-261](https://issues.apache.org/jira/browse/GUACAMOLE-261)). Enables connecting to SPICE displays (e.g. Proxmox VE / QEMU consoles). Requires `libspice-client-glib-2.0-dev` (>= 0.38) at build time; guacd is configured `--with-spice`.
 
-Vendored as the diff of the PR branch against its merge-base with our pinned guacd. The PR's incidental, non-SPICE change to `src/terminal/terminal.c` (SSH terminal keyboard-modifier handling) is **excluded** here: it is unrelated to SPICE and conflicted with our pinned base. The bundled `guacclip` tool is included in the source but not built (`--disable-guacclip`, matching how we treat guacenc/guaclog); see [sol1/persea#181](https://github.com/sol1/persea/issues/181) for a possible future clipboard-audit feature.
+Vendored as the diff of the PR branch against its merge-base with our pinned guacd. The PR's incidental, non-SPICE change to `src/terminal/terminal.c` (SSH terminal keyboard-modifier handling) is **excluded** here: it is unrelated to SPICE and conflicted with our pinned base. The bundled `guacclip` tool is included in the source but not built (`--disable-guacclip`, matching how we treat guacenc/guaclog); see [BarbellDwarf/persea#181](https://github.com/BarbellDwarf/persea/issues/181) for a possible future clipboard-audit feature.
 
 **Files patched:** new `src/protocols/spice/*` and `src/guacclip/*` trees, plus additive hooks in `configure.ac`, `Makefile.am`, `src/libguac/*` (protocol constants, user handlers, rect), and per-protocol `input.c`.
 

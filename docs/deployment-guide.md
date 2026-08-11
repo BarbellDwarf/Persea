@@ -53,13 +53,67 @@ docker run -d \
   -p 443:8089 \
   -v persea-data:/opt/persea/data \
   -v persea-recordings:/opt/persea/recordings \
+  -v persea-tls:/opt/persea/tls \
   -v ./config.toml:/opt/persea/config.toml \
   ghcr.io/barbelldwarf/persea:latest
 ```
 
 The Docker image bundles guacd + FreeRDP + dependencies, so it runs cleanly on Ubuntu, RHEL, Rocky, Arch, and other distros where the bare-metal `.deb` would hit a FreeRDP ABI mismatch. See [installation.md](installation.md#other-linux-distributions) for the full story on non-Debian-13 targets.
 
+> **Persistent state:** the three named volumes (`persea-data`, `persea-recordings`, `persea-tls`) keep the SQLite database, recordings, and the TLS certificate across container recreations/upgrades. The `persea-tls` volume is important — without it, the entrypoint generates a fresh self-signed certificate on every container recreate, changing the cert fingerprint and re-triggering browser warnings. For production, mount your own certificate over `/opt/persea/tls/cert.pem` + `key.pem`; when persea generates a self-signed cert itself, it automatically adds `secure_cookies = false` to the config so browsers accept the session cookie over the untrusted connection.
+
 See [installation.md](installation.md) for all install options.
+
+## Environment Variables
+
+All config options can be set via environment variables with the `PERSEA_` prefix.
+Nested table keys use `__` as the separator (double underscore).
+
+Examples:
+- `PERSEA_LISTEN_ADDR`
+- `PERSEA_DB_PATH`
+- `PERSEA_SESSION_MAX_DURATION_SECS`
+- `PERSEA_STORAGE_KEY` (special: storage encryption key)
+
+| Config Key | Env Var | Default | Description |
+|------------|---------|---------|-------------|
+| listen_addr | PERSEA_LISTEN_ADDR | 127.0.0.1:8089 | Listen address |
+| guacd_addr | PERSEA_GUACD_ADDR | 127.0.0.1:4822 | guacd daemon address |
+| static_path | PERSEA_STATIC_PATH | ./static | Static files directory |
+| db_path | PERSEA_DB_PATH | ./persea.db | SQLite database path |
+| site_title | PERSEA_SITE_TITLE | Persea | Browser tab title |
+| session_pending_timeout_secs | PERSEA_SESSION_PENDING_TIMEOUT_SECS | 60 | Pending session timeout |
+| session_max_duration_secs | PERSEA_SESSION_MAX_DURATION_SECS | 28800 | Max session duration (8h) |
+| auth_session_ttl_secs | PERSEA_AUTH_SESSION_TTL_SECS | 86400 | OIDC session TTL (24h) |
+| session_history_retention_days | PERSEA_SESSION_HISTORY_RETENTION_DAYS | 90 | History retention days |
+| xvnc_path | PERSEA_XVNC_PATH | Xvnc | Xvnc binary path |
+| chromium_path | PERSEA_CHROMIUM_PATH | chromium | Chromium binary path |
+| display_range_start | PERSEA_DISPLAY_RANGE_START | 100 | X display range start |
+| display_range_end | PERSEA_DISPLAY_RANGE_END | 199 | X display range end |
+| cdp_port_range_start | PERSEA_CDP_PORT_RANGE_START | 9200 | CDP port range start |
+| cdp_port_range_end | PERSEA_CDP_PORT_RANGE_END | 9299 | CDP port range end |
+| login_script_timeout_secs | PERSEA_LOGIN_SCRIPT_TIMEOUT_SECS | 120 | Login script timeout |
+| login_scripts_dir | PERSEA_LOGIN_SCRIPTS_DIR | /opt/persea/scripts | Login scripts directory |
+| ssh_scrollback | PERSEA_SSH_SCROLLBACK | 10000 | SSH terminal scrollback |
+| ssh_tmux_detach | PERSEA_SSH_TMUX_DETACH | false | SSH tmux detach mode |
+| max_sessions | PERSEA_MAX_SESSIONS | 500 | Max concurrent sessions |
+| max_sessions_per_user | PERSEA_MAX_SESSIONS_PER_USER | 50 | Max sessions per user |
+| max_viewers | PERSEA_MAX_VIEWERS | 10 | Max viewers per session |
+| session_cleanup_delay_secs | PERSEA_SESSION_CLEANUP_DELAY_SECS | 300 | Session cleanup delay |
+| shutdown_timeout_secs | PERSEA_SHUTDOWN_TIMEOUT_SECS | 30 | Graceful shutdown timeout |
+| rate_limit | PERSEA_RATE_LIMIT | false | Enable rate limiting |
+| user_credentials_default_scope | PERSEA_USER_CREDENTIALS_DEFAULT_SCOPE | local | Credential default scope |
+| ssh_allowed_networks | PERSEA_SSH_ALLOWED_NETWORKS | ["10.0.0.0/8", ...] | SSH allowed networks |
+| rdp_allowed_networks | PERSEA_RDP_ALLOWED_NETWORKS | ["10.0.0.0/8", ...] | RDP allowed networks |
+| vnc_allowed_networks | PERSEA_VNC_ALLOWED_NETWORKS | ["10.0.0.0/8", ...] | VNC allowed networks |
+| web_allowed_networks | PERSEA_WEB_ALLOWED_NETWORKS | ["127.0.0.0/8", ...] | Web allowed networks |
+| trusted_proxies | PERSEA_TRUSTED_PROXIES | [] | Trusted proxy CIDRs |
+| tls.secure_cookies | PERSEA_TLS__SECURE_COOKIES | true | Set `false` when serving HTTPS with a self-signed/untrusted cert — browsers block `Secure` cookies over untrusted connections, breaking logins. Auto-set by `install.sh` and the Docker entrypoint when they generate their own cert |
+| storage.encryption_key | PERSEA_STORAGE__ENCRYPTION_KEY | (none) | Storage encryption key |
+
+**Precedence:** Environment variables override config file values, which override built-in defaults.
+
+**Note:** Some settings (like `OIDC_CLIENT_SECRET`, `VAULT_SECRET_ID`, `PERSEA_STORAGE_KEY`) are already read via dedicated environment variable handling and continue to work as before.
 
 ## Step 2: Initial Configuration
 
@@ -401,3 +455,18 @@ Connections data lives in Vault (when `[storage] backend = "vault"`) or encrypte
 - [ ] Session recording enabled for audit compliance
 - [ ] `/opt/persea/env` has `chmod 600` permissions
 - [ ] Trusted proxies configured to match HAProxy IP
+
+## Audit Logging Limitations
+
+The audit log uses a SHA-256 hash chain for tamper evidence. This means:
+
+- **Tamper-evident, not tamper-proof**: An attacker with database write access can regenerate a valid chain from a tampering point by recomputing hashes forward.
+- **No external anchor**: The chain is self-contained — there's no external signature or timestamp authority.
+
+### Recommended compensating controls
+
+For enterprise deployments:
+- **External anchoring**: Periodically export chain head hashes and sign them with an external key, or ship to a separate system
+- **SIEM streaming**: Forward audit events to an external SIEM in real-time (before they're written to the local DB)
+- **WORM storage**: Write audit logs to write-once-read-many storage if available
+- **Database access controls**: Restrict who can write to the persea database

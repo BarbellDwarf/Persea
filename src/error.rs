@@ -2,6 +2,36 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
+/// Per-request context for error rendering, captured by the error middleware
+/// (see `error_pages` in main.rs) so `AppError::into_response` can pick
+/// between the styled HTML error page and JSON without request access.
+#[derive(Clone, Debug)]
+pub struct ErrorContext {
+    /// Whether the client wants an HTML error page (browser) vs JSON (API).
+    pub wants_html: bool,
+    /// CSP nonce for the rendered page (empty when unavailable).
+    pub csp_nonce: String,
+}
+
+tokio::task_local! {
+    static ERROR_CONTEXT: ErrorContext;
+}
+
+/// Run `future` inside the given error context. Called by the error
+/// middleware; the context stays visible to every `IntoResponse` that runs
+/// inside the request, even across awaits.
+pub async fn with_error_context(
+    ctx: ErrorContext,
+    future: impl std::future::Future<Output = Response>,
+) -> Response {
+    ERROR_CONTEXT.scope(ctx, future).await
+}
+
+/// The error context for the current request, when the error middleware ran.
+fn current_error_context() -> Option<ErrorContext> {
+    ERROR_CONTEXT.try_with(|c| c.clone()).ok()
+}
+
 #[derive(Debug, thiserror::Error)]
 #[must_use]
 pub enum AppError {
@@ -56,6 +86,13 @@ pub enum AppError {
 
 impl AppError {
     fn status_for_response(status: StatusCode, message: &str) -> Response {
+        // Browser requests (Accept: text/html) get the styled error page;
+        // API and unknown clients keep the JSON error body.
+        if let Some(ctx) = current_error_context() {
+            if ctx.wants_html {
+                return crate::templates::render_error_page(status, message, &ctx.csp_nonce);
+            }
+        }
         let error_code = match status {
             StatusCode::NOT_FOUND => "NOT_FOUND",
             StatusCode::BAD_REQUEST => "VALIDATION_ERROR",
@@ -92,6 +129,7 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, message) = match &self {
+            // ── User-facing errors: safe to include specific messages ──
             AppError::Session(msg) if msg.contains("not found") => {
                 (StatusCode::NOT_FOUND, self.to_string())
             }
@@ -101,9 +139,6 @@ impl IntoResponse for AppError {
             AppError::Session(msg) if msg.contains("not active") => {
                 (StatusCode::CONFLICT, self.to_string())
             }
-            AppError::Session(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-
-            AppError::Guacd(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
 
             AppError::Vault(msg) if msg.contains("not found") => {
                 (StatusCode::NOT_FOUND, self.to_string())
@@ -117,27 +152,44 @@ impl IntoResponse for AppError {
             AppError::Vault(msg) if msg.contains("invalid name") => {
                 (StatusCode::BAD_REQUEST, self.to_string())
             }
-            AppError::Vault(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
 
             AppError::Auth(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
             AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::Conflict(_) => (StatusCode::CONFLICT, self.to_string()),
             AppError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
-            AppError::Browser(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
+            AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+
             AppError::Vdi(msg) if msg.contains("not enabled") => {
                 (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
             }
             AppError::Vdi(msg) if msg.contains("timeout") => {
                 (StatusCode::GATEWAY_TIMEOUT, self.to_string())
             }
-            AppError::Vdi(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Tunnel(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Protocol(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Drive(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            AppError::Pve(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Vsphere(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
-            AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-            AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+
+            // ── Infrastructure errors: sanitize to avoid leaking paths / hostnames ──
+            AppError::Session(_)
+            | AppError::Guacd(_)
+            | AppError::Vault(_)
+            | AppError::Browser(_)
+            | AppError::Vdi(_)
+            | AppError::Tunnel(_)
+            | AppError::Protocol(_)
+            | AppError::Pve(_)
+            | AppError::Vsphere(_) => {
+                tracing::error!(error = %self, "infrastructure error (sanitized in response)");
+                (StatusCode::BAD_GATEWAY, "infrastructure error".to_string())
+            }
+            AppError::Drive(_) => {
+                tracing::error!(error = %self, "drive error (sanitized in response)");
+                (StatusCode::INTERNAL_SERVER_ERROR, "drive error".to_string())
+            }
+            AppError::Internal(msg) => {
+                tracing::error!(internal_error = %msg, "internal error (sanitized in response)");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "An internal error occurred".to_string(),
+                )
+            }
         };
 
         tracing::error!(status = %status, error = %message, "request error");

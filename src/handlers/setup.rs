@@ -84,7 +84,7 @@ pub fn needs_setup(db: &crate::db::Db) -> bool {
 pub async fn setup_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(database): Extension<crate::db::Db>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
 ) -> Response {
     if !needs_setup(&database) {
         return Redirect::to("/").into_response();
@@ -112,6 +112,7 @@ pub async fn setup_page(
         guacd_path,
         admin_email: String::new(),
         admin_name: String::new(),
+        csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
@@ -120,7 +121,7 @@ pub async fn setup_page(
 pub async fn setup_submit(
     Extension(site_title): Extension<SiteTitle>,
     Extension(database): Extension<crate::db::Db>,
-    Extension(_nonce): Extension<CspNonce>,
+    Extension(nonce): Extension<CspNonce>,
     Form(form): Form<SetupForm>,
 ) -> Response {
     if !needs_setup(&database) {
@@ -141,6 +142,7 @@ pub async fn setup_submit(
             guacd_path: form.guacd_path,
             admin_email: form.admin_email,
             admin_name: form.admin_name,
+            csp_nonce: nonce.0.clone(),
         };
         return tmpl.into_response();
     }
@@ -159,6 +161,7 @@ pub async fn setup_submit(
                 guacd_path: form.guacd_path,
                 admin_email: form.admin_email,
                 admin_name: form.admin_name,
+                csp_nonce: nonce.0.clone(),
             };
             return tmpl.into_response();
         }
@@ -192,6 +195,7 @@ pub async fn setup_submit(
                 guacd_path: form.guacd_path,
                 admin_email: form.admin_email,
                 admin_name: form.admin_name,
+                csp_nonce: nonce.0.clone(),
             };
             return tmpl.into_response();
         }

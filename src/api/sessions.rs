@@ -19,6 +19,8 @@ use uuid::Uuid;
 pub struct ListSessionsQuery {
     #[serde(default)]
     pub all: bool,
+    /// Optional limit on the number of sessions returned (most recent first).
+    pub limit: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -190,13 +192,18 @@ pub async fn list_sessions(
         .map(|Extension(id)| id.display_name().to_string());
     let show_all = q.all && is_admin;
 
-    let sessions: Vec<_> = manager
+    let mut sessions: Vec<_> = manager
         .list_sessions()
         .await
         .into_iter()
         .filter(|s| show_all || owner.as_deref().map(|o| s.created_by == o).unwrap_or(false))
         .map(|s| redact_share_url(s, &identity))
         .collect();
+    // Sort by creation time descending (most recent first)
+    sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    if let Some(limit) = q.limit {
+        sessions.truncate(limit);
+    }
     Ok(Json(json!(sessions)))
 }
 

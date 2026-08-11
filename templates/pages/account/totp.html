@@ -5,8 +5,8 @@
 {% block content %}
 <div class="max-w-2xl mx-auto">
     <div class="mb-8">
-        <h1 class="text-2xl font-bold text-gray-100">Two-Factor Authentication</h1>
-        <p class="text-sm text-gray-500 mt-1">Add an extra layer of security with TOTP authenticator apps</p>
+        <h1 class="text-2xl font-bold text-[var(--text-primary)]">Two-Factor Authentication</h1>
+        <p class="text-sm text-[var(--text-muted)] mt-1">Add an extra layer of security with TOTP authenticator apps</p>
     </div>
 
     <!-- TOTP Status Card -->
@@ -16,8 +16,8 @@
                 <!-- filled by JS -->
             </div>
             <div class="flex-1">
-                <h2 class="text-lg font-semibold text-gray-100" id="totp-title">Loading...</h2>
-                <p class="text-sm text-gray-500" id="totp-description"></p>
+                <h2 class="text-lg font-semibold text-[var(--text-primary)]" id="totp-title">Loading...</h2>
+                <p class="text-sm text-[var(--text-muted)]" id="totp-description"></p>
             </div>
             <div id="totp-actions" class="flex items-center gap-2">
                 <!-- filled by JS -->
@@ -28,24 +28,24 @@
     <!-- Enrollment Flow (hidden by default) -->
     <div id="enrollment-section" class="hidden">
         <div class="card mb-6">
-            <h3 class="text-lg font-semibold text-gray-100 mb-4">Step 1: Scan QR Code</h3>
-            <p class="text-sm text-gray-400 mb-4">Scan this QR code with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
+            <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Step 1: Scan QR Code</h3>
+            <p class="text-sm text-[var(--text-muted)] mb-4">Scan this QR code with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
             <div class="flex items-start gap-6">
                 <div class="shrink-0">
-                    <img id="qr-code-img" class="rounded-lg border border-gray-700" alt="TOTP QR Code" style="image-rendering: pixelated;">
+                    <img id="qr-code-img" class="rounded-lg border border-[var(--border)]" alt="TOTP QR Code" style="image-rendering: pixelated;">
                 </div>
                 <div class="flex-1 min-w-0">
-                    <p class="text-xs text-gray-500 mb-2">Or enter this key manually:</p>
-                    <code id="totp-secret" class="block px-3 py-2 bg-gray-800 rounded text-sm text-gray-300 font-mono select-all break-all mb-3"></code>
-                    <p class="text-xs text-gray-500">Issuer: <span id="totp-issuer" class="text-gray-400"></span></p>
-                    <p class="text-xs text-gray-500">Account: <span id="totp-account" class="text-gray-400"></span></p>
+                    <p class="text-xs text-[var(--text-muted)] mb-2">Or enter this key manually:</p>
+                    <code id="totp-secret" class="block px-3 py-2 bg-[var(--bg-card)] rounded text-sm text-[var(--text-secondary)] font-mono select-all break-all mb-3"></code>
+                    <p class="text-xs text-[var(--text-muted)]">Issuer: <span id="totp-issuer" class="text-[var(--text-muted)]"></span></p>
+                    <p class="text-xs text-[var(--text-muted)]">Account: <span id="totp-account" class="text-[var(--text-muted)]"></span></p>
                 </div>
             </div>
         </div>
 
         <div class="card">
-            <h3 class="text-lg font-semibold text-gray-100 mb-4">Step 2: Verify Code</h3>
-            <p class="text-sm text-gray-400 mb-4">Enter the 6-digit code from your authenticator app to complete setup.</p>
+            <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Step 2: Verify Code</h3>
+            <p class="text-sm text-[var(--text-muted)] mb-4">Enter the 6-digit code from your authenticator app to complete setup.</p>
             <form id="verify-form" class="flex items-end gap-3">
                 <div class="flex-1">
                     <label for="verify-code" class="form-label">Verification Code</label>
@@ -66,7 +66,7 @@
     <div id="recovery-codes-section" class="hidden">
         <div class="card mb-6">
             <div class="flex items-center justify-between mb-4">
-                <h3 class="text-lg font-semibold text-gray-100">Recovery Codes</h3>
+                <h3 class="text-lg font-semibold text-[var(--text-primary)]">Recovery Codes</h3>
                 <button id="btn-copy-codes" class="btn btn-secondary btn-sm">
                     Copy All
                 </button>
@@ -87,8 +87,8 @@
     <div id="disable-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
         <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
         <div class="relative card w-full max-w-md shadow-xl">
-            <h2 class="text-lg font-semibold text-gray-100 mb-2">Disable Two-Factor Authentication?</h2>
-            <p class="text-sm text-gray-400 mb-6">This will remove the TOTP requirement from your account. You'll only need your password to log in.</p>
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-2">Disable Two-Factor Authentication?</h2>
+            <p class="text-sm text-[var(--text-muted)] mb-6">This will remove the TOTP requirement from your account. You'll only need your password to log in.</p>
             <form id="disable-form" class="space-y-4">
                 <div>
                     <label for="disable-code" class="form-label">Enter current code to confirm</label>
@@ -97,7 +97,7 @@
                         placeholder="000000">
                 </div>
                 <div class="flex items-center justify-end gap-3">
-                    <button type="button" onclick="closeDisableModal()" class="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm transition-colors">
+                    <button type="button" onclick="closeDisableModal()" class="px-4 py-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] text-sm transition-colors">
                         Cancel
                     </button>
                     <button type="submit" class="btn btn-danger btn-sm">
@@ -110,7 +110,7 @@
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
     (function() {
         var totpEnabled = false;
 
@@ -132,11 +132,11 @@
                     '<button onclick="openDisableModal()" class="btn btn-danger btn-sm">Disable</button>';
                 enroll.classList.add('hidden');
             } else {
-                icon.className = 'w-12 h-12 rounded-lg bg-gray-800 border border-gray-700 flex items-center justify-center shrink-0';
-                icon.innerHTML = '<svg class="w-6 h-6 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>';
+                icon.className = 'w-12 h-12 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] flex items-center justify-center shrink-0';
+                icon.innerHTML = '<svg class="w-6 h-6 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>';
                 title.textContent = 'Two-Factor Authentication Not Enabled';
                 desc.textContent = 'Add an extra layer of security to your account.';
-                actions.innerHTML = '<button onclick="startEnrollment()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition-colors">Enable TOTP</button>';
+                actions.innerHTML = '<button onclick="startEnrollment()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-[var(--text-primary)] rounded-lg text-sm font-medium transition-colors">Enable TOTP</button>';
                 enroll.classList.add('hidden');
                 recovery.classList.add('hidden');
             }
@@ -213,7 +213,7 @@
             var list = document.getElementById('recovery-codes-list');
             var html = '';
             codes.forEach(function(c) {
-                html += '<div class="px-3 py-2 bg-gray-800 rounded font-mono text-sm text-gray-300 text-center">' + escapeHtml(c) + '</div>';
+                html += '<div class="px-3 py-2 bg-[var(--bg-card)] rounded font-mono text-sm text-[var(--text-secondary)] text-center">' + escapeHtml(c) + '</div>';
             });
             list.innerHTML = html;
             section.classList.remove('hidden');

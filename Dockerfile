@@ -96,23 +96,32 @@ ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
+COPY keys/ keys/
+
+# Create dummy sources so cargo can resolve all [[bin]] targets during the
+# dependency-cache build.  These are overwritten by the real COPYs below.
+RUN mkdir -p src license-gen && echo 'fn main() {}' > src/main.rs && echo 'fn main() {}' > license-gen/main.rs
 
 # Compile all dependencies once with a dummy main so the dependency layer is
 # only rebuilt when Cargo.toml/Cargo.lock change, not on every source edit.
 # The registry/git/target cache mounts persist between builds (exported to
 # GHCR via the workflow's type=gha cache), so the second build below is
 # incremental: only crates touched by the new sources recompile.
-RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
     cargo build --release
+
+RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY src/ src/
 COPY templates/ templates/
 COPY migrations/ migrations/
 COPY docs/ docs/
 COPY static/ static/
+COPY tailwind.config.js ./
+RUN npx --yes tailwindcss@3 -i static/css/input.css -o static/css/tailwind.min.css --minify
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -209,9 +218,6 @@ RUN mkdir -p /etc/chromium/policies/managed && \
 # Create non-root user with a real home directory (Chromium crashpad needs it)
 RUN groupadd -r persea && useradd -r -g persea -m -d /home/persea -s /bin/sh persea
 
-# Generate self-signed cert for guacd TLS (internal loopback encryption)
-RUN /opt/persea/bin/persea generate-cert --hostname localhost --out-dir /opt/persea/tls
-
 # Default config template (copied to config.toml on first run if not mounted)
 RUN cat > /opt/persea/config.toml.default <<'EOF'
 listen_addr = "0.0.0.0:8089"
@@ -258,14 +264,41 @@ if [ ! -f "$CONFIG_PATH" ]; then
     cp /opt/persea/config.toml.default "$CONFIG_PATH"
 fi
 
+# Generate TLS cert at runtime if not already present (e.g. mounted)
+TLS_DIR="/opt/persea/tls"
+if [ ! -f "$TLS_DIR/cert.pem" ] || [ ! -f "$TLS_DIR/key.pem" ]; then
+    echo "No TLS cert found — generating self-signed certificate..."
+    /opt/persea/bin/persea generate-cert --hostname localhost --out-dir "$TLS_DIR"
+    echo "==> Generated self-signed TLS cert. Mount your own cert for production. <=="
+    # Self-signed certs cause browsers to block Secure cookies even after
+    # clicking through the cert warning. Disable Secure attribute automatically.
+    if ! grep -q 'secure_cookies' "$CONFIG_PATH" 2>/dev/null; then
+        if grep -q '^\[tls\]' "$CONFIG_PATH" 2>/dev/null; then
+            # A [tls] section already exists (cert_path/guacd_cert_path,
+            # from the default config) — insert into it. A second [tls]
+            # header is invalid TOML ("duplicate key") and breaks config
+            # loading entirely on every fresh container.
+            sed -i '/^\[tls\]/a secure_cookies = false  # self-signed cert — browsers block Secure cookies' "$CONFIG_PATH"
+        else
+            {
+                echo ""
+                echo "[tls]"
+                echo "secure_cookies = false  # self-signed cert — browsers block Secure cookies"
+            } >> "$CONFIG_PATH"
+        fi
+        echo "Added secure_cookies = false for self-signed cert."
+    fi
+fi
+
 # Create admin API key on first run (if no DB exists yet)
 DB_PATH="/opt/persea/data/persea.db"
 if [ ! -f "$DB_PATH" ]; then
     echo "First run detected — creating admin API key..."
-    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin
-    echo ""
-    echo "==> SAVE THE API KEY ABOVE — it is only shown once! <=="
-    echo ""
+    ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
+    touch "$ADMIN_KEY_FILE"
+    chmod 600 "$ADMIN_KEY_FILE"
+    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin > "$ADMIN_KEY_FILE" 2>&1
+    echo "Admin API key written to $ADMIN_KEY_FILE (owner-read only)"
 fi
 
 # Print the running version on beta images (PERSEA_BETA=1 set at build time
