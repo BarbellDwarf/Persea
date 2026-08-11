@@ -15,7 +15,6 @@
 use std::io;
 use std::net::SocketAddr;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 
@@ -129,6 +128,7 @@ async fn bridge(mut inbound: TcpStream, target_host: &str, target_port: u16) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[tokio::test]
     async fn relay_forwards_bidirectional_traffic() {
