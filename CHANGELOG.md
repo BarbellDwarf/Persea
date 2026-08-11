@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Release hardening (R70–R79)**
+  - Admin branding page (`/admin/branding.html`) — white-label title/logo/colors (R78)
+  - Sidebar now highlights the active admin page on all 9 admin sections (was broken on 7)
+  - Docs: light/dark UI screenshots in `docs/overview.md`; persistent TLS cert volume (`persea-tls`) in all Docker examples (R77)
+  - `PERSEA_TLS__SECURE_COOKIES` documented in the env-var reference
+  - HSTS (`Strict-Transport-Security`) sent when a real/trusted certificate is in use (gated on `SecureCookies`)
+
 - **Session Management**
   - Disconnect vs Logout split: disconnect keeps session for reconnection, logout terminates
   - Recent connections section on Connections page
@@ -67,6 +74,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Subagent work contract: edits-first, single-verifier model for parallel implementation
 
 ### Fixed
+
+- **Release hardening (R70–R79)**
+  - **HTTP/2 cookie splitting**: `extract_cookie` only read the first `Cookie` header — Chromium splits cookies across multiple headers for HPACK compression (RFC 7540 §8.1.2.5), so `persea_session` was silently dropped and logins looped back to the login page. Now combines all headers (`get_all` + `"; "` join) in both `auth.rs` and `csrf.rs`
+  - **`SecureCookies::init()` was written as a comment, never as code** (R70) — `secure_cookies = false` was silently ignored on self-signed-cert deployments, breaking login over HTTPS. Now called at startup
+  - **Login returned 500**: `Extension<LicenseManager>` was added to `login_submit`/`saml_acs` but never provided by the router (axum resolves extractors at runtime — compiles clean, 500s at runtime). `LicenseManager` is now constructed and layered (R75); CI `playwright-auth` was red until this landed
+  - **CSRF token rotation race** — the CSRF middleware regenerated the token cookie on every response, so concurrent AJAX could end up with a mismatched token. Token is now reused from the incoming request; `/auth/login` CSRF failures redirect to `/?error=csrf_failed` instead of returning raw JSON
+  - **Admin branding page rendered "template does not exist"** — template was on disk and wired but never registered in `templates.rs` (R78)
+  - **SAML SSO button shown on unlicensed instances** — routes are dropped without a license, so the button pointed at a 404; now gated on the license
+  - **DOM XSS in branding preview** — logo URL accepted `javascript:` URIs (CodeQL high); restricted to http(s)
+  - **Sidebar admin active state** — `active_page: "users"` etc. never matched the sidebar's `admin-*` conditions; all 9 admin pages now highlight correctly
+  - **Playwright suite was unrunnable** — 62/115 specs failed because no authentication setup existed (only `login.spec.ts` was CI-wired since R21). Added `global-setup.ts` (logs in via the real form, saves `storageState`), wired `test.use({ storageState })` into 16 spec files, regenerated visual snapshots, masked dynamic regions — full suite now **110 passed / 1 skipped / 0 failed** (R79)
+  - **Quick-connect integration tests 502'd spuriously** — seeded SSH entries point at `127.0.0.1:22`; tests now skip cleanly unless both guacd and the SSH target are reachable
 
 - **Critical Security**
   - Stored XSS in admin Users page — all user data now escaped
@@ -122,6 +141,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `settings_api_tests` updated for current `enable_vdi` default
 
 ### Changed
+
+- **Release hardening (R70–R79)**
+  - Cookie format normalized to `HttpOnly; Secure; SameSite=Lax` (space before SameSite) across all Set-Cookie sites — Chromium mis-parses the no-space variant
+  - `extract_cookie` in both `auth.rs` and `csrf.rs` combines all Cookie headers before parsing
+  - Docker/install: `secure_cookies = false` auto-appended when a self-signed cert is generated, without breaking existing `[tls]` sections
+  - Code scanning: 25 stale alerts dismissed (17 false positives — Argon2 params/test fixtures; 8 resolved by R51/R52 deletions and permissions)
 
 - Connection credentials encryption now enforced (warns loudly if no key set)
 - Recording retention defaults to 1000 (was unlimited)
