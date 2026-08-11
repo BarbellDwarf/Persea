@@ -130,10 +130,12 @@ function updatePreview() {
     logoEl.style.background = color;
 
     // Only http(s) URLs are allowed for the logo — a javascript: URI would
-    // execute in the page context (DOM XSS, CodeQL flag). Anything else is
-    // rejected outright; the empty string is a safe literal, never user input.
-    var logoUrlSafe = /^https?:\/\//i.test(logoUrl || '');
-    if (logoUrlSafe) {
+    // execute in the page context (DOM XSS, CodeQL flag). Parse the URL and
+    // verify the protocol; anything else is rejected outright.
+    var parsedLogo;
+    try { parsedLogo = new URL(logoUrl); } catch (e) { parsedLogo = null; }
+    var logoOk = parsedLogo !== null && (parsedLogo.protocol === 'http:' || parsedLogo.protocol === 'https:');
+    if (logoOk) {
         logoText.style.display = 'none';
         var img = logoEl.querySelector('img');
         if (!img) {
@@ -141,7 +143,7 @@ function updatePreview() {
             img.style.cssText = 'height:28px;width:auto;object-fit:contain';
             logoEl.appendChild(img);
         }
-        img.src = logoUrl;
+        img.src = parsedLogo.href;
         img.style.display = '';
     } else {
         var img = logoEl.querySelector('img');
