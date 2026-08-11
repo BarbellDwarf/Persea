@@ -118,7 +118,7 @@ function loadLicenseStatus() {
                 'valid': { cls: 'bg-emerald-900/50 text-emerald-300 border-emerald-800', label: 'Valid' },
                 'expired': { cls: 'bg-red-900/50 text-red-300 border-red-800', label: 'Expired' },
                 'evaluating': { cls: 'bg-amber-900/50 text-amber-300 border-amber-800', label: 'Evaluating' },
-                'no_license': { cls: 'bg-gray-900/50 text-gray-300 border-gray-700', label: 'No License' }
+                'no_license': { cls: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]', label: 'No License' }
             };
             var s = statusMap[data.status] || statusMap['no_license'];
             badge.className = 'px-3 py-1 text-sm rounded border ' + s.cls;
@@ -156,7 +156,7 @@ function loadLicenseStatus() {
                 var fid = allFeatures[i];
                 var finfo = FEATURES[fid];
                 var isEnabled = enabled.indexOf(fid) !== -1 || data.status === 'evaluating';
-                var iconCls = isEnabled ? 'text-emerald-400' : 'text-gray-600';
+                var iconCls = isEnabled ? 'text-emerald-400' : 'text-[var(--text-muted)]';
                 var txtCls = isEnabled ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]';
                 html += '<div class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">' +
                     '<div class="flex items-center gap-3">' +

@@ -303,8 +303,9 @@ username = "administrator@vsphere.local"
 
 ### Known pitfalls (do not reintroduce)
 
-- **Login page JS**: uses `redirect: 'follow'` + `resp.redirected` + `resp.url` — full error specificity from the final URL. The server returns 303 redirects for success/MFA/errors, and the JS follows them.
+- **Login page**: a plain `<form method="POST" action="/auth/login">` — NOT a `fetch()`-based submit. Chromium does not reliably send cookies on a fetch-followed redirect (even with `credentials:'same-origin'`); a real browser navigation always does. Do not reintroduce a fetch-based login handler.
 - **Cookie format**: `HttpOnly; Secure; SameSite=Lax` — never `HttpOnly;; Secure SameSite` (double semicolon breaks parsing).
+- **`SecureCookies::init()` must be called at startup** (`src/main.rs`, from `config.tls.secure_cookies`) — without it, `SecureCookies::enabled()` defaults to `true` and the `secure_cookies = false` config option (required for self-signed certs — browsers block `Secure` cookies over an untrusted-cert connection even after the user clicks through the warning) is silently ignored no matter what's in config. This exact bug shipped once already (the `init()` call was written as a comment, never as code) and broke login for every self-signed-cert deployment. `install.sh` and the Docker entrypoint both auto-append `secure_cookies = false` when they generate their own self-signed cert; anyone supplying their own cert must set it by hand (documented in `config.example.toml`).
 - **Config defaults**: `default_toml()` in `src/config.rs` must emit ALL sections — missing sections silently reset defaults (e.g. `max_recordings` → 0).
 - **Theme**: `initTheme()` only applies a preset when the user explicitly chose one (`localStorage.persea_theme`) — otherwise app.css defaults (green) show.
 - **Static pages**: pages are served from templates, NOT `static/*.html` — the static files are legacy and must not be re-added to the disk-served list in `main.rs`.

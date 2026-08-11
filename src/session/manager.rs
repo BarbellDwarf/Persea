@@ -41,6 +41,15 @@ impl SessionManager {
         mgr
     }
 
+    /// Whether the given enterprise feature is licensed. Delegates to the
+    /// process-global license handle (`crate::license::set_global`, set
+    /// once at startup) since callers of this method (e.g. the WebSocket
+    /// recording-encryption check) aren't axum handlers and can't take an
+    /// `Extension<LicenseManager>` directly.
+    pub fn has_feature(&self, feature: &str) -> bool {
+        crate::license::global().is_some_and(|lm| lm.has_feature(feature))
+    }
+
     pub fn new(config: Config, guacd_tls: Option<TlsConnector>) -> Self {
         // Ensure recording directory exists with restrictive permissions
         let recording_dir = config.effective_recording_path().into_owned();

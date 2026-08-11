@@ -149,5 +149,65 @@ function exportAudit(format) {
     params.set('format', format);
     window.location.href = '/api/audit/export?' + params.toString();
 }
+
+// Pagination: the server appends a hidden #audit-pagination-data row with
+// data-total/data-pages/data-current/data-limit and fires an
+// "auditEventsLoaded" HX-Trigger event on #audit-table-body after every
+// swap (initial load, filter change, or a page-button click below).
+var AUDIT_FILTER_INCLUDE = "[name='from'],[name='to'],[name='user'],[name='event_type'],[name='outcome']";
+
+function renderAuditPagination() {
+    var dataRow = document.getElementById('audit-pagination-data');
+    var countEl = document.getElementById('audit-count');
+    var pagesEl = document.getElementById('audit-pages');
+    if (!dataRow || !countEl || !pagesEl) return;
+
+    var total = parseInt(dataRow.getAttribute('data-total'), 10) || 0;
+    var totalPages = parseInt(dataRow.getAttribute('data-pages'), 10) || 1;
+    var currentPage = parseInt(dataRow.getAttribute('data-current'), 10) || 1;
+    var limit = parseInt(dataRow.getAttribute('data-limit'), 10) || 50;
+
+    if (total === 0) {
+        countEl.textContent = 'No events';
+        pagesEl.innerHTML = '';
+        return;
+    }
+    var rangeStart = (currentPage - 1) * limit + 1;
+    var rangeEnd = Math.min(currentPage * limit, total);
+    countEl.textContent = 'Showing ' + rangeStart + '–' + rangeEnd + ' of ' + total + ' events';
+
+    var buttons = '';
+    function pageButton(label, page, disabled, current) {
+        if (disabled) {
+            return '<button class="px-2 py-1 rounded border border-[var(--border)] text-[var(--text-muted)] cursor-not-allowed" disabled>' + label + '</button>';
+        }
+        var cls = current
+            ? 'px-2 py-1 rounded border border-[var(--accent)] text-[var(--accent)] font-medium'
+            : 'px-2 py-1 rounded border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]';
+        return '<button class="' + cls + '" data-audit-page="' + page + '"' +
+            (current ? ' aria-current="page"' : '') + '>' + label + '</button>';
+    }
+
+    buttons += pageButton('Prev', currentPage - 1, currentPage <= 1, false);
+    // Keep this simple — total_pages for an audit log can be large, so show
+    // current +/- 2 rather than every page number.
+    var start = Math.max(1, currentPage - 2);
+    var end = Math.min(totalPages, currentPage + 2);
+    for (var p = start; p <= end; p++) {
+        buttons += pageButton(String(p), p, false, p === currentPage);
+    }
+    buttons += pageButton('Next', currentPage + 1, currentPage >= totalPages, false);
+    pagesEl.innerHTML = buttons;
+
+    pagesEl.querySelectorAll('[data-audit-page]').forEach(function(btn) {
+        var targetPage = parseInt(btn.getAttribute('data-audit-page'), 10);
+        btn.setAttribute('hx-get', '/api/audit/events?offset=' + ((targetPage - 1) * limit));
+        btn.setAttribute('hx-target', '#audit-table-body');
+        btn.setAttribute('hx-include', AUDIT_FILTER_INCLUDE);
+    });
+    htmx.process(pagesEl);
+}
+
+document.getElementById('audit-table-body').addEventListener('auditEventsLoaded', renderAuditPagination);
 </script>
 {% endblock %}

@@ -56,6 +56,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                     cert_path: None,
                     key_path: None,
                     guacd_cert_path: None,
+                    secure_cookies: true,
                 });
                 tls.cert_path = Some(std::path::PathBuf::from(value));
             }
@@ -64,6 +65,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                     cert_path: None,
                     key_path: None,
                     guacd_cert_path: None,
+                    secure_cookies: true,
                 });
                 tls.key_path = Some(std::path::PathBuf::from(value));
             }

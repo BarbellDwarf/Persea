@@ -1838,7 +1838,10 @@ pub fn stream_session_history_csv(
     Ok(count)
 }
 
-fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<()> {
+/// OWASP CSV-injection escaping for a single field — `pub` so regression
+/// tests in `tests/security_regression.rs` exercise the real implementation
+/// instead of a hand-maintained copy that could silently diverge from it.
+pub fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Result<()> {
     // OWASP CSV injection prevention: prefix formula-triggering characters
     let safe_field = if let Some(first) = field.chars().next() {
         if matches!(first, '=' | '+' | '-' | '@' | '\t' | '\r') {

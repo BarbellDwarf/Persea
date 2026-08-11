@@ -12,6 +12,12 @@ pub struct TlsConfig {
     /// Path to guacd's TLS certificate (PEM). When set, persea connects to guacd over TLS.
     /// This is independent of server HTTPS — you can use guacd TLS without serving HTTPS.
     pub guacd_cert_path: Option<PathBuf>,
+    /// Whether to set the Secure attribute on session cookies. Defaults to true
+    /// when TLS is enabled. Set to false when using self-signed certs — browsers
+    /// block Secure cookies over connections with invalid certificates, which
+    /// breaks login even after clicking through the cert warning.
+    #[serde(default = "default_secure_cookies")]
+    pub secure_cookies: bool,
 }
 
 #[derive(Deserialize, Clone)]
@@ -385,6 +391,9 @@ fn default_totp_period() -> u16 {
 }
 fn default_totp_skew() -> u8 {
     1
+}
+fn default_secure_cookies() -> bool {
+    true
 }
 
 impl Default for AuthTotpConfig {

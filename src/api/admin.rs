@@ -11,6 +11,7 @@ use serde_json::json;
 pub async fn health(
     State(state): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
+    db_pool: Extension<crate::db_pool::DbPool>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     // Shallow check (no auth)
     let Some(Extension(identity)) = identity else {
@@ -47,8 +48,14 @@ pub async fn health(
     // Check database
     let db_start = std::time::Instant::now();
     let db_status = if let Some(db) = state.db() {
-        match db.lock().unwrap().execute("SELECT 1", []) {
-            Ok(_) => "up",
+        // rusqlite's `execute()` rejects statements that return rows (a
+        // hard error, not just a lint) — `query_row` is the correct call
+        // for a SELECT. This is a bug fix: this path always reported
+        // "down" for a perfectly healthy connection, it just had never
+        // been reachable before now (optional_auth API-key auth and this
+        // route's Db extension were both broken until this same change).
+        match db.lock().unwrap().query_row("SELECT 1", [], |_| Ok(())) {
+            Ok(()) => "up",
             Err(e) => {
                 tracing::warn!(error = %e, "health: database error");
                 "down"
@@ -62,6 +69,31 @@ pub async fn health(
         json!({
             "status": db_status,
             "latency_ms": db_start.elapsed().as_millis(),
+        }),
+    );
+
+    // Check the SQLx multi-backend pool (Postgres/MySQL/SQLite via `db_url`)
+    // — distinct from the rusqlite admin DB checked above. Actually issues a
+    // query rather than just confirming the pool object exists, so a
+    // backend-specific regression (e.g. a bad query for one SQL dialect)
+    // shows up here instead of only at first real use.
+    let db_pool_start = std::time::Instant::now();
+    let db_pool_status = match db_pool.0.kind() {
+        None => "unavailable",
+        Some(kind) => match db_pool.0.ping().await {
+            Ok(()) => "up",
+            Err(e) => {
+                tracing::warn!(error = %e, backend = %kind, "health: db_pool error");
+                "down"
+            }
+        },
+    };
+    checks.insert(
+        "db_pool".to_string(),
+        json!({
+            "status": db_pool_status,
+            "backend": db_pool.0.kind().map(|k| k.to_string()),
+            "latency_ms": db_pool_start.elapsed().as_millis(),
         }),
     );
 
@@ -136,10 +168,12 @@ pub async fn health(
         .filter(|s| s.status == crate::session::SessionStatus::Active)
         .count();
 
-    let status = if checks
-        .values()
-        .all(|c| c["status"] == "up" || c["status"] == "ok")
-    {
+    let status = if checks.values().all(|c| {
+        matches!(
+            c["status"].as_str(),
+            Some("up") | Some("ok") | Some("unavailable")
+        )
+    }) {
         "healthy"
     } else {
         "degraded"
@@ -390,7 +424,10 @@ pub async fn audit_events(
 
     Ok((
         [
-            ("HX-Trigger", "auditEventsLoaded"),
+            // After-Swap (not plain HX-Trigger, which fires as soon as the
+            // response arrives — before the new rows, including the
+            // pagination-data row below, actually land in the DOM).
+            ("HX-Trigger-After-Swap", "auditEventsLoaded"),
             ("Content-Type", "text/html; charset=utf-8"),
         ],
         html,
@@ -435,6 +472,7 @@ pub async fn audit_verify(
 pub async fn audit_export(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Extension(license_manager): Extension<std::sync::Arc<crate::license::LicenseManager>>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     if !identity
@@ -444,6 +482,13 @@ pub async fn audit_export(
     {
         return Err(AppError::Forbidden("admin role required".into()));
     }
+    // Basic audit logging/viewing/verification stays free; compliance
+    // export (CSV/JSON download) is the enterprise-gated part — R43.
+    if !license_manager.has_feature(crate::license::FEAT_AUDIT_RETENTION) {
+        return Err(AppError::Forbidden(
+            "audit log export requires an enterprise license".into(),
+        ));
+    }
 
     let filters = crate::audit::AuditFilters {
         user_id: params.get("user").cloned().filter(|s| !s.is_empty()),
@@ -452,6 +497,31 @@ pub async fn audit_export(
         from: params.get("from").cloned().filter(|s| !s.is_empty()),
         to: params.get("to").cloned().filter(|s| !s.is_empty()),
     };
+
+    let format = params.get("format").map(|s| s.as_str()).unwrap_or("csv");
+
+    if format == "json" {
+        let events = tokio::task::spawn_blocking(move || {
+            crate::audit::list_events(&database, 100_000, 0, &filters)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("task join error: {}", e)))?
+        .map_err(|e| AppError::Internal(format!("export error: {}", e)))?;
+
+        let json_data = serde_json::to_string_pretty(&events)
+            .map_err(|e| AppError::Internal(format!("JSON serialization error: {}", e)))?;
+
+        return Ok((
+            [
+                ("Content-Type", "application/json; charset=utf-8"),
+                (
+                    "Content-Disposition",
+                    "attachment; filename=\"audit-export.json\"",
+                ),
+            ],
+            json_data,
+        ));
+    }
 
     let csv_data =
         tokio::task::spawn_blocking(move || crate::audit::export_events_csv(&database, &filters))

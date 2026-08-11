@@ -32,7 +32,10 @@
             {% elif error == 'mfa_setup_failed' %}MFA setup failed. Please try again.
             {% elif error == 'auth_unavailable' %}Authentication service is unavailable. Please try again later.
             {% elif error == 'saml_not_configured' %}SAML authentication is not configured.
+            {% elif error == 'saml_not_licensed' %}SAML single sign-on requires an enterprise license.
             {% elif error == 'login_failed' %}Login failed. Please try again.
+            {% elif error == 'csrf_failed' %}Your session expired. Please try signing in again.
+            {% elif error == 'login_required' %}Please sign in to continue.
             {% elif error == 'network_error' %}Network error. Please check your connection.
             {% else %}An error occurred. Please try again.
             {% endif %}

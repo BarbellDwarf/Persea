@@ -122,11 +122,19 @@ jobs:
           components: rustfmt, clippy
           rustflags: ""
       - run: cargo build
-      - name: Start persea with ${{ matrix.backend }}
+      - name: Start persea with ${{ matrix.backend }} and verify the pool is actually reachable
         run: |
           cat > /tmp/persea-db-ci.toml <<EOF
           db_url = "${{ matrix.db_url }}"
+          db_path = "/tmp/persea-db-ci-admin.db"
           EOF
+
+          # Run migrations for this backend + create an admin key so the
+          # health check below can hit the *authenticated* (deep) path —
+          # the unauthenticated one never touches db_pool at all.
+          API_KEY=$(./target/debug/persea --config /tmp/persea-db-ci.toml add-admin --name ci-check | grep "API Key:" | awk '{print $3}')
+          [ -n "$API_KEY" ] || { echo "failed to create admin key for ${{ matrix.backend }}" >&2; exit 1; }
+
           ./target/debug/persea --config /tmp/persea-db-ci.toml &
           SERVER_PID=$!
           READY=0
@@ -138,8 +146,37 @@ jobs:
             fi
             sleep 1
           done
+          if [ "$READY" != "1" ]; then
+            kill $SERVER_PID 2>/dev/null
+            echo "server failed to become healthy against ${{ matrix.backend }}" >&2
+            exit 1
+          fi
+
+          # Deep check: authenticated /api/health actually queries db_pool
+          # (SELECT 1 against the real backend), not just the always-SQLite
+          # admin DB. This is what R50 was filed to close — the previous
+          # version of this job only confirmed the server process started.
+          HEALTH_JSON=$(curl -sf -H "Authorization: Bearer $API_KEY" http://localhost:8089/api/health)
           kill $SERVER_PID 2>/dev/null
-          [ "$READY" = "1" ] || { echo "server failed to become healthy against ${{ matrix.backend }}" >&2; exit 1; }
+
+          echo "$HEALTH_JSON" | jq .
+          DB_POOL_STATUS=$(echo "$HEALTH_JSON" | jq -r '.checks.db_pool.status')
+          ACTUAL_BACKEND=$(echo "$HEALTH_JSON" | jq -r '.checks.db_pool.backend')
+          if [ "$DB_POOL_STATUS" != "up" ]; then
+            echo "db_pool health check failed for ${{ matrix.backend }}: status=$DB_POOL_STATUS" >&2
+            exit 1
+          fi
+          # DbKind's Display prints "postgresql" for the postgres backend
+          # (matrix.backend uses "postgres"); mysql/sqlite match verbatim.
+          case "${{ matrix.backend }}" in
+            postgres) EXPECTED_BACKEND="postgresql" ;;
+            *) EXPECTED_BACKEND="${{ matrix.backend }}" ;;
+          esac
+          if [ "$ACTUAL_BACKEND" != "$EXPECTED_BACKEND" ]; then
+            echo "expected backend $EXPECTED_BACKEND, db_pool reports $ACTUAL_BACKEND" >&2
+            exit 1
+          fi
+          echo "db_pool confirmed up and reachable for ${{ matrix.backend }} (reported: $ACTUAL_BACKEND)"
 
   # Playwright auth E2E — tests password login over HTTP and HTTPS
   playwright-auth:

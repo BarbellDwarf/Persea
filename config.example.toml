@@ -187,6 +187,17 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # # The same self-signed cert can serve both purposes.
 # # Omit for plain TCP to guacd.
 # guacd_cert_path = "/opt/persea/tls/cert.pem"
+#
+# # Set this to false if cert_path/key_path point at a self-signed
+# # certificate (e.g. generated with `persea generate-cert`). Browsers
+# # refuse to send Secure-flagged cookies over a connection with an
+# # invalid/untrusted certificate — even after you click through the
+# # warning — which breaks login entirely if this stays true. install.sh
+# # and the Docker image both set this automatically when they generate
+# # their own self-signed cert; set it by hand if you generated or
+# # supplied the cert yourself. Leave as true (the default) for a real
+# # CA-issued certificate.
+# secure_cookies = true
 
 # ─── OIDC (Single Sign-On) ───────────────────────────────────────────────────
 #

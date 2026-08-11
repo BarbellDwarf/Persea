@@ -69,6 +69,27 @@ impl DbPool {
         }
     }
 
+    /// Run a trivial backend-native query to confirm the pool is actually
+    /// reachable — not just configured. Used by the deep health check
+    /// (`/api/health`, authenticated) so CI's multi-backend job has a real,
+    /// DB-touching probe per backend instead of only confirming the server
+    /// process started.
+    pub async fn ping(&self) -> Result<(), sqlx::Error> {
+        match self {
+            DbPool::Postgres(pool) => {
+                sqlx::query("SELECT 1").execute(pool).await?;
+            }
+            DbPool::MySQL(pool) => {
+                sqlx::query("SELECT 1").execute(pool).await?;
+            }
+            DbPool::SQLite(pool) => {
+                sqlx::query("SELECT 1").execute(pool).await?;
+            }
+            DbPool::None => {}
+        }
+        Ok(())
+    }
+
     /// Run embedded migrations for the active backend.
     pub async fn run_migrations(&self) -> Result<(), sqlx::migrate::MigrateError> {
         match self {

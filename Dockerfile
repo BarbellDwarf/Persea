@@ -270,6 +270,24 @@ if [ ! -f "$TLS_DIR/cert.pem" ] || [ ! -f "$TLS_DIR/key.pem" ]; then
     echo "No TLS cert found — generating self-signed certificate..."
     /opt/persea/bin/persea generate-cert --hostname localhost --out-dir "$TLS_DIR"
     echo "==> Generated self-signed TLS cert. Mount your own cert for production. <=="
+    # Self-signed certs cause browsers to block Secure cookies even after
+    # clicking through the cert warning. Disable Secure attribute automatically.
+    if ! grep -q 'secure_cookies' "$CONFIG_PATH" 2>/dev/null; then
+        if grep -q '^\[tls\]' "$CONFIG_PATH" 2>/dev/null; then
+            # A [tls] section already exists (cert_path/guacd_cert_path,
+            # from the default config) — insert into it. A second [tls]
+            # header is invalid TOML ("duplicate key") and breaks config
+            # loading entirely on every fresh container.
+            sed -i '/^\[tls\]/a secure_cookies = false  # self-signed cert — browsers block Secure cookies' "$CONFIG_PATH"
+        else
+            {
+                echo ""
+                echo "[tls]"
+                echo "secure_cookies = false  # self-signed cert — browsers block Secure cookies"
+            } >> "$CONFIG_PATH"
+        fi
+        echo "Added secure_cookies = false for self-signed cert."
+    fi
 fi
 
 # Create admin API key on first run (if no DB exists yet)

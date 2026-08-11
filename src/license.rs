@@ -159,6 +159,25 @@ pub fn is_feature_enabled(license: Option<&LicenseKey>, feature: &str) -> bool {
 
 // ── LicenseManager ──
 
+/// Process-global handle, for call sites that aren't axum handlers (e.g.
+/// `src/websocket.rs`'s post-session encryption-at-rest check) and so can't
+/// receive it via `Extension<T>`. Set once at startup, alongside the
+/// `Extension` that request handlers use — same pattern as
+/// `crate::csrf::SecureCookies`.
+static GLOBAL: OnceLock<std::sync::Arc<LicenseManager>> = OnceLock::new();
+
+/// Set the process-global handle (call once at startup, right after
+/// constructing the manager).
+pub fn set_global(manager: std::sync::Arc<LicenseManager>) {
+    let _ = GLOBAL.set(manager);
+}
+
+/// Read the process-global handle. Returns `None` if `set_global` was never
+/// called (shouldn't happen outside of tests that don't boot the full app).
+pub fn global() -> Option<std::sync::Arc<LicenseManager>> {
+    GLOBAL.get().cloned()
+}
+
 /// Shared license state, safe to pass via axum `Extension`.
 pub struct LicenseManager {
     inner: RwLock<LicenseManagerInner>,

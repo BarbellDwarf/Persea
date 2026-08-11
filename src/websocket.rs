@@ -413,12 +413,22 @@ async fn handle_ws(
         }
     }
 
-    // Encrypt recording at rest (file is closed after proxy_ws_guacd returns)
+    // Encrypt recording at rest (file is closed after proxy_ws_guacd returns).
+    // Enterprise-gated (R43) — checked via the process-global handle since
+    // this isn't an axum handler and can't take an `Extension<T>`.
     if is_recording_enabled && recording_path.exists() {
         let rec_config = manager.recording_config();
         let enc_key = manager.config().storage_encryption_key();
         if crate::recording::should_encrypt_at_rest(&rec_config, enc_key.as_deref()) {
-            if let Some(ref key_hex) = enc_key {
+            let licensed = crate::license::global()
+                .map(|lm| lm.has_feature(crate::license::FEAT_ENCRYPTED_RECORDING))
+                .unwrap_or(false);
+            if !licensed {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "Recording encryption at rest is configured but requires an enterprise license — this recording was saved unencrypted"
+                );
+            } else if let Some(ref key_hex) = enc_key {
                 if let Err(e) = crate::recording::encrypt_recording_file(&recording_path, key_hex) {
                     tracing::error!(
                         session_id = %session_id, error = %e,

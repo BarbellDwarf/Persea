@@ -14,6 +14,8 @@
     --text-muted: #64748b;
     --accent: #10b981;
     --accent-hover: #059669;
+    --info: #2563eb;
+    --info-hover: #1d4ed8;
     --danger: #ef4444;
     --danger-bg: rgba(239,68,68,0.08);
     --radius: 10px;
@@ -43,6 +45,8 @@
     --text-muted: #64748b;
     --accent: #10b981;
     --accent-hover: #059669;
+    --info: #1d4ed8;
+    --info-hover: #1e40af;
     --danger: #ef4444;
     --danger-bg: rgba(239,68,68,0.08);
 }
@@ -97,6 +101,21 @@ body {
 .sidebar.collapsed:hover .nav-item { justify-content: flex-start; padding: 8px 12px; gap: 10px; }
 .sidebar.collapsed:hover .sidebar-logo { justify-content: flex-start; padding: 0 16px; gap: 12px; }
 .sidebar.collapsed:hover .sidebar-toggle { display: inline-flex; }
+
+/* R12: right after a manual collapse click, suppress hover-expand for a
+   moment so the collapse is actually visible even if the mouse hasn't
+   moved off the sidebar yet — higher specificity (3 classes) wins over the
+   plain :hover rules above. */
+.sidebar.collapsed.just-collapsed:hover {
+    width: 48px;
+    box-shadow: none;
+}
+.sidebar.collapsed.just-collapsed:hover .nav-text,
+.sidebar.collapsed.just-collapsed:hover .sidebar-logo-text,
+.sidebar.collapsed.just-collapsed:hover .nav-section-label { opacity: 0; width: 0; }
+.sidebar.collapsed.just-collapsed:hover .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
+.sidebar.collapsed.just-collapsed:hover .sidebar-logo { justify-content: center; padding: 0; gap: 0; }
+.sidebar.collapsed.just-collapsed:hover .sidebar-toggle { display: none; }
 
 .sidebar-logo {
     height: 56px;
@@ -182,6 +201,13 @@ body {
     font-weight: 700;
 }
 
+.light .nav-item.active {
+    /* var(--accent) (#10b981) on the light tint background is ~2.35:1 —
+       fails WCAG AA even at font-weight 700. Darken to emerald-700 for the
+       light theme specifically; dark mode's ratio is already adequate. */
+    color: #047857;
+}
+
 .nav-item svg {
     width: 16px; height: 16px;
     flex-shrink: 0;
@@ -249,6 +275,10 @@ body {
 
 .sidebar.collapsed:hover ~ .main-area {
     margin-left: 240px;
+}
+
+.sidebar.collapsed.just-collapsed:hover ~ .main-area {
+    margin-left: 48px;
 }
 
 .header {
@@ -421,12 +451,12 @@ body {
 }
 
 .btn-info {
-    background: #2563eb;
+    background: var(--info);
     color: #fff;
 }
 
 .btn-info:hover {
-    background: #1d4ed8;
+    background: var(--info-hover);
 }
 
 .btn-sm {

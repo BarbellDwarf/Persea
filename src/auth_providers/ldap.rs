@@ -78,7 +78,10 @@ fn default_email_attr() -> String {
     "mail".into()
 }
 
-fn ldap_escape(input: &str) -> String {
+/// Escape LDAP filter special characters (RFC 4515) — `pub` so regression
+/// tests in `tests/security_regression.rs` exercise the real implementation
+/// instead of a hand-maintained copy that could silently diverge from it.
+pub fn ldap_escape(input: &str) -> String {
     input
         .replace('\\', "\\5c")
         .replace('*', "\\2a")

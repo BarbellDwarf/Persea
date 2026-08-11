@@ -717,6 +717,7 @@ fn cmd_delete_user(database: &Db, email: &str) {
     }
 }
 
+use crate::csrf::SecureCookies;
 /// Whether TLS is enabled (used by security headers middleware).
 use crate::csrf::TlsEnabled;
 
@@ -1299,39 +1300,103 @@ async fn run_server(
         DbPool::None
     };
 
+    // Enterprise license: construct before `config` is moved into
+    // SessionManager, and before the SAML/TOTP blocks below since both
+    // gate on it. Previously this was never constructed at all — the
+    // license admin API/page extracted `Extension<Arc<LicenseManager>>`
+    // with no provider layered in anywhere, so those routes were broken.
+    crate::license::init_eval_period();
+    let license_manager = std::sync::Arc::new(crate::license::LicenseManager::new(
+        config.license_key.as_deref(),
+    ));
+    crate::license::set_global(license_manager.clone());
+    match license_manager.status() {
+        crate::license::LicenseStatus::Valid => {
+            tracing::info!("enterprise license: valid")
+        }
+        crate::license::LicenseStatus::Expired => {
+            tracing::warn!("enterprise license: expired — enterprise features disabled")
+        }
+        crate::license::LicenseStatus::Evaluating { days_remaining } => {
+            tracing::info!(days_remaining, "enterprise license: evaluation period")
+        }
+        crate::license::LicenseStatus::NoLicense => {
+            tracing::info!(
+                "enterprise license: none — enterprise features disabled (evaluation period ended)"
+            )
+        }
+    }
+
     // Extract SAML provider and TOTP enforcement before config is moved into SessionManager
-    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> = config
-        .auth
-        .as_ref()
-        .and_then(|a| {
-            a.saml
-                .as_ref()
-                .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone())))
-        })
-        .or_else(|| {
-            // A DB-configured SAML provider (admin auth page) also needs the
-            // ACS/metadata routes; build the provider from its stored config.
-            crate::providers_db::load_providers(&database)
-                .ok()
-                .and_then(|providers| {
-                    providers
-                        .iter()
-                        .find(|p| p.enabled && p.provider_type == "saml")
-                        .and_then(|p| {
-                            serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
-                                p.config.clone(),
-                            )
-                            .ok()
-                        })
-                        .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg)))
+    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> = if !license_manager
+        .has_feature(crate::license::FEAT_SAML)
+    {
+        if config.auth.as_ref().is_some_and(|a| a.saml.is_some()) {
+            tracing::warn!(
+                "auth.saml is configured but SAML SSO requires an enterprise license — SAML login is disabled"
+            );
+        }
+        None
+    } else {
+        config
+            .auth
+            .as_ref()
+            .and_then(|a| {
+                a.saml.as_ref().map(|cfg| {
+                    Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone()))
                 })
-        });
-    let totp_enforcement = config
+            })
+            .or_else(|| {
+                // A DB-configured SAML provider (admin auth page) also needs the
+                // ACS/metadata routes; build the provider from its stored config.
+                crate::providers_db::load_providers(&database)
+                    .ok()
+                    .and_then(|providers| {
+                        providers
+                            .iter()
+                            .find(|p| p.enabled && p.provider_type == "saml")
+                            .and_then(|p| {
+                                serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
+                                    p.config.clone(),
+                                )
+                                .ok()
+                            })
+                            .map(|cfg| {
+                                Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg))
+                            })
+                    })
+            })
+    };
+    let totp_enforcement_configured = config
         .auth
         .as_ref()
         .and_then(|a| a.totp.as_ref())
         .map(|t| t.enforcement)
         .unwrap_or(crate::totp::TotpEnforcement::Off);
+    let totp_enforcement = if totp_enforcement_configured != crate::totp::TotpEnforcement::Off
+        && !license_manager.has_feature(crate::license::FEAT_TOTP)
+    {
+        tracing::warn!(
+            configured = ?totp_enforcement_configured,
+            "TOTP enforcement requires an enterprise license — falling back to Off (users may still opt in to TOTP themselves)"
+        );
+        crate::totp::TotpEnforcement::Off
+    } else {
+        totp_enforcement_configured
+    };
+
+    // Save secure_cookies before config is moved into SessionManager
+    let secure_cookies_flag = config
+        .tls
+        .as_ref()
+        .map(|t| t.secure_cookies)
+        .unwrap_or(true);
+    SecureCookies::init(secure_cookies_flag);
+    if !secure_cookies_flag {
+        tracing::info!(
+            "secure_cookies = false — the Secure attribute will be omitted from all cookies (self-signed cert mode)"
+        );
+    }
 
     // Create session manager
     let manager: AppState = Arc::new(SessionManager::new_with_db(
@@ -1813,7 +1878,8 @@ async fn run_server(
     let health_route = Router::new()
         .route("/api/health", get(api::health))
         .with_state(manager.clone())
-        .layer(middleware::from_fn(auth::optional_auth));
+        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(database.clone()));
 
     // Prometheus metrics endpoint
     let metrics_route = Router::new().route("/metrics", get(api::metrics));
@@ -1988,6 +2054,8 @@ async fn run_server(
         }
     });
     let tls_enabled = TlsEnabled(server_tls.is_some());
+    // SecureCookies::init was called before config was moved (see above)
+
     // Unknown routes fall through to the static dir; missing files hand off
     // to `not_found_handler`, which renders the styled error page. The
     // fallback must be registered BEFORE the shared layers below so they
@@ -2009,7 +2077,8 @@ async fn run_server(
         .layer(Extension(theme_data))
         .layer(Extension(trusted_proxies))
         .layer(Extension(branded_pages))
-        .layer(Extension(db_pool));
+        .layer(Extension(db_pool))
+        .layer(Extension(license_manager));
 
     let scheme = if server_tls.is_some() {
         "https"

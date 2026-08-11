@@ -3,17 +3,11 @@
 //! These tests verify that specific vulnerability classes cannot silently regress.
 
 // ── M01 — LDAP special-character escaping ──
-// `ldap_escape` is private in `persea::auth_providers::ldap`, so we replicate
-// the exact algorithm here to guard against regressions.
+// Calls the real implementation directly (made `pub` for exactly this reason
+// — see R07) so this test can't silently diverge from the code it's meant
+// to guard.
 
-fn ldap_escape(input: &str) -> String {
-    input
-        .replace('\\', "\\5c")
-        .replace('*', "\\2a")
-        .replace('(', "\\28")
-        .replace(')', "\\29")
-        .replace('\0', "\\00")
-}
+use persea::auth_providers::ldap::ldap_escape;
 
 #[test]
 fn m01_ldap_escape_asterisk() {
@@ -51,35 +45,15 @@ fn m01_ldap_escape_null() {
 }
 
 // ── H11 — CSV injection prevention ──
-// `csv_escape_field` is private in `persea::db`.  Replicate the OWASP
-// sanitisation logic to guard against regressions.
+// Calls the real implementation directly (made `pub` for exactly this reason
+// — see R07). The real function writes to a `dyn Write` rather than
+// returning a `String`; this is a signature adapter, not a reimplementation
+// of the escaping logic itself.
 
 fn csv_escape_field(field: &str) -> String {
-    let safe = if let Some(first) = field.chars().next() {
-        if matches!(first, '=' | '+' | '-' | '@' | '\t' | '\r') {
-            format!("'{}", field)
-        } else {
-            field.to_string()
-        }
-    } else {
-        field.to_string()
-    };
-
-    if safe.contains(',') || safe.contains('"') || safe.contains('\n') || safe.contains('\r') {
-        let mut out = String::with_capacity(safe.len() + 2);
-        out.push('"');
-        for ch in safe.chars() {
-            if ch == '"' {
-                out.push_str("\"\"");
-            } else {
-                out.push(ch);
-            }
-        }
-        out.push('"');
-        out
-    } else {
-        safe
-    }
+    let mut buf = Vec::new();
+    persea::db::csv_escape_field(&mut buf, field).unwrap();
+    String::from_utf8(buf).unwrap()
 }
 
 #[test]

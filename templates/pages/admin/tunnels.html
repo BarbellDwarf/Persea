@@ -152,7 +152,7 @@
             <div class="flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-colors ${selectedHostId === jh.id ? 'border-emerald-600 bg-emerald-900/20' : 'border-[var(--border)] bg-[var(--bg-card)]/50 hover:border-[var(--border)]'}"
                  onclick="selectJumpHost('${jh.id}')">
                 <div class="flex items-center gap-3">
-                    <span class="w-2 h-2 rounded-full ${jh.status === 'connected' ? 'bg-green-400' : jh.status === 'error' ? 'bg-red-400' : 'bg-gray-500'}"></span>
+                    <span class="w-2 h-2 rounded-full ${jh.status === 'connected' ? 'bg-green-400' : jh.status === 'error' ? 'bg-red-400' : 'bg-[var(--text-muted)]'}"></span>
                     <div>
                         <div class="text-sm font-medium text-[var(--text-primary)]">${esc(jh.name)}</div>
                         <div class="text-xs text-[var(--text-muted)]">${esc(jh.username)}@${esc(jh.hostname)}:${jh.port}</div>
@@ -370,16 +370,11 @@
                 <td class="py-2 text-[var(--text-muted)]">${esc(t.user || '')}</td>
                 <td class="py-2"><span class="px-2 py-0.5 text-xs rounded-full ${t.status === 'connected' ? 'bg-green-900/50 text-green-300' : t.status === 'error' ? 'bg-red-900/50 text-red-300' : 'bg-yellow-900/50 text-yellow-300'}">${t.status || 'unknown'}</span></td>
                 <td class="py-2 text-[var(--text-muted)]">${t.duration || ''}</td>
-                <td class="py-2"><button onclick="disconnectTunnel('${t.id}')" class="text-xs text-red-400 hover:text-red-300">Disconnect</button></td>
+                <td class="py-2"><button disabled title="Disconnecting active tunnels from this page isn't supported yet — restart the persea service to close all active tunnels." class="text-xs text-[var(--text-muted)] cursor-not-allowed" aria-disabled="true">Disconnect</button></td>
             </tr>`).join('')}</tbody></table>`;
         } catch (e) {
             console.error('Failed to load active tunnels:', e);
         }
-    }
-
-    function disconnectTunnel(id) {
-        // TODO: implement disconnect API when backend support is added
-        alert('Disconnect is not yet implemented.');
     }
 
     // Refresh active tunnels periodically
