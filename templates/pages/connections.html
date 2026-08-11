@@ -888,20 +888,25 @@
             })
             .then(function(res) {
                 if (btn) { btn.disabled = false; btn.textContent = 'Connect'; }
-                if (!res.ok && res.data.code === 401) {
-                    window.location.href = '/';
-                    return;
-                }
                 if (res.ok && res.data.session_id) {
                     var url = '/client/' + encodeURIComponent(res.data.session_id);
                     var list = entriesByFolder.get(folderKey(scope, folder)) || [];
                     var e = findByName(list, entry);
                     var displayName = e ? (e.display_name || '') : '';
                     if (displayName) url += '?name=' + encodeURIComponent(displayName);
-                    window.open(url, '_blank');
+                    if (!window.open(url, '_blank') && err) {
+                        // Popup blocked — the session was created but never
+                        // joined; tell the user instead of silently leaving a
+                        // dangling pending session.
+                        err.textContent = 'Popup blocked \u2014 allow popups for this site and try again.';
+                        err.classList.remove('hidden');
+                    }
                     return;
                 }
                 if (err) {
+                    // Stay on the Connections page — a failed or stale
+                    // connect attempt must not bounce the user to the login
+                    // screen (they are still authenticated here).
                     err.textContent = res.data.error || 'Failed to connect.';
                     err.classList.remove('hidden');
                 }
