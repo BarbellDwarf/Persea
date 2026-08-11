@@ -129,10 +129,11 @@ function updatePreview() {
     var logoText = document.getElementById('preview-logo-text');
     logoEl.style.background = color;
 
-    if (logoUrl) {
-        // Only http(s) URLs are allowed for the logo — a javascript: URI
-        // would execute in the page context (DOM XSS, CodeQL flag).
-        var safe = /^https?:\/\//i.test(logoUrl);
+    // Only http(s) URLs are allowed for the logo — a javascript: URI would
+    // execute in the page context (DOM XSS, CodeQL flag). Anything else is
+    // rejected outright; the empty string is a safe literal, never user input.
+    var logoUrlSafe = /^https?:\/\//i.test(logoUrl || '');
+    if (logoUrlSafe) {
         logoText.style.display = 'none';
         var img = logoEl.querySelector('img');
         if (!img) {
@@ -140,11 +141,11 @@ function updatePreview() {
             img.style.cssText = 'height:28px;width:auto;object-fit:contain';
             logoEl.appendChild(img);
         }
-        img.src = safe ? logoUrl : '';
-        img.style.display = safe ? '' : 'none';
+        img.src = logoUrl;
+        img.style.display = '';
     } else {
         var img = logoEl.querySelector('img');
-        if (img) img.remove();
+        if (img) { img.remove(); }
         logoText.style.display = '';
     }
 }

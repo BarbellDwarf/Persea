@@ -177,6 +177,7 @@
     <script>(function(){var c=localStorage.getItem('persea_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);}catch(e){}}})();</script>
 
     <!-- Guacamole JS modules -->
+    <script src="/js/utils.js?v=1.1.1"></script>
     <script src="/guac/Namespace.js"></script>
     <script src="/guac/Client.js"></script>
     <script src="/guac/Display.js"></script>
@@ -749,7 +750,7 @@
                 for (var i = 0; i < files.length; i++) { uploadFile(files[i]); }
             });
             function uploadFile(file) {
-                showTransferStatus('<span style="color:var(--accent);">Uploading:</span> ' + file.name + ' <span style="color:var(--text-dim);">(' + formatBytes(file.size) + ')</span>');
+                showTransferStatus('<span style="color:var(--accent);">Uploading:</span> ' + escapeHtml(file.name) + ' <span style="color:var(--text-dim);">(' + formatBytes(file.size) + ')</span>');
                 var reader = new FileReader();
                 reader.onload = function(e) {
                     try {
@@ -757,16 +758,16 @@
                         var writer = new Guacamole.ArrayBufferWriter(stream);
                         writer.onack = function(status) {
                             if (status.code && status.code !== 0x0000) {
-                                showTransferStatus('<span style="color:var(--primary);">Error:</span> ' + file.name);
+                                showTransferStatus('<span style="color:var(--primary);">Error:</span> ' + escapeHtml(file.name));
                                 setTimeout(hideTransferStatus, 3000);
                             }
                         };
                         writer.sendData(e.target.result);
                         writer.sendEnd();
-                        showTransferStatus('<span style="color:var(--accent);">Sent:</span> ' + file.name);
+                        showTransferStatus('<span style="color:var(--accent);">Sent:</span> ' + escapeHtml(file.name));
                         setTimeout(hideTransferStatus, 2000);
                     } catch (err) {
-                        showTransferStatus('<span style="color:var(--primary);">Failed:</span> ' + file.name);
+                        showTransferStatus('<span style="color:var(--primary);">Failed:</span> ' + escapeHtml(file.name));
                         setTimeout(hideTransferStatus, 3000);
                     }
                 };
