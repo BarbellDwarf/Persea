@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-08-11
+
+### Fixed
+
+- **Docker first-run crashed on filesystems without chmod support** (R82) — the
+  entrypoint's `chmod 600` on `admin-key.txt` failed with EPERM on Windows/WSL
+  bind mounts (`/mnt/g/...`, 9p, virtiofs), and `set -e` killed the script
+  before the admin key was created — so the DB never initialized and every
+  container restart looped on "First run detected". The chmod is now
+  best-effort with a clear warning; POSIX filesystems still get `chmod 600`.
+
 ## [Unreleased]
 
 ### Changed

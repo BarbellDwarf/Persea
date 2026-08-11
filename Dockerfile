@@ -296,7 +296,12 @@ if [ ! -f "$DB_PATH" ]; then
     echo "First run detected — creating admin API key..."
     ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
     touch "$ADMIN_KEY_FILE"
-    chmod 600 "$ADMIN_KEY_FILE"
+    # Best-effort: some bind mounts (Windows/WSL, 9p, virtiofs) don't support
+    # chmod and would otherwise kill the script under set -e, leaving the DB
+    # uncreated and the container looping on first run forever.
+    if ! chmod 600 "$ADMIN_KEY_FILE" 2>/dev/null; then
+        echo "warning: could not set owner-only permissions on $ADMIN_KEY_FILE (filesystem does not support chmod) — the admin API key may be readable by other users on the host"
+    fi
     /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin > "$ADMIN_KEY_FILE" 2>&1
     echo "Admin API key written to $ADMIN_KEY_FILE (owner-read only)"
 fi
