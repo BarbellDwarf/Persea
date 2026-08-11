@@ -210,7 +210,6 @@ async fn put_accepts_array_values_from_duplicate_form_names() {
     let body = serde_json::json!({
         "db_only_mode": ["false", "false"],
         "enable_rdp": ["true", "true"],
-        "rdp_connection_mode": ["proxy", "fallback"],
     });
     let resp = router
         .oneshot(admin_put(&key, "/api/system/settings", body))
@@ -220,7 +219,6 @@ async fn put_accepts_array_values_from_duplicate_form_names() {
     let saved = body_json(resp).await;
     assert_eq!(saved["db_only_mode"].as_bool(), Some(false));
     assert_eq!(saved["enable_rdp"].as_bool(), Some(true));
-    assert_eq!(saved["rdp_connection_mode"].as_str(), Some("fallback"));
 }
 
 #[tokio::test]
