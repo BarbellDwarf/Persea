@@ -41,7 +41,11 @@ async fn check_totp_enforcement(
     user_id: i64,
     role: &str,
     enforcement: &TotpEnforcement,
+    license_manager: &crate::license::LicenseManager,
 ) -> bool {
+    if !license_manager.has_feature(crate::license::FEAT_TOTP) {
+        return false;
+    }
     match enforcement {
         TotpEnforcement::Off => false,
         TotpEnforcement::AdminsOnly => {
@@ -102,7 +106,7 @@ async fn redirect_to_mfa(
     };
 
     let mfa_cookie = format!(
-        "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{}SameSite=Lax; Max-Age={}",
+        "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age={}",
         pending_token,
         crate::csrf::cookie_secure_attr(headers, tls_enabled, trusted_proxies, peer_ip),
         ttl_secs
@@ -198,6 +202,7 @@ pub async fn login_submit(
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(tls_enabled): Extension<TlsEnabled>,
     Extension(auth_chain): Extension<Arc<AuthChain>>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<LoginFormData>,
 ) -> Response {
@@ -276,7 +281,14 @@ pub async fn login_submit(
                 .map(|t| t.enforcement)
                 .unwrap_or(TotpEnforcement::Off);
 
-            if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
+            if check_totp_enforcement(
+                &database,
+                user.id,
+                &effective_role,
+                &totp_enforcement,
+                &license_manager,
+            )
+            .await
             {
                 let ttl_secs = 300; // 5 minutes for MFA pending
                 return redirect_to_mfa(
@@ -378,7 +390,7 @@ pub async fn login_submit(
             }
 
             let session_cookie = format!(
-                "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
+                "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
                 session_token,
                 crate::csrf::cookie_secure_attr(
                     &headers,
@@ -678,14 +690,14 @@ pub async fn mfa_submit(
         Some(addr.ip()),
     );
     let session_cookie = format!(
-        "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
+        "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
         session_token,
-        if secure.is_empty() { "" } else { "Secure; " },
+        if secure.is_empty() { "" } else { "Secure;" },
         ttl_secs
     );
     let clear_mfa_cookie = format!(
-        "persea_mfa_pending=; Path=/auth/mfa; HttpOnly;{}SameSite=Lax; Max-Age=0",
-        if secure.is_empty() { "" } else { "Secure; " }
+        "persea_mfa_pending=; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        if secure.is_empty() { "" } else { "Secure;" }
     );
 
     (
@@ -721,6 +733,7 @@ pub async fn saml_acs(
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(totp_enforcement): Extension<TotpEnforcement>,
     Extension(tls_enabled): Extension<TlsEnabled>,
+    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<SamlAcsForm>,
 ) -> Response {
@@ -728,6 +741,11 @@ pub async fn saml_acs(
     use std::collections::HashMap;
 
     let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
+
+    if !license_manager.has_feature(crate::license::FEAT_SAML) {
+        tracing::warn!(client_ip = %client_ip, "SAML login attempted without an enterprise license");
+        return Redirect::to("/?error=saml_not_licensed").into_response();
+    }
 
     if form.SAMLResponse.is_empty() {
         return Redirect::to("/?error=saml_missing_response").into_response();
@@ -793,7 +811,14 @@ pub async fn saml_acs(
 
             // Check TOTP enforcement before creating session
             let effective_role = role.clone().unwrap_or_else(|| user.role.clone());
-            if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
+            if check_totp_enforcement(
+                &database,
+                user.id,
+                &effective_role,
+                &totp_enforcement,
+                &license_manager,
+            )
+            .await
             {
                 let ttl_secs = 300; // 5 minutes for MFA pending
                 return redirect_to_mfa(
@@ -853,7 +878,7 @@ pub async fn saml_acs(
                 .unwrap_or_else(|| "/connections.html".to_string());
 
             let session_cookie = format!(
-                "persea_session={}; Path=/; HttpOnly;{}SameSite=Lax; Max-Age={}",
+                "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
                 session_token,
                 crate::csrf::cookie_secure_attr(
                     &headers,

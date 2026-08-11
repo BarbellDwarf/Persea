@@ -28,6 +28,28 @@ const CSRF_TOKEN_LEN: usize = 32;
 #[derive(Clone)]
 pub struct TlsEnabled(pub bool);
 
+/// Whether to set the `Secure` attribute on cookies. Defaults to true when TLS
+/// is enabled. Set to false for self-signed certs — browsers block Secure
+/// cookies over connections with invalid certificates.
+///
+/// Stored as a process-global once set at startup, so `cookie_secure_attr` can
+/// read it without threading the value through every handler.
+pub struct SecureCookies(pub bool);
+
+static SECURE_COOKIES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+impl SecureCookies {
+    /// Initialize the global secure-cookies flag (call once at startup).
+    pub fn init(secure: bool) {
+        let _ = SECURE_COOKIES.set(secure);
+    }
+
+    /// Read the global flag. Returns true (default) if not yet initialized.
+    pub fn enabled() -> bool {
+        SECURE_COOKIES.get().copied().unwrap_or(true)
+    }
+}
+
 /// Is the connection HTTPS? True when Persea terminated TLS itself, or when
 /// a trusted proxy reports `X-Forwarded-Proto: https`. The proxy header is
 /// only honoured when the immediate peer is in `trusted_proxies` — matching
@@ -62,6 +84,11 @@ pub fn is_https(
 /// `is_https` for code that holds the full request: reads `TlsEnabled`,
 /// `TrustedProxies`, and `ConnectInfo` from the request extensions.
 pub fn is_https_request(req: &Request<Body>) -> bool {
+    // If SecureCookies is disabled (e.g. self-signed cert), skip the Secure
+    // attribute on all cookies.
+    if !SecureCookies::enabled() {
+        return false;
+    }
     let tls_enabled = req
         .extensions()
         .get::<TlsEnabled>()
@@ -75,22 +102,23 @@ pub fn is_https_request(req: &Request<Body>) -> bool {
     is_https(req.headers(), tls_enabled, trusted_proxies, peer_ip)
 }
 
-/// `" Secure; "` when the request arrived over HTTPS (Persea's own TLS or a
+/// `" Secure;"` when the request arrived over HTTPS (Persea's own TLS or a
 /// trusted proxy), empty otherwise. Set-Cookie builders use this so session
 /// cookies are not dropped by browsers when serving plain HTTP (e.g. LAN
 /// access without TLS).
 ///
-/// The value is designed to be interpolated into `HttpOnly;{}SameSite=Lax`
+/// The value is designed to be interpolated into `HttpOnly;{} SameSite=Lax`
 /// so the result is `HttpOnly; Secure; SameSite=Lax` (HTTPS) or
-/// `HttpOnly;SameSite=Lax` (HTTP) — no double semicolons.
+/// `HttpOnly; SameSite=Lax` (HTTP) — no double semicolons, always a space
+/// before SameSite so Chromium parses the attribute correctly.
 pub fn cookie_secure_attr(
     headers: &HeaderMap,
     tls_enabled: bool,
     trusted_proxies: Option<&TrustedProxies>,
     peer_ip: Option<IpAddr>,
 ) -> &'static str {
-    if is_https(headers, tls_enabled, trusted_proxies, peer_ip) {
-        " Secure; "
+    if SecureCookies::enabled() && is_https(headers, tls_enabled, trusted_proxies, peer_ip) {
+        " Secure;"
     } else {
         ""
     }
@@ -104,19 +132,25 @@ fn generate_token() -> String {
 }
 
 fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies.split(';').find_map(|c| {
-                let c = c.trim();
-                if let Some(val) = c.strip_prefix(name) {
-                    val.strip_prefix('=').map(|v| v.to_string())
-                } else {
-                    None
-                }
-            })
-        })
+    // Combine ALL cookie headers before parsing — some clients split cookies
+    // across multiple Cookie headers, and `get()` would only see the first.
+    let combined: String = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect::<Vec<_>>()
+        .join("; ");
+    if combined.is_empty() {
+        return None;
+    }
+    combined.split(';').find_map(|c| {
+        let c = c.trim();
+        if let Some(val) = c.strip_prefix(name) {
+            val.strip_prefix('=').map(|v| v.to_string())
+        } else {
+            None
+        }
+    })
 }
 
 fn is_state_changing(method: &Method) -> bool {
@@ -159,7 +193,13 @@ where
         let method = req.method().clone();
         // Secure cookie attribute only over HTTPS: Persea's own TLS, or a
         // trusted proxy's X-Forwarded-Proto (gated on the peer address).
-        let is_https = is_https_request(&req);
+        // Also gated on `SecureCookies::enabled()` — same as the session
+        // cookie's `cookie_secure_attr()` — so a self-signed cert (which
+        // browsers refuse to send Secure-flagged cookies over, even after
+        // clicking through the warning) doesn't silently drop this cookie
+        // too. This was missed when that fix landed: this is a separate,
+        // parallel code path that never consulted the flag at all.
+        let is_https = SecureCookies::enabled() && is_https_request(&req);
 
         let mut inner = self.inner.clone();
         Box::pin(async move {
@@ -225,12 +265,27 @@ where
                 match (&incoming_cookie, &effective) {
                     (Some(c), Some(h)) if c == h => { /* valid */ }
                     _ => {
+                        let path = req.uri().path().to_string();
                         tracing::warn!(
                             expected = %incoming_cookie.as_deref().unwrap_or("none"),
                             received = %effective.as_deref().unwrap_or("none"),
-                            path = %req.uri().path(),
+                            path = %path,
                             "CSRF token mismatch"
                         );
+                        // The login form is a plain (non-fetch) POST — see
+                        // R70 — so a raw JSON body here would navigate the
+                        // browser straight to it instead of showing on the
+                        // login page. Redirect back with a friendly error
+                        // instead, matching how every other login failure
+                        // is surfaced. All other endpoints (admin UI, API)
+                        // are fetch/htmx-driven and expect JSON.
+                        if path == "/auth/login" {
+                            return Ok(Response::builder()
+                                .status(StatusCode::SEE_OTHER)
+                                .header(header::LOCATION, "/?error=csrf_failed")
+                                .body(Body::empty())
+                                .unwrap_or_else(|_| Response::new(Body::empty())));
+                        }
                         let body_text =
                             serde_json::json!({"error": "CSRF token missing or invalid"})
                                 .to_string();
@@ -393,9 +448,9 @@ mod tests {
 
     #[test]
     fn cookie_format_no_double_semicolons() {
-        let secure = " Secure; ";
+        let secure = " Secure;";
         let cookie = format!(
-            "persea_session=test123; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=86400",
+            "persea_session=test123; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=86400",
             secure
         );
         assert!(
@@ -412,7 +467,7 @@ mod tests {
     fn cookie_format_http_no_secure() {
         let secure = "";
         let cookie = format!(
-            "persea_session=test123; Path=/; HttpOnly;{}SameSite=Lax; Max-Age=86400",
+            "persea_session=test123; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=86400",
             secure
         );
         assert!(
@@ -420,7 +475,7 @@ mod tests {
             "double semicolons in cookie: {cookie}"
         );
         assert!(
-            cookie.contains("HttpOnly;SameSite=Lax"),
+            cookie.contains("HttpOnly; SameSite=Lax"),
             "expected no-secure format: {cookie}"
         );
         assert!(
