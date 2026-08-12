@@ -616,7 +616,7 @@ pub struct Config {
     /// to work alongside it.
     pub db_url: Option<String>,
 
-    /// Stable identifier for this instance, used by the enterprise HA
+    /// Stable identifier for this instance, used by the shared HA
     /// session registry to mark session ownership. Must be unique
     /// across the fleet; defaults to `hostname-pid`. Recording rotation and
     /// the session reaper only operate on sessions/files this instance owns.
@@ -624,19 +624,13 @@ pub struct Config {
     pub instance_id: String,
 
     /// Public base URL of this instance (scheme + host + port), e.g.
-    /// "https://persea-1.example.com". When the HA license is active and a
-    /// session created here is joined from another instance, browsers are
-    /// redirected to this URL so the owner instance can serve the guacd
-    /// stream. Unset: remote joins to this instance's sessions are rejected
-    /// with a clear error.
+    /// "https://persea-1.example.com". When a session created here is
+    /// joined from another instance, browsers are redirected to this URL
+    /// so the owner instance can serve the guacd stream. Unset: remote
+    /// joins to this instance's sessions are rejected with a clear error.
     #[serde(default)]
     pub ha_base_url: Option<String>,
 
-    /// Commercial license key (format: `PSEA-<base64>`).
-    /// When absent, enterprise features are available during the 30-day
-    /// evaluation period.
-    #[serde(default)]
-    pub license_key: Option<String>,
     /// Storage backend for the address book (connections, credentials).
     /// When `backend = "db"` (default), the DB stores folder/entry metadata
     /// and encrypted credentials. When `backend = "vault"`, metadata stays
@@ -1594,7 +1588,6 @@ impl Default for Config {
             instance_id: default_instance_id(),
             ha_base_url: None,
             storage: None,
-            license_key: None,
             password: default_password_config(),
         }
     }

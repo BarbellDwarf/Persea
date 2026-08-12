@@ -36,7 +36,6 @@ pub mod drive;
 pub mod error;
 pub mod guacd;
 pub mod import;
-pub mod license;
 pub mod metrics;
 pub mod migrate;
 pub mod oidc;
