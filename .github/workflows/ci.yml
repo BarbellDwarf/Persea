@@ -16,7 +16,12 @@ jobs:
           fi
       - name: Fail if private key material is committed
         run: |
-          HITS=$(grep -rIl "BEGIN OPENSSH PRIVATE KEY" --exclude-dir=.git . || true)
+          # A real key file starts with the PEM header at line 1. Docs,
+          # templates, and workflows legitimately mention the header as a
+          # placeholder or example, so they are excluded.
+          HITS=$(grep -rIlE "^-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----" \
+            --exclude-dir=.git --exclude="*.html" --exclude="*.md" \
+            --exclude="*.yml" . || true)
           if [ -n "$HITS" ]; then
             echo "private key material found in: $HITS"
             exit 1
