@@ -365,7 +365,8 @@
             <p id="disconnected-message">The remote session has been disconnected.</p>
             <div>
                 <button id="btn-reconnect" class="btn-secondary">Reconnect</button>
-                <button id="btn-close-session" class="btn-primary">Close</button>
+                <button id="btn-close-session" class="btn-primary">Close tab</button>
+                <button id="btn-back-connections" class="btn-secondary" style="display:none">Back to connections</button>
             </div>
         </div>
     </div>
@@ -442,6 +443,37 @@
             };
         })();
         var connectStartTime = Date.now();
+
+        // ── Session open preference + close-or-navigate ──
+        // Per-user preference (account profile page), stored in localStorage
+        // like the theme/clipboard prefs: `tab` (default) | `window` | `same`.
+        function getOpenMode() {
+            var m = localStorage.getItem('persea_session_open');
+            return (m === 'window' || m === 'same') ? m : 'tab';
+        }
+        function openSessionUrl(url) {
+            var mode = getOpenMode();
+            if (mode === 'same') { window.location.href = url; return true; }
+            var features = (mode === 'window') ? 'width=1280,height=800' : undefined;
+            return !!window.open(url, '_blank', features);
+        }
+        // EVERY exit path funnels through here. Session tabs are script-opened
+        // from the Connections page, so window.close() works; if the browser
+        // blocks it (tab opened directly, or via a share link), fall back to
+        // navigating after ~100ms so no dead tab parks on /connections.html.
+        // When closing, focus the opener tab. In `same` mode the session page
+        // IS the user's main tab — navigate back instead of closing.
+        // Share viewers have no Connections page — their landing spot is the
+        // site home.
+        var exitTarget = shareToken ? '/' : '/connections.html';
+        function closeOrNavigate() {
+            if (exitInProgress) return;
+            exitInProgress = true;
+            if (getOpenMode() === 'same') { window.location.href = exitTarget; return; }
+            try { window.close(); } catch (e) {}
+            try { if (window.opener) window.opener.focus(); } catch (e) {}
+            setTimeout(function() { window.location.href = exitTarget; }, 100);
+        }
 
         // ── Settings state ──
         var cfgQuality = parseInt(localStorage.getItem('rg_quality') || '80', 10);
@@ -608,7 +640,7 @@
             userDisconnected = true;
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
-            window.location.href = '/connections.html';
+            closeOrNavigate();
         });
 
         // ── Log Out (destroy session entirely) ──
@@ -626,10 +658,10 @@
                 credentials: 'same-origin'
             }).then(function() {
                 try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
-                window.location.href = '/connections.html';
+                closeOrNavigate();
             }).catch(function() {
                 try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
-                window.location.href = '/connections.html';
+                closeOrNavigate();
             });
         });
 
@@ -698,7 +730,11 @@
         else if (shareToken) {
             fetch('/api/sessions/' + sessionId + '/banner?token=' + encodeURIComponent(shareToken))
             .then(function(r) { return r.ok ? r.json() : null; })
-            .then(function(d) { return showBanner(d && d.banner); })
+            .then(function(d) {
+                sessionReconnectable = !!(d && d.banner);
+                updateReconnectVisibility();
+                return showBanner(d && d.banner);
+            })
             .then(function() { startGuacamole(); })
             .catch(function() { startGuacamole(); });
         } else {
@@ -708,10 +744,9 @@
             .then(function(res) {
                 if (res.status === 401 || res.status === 404) {
                     // Session gone (cancelled while starting, reaped, or
-                    // deleted) or the auth session expired — return to the
-                    // Connections page instead of stranding the user on a
-                    // dead tab with no way out.
-                    window.location.href = '/connections.html';
+                    // deleted) or the auth session expired — leave instead of
+                    // stranding the user on a dead tab with no way out.
+                    closeOrNavigate();
                     throw new Error('redirect');
                 }
                 if (!res.ok) { statusEl.textContent = 'Error: Session not found'; throw new Error('Session not found'); }
@@ -733,6 +768,7 @@
                 // ephemeral-key prompt). Banner presence is the client-side
                 // marker used to gate the Reconnect buttons.
                 sessionReconnectable = !!(session && session.banner);
+                updateReconnectVisibility();
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 if (session && session.drive_enabled) { driveEnabled = true; document.getElementById('btn-file-transfer').style.display = ''; }
@@ -772,15 +808,47 @@
             }, delay);
         }
 
+        // ── Reconnect button gating ──
+        // Reconnect is only offered for sessions that genuinely support
+        // reconnection — the deferred/ephemeral-key sessions, which are
+        // exactly the sessions that carry a banner (the ephemeral-key
+        // prompt). Everything else hides the button: re-joining would only
+        // fail or spawn a pointless fresh guacd connection.
+        function updateReconnectVisibility() {
+            var canReconnect = sessionReconnectable && (shareToken || relaunchInfo);
+            document.getElementById('btn-reconnect').style.display = canReconnect ? '' : 'none';
+        }
+
+        // ── Ended-overlay auto-close ──
+        // No auto-navigation while the user reads the overlay; but a dead
+        // session tab should not park forever either, so a generous 60s
+        // timeout funnels into the same close-or-navigate helper.
+        var autoCloseTimer = null;
+        function startAutoClose() {
+            if (autoCloseTimer) { clearTimeout(autoCloseTimer); autoCloseTimer = null; }
+            autoCloseTimer = setTimeout(function() { autoCloseTimer = null; closeOrNavigate(); }, 60000);
+        }
+        function cancelAutoClose() {
+            if (autoCloseTimer) { clearTimeout(autoCloseTimer); autoCloseTimer = null; }
+        }
+
         // Show the ended overlay and stop the auto-reconnect loop for good.
         function showSessionEnded(title, message) {
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             reconnectAttempts = maxReconnectAttempts;
             statusEl.textContent = 'Disconnected';
             statusEl.className = '';
+            setLiveState('ended');
             document.getElementById('disconnected-title').textContent = title;
             document.getElementById('disconnected-message').textContent = message;
+            updateReconnectVisibility();
+            // In `same` mode the Close-tab button already reads "Back to
+            // connections" and does exactly that — a second identical button
+            // would be redundant.
+            document.getElementById('btn-back-connections').style.display =
+                (getOpenMode() === 'same') ? 'none' : '';
             document.getElementById('disconnected-overlay').className = 'visible';
+            startAutoClose();
         }
 
         // Distinguish "the session actually ended" (user typed exit, remote
@@ -1207,25 +1275,37 @@
             };
 
             // Disconnected overlay buttons
-            document.getElementById('btn-close-session').addEventListener('click', function() {
+            // In `same` mode the session page IS the user's main tab, so the
+            // close helper navigates back — label the button accordingly.
+            var btnCloseSession = document.getElementById('btn-close-session');
+            if (getOpenMode() === 'same') btnCloseSession.textContent = 'Back to connections';
+            btnCloseSession.addEventListener('click', function() {
                 userDisconnected = true;
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
-                // Owners go back to the Connections page (still authenticated).
-                // Share viewers have no connections page — the site home is
-                // their landing spot.
+                cancelAutoClose();
+                closeOrNavigate();
+            });
+            document.getElementById('btn-back-connections').addEventListener('click', function() {
+                userDisconnected = true;
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                cancelAutoClose();
+                // Explicit user choice to keep this tab and browse — a plain
+                // navigation, not the close helper. Share viewers land on the
+                // site home (they have no Connections page).
                 window.location.href = shareToken ? '/' : '/connections.html';
             });
             document.getElementById('btn-reconnect').addEventListener('click', function() {
                 userDisconnected = true;
                 if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                cancelAutoClose();
                 var btn = this;
                 btn.disabled = true; btn.textContent = 'Reconnecting...';
                 if (shareToken) { window.location.reload(); return; }
-                if (!relaunchInfo) { window.location.href = '/connections.html'; return; }
+                if (!relaunchInfo) { closeOrNavigate(); return; }
                 var key = relaunchInfo.entry_key;
                 var firstSlash = key.indexOf('/');
                 var lastSlash = key.lastIndexOf('/');
-                if (firstSlash < 0 || lastSlash <= firstSlash) { window.location.href = '/connections.html'; return; }
+                if (firstSlash < 0 || lastSlash <= firstSlash) { closeOrNavigate(); return; }
                 var scope = key.substring(0, firstSlash);
                 var folder = relaunchInfo.folder;
                 var entry = key.substring(lastSlash + 1);
@@ -1235,8 +1315,23 @@
                     method: 'POST', headers: headers, credentials: 'same-origin',
                     body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, dpi: Math.round((window.devicePixelRatio || 1) * 96) })
                 })
-                .then(function(res) { if (!res.ok) { window.location.href = '/connections.html'; return; } return res.json().then(function(d) { window.location.href = d && d.client_url ? d.client_url : '/connections.html'; }); })
-                .catch(function() { window.location.href = '/connections.html'; });
+                .then(function(res) {
+                    if (!res.ok) { btn.disabled = false; btn.textContent = 'Reconnect'; closeOrNavigate(); return; }
+                    return res.json().then(function(d) {
+                        if (!d.client_url) { btn.disabled = false; btn.textContent = 'Reconnect'; closeOrNavigate(); return; }
+                        if (getOpenMode() === 'same') { window.location.href = d.client_url; return; }
+                        if (openSessionUrl(d.client_url)) {
+                            // The relaunched session lives in its own tab —
+                            // this tab is a dead session tab now: close it.
+                            setTimeout(closeOrNavigate, 500);
+                        } else {
+                            // Popup blocked — take over this tab instead of
+                            // stranding the user on the overlay.
+                            window.location.href = d.client_url;
+                        }
+                    });
+                })
+                .catch(function() { btn.disabled = false; btn.textContent = 'Reconnect'; closeOrNavigate(); });
             });
 
             // ── Keyboard ──
