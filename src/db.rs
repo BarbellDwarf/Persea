@@ -8937,9 +8937,7 @@ pub(crate) async fn providers_move_pool(
 
 // ── System settings (src/settings_merge.rs, src/api/settings.rs) ──────
 
-pub async fn settings_load_all_pool(
-    pool: &DbPool,
-) -> rusqlite::Result<Vec<(String, String)>> {
+pub async fn settings_load_all_pool(pool: &DbPool) -> rusqlite::Result<Vec<(String, String)>> {
     let sql = qsql!(
         pool,
         "SELECT key, value FROM system_settings",

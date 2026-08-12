@@ -45,7 +45,6 @@ async fn mysql_backend_round_trip_and_persistence() {
 
 macro_rules! check_rows_in_backend {
     ($pool:expr, $users_q:expr, $folders_q:expr, $entries_q:expr, $email:expr, $folder:expr, $entry:expr, $site_title:expr, $settings_q:expr $(,)?) => {{
-        
         let row = sqlx::query($users_q)
             .bind(&$email)
             .bind(&$email)
@@ -59,10 +58,7 @@ macro_rules! check_rows_in_backend {
             $email
         );
 
-        let row = sqlx::query($settings_q)
-            .fetch_one($pool)
-            .await
-            .unwrap();
+        let row = sqlx::query($settings_q).fetch_one($pool).await.unwrap();
         let value: String = row.get(0);
         assert_eq!(
             value, $site_title,
@@ -412,7 +408,8 @@ async fn send_json(
         request = request.header("X-CSRF-Token", tok);
         request = request.header("Cookie", format!("csrf_token={tok}"));
     }
-    let resp = request.send()
+    let resp = request
+        .send()
         .await
         .unwrap_or_else(|e| panic!("request to {url} failed: {e}"));
     let status = resp.status();
