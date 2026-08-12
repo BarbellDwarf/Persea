@@ -152,11 +152,6 @@ admin API (`/api/admin/rbac/groups`):
 team's connection group: every member can open those servers without any
 role change.
 
-> Fine-grained RBAC is an enterprise feature: the management API returns 403
-> without the license (included in the 30-day evaluation). The connect-time
-> enforcement check itself is not license-gated, so existing grants keep
-> working.
-
 ---
 
 ## Groups from your identity provider
@@ -344,7 +339,7 @@ cookie).
 
 ### RBAC (connection permissions)
 
-All require **admin** *and* the enterprise RBAC feature (otherwise 403).
+All require **admin**.
 Grants use `entity_id` = `u:<user-id>` or `g:<group-id>` and an object
 permission name.
 

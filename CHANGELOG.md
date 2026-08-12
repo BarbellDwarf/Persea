@@ -98,10 +98,10 @@ audit verification).
 
 ### Changed
 
-- **License: Apache 2.0 → AGPL-3.0** — persea is dual-licensed under
-  AGPL-3.0 (open source) with a commercial license exception. See
-  [LICENSE](LICENSE), [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md), and
-  [CLA.md](CLA.md). All contributors must sign the CLA.
+- **License: AGPL-3.0 → Apache-2.0** — persea is now Apache-2.0,
+  free for everyone: no license keys, no enterprise feature gates, no
+  evaluation period. See [LICENSE](LICENSE) and [CLA.md](CLA.md). All
+  contributors must sign the CLA.
 - **Connections page layout** — the folder pane gets real width
   (clamp 260–360px), a rebalanced three-pane layout, and proper ellipsis;
   mobile stacking unchanged.
@@ -158,17 +158,6 @@ audit verification).
 - **CSRF-safe settings handlers** — no inline handlers remain on the
   settings/branding admin pages.
 - **CLA gate** — unsigned contributions fail CI.
-- **License gates live** — SAML, TOTP enforcement, RBAC, audit-retention
-  export, and encrypted recordings are enforced via the enterprise license;
-  the admin license API/page manages keys. (HA gate `FEAT_HA` lands with
-  the enterprise HA work.)
-
-### Enterprise licensing
-
-- License keys (`PSEA-...`, Ed25519-signed) validate at startup and gate
-  enterprise features; evaluation period included; the admin License page
-  shows status and accepts keys. Validation is covered by 14 unit tests
-  (tamper, expiry, wrong-key, feature checks).
 
 ## [1.1.0] - 2026-08-09
 

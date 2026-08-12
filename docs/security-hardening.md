@@ -124,7 +124,7 @@ for the exact keys.
 | **OIDC** | Single sign-on with an existing IdP (Authentik, Keycloak, Okta, Azure AD, Google, ...) | PKCE and nonce validation on every login; 24 h session TTL by default (`auth_session_ttl_secs`) |
 | **LDAP / AD** | Corporate directories | Bind+search; supports `ldaps://`, StartTLS, and group resolution |
 | **RADIUS** | Organisations with an existing RADIUS server | PAP/CHAP/MSCHAPv2; can serve as first factor or MFA step |
-| **SAML 2.0** | Enterprise single sign-on | Enterprise feature: see [Licensing](licensing.md) |
+| **SAML 2.0** | Enterprise single sign-on |
 | **API key** | Scripts and integrations | See below |
 
 ### TOTP / MFA
@@ -142,8 +142,8 @@ enforcement = "All"   # Off | AdminsOnly | All
 ```
 
 Users enroll by scanning a QR code into an authenticator app (Google
-Authenticator, Authy, ...). TOTP enforcement is an Enterprise feature
-(see [Licensing](licensing.md)).
+Authenticator, Authy, ...). TOTP enforcement is available for every
+deployment.
 
 *How to check:* log out and log back in: you should be prompted for a
 six-digit code.
@@ -317,9 +317,8 @@ flags it plus every subsequent event.
 2. **API**: `GET /api/audit/verify` (admin) returns the same verdict
    as JSON, which makes it easy to script nightly verification.
 
-Compliance exports (filtered CSV/JSON download of the audit log) are an
-Enterprise feature gated by the license: basic viewing and tamper
-verification stay free. See [Licensing](licensing.md).
+Compliance exports (filtered CSV/JSON download of the audit log) are
+available to admins.
 
 ## Credential storage
 
@@ -350,15 +349,6 @@ are kept (`[password] history`), and reusing one is rejected. Policy is
 enforced wherever a password is set: the admin users API, the CLI
 `create-user` command, and the account password-change endpoint.
 Passwords are never logged or included in error messages.
-
-## Enterprise license gates
-
-*What they protect:* enterprise features (SAML SSO, fine-grained RBAC,
-TOTP/MFA enforcement, audit-log compliance exports, encrypted session
-recording, and high availability) are locked behind the commercial
-license key (or the 30-day evaluation period). Without a license, the
-UI shows these features as **Locked** and their endpoints refuse with a
-license error. See [Licensing](licensing.md) for the full picture.
 
 ## File permissions
 

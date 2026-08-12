@@ -52,29 +52,6 @@ default SQLite file).
 | `instance_id` | `<hostname>-<pid>` | Stable name for this instance in a multi-instance (HA) fleet; marks which instance owns each live session. Must be unique across the fleet; set a fixed value per host if you run HA (see [High Availability](high-availability.md)). |
 | `ha_base_url` | *(unset)* | Public base URL of this instance (for example `https://persea-1.example.com`). The target of cross-instance join/shadow redirects in HA mode. See [High Availability](high-availability.md). |
 
-## License key
-
-persea ships in a free edition and an Enterprise edition. Enterprise
-features are unlocked by a commercial license key, or by the built-in
-30-day evaluation period. See [Licensing](licensing.md) for details.
-
-| Key | Default | What it controls |
-|-----|---------|------------------|
-| `license_key` | *(unset)* | Commercial license key, format `PSEA-<base64>`. When absent, enterprise features are available during the 30-day evaluation period. |
-
-```toml
-license_key = "PSEA-XXXX-XXXX-XXXX-XXXX"
-```
-
-Or via environment variable:
-
-```bash
-PERSEA_LICENSE_KEY=PSEA-XXXX-XXXX-XXXX-XXXX
-```
-
-The license status is also visible in the admin UI (Admin → License,
-`/admin/license.html`).
-
 ## Session limits and timeouts
 
 These bound how many sessions can run and how long they may live. The
@@ -312,7 +289,7 @@ and can act as the primary authenticator or as an MFA step.
 
 SAML 2.0 single sign-on. persea acts as the Service Provider: it parses
 the IdP's metadata, signs its authentication requests, and validates
-the signed response. Enterprise feature (see [Licensing](licensing.md)).
+the signed response.
 
 | Key | Default | What it controls |
 |-----|---------|------------------|
@@ -330,8 +307,7 @@ the signed response. Enterprise feature (see [Licensing](licensing.md)).
 TOTP (time-based one-time password) MFA: users enroll by scanning a QR
 code into an authenticator app (Google Authenticator, Authy, ...) and
 then must enter a six-digit code at login. The TOTP provider layers on
-top of the primary auth method. Enterprise feature when enforced (see
-[Licensing](licensing.md)).
+top of the primary auth method.
 
 | Key | Default | What it controls |
 |-----|---------|------------------|
@@ -776,7 +752,6 @@ Every config key can also be set as an environment variable with the
 | `VAULT_SHARED_SECRET_ID` | Vault AppRole secret ID for `[vault_shared]` (only if configured). |
 | `VAULT_LOCAL_SECRET_ID` | Vault AppRole secret ID for `[vault_local]` (only if configured). |
 | `PERSEA_STORAGE_KEY` | 64-char hex encryption key for DB credential storage (alternative to `[storage].encryption_key`). |
-| `PERSEA_LICENSE_KEY` | Commercial license key (alternative to the `license_key` config option). |
 | `VSPHERE_PASSWORD` | VMware vSphere password: the default variable referenced by `[vsphere].password_env` (override the name with `password_env` if you prefer another variable). |
 | `RUST_LOG` | Log level (e.g. `info`, `debug`, `persea=debug`). |
 | `RUST_LOG_FORMAT` | Log format: `text` (default) or `json` for JSON lines (structured logging). Equivalent to the `--log-format` CLI flag, which takes precedence. |

@@ -113,10 +113,6 @@ redirected to your identity provider (Okta, Entra ID, ADFS, Keycloak,
 SimpleSAMLphp, ...), authenticate there, and are sent back already logged in.
 SAML is the XML-based SSO protocol that many enterprise IdPs still require.
 
-> SAML SSO is an enterprise feature, included in the 30-day evaluation.
-> Without a license, the login page reports "SAML single sign-on requires an
-> enterprise license" (see [Licensing](licensing.md)).
-
 **When to use it.** Your organisation uses a SAML identity provider and you
 can't use OIDC (persea's simpler, recommended protocol). If your IdP supports
 both, prefer OIDC.
@@ -168,7 +164,6 @@ Optional keys:
 | Login fails with an audience error | The `entity_id` doesn't match what the IdP has registered | Register the same value at both ends |
 | Responses rejected | Clock skew between persea and the IdP | Synchronise clocks (NTP) |
 | Metadata won't parse | The URL returns HTML or an auth page instead of XML | Download the XML and use `idp_metadata_file` |
-| "SAML SSO requires a license" | No enterprise license active | Install a license or run within the 30-day evaluation |
 
 ---
 
@@ -485,10 +480,6 @@ code-entry page.
 | `AdminsOnly` | Every admin login requires a TOTP code |
 | `All` | Every user's login requires a TOTP code |
 
-> Enforcing TOTP (`AdminsOnly`/`All`) is an enterprise feature, included in
-> the 30-day evaluation. Without a license, persea logs a warning and falls
-> back to `Off`: users may still enroll and use TOTP voluntarily.
-
 ### Verify
 
 1. Restart persea.
@@ -501,7 +492,7 @@ code-entry page.
 | Problem | Likely cause | Fix |
 |---------|-------------|-----|
 | Codes rejected | Phone clock is off | Sync the phone's clock; TOTP tolerates ~±1 period (`skew`) |
-| No code prompt after password | Enforcement is `Off` (or no license) | Users must enroll themselves; enforcement needs the enterprise feature |
+| No code prompt after password | Enforcement is `Off` | Users must enroll themselves; enforcement needs `AdminsOnly` or `All` |
 | Can't enroll | Recovery codes not saved | Save the recovery codes shown during enrollment: they're the way back in if the app is lost |
 
 ---

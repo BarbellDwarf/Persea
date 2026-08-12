@@ -1,21 +1,20 @@
 # High Availability
 
 > **Audience:** operators running persea across multiple servers (a cluster) for resilience and scale.
-> **Next:** [Deployment Guide](deployment-guide.md#database-backends) for shared-database setup, or [Licensing](licensing.md) for the Enterprise license that unlocks HA.
+> **Next:** [Deployment Guide](deployment-guide.md#database-backends) for shared-database setup.
 
 ## What this gives you
 
 persea normally runs as a single instance: one server process plus one guacd daemon. You can run several instances against the **same database** (`db_url`) and they already share the static data: users, the connections (address book), auth sessions, audit log, and settings.
 
-The **Enterprise HA feature** (license feature `ha`, included in the 30-day evaluation period) goes further: live sessions become visible across the whole fleet. A session started on instance A appears in the session list on instance B, can be joined or shadowed from B, and a user who lands on the "wrong" instance is transparently redirected to the one hosting their session. Recording rotation is shared safely too, so multiple instances never fight over the same files.
+The **HA feature** goes further: live sessions become visible across the whole fleet. A session started on instance A appears in the session list on instance B, can be joined or shadowed from B, and a user who lands on the "wrong" instance is transparently redirected to the one hosting their session. Recording rotation is shared safely too, so multiple instances never fight over the same files.
 
-Without the license (or without a shared `db_url`), every instance behaves exactly as a standalone single instance: nothing changes.
+Without a shared `db_url`, every instance behaves exactly as a standalone single instance: nothing changes.
 
 ## What you need
 
 1. **A shared database backend**: MySQL or PostgreSQL via `db_url`, identical on every instance. (SQLite is single-writer and cannot be shared safely.)
-2. **An Enterprise license** that includes the `ha` feature (or the 30-day evaluation window). See [Licensing](licensing.md).
-3. **A unique `instance_id` per instance** and a public base URL (`ha_base_url`) per instance, so browsers can be redirected to the right place.
+2. **A unique `instance_id` per instance** and a public base URL (`ha_base_url`) per instance, so browsers can be redirected to the right place.
 
 ## How it works
 
@@ -91,8 +90,7 @@ session_max_duration_secs = 28800
 
 1. Set up the shared database (see [Deployment Guide > Databases](deployment-guide.md#databases)) and point every instance at it.
 2. Configure `instance_id` and `ha_base_url` per instance, and make sure `ha_base_url` resolves from the browsers that use it.
-3. Install the Enterprise license key on every instance (or rely on the 30-day evaluation). See [Licensing](licensing.md).
-4. Restart each instance and confirm with the health check below that HA is active.
+3. Restart each instance and confirm with the health check below that HA is active.
 
 The `ha_base_url` values must be reachable from browsers, typically the same hostname/port users already use to reach each instance.
 
@@ -150,5 +148,5 @@ guacd is a shared resource: point every instance at the same guacd address (or a
 ## Verifying HA is active
 
 - `GET /api/health` returns `200` when an instance is running.
-- `GET /api/system/status` (admin) reports `instance.instance_id` and `instance.ha_enabled`, so you can confirm every instance sees the same registry and the license is active.
+- `GET /api/system/status` (admin) reports `instance.instance_id` and `instance.ha_enabled`, so you can confirm every instance sees the same registry.
 - The end-to-end test: **start two instances** against the same database with distinct `instance_id`/`ha_base_url` values, create a session on one, and check the Sessions page on the other: the session appears there, marked as remote, and clicking it joins the session through the redirect. That is the whole feature working end to end.

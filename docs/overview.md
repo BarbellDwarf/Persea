@@ -86,4 +86,4 @@ Other guides in this documentation set:
 - [VDI Desktop Containers](vdi.md): configuring Docker desktop sessions.
 - [Security Hardening](security-hardening.md): TLS, allowlists, headers, CSRF, rate limiting, audit.
 - [API Reference](api.md): the REST API, health checks, and metrics.
-- [Reports](reports.md), [Themes](themes.md), [Credential Variables](credential-variables.md), [RDP Video Performance](rdp-video-performance.md), [Reverse Proxies](reverse-proxies.md), [NetBox](netbox.md), [Licensing](licensing.md), [High Availability](high-availability.md).
+- [Reports](reports.md), [Themes](themes.md), [Credential Variables](credential-variables.md), [RDP Video Performance](rdp-video-performance.md), [Reverse Proxies](reverse-proxies.md), [NetBox](netbox.md), [High Availability](high-availability.md).

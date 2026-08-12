@@ -444,7 +444,7 @@ the chain and flags every subsequent event.
 |----------|------|---------|
 | `GET /api/audit/events` | admin (Audit permission) | Query audit events |
 | `GET /api/audit/verify` | admin (Audit permission) | Verify the hash chain: `{"status":"verified"|"broken", "events_scanned":..., "errors":[...]}` |
-| `GET /api/audit/export` | admin, **Enterprise license** (audit_retention) | Filtered CSV/JSON export of the audit log for compliance. Returns a license error without a license key. |
+| `GET /api/audit/export` | admin (Audit permission) | Filtered CSV/JSON export of the audit log for compliance. |
 
 See [Security Hardening](security-hardening.md#audit-log) for how to
 read the verification result.
@@ -467,10 +467,9 @@ Session analytics for the Reports page:
 |----------|---------|
 | `GET /api/system/status` | System status overview |
 | `GET` / `PUT /api/system/settings` | System settings (including `enable_api_keys`) |
-| `POST /api/admin/license` / `GET /api/admin/license` | Set / read the enterprise license key (see [Licensing](licensing.md)) |
 | `GET /api/auth/providers` + CRUD under `/api/auth/providers/{id}` | Manage configured auth providers (create, update, enable/disable, reorder, test) |
-| `GET` / `POST /api/admin/groups`, `/api/admin/groups/{id}` | Manage user groups and their role mappings (enterprise RBAC) |
-| `GET` / `POST /api/admin/rbac/groups` + permissions under `/api/admin/rbac/connections/{id}/permissions` | Connection-level permission management (enterprise RBAC) |
+| `GET` / `POST /api/admin/groups`, `/api/admin/groups/{id}` | Manage user groups and their role mappings |
+| `GET` / `POST /api/admin/rbac/groups` + permissions under `/api/admin/rbac/connections/{id}/permissions` | Connection-level permission management |
 | `GET` / `POST /api/admin/jump-hosts` + `/api/admin/jump-hosts/{id}` | Manage named SSH jump hosts; `POST .../test` tests reachability |
 | `GET /api/admin/tunnels/active` | List currently active tunnels |
 | `POST /api/upload-logo` | Upload a custom logo (2 MB limit) |

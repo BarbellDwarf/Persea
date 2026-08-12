@@ -374,12 +374,6 @@ rotation_interval_secs = 300 # check every 5 minutes
 
 ![Admin settings page](assets/screenshots/admin-settings.png)
 
-### License
-
-persea's enterprise features (high availability, and anything beyond the basics) are available for a 30-day evaluation period after which a license key is needed. The current status is shown on Admin → License; paste a key there or set `license_key` in the config.
-
-![Admin license page](assets/screenshots/admin-license.png)
-
 ### Backups
 
 Back up these paths:
