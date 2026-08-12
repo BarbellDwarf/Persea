@@ -9,23 +9,40 @@ use crate::db_pool::{DbKind, DbPool};
 use crate::templates::SetupTemplate;
 use crate::CspNonce;
 
+/// Form body of the setup wizard (POST /setup).
 #[derive(Debug, Deserialize)]
 pub struct SetupForm {
+    /// Listen address the server should bind, e.g. "0.0.0.0:8089".
     pub listen_addr: String,
+    /// SQLite database file path used when no managed backend URL is given.
     pub db_path: String,
+    /// Managed backend URL (Postgres/MySQL); empty keeps the SQLite file.
     #[serde(default)]
     pub db_url: String,
+    /// guacd run mode, "embedded" or "external".
     pub guacd_mode: String,
+    /// guacd TCP address used in external mode.
     pub guacd_addr: String,
+    /// Path to the guacd binary used in embedded mode.
     pub guacd_path: String,
+    /// Email of the admin account the wizard creates.
     pub admin_email: String,
+    /// Display name of the admin account.
     pub admin_name: String,
+    /// Password for the admin account, hashed with Argon2id.
     pub admin_password: String,
+    /// Set when the Proxmox VE checkbox is ticked.
     pub feature_proxmox: Option<String>,
+    /// Set when the VMware checkbox is ticked; writes a commented
+    /// [vsphere] stub into the generated config.
     pub feature_vmware: Option<String>,
+    /// Set when the session recording checkbox is ticked.
     pub feature_recordings: Option<String>,
+    /// Set when the SSH tunnels checkbox is ticked.
     pub feature_tunnels: Option<String>,
+    /// Set when the web browser sessions checkbox is ticked.
     pub feature_browser: Option<String>,
+    /// Set when the VDI containers checkbox is ticked.
     pub feature_vdi: Option<String>,
 }
 
