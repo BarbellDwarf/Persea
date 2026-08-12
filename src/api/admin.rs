@@ -489,7 +489,7 @@ pub async fn audit_export(
         return Err(AppError::Forbidden("admin role required".into()));
     }
     // Basic audit logging/viewing/verification stays free; compliance
-    // export (CSV/JSON download) is the enterprise-gated part — R43.
+    // export (CSV/JSON download) is the enterprise-gated part.
     if !license_manager.has_feature(crate::license::FEAT_AUDIT_RETENTION) {
         return Err(AppError::Forbidden(
             "audit log export requires an enterprise license".into(),

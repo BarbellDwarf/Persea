@@ -138,7 +138,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                 }
             },
             "vault_enabled" => {
-                // DB-first storage (ticket 026): flipping Vault on routes
+                // DB-first storage: flipping Vault on routes
                 // credential storage to Vault. Requires a [vault] section —
                 // without one there is nowhere to store them.
                 if value == "true" {
@@ -170,7 +170,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                     storage.backend = "db".into();
                 }
             }
-            // Branding (wayfinder R95): overlaid onto the runtime config at
+            // Branding: overlaid onto the runtime config at
             // startup so the SiteTitle extension, ThemeData (logo + resolved
             // colors served via /api/auth/status) and the login page all pick
             // the saved values up. Takes effect on the next server start.

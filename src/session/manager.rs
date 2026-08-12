@@ -50,7 +50,7 @@ impl SessionManager {
         crate::license::global().is_some_and(|lm| lm.has_feature(feature))
     }
 
-    /// Enterprise HA (R110) is active when the FEAT_HA license grants it AND
+    /// Enterprise HA is active when the FEAT_HA license grants it AND
     /// a shared backend pool is installed. Without either, every HA code
     /// path stays inert and behavior is byte-for-byte single-instance.
     pub fn ha_enabled(&self) -> bool {
@@ -68,7 +68,7 @@ impl SessionManager {
         self.config.ha_base_url.as_deref()
     }
 
-    // ── Registry persistence (R110) ────────────────────────────────────
+    // ── Registry persistence (enterprise HA) ────────────────────────────────────
     //
     // All writes are gated on `ha_enabled()` (FEAT_HA license + shared
     // backend pool); the store functions also no-op without a pool, so
@@ -364,7 +364,7 @@ impl SessionManager {
     /// audit shadow uses; returns `Invalid` if neither matches or the
     /// session is unknown.
     ///
-    /// Enterprise HA (R110): when the session is not local (registry-only),
+    /// Enterprise HA: when the session is not local (registry-only),
     /// the in-memory check cannot match — the registry row carries the
     /// admin-minted shadow token instead (see `mint_remote_shadow_token`),
     /// so shadowing works from any instance.
@@ -448,7 +448,7 @@ impl SessionManager {
         Some((raw, expires_at))
     }
 
-    /// Delete registry rows that can no longer be live (R110):
+    /// Delete registry rows that can no longer be live:
     /// - rows still `pending` past `max(pending_timeout × 2, 60s)` — the
     ///   owner's pending-timeout task would have marked them `expired`;
     /// - rows in a terminal status past 24h — kept so the owning instance's
@@ -767,7 +767,7 @@ impl SessionManager {
             tracing::info!(session_id = %id, "Session terminated by API");
             drop(session);
             drop(sessions);
-            // R110: keep the registry row in a terminal state so the owning
+            // Keep the registry row in a terminal state so the owning
             // instance's recording rotation can still attribute the file;
             // the stale sweep removes the row within 24h.
             self.registry_set_status(id, "completed");
@@ -872,7 +872,7 @@ impl SessionManager {
             let mut sessions = self.sessions.write().await;
             for id in &to_remove {
                 sessions.remove(id);
-                // R110: the registry row intentionally stays (terminal
+                // The registry row intentionally stays (terminal
                 // state) so recording rotation can still attribute the
                 // file — the stale sweep removes it within 24h.
             }

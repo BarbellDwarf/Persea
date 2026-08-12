@@ -195,7 +195,7 @@ pub async fn cmd_import_guacamole(
         return;
     }
 
-    // DB-first storage (wayfinder ticket 026): folder/entry metadata always
+    // DB-first storage: folder/entry metadata always
     // lives in the app database. Credentials are stored encrypted in the DB
     // unless [storage].backend = "vault", in which case they go to Vault.
     let vault_mode = config

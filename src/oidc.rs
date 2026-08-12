@@ -58,8 +58,8 @@ pub struct OidcProvider {
     pub state: OidcState,
 }
 
-/// All configured OIDC providers, for multi-provider SSO (wayfinder ticket
-/// D29): the login page renders one button per provider and the state cookie
+/// All configured OIDC providers, for multi-provider SSO: the login page
+/// renders one button per provider and the state cookie
 /// carries the provider name so the callback resolves the right client.
 pub struct OidcRegistry {
     pub providers: Vec<OidcProvider>,

@@ -297,17 +297,17 @@ pub struct SessionInfo {
     /// session. Read by client.html to show/hide the upload button.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub drive_enabled: bool,
-    /// Enterprise HA (R110): the instance id that owns this session, when it
+    /// Enterprise HA: the instance id that owns this session, when it
     /// is NOT this instance. `remote = true` means the session lives in the
     /// shared registry only and its guacd stream is on `owner_instance`
     /// (join/shadow are redirected to `owner_base_url`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_instance: Option<String>,
-    /// Enterprise HA (R110): public base URL of the owning instance, for
+    /// Enterprise HA: public base URL of the owning instance, for
     /// cross-instance join/shadow redirects.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_base_url: Option<String>,
-    /// Enterprise HA (R110): true when this session is hosted by another
+    /// Enterprise HA: true when this session is hosted by another
     /// instance (seen via the shared registry, not the local map).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remote: bool,
@@ -486,7 +486,7 @@ impl Session {
 
 impl SessionInfo {
     /// Build the public info for a session that exists only in the shared
-    /// registry (R110): it is owned by another instance, so every field is
+    /// registry: it is owned by another instance, so every field is
     /// what the registry recorded — no local state, no tokens.
     pub fn from_registry(row: &crate::db::SessionRegistryRow) -> Option<SessionInfo> {
         use chrono::NaiveDateTime;

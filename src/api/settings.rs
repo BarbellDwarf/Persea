@@ -1,4 +1,4 @@
-//! Admin system settings API (ticket #024).
+//! Admin system settings API.
 //!
 //! Settings are persisted as strings in the `system_settings` key/value
 //! table and returned as typed JSON. Config-file values are not available
@@ -421,7 +421,7 @@ pub async fn upload_logo(
 
     // Build a deterministic name: logo.<ext>. Write under the configured
     // static_path so the file lands exactly where ServeDir serves it from
-    // (R95: the old CWD-relative "static" diverged when static_path was
+    // (the old CWD-relative "static" diverged when static_path was
     // customized).
     let out_name = format!("logo.{ext}");
     let uploads_dir = state.config().static_path.join("uploads").join("logo");

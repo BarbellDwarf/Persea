@@ -55,7 +55,7 @@ pub struct WsQuery {
 
 /// Parts of the WS upgrade request the handler needs beyond the typed
 /// extracts: the raw query string (for preserving ?token= etc. on the
-/// cross-instance redirect, R110) and whether the identity came from a
+/// cross-instance redirect) and whether the identity came from a
 /// consumed ticket (which lets the origin check be skipped — the ticket is
 /// the anti-CSWSh credential). Implemented as a parts extractor so it can
 /// coexist with `WebSocketUpgrade` (both cannot consume the body).
@@ -101,7 +101,7 @@ pub async fn ws_handler(
     let ip = client_ip(&headers, addr.ip(), &proxies);
     let identity = identity.map(|Extension(id)| id);
 
-    // R110: when the identity came from a consumed WebSocket ticket, the
+    // When the identity came from a consumed WebSocket ticket, the
     // ticket itself is the anti-CSWSh credential (minted only by
     // authenticated callers, single-use, 30s TTL) — the Origin/Host match is
     // skipped so cross-instance join/shadow redirects (which necessarily
@@ -161,7 +161,7 @@ pub async fn ws_handler(
             .into_response();
     }
 
-    // R110 — cross-instance join/shadow/owner-reconnect: the guacd stream
+    // Cross-instance join/shadow/owner-reconnect: the guacd stream
     // lives on the owning instance, so a WebSocket that lands here for a
     // remote session is redirected to the owner's WS endpoint. The ticket is
     // DB-backed, so the owner instance validates it; a fresh ticket is
@@ -354,7 +354,7 @@ async fn handle_ws(
             }
         }
 
-        // Per-session concurrent viewer limit (H02).
+        // Per-session concurrent viewer limit.
         // The owner connection is not counted (active_connections starts at 0
         // for a Pending session).  max_viewers == 0 means unlimited.
         {
@@ -550,7 +550,7 @@ async fn handle_ws(
     }
 
     // Encrypt recording at rest (file is closed after proxy_ws_guacd returns).
-    // Enterprise-gated (R43) — checked via the process-global handle since
+    // Enterprise-gated — checked via the process-global handle since
     // this isn't an axum handler and can't take an `Extension<T>`.
     if is_recording_enabled && recording_path.exists() {
         let rec_config = manager.recording_config();
@@ -844,7 +844,7 @@ async fn ws_to_guacd(
                 }
                 // Real client activity (ping echoes `continue`d above), so
                 // idle sessions are not reaped while the user is typing.
-                // Server keepalive pings never reach this point (R109).
+                // Server keepalive pings never reach this point.
                 manager.update_activity(&session_id).await;
                 guacd.write_all(text.as_bytes()).await?;
             }

@@ -1,4 +1,4 @@
-//! Integration tests for the admin local-groups API (wayfinder ticket #029):
+//! Integration tests for the admin local-groups API:
 //! GET/POST `/api/admin/groups`, GET/PUT/DELETE `/{id}`,
 //! POST `/{id}/mappings`, DELETE `/{id}/mappings/{mapping_id}`.
 //!

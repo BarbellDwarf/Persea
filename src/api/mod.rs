@@ -60,7 +60,7 @@ pub struct CredentialDefaultScope(pub String);
 pub struct StorageKey(pub Option<String>);
 
 /// Names of configured OIDC providers for the login page's SSO buttons
-/// (multi-provider support, wayfinder D29).
+/// (multi-provider support).
 #[derive(Clone)]
 pub struct OidcProviderNames(pub Vec<String>);
 

@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 pub type Db = Arc<Mutex<Connection>>;
 
-/// Route a store call to the SQLx pool store when one is active (R102).
+/// Route a store call to the SQLx pool store when one is active (db_url configured).
 /// Usage at the top of each store function:
 /// `db_route!(db, some_fn_pool, arg1, arg2.to_string());`
 /// Arguments are evaluated into an owned tuple BEFORE the 'static pool
@@ -432,7 +432,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );",
     )?;
 
-    // Migration: address book tables (ticket #022)
+    // Migration: address book tables
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS address_book_folders (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -490,7 +490,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );",
     )?;
 
-    // Folder-level ACLs (wayfinder ticket 027): columns added after the
+    // Folder-level ACLs: columns added after the
     // original address book schema. ALTER is idempotent-guarded — existing
     // databases get the columns, fresh ones already have them.
     for ddl in [
@@ -504,7 +504,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         }
     }
 
-    // Migration: local groups + provider-group mappings (ticket #029).
+    // Migration: local groups + provider-group mappings.
     // Local groups are admin-defined named groups that folders/connections
     // can grant access to. `group_mappings` links an auth-provider group name
     // (from OIDC/LDAP claims, see list_known_groups) to a local group; one
@@ -528,7 +528,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );",
     )?;
 
-    // Migration: failed login attempt tracking (H07)
+    // Migration: failed login attempt tracking
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS failed_login_attempts (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1093,7 +1093,7 @@ pub fn cleanup_expired_sessions(db: &Db) -> rusqlite::Result<usize> {
     )
 }
 
-/// Record a failed login attempt (H07).
+/// Record a failed login attempt.
 pub fn record_failed_login_attempt(db: &Db, username: &str, ip: &str) -> rusqlite::Result<()> {
     db_route!(
         db,
@@ -1362,8 +1362,8 @@ pub fn upsert_seen_groups(db: &Db, groups: &[String]) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Auto-provision `local_groups` for the given provider groups (wayfinder fog
-/// item: "map OIDC groups to local groups without manual mapping"). Folder
+/// Auto-provision `local_groups` for the given provider groups, mapping
+/// OIDC groups to local groups without manual mapping. Folder
 /// ACLs reference local group names, so a provider group that shows up in
 /// login claims becomes usable in the connections page immediately. Groups
 /// already created (or mapped) are left untouched.
@@ -1872,7 +1872,7 @@ pub fn end_session_history(
     Ok(())
 }
 
-// ── Session registry (R110 enterprise HA) ──────────────────────────────
+// ── Session registry (enterprise HA) ──────────────────────────────
 
 /// One live-session record in the shared registry. Mirrors the in-memory
 /// `Session` on the owning instance; every other instance reads it to see,
@@ -2075,7 +2075,7 @@ pub fn registry_delete_all_owned(_db: &Db, owner_instance: &str) -> rusqlite::Re
     Ok(0)
 }
 
-// ── WS ticket persistence (R110 enterprise HA) ─────────────────────────
+// ── WS ticket persistence (enterprise HA) ─────────────────────────
 
 /// Persist a WebSocket ticket so any instance sharing the backend can
 /// validate it. Only the SHA-256 hash of the raw ticket is stored. No-op
@@ -3885,7 +3885,7 @@ mod tests {
     }
 }
 
-// ── Local groups + provider-group mappings (ticket #029) ────────────────────
+// ── Local groups + provider-group mappings ────────────────────────────
 // This block was appended at the end of the file because parallel workstreams
 // may be editing db.rs.
 //
@@ -4178,7 +4178,7 @@ pub fn delete_provider_group_mapping(db: &Db, mapping_id: i64) -> rusqlite::Resu
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// SQLx pool store (R102) — real multi-backend storage when db_url is set.
+// SQLx pool store — real multi-backend storage when db_url is set.
 //
 // Every store function above has a `_pool` twin below that runs the same
 // operation against the SQLx pool (PostgreSQL / MySQL / SQLite). The
@@ -6408,7 +6408,7 @@ async fn end_session_history_pool(
     Ok(())
 }
 
-// ── Session registry (R110 enterprise HA) ───────────────────────────────
+// ── Session registry (enterprise HA) ───────────────────────────────
 
 /// Upsert differs only in the conflict clause: Postgres and SQLite share
 /// `ON CONFLICT (session_id) DO UPDATE SET`, MySQL uses
@@ -6721,7 +6721,7 @@ async fn registry_delete_all_owned_pool(
     Ok(n as usize)
 }
 
-// ── WS ticket persistence (R110 enterprise HA) ──────────────────────────
+// ── WS ticket persistence (enterprise HA) ──────────────────────────
 
 async fn ws_ticket_insert_pool(
     pool: &DbPool,

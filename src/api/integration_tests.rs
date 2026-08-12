@@ -1483,7 +1483,7 @@ async fn test_ab_create_entry_db_fallback_missing_folder_fails() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
-// ── vSphere power action authorization (R07 / C03) ──
+// ── vSphere power action authorization ──
 // `power_action` requires `operator` role or above. This regression test was
 // missing — the role check was correct, but nothing exercised it.
 

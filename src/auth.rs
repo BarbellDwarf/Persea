@@ -24,7 +24,7 @@ struct WsTicket {
 
 /// Thread-safe store of pending WebSocket tickets.
 ///
-/// Enterprise HA (R110): when a shared backend pool is active AND the FEAT_HA
+/// Enterprise HA: when a shared backend pool is active AND the FEAT_HA
 /// license grants it, every ticket is also persisted (SHA-256 hash only) to
 /// the `ws_tickets` table so any instance can validate a ticket issued by
 /// another. The in-memory map remains the fast path; a miss falls through to
@@ -38,7 +38,7 @@ pub struct WsTicketStore {
 
 const WS_TICKET_TTL_SECS: u64 = 30;
 
-/// R105: whether API-key authentication is permitted. Reads the
+/// Whether API-key authentication is permitted. Reads the
 /// `enable_api_keys` lockdown toggle from the DB; unset or unreadable →
 /// enabled, so existing deployments behave exactly as before.
 async fn api_keys_enabled(db: &Db) -> bool {
@@ -53,7 +53,7 @@ async fn api_keys_enabled(db: &Db) -> bool {
 /// Marker extension: the request's identity was derived from a consumed
 /// WebSocket ticket (not a cookie/API key). Lets the WS handler trust the
 /// ticket as the anti-CSWSh credential and skip the Origin/Host match for
-/// cross-instance redirects (R110) — tickets are minted only by
+/// cross-instance redirects — tickets are minted only by
 /// authenticated callers, are single-use, and expire in 30s.
 #[derive(Clone)]
 pub struct TicketAuthenticated;
@@ -199,7 +199,7 @@ impl WsTicketStore {
         None
     }
 
-    /// Re-issue a ticket for a forwarded cross-instance connection (R110):
+    /// Re-issue a ticket for a forwarded cross-instance connection:
     /// the raw ticket was already consumed by this instance's auth
     /// middleware, so before redirecting the browser to the owning instance
     /// a fresh persisted ticket is minted for the same identity. Returns
@@ -364,7 +364,7 @@ pub async fn require_auth(
         .map(|k| k.to_string());
 
     if let Some(key) = api_key {
-        // R105: the admin can lock down API-key auth entirely. Reject
+        // The admin can lock down API-key auth entirely. Reject
         // outright when disabled — a request presenting only an API key has
         // no other way to authenticate (admin keys and user tokens alike).
         if !api_keys_enabled(&db).await {
@@ -531,7 +531,7 @@ pub async fn optional_auth(
         .map(|k| k.to_string());
 
     if let Some(key) = api_key {
-        // R105: when the admin locked down API-key auth, an API key is
+        // When the admin locked down API-key auth, an API key is
         // ignored here — optional auth passes through silently so a cookie
         // or ticket on the same request can still authenticate it.
         if !api_keys_enabled(&db).await {
@@ -605,7 +605,7 @@ pub async fn optional_auth(
                 tracing::debug!("Optional auth: WebSocket ticket consumed");
                 let mut request = request;
                 request.extensions_mut().insert(identity);
-                // R110: the ticket is the anti-CSWSh credential for this
+                // The ticket is the anti-CSWSh credential for this
                 // request — the WS handler may skip the Origin/Host match
                 // (needed for cross-instance join redirects).
                 request.extensions_mut().insert(TicketAuthenticated);

@@ -290,7 +290,7 @@ impl BrowserManager {
             "--disable-crash-reporter",
             "--no-default-browser-check",
             "--window-position=0,0",
-            // Disable autofill/credential storage for ephemeral VDI sessions (H09)
+            // Disable autofill/credential storage for ephemeral VDI sessions
             "--disable-autofill",
         ];
         // Owned strings that need to outlive the args slice

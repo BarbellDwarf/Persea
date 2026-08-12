@@ -33,7 +33,7 @@ impl DatabaseProvider {
             conn.execute_batch("ALTER TABLE users ADD COLUMN password_hash TEXT")
                 .expect("failed to add password_hash column");
         }
-        // Password reuse history (R108). The SQLx backends get the table
+        // Password reuse history. The SQLx backends get the table
         // from migrations/008_password-history.sql; the legacy rusqlite
         // path creates it lazily here (and in password.rs for the CLI).
         let _ = crate::password::ensure_history_table(&conn);

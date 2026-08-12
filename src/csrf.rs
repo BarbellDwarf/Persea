@@ -272,8 +272,8 @@ where
                             path = %path,
                             "CSRF token mismatch"
                         );
-                        // The login form is a plain (non-fetch) POST — see
-                        // R70 — so a raw JSON body here would navigate the
+                        // The login form is a plain (non-fetch) POST — a raw
+                        // JSON body here would navigate the
                         // browser straight to it instead of showing on the
                         // login page. Redirect back with a friendly error
                         // instead, matching how every other login failure

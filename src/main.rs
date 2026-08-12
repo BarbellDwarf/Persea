@@ -328,7 +328,7 @@ async fn main() {
 
     // Open database
     let database = db::init_db(&config.db_path).expect("Failed to open database");
-    // DB-configured auth providers (wayfinder ticket 025) — schema + rows
+    // DB-configured auth providers — schema + rows
     // live in the app database; config-file providers still work alongside.
     crate::providers_db::migrate(&database).expect("Failed to migrate auth_providers table");
 
@@ -368,7 +368,7 @@ async fn main() {
         None | Some(Command::Serve) => {
             // Overlay DB-persisted settings (admin settings page) onto the
             // config-file values before the server starts. The settings API
-            // (wayfinder ticket 024) stores these in `system_settings`; the
+            // stores these in `system_settings`; the
             // merge maps the fields that have config equivalents.
             if let Ok(overrides) = crate::settings_merge::load_db_settings(&database) {
                 crate::settings_merge::apply_db_settings(&mut config, &overrides);
@@ -397,7 +397,7 @@ async fn main() {
                     }
                 }
             }
-            // DB-first storage (ticket 026): credentials are encrypted at
+            // DB-first storage: credentials are encrypted at
             // rest in the DB — without a key they are stored/returned in
             // plaintext. Refuse to start so operators cannot accidentally
             // run with plaintext credentials.
@@ -538,7 +538,7 @@ fn cmd_create_user(
     };
     match crate::db::create_user_with_password(database, email, name, &hash, role, "database") {
         Ok(()) => {
-            // Record the initial hash in the reuse history (R108). The user
+            // Record the initial hash in the reuse history. The user
             // row was just inserted, so the lookup cannot fail in practice.
             if let Ok(user) = crate::db::get_user_by_email(database, email) {
                 let _ = crate::password::record_password_history(
@@ -929,7 +929,7 @@ async fn run_server(
     let tls_config = config.tls.clone();
 
     // Initialize OIDC providers. Every enabled DB-configured OIDC provider
-    // (admin auth page, wayfinder ticket 025) becomes an SSO button, plus the
+    // (admin auth page) becomes an SSO button, plus the
     // `[oidc]` config section as a fallback ("sso") when no DB provider is set.
     let mut oidc_registry: crate::oidc::OidcRegistry = crate::oidc::OidcRegistry {
         providers: Vec::new(),
@@ -1089,8 +1089,8 @@ async fn run_server(
         None
     };
 
-    // Build the auth chain from [auth] config plus DB-configured providers
-    // (wayfinder ticket 025). DB entries added through the admin auth page
+    // Build the auth chain from [auth] config plus DB-configured providers.
+    // DB entries added through the admin auth page
     // extend the chain, appended after config methods in position order;
     // they work with or without an [auth] section. OIDC keeps its own
     // separate flow; TOTP remains [auth.totp]-only.
@@ -1310,7 +1310,7 @@ async fn run_server(
                 Err(e) => tracing::warn!("Failed to clean up session history: {}", e),
                 _ => {}
             }
-            // R110: expired persisted WS tickets (cross-instance validation
+            // Expired persisted WS tickets (cross-instance validation
             // rows) — no-op without a shared backend pool or the HA license.
             if crate::license::global().is_some_and(|lm| lm.has_feature(crate::license::FEAT_HA)) {
                 let cutoff =
@@ -1445,7 +1445,7 @@ async fn run_server(
         );
     }
 
-    // Password policy (R108) — extracted before config is moved into
+    // Password policy — extracted before config is moved into
     // SessionManager so the admin users API and the account password-change
     // endpoint can enforce minimum length + reuse history.
     let password_policy = crate::password::PasswordPolicy::from_config(&config);
@@ -1499,7 +1499,7 @@ async fn run_server(
                 if idle_reaped > 0 {
                     tracing::info!("Reaped {} idle sessions", idle_reaped);
                 }
-                // R110: sweep shared-registry rows that can no longer be
+                // Sweep shared-registry rows that can no longer be
                 // live (dead owners, expired pendings, old terminal rows).
                 // No-op without the HA license or a shared backend.
                 reaper_manager.registry_sweep_stale();
@@ -1613,7 +1613,7 @@ async fn run_server(
                 loop {
                     interval.tick().await;
                     if rotate_manager.ha_enabled() {
-                        // R110: with a shared backend, rotate ONLY files
+                        // With a shared backend, rotate ONLY files
                         // owned by this instance (registry owner filter) —
                         // another instance's live recordings are never
                         // touched (see rotate_owned below).
@@ -1639,7 +1639,7 @@ async fn run_server(
     }
 
     // WebSocket ticket store (single-use tokens to keep API keys out of WS URLs).
-    // R110: with the DB handle, tickets are also persisted to the shared
+    // With the DB handle, tickets are also persisted to the shared
     // backend when the HA license is active, so any instance can validate
     // tickets issued by another.
     let ws_ticket_store = auth::WsTicketStore::new_with_db(Some(database.clone()));
@@ -2386,7 +2386,7 @@ async fn run_server(
     }
 }
 
-/// R110: recording rotation scoped to THIS instance's files. With a shared
+/// Recording rotation scoped to THIS instance's files. With a shared
 /// backend, `recording::rotate` cannot be used as-is — it would delete the
 /// oldest files in the shared directory regardless of which instance wrote
 /// them, so one instance could rotate another's live recording. This variant
@@ -2708,7 +2708,7 @@ mod tests {
         );
     }
 
-    // ── Error-page negotiation (R18) ───────────────────────────────────
+    // ── Error-page negotiation ─────────────────────────────────────────
 
     #[tokio::test]
     async fn error_page_renders_html_for_browsers_and_json_for_api() {

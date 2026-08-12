@@ -358,7 +358,7 @@ fn require_admin(identity: &Option<Extension<AuthIdentity>>) -> Result<(), AppEr
 }
 
 /// Fine-grained RBAC (object-level permissions, recursive group membership)
-/// is an enterprise feature — see wayfinder R43. The base 4-tier role
+/// is an enterprise feature. The base 4-tier role
 /// hierarchy (admin/poweruser/operator/viewer) stays free regardless.
 fn require_rbac_license(license_manager: &crate::license::LicenseManager) -> Result<(), AppError> {
     if license_manager.has_feature(crate::license::FEAT_RBAC) {

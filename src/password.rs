@@ -2,7 +2,7 @@
 //!
 //! Default: 46 MiB memory, 3 iterations, 1 parallelism, 32-byte output.
 //!
-//! Also implements the password policy surface (R108): minimum length
+//! Also implements the password policy surface: minimum length
 //! enforcement and per-user reuse history (last N hashes, DB-backed). The
 //! history table lives in the per-backend migrations (`008_password-history`)
 //! for the SQLx backends and is created lazily here for the legacy rusqlite

@@ -1,6 +1,6 @@
 //! Integration tests for the recordings API — listing, serving and deletion
 //! of both plain `.guac` recordings and encrypted-at-rest `.guac.enc`
-//! recordings (R94: encrypted recordings were invisible to the UI).
+//! recordings (encrypted recordings were invisible to the UI).
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::routing::delete;

@@ -65,7 +65,7 @@ pub async fn create_user(
         return Err(AppError::Forbidden("admin role required".into()));
     }
 
-    // Password policy (R108): minimum length enforced at creation, and the
+    // Password policy: minimum length enforced at creation, and the
     // new hash goes into the per-user reuse history. Handlers fall back to
     // the documented defaults when the extension is absent (test routers).
     let policy = policy.map(|Extension(p)| p).unwrap_or_default();

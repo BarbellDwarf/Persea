@@ -84,7 +84,7 @@ fn current_backend() -> Option<String> {
 
 /// Check if setup is needed (no users in the active store at all).
 ///
-/// Pool-aware since R102: with `db_url` set, this counts rows in the
+/// Pool-aware: with `db_url` set, this counts rows in the
 /// configured backend; without it, in the legacy SQLite file. The wizard is
 /// shown whenever the active store has zero users.
 pub fn needs_setup(db: &crate::db::Db) -> bool {
@@ -257,7 +257,7 @@ pub async fn setup_submit(
         );
     }
 
-    // Enforce the password policy minimum length (R108) before hashing.
+    // Enforce the password policy minimum length before hashing.
     let min_len = config.password.as_ref().map(|p| p.min_length).unwrap_or(15);
     if form.admin_password.len() < min_len {
         return error_response(

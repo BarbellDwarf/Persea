@@ -1,4 +1,4 @@
-//! Admin API for local group management (wayfinder ticket #029).
+//! Admin API for local group management.
 //!
 //! Routes (registered by the orchestrator in `src/main.rs`; all admin-only):
 //!

@@ -501,7 +501,7 @@ pub async fn list_credential_variables(
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
-    // DB-first storage (ticket 026): folders/entries metadata lives in the
+    // DB-first storage: folders/entries metadata lives in the
     // DB; credentials live in the DB unless [storage].backend = "vault".
     let vault_creds =
         super::address_book::vault_credentials_enabled(backend.as_ref().map(|b| &b.0), &vault)

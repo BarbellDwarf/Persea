@@ -1,5 +1,5 @@
-//! Integration tests for the admin auth-provider API
-//! (ticket #025): GET/POST `/api/auth/providers`, `/{id}`,
+//! Integration tests for the admin auth-provider API:
+//! GET/POST `/api/auth/providers`, `/{id}`,
 //! `/{id}/enable|disable|move|config|test`, DELETE.
 //!
 //! Schema setup mirrors `tests/api_handler_tests.rs`: in-memory SQLite via

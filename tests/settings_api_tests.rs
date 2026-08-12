@@ -1,4 +1,4 @@
-//! Integration tests for the admin system settings API (ticket #024).
+//! Integration tests for the admin system settings API.
 //!
 //! The handlers live in `src/api/settings.rs`. That module is declared in
 //! `src/api/mod.rs` by the route-wiring orchestrator step, so this test file

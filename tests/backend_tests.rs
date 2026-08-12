@@ -1,4 +1,4 @@
-//! Backend database integration tests (R104).
+//! Backend database integration tests (SQLx multi-backend).
 //!
 //! Proves the Postgres and MySQL backends are real stores: with `db_url`
 //! set, the persea binary actually persists data in the configured backend

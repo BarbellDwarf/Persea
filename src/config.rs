@@ -617,7 +617,7 @@ pub struct Config {
     pub db_url: Option<String>,
 
     /// Stable identifier for this instance, used by the enterprise HA
-    /// session registry (R110) to mark session ownership. Must be unique
+    /// session registry to mark session ownership. Must be unique
     /// across the fleet; defaults to `hostname-pid`. Recording rotation and
     /// the session reaper only operate on sessions/files this instance owns.
     #[serde(default = "default_instance_id")]
@@ -2013,7 +2013,7 @@ mod tests {
 
     #[test]
     fn test_load_without_file_matches_previous_defaults() {
-        // R19 regression: default_toml() must emit every section/key the
+        // Regression guard: default_toml() must emit every section/key the
         // previous hand-rolled defaults covered, so the config crate's
         // layered merge (defaults → file → env) reproduces them exactly.
         // Loading with an empty path exercises the defaults layer alone.

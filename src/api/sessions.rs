@@ -263,7 +263,7 @@ pub async fn delete_session(
         }
     }
 
-    // R110: a session hosted by another instance cannot be terminated from
+    // A session hosted by another instance cannot be terminated from
     // here — its guacd stream and reaper live on the owning instance. Fail
     // with an explicit message instead of a misleading 404.
     if let Some(info) = manager.get_session(id).await {
@@ -415,7 +415,7 @@ pub async fn shadow_session(
         .ok_or_else(|| AppError::Session("session not found".into()))?;
 
     let admin_email = id_inner.display_name().to_string();
-    // R110: for a session hosted by another instance, the shadow token is
+    // For a session hosted by another instance, the shadow token is
     // persisted on the shared registry row (the in-memory session — and its
     // token list — lives on the owning instance). Either instance can then
     // validate it; the browser is redirected to the owner for the stream.

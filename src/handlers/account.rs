@@ -11,7 +11,7 @@ use crate::CspNonce;
 
 /// POST /api/me/password — change the signed-in user's password.
 ///
-/// Enforces the password policy (R108): minimum length, and the new
+/// Enforces the password policy: minimum length, and the new
 /// password must not match any of the user's last `password.history`
 /// hashes. The new hash is recorded into the reuse history.
 #[derive(Deserialize)]

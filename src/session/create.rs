@@ -65,7 +65,7 @@ impl SessionManager {
             ));
         }
 
-        // R105: admin lockdown toggles from the Settings page — a disabled
+        // Admin lockdown toggles from the Settings page — a disabled
         // protocol must not spawn sessions. The DB overlay is read once per
         // creation attempt (live: flipping a toggle takes effect without a
         // restart); unset or unreadable toggles default to enabled so
@@ -1114,7 +1114,7 @@ impl SessionManager {
             (Some(stream), connection_id, None)
         };
 
-        // R105: `enable_recordings` lockdown — when the admin switched
+        // `enable_recordings` lockdown — when the admin switched
         // recordings off, no session may record regardless of request or
         // config (the toggle defaults to enabled when unset).
         let recording_enabled = req
@@ -1217,7 +1217,7 @@ impl SessionManager {
 
         crate::metrics::session_total_inc();
 
-        // Enterprise HA (R110): mirror the live session in the shared
+        // Enterprise HA: mirror the live session in the shared
         // registry so other instances can see/join it. No-op without a
         // shared backend (single-instance mode unchanged).
         if self.ha_enabled() {
@@ -1286,7 +1286,7 @@ impl SessionManager {
         let browser_mgr = std::sync::Arc::clone(&self.browser_manager);
         let timeout_secs = self.config.session_pending_timeout_secs;
         let (cleanup_on_close, retention_secs) = super::drive_cleanup_settings(&self.config.drive);
-        // R110: mark the registry row expired when the pending window lapses
+        // Mark the registry row expired when the pending window lapses
         // (the store functions no-op without a shared backend pool).
         let registry_db = self.db.clone();
         let registry_ha = self.ha_enabled();
@@ -1312,7 +1312,7 @@ impl SessionManager {
                     }
                 }
             }
-            // R110: mark the registry row expired only when the session was
+            // Mark the registry row expired only when the session was
             // still pending — a session that already connected must keep its
             // live status.
             if was_pending && registry_ha {
@@ -1525,7 +1525,7 @@ fn protocol_toggle(session_type: &SessionType) -> Option<&'static str> {
     match session_type {
         SessionType::Rdp => Some("enable_rdp"),
         // The settings page has no `enable_ssh` toggle; SSH sessions are
-        // gated by the SSH-related lockdown switch (R105).
+        // gated by the SSH-related lockdown switch.
         SessionType::Ssh => Some("enable_ssh_tunnels"),
         SessionType::Spice => Some("enable_spice"),
         SessionType::Proxmox => Some("enable_proxmox"),
@@ -1548,7 +1548,7 @@ fn protocol_label(session_type: &SessionType) -> &'static str {
     }
 }
 
-/// R105: enforce the admin lockdown toggles at session creation. Rejects
+/// Enforce the admin lockdown toggles at session creation. Rejects
 /// with a clear error when the effective setting forbids the session type.
 /// VMware sessions are plain RDP/SSH/VNC sessions routed from the vSphere
 /// API with an `address_book_entry` of the form `vsphere/<vm name>`; they
@@ -1815,7 +1815,7 @@ mod tests {
         assert_eq!(creds[0].0, "https://ok.com");
     }
 
-    // ── R105: protocol lockdown toggles ──
+    // ── Protocol lockdown toggles ──
 
     const ALL_TYPES: [SessionType; 7] = [
         SessionType::Ssh,
