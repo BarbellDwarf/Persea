@@ -1,10 +1,8 @@
 # Funding for persea.
 #
-# GitHub Sponsors is the primary; Polar funds issues and features;
-# Ko-fi is the low-friction tip jar; Open Collective keeps project
-# expenses public.
+# GitHub Sponsors is the primary; Ko-fi is the low-friction tip jar;
+# Open Collective keeps project expenses public.
 
-github: [YOUR_GITHUB_USERNAME]
-polar: YOUR_POLAR_USERNAME
+github: barbelldwarf
 ko_fi: barbelldwarf
 open_collective: barbelldwarf
