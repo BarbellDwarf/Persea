@@ -263,7 +263,10 @@ db_url = "mysql://user:password@localhost:3306/persea"
 db_url = "sqlite:///opt/persea/data/persea.db?mode=rwc"
 ```
 
-When `db_url` is set, the SQLx pool is initialised alongside the existing rusqlite `Db`. The `db_path` setting is still used for the admin database (users, API keys, sessions, tokens).
+When `db_url` is set, the SQLx pool IS the store: users, auth sessions,
+API keys, address book, audit, settings and history all live in the
+configured backend (migrations run automatically at startup). `db_path`
+is only used in legacy mode (no `db_url`).
 
 **Note:** Migrations are per-backend. The schema DDL lives in `migrations/postgres/`, `migrations/mysql/`, and `migrations/sqlite/`.
 

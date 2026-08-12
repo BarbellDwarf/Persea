@@ -21,11 +21,14 @@ persea ships in two versions: a **free, self-hosted** edition that runs without 
 | **Audit log compliance exports** | Filtered CSV/JSON download of the audit log (basic audit viewing and tamper verification stay free) |
 | **Encrypted session recording** | Session recordings encrypted at rest |
 
-> **Not implemented (roadmap):** high availability / clustering. The license
-> format reserves an `ha` feature flag, but no clustering code exists in
-> persea — it is a single-instance server, so the flag can never be granted by
-> a license today. See [High Availability Architecture](high-availability.md)
-> for what is and is not shareable across instances.
+> **In progress:** high availability / clustering. The shared-data foundation
+> (multi-backend storage via `db_url`, first-run setup on Postgres/MySQL,
+> backend round-trip CI) is shipped; cross-instance session sharing,
+> DB-backed WebSocket tickets and instance coordination are in development
+> (see the `R110` enterprise-HA work). The license format reserves an `ha`
+> feature flag that gates those features. See
+> [High Availability Architecture](high-availability.md) for what is and is
+> not shareable across instances.
 
 ## 30-day evaluation period
 
