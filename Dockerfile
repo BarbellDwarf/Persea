@@ -46,6 +46,7 @@ WORKDIR /build
 RUN git clone --depth 1 --branch persea-1.6.1-freerdp3 \
     https://github.com/BarbellDwarf/persea-guacamole-server.git guacamole-server
 
+WORKDIR /build/guacamole-server
 RUN autoreconf -fi
 
 WORKDIR /build/guacd-build
