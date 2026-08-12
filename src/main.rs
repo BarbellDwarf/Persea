@@ -2100,7 +2100,10 @@ async fn run_server(
     // Feature-gated admin page: /admin/tunnels.html 404s when the
     // `enable_ssh_tunnels` toggle is off (request-time check).
     let gated_tunnels_page = Router::new()
-        .route("/admin/tunnels.html", get(handlers::pages::admin_tunnels_page))
+        .route(
+            "/admin/tunnels.html",
+            get(handlers::pages::admin_tunnels_page),
+        )
         .layer(middleware::from_fn(feature_gate))
         .layer(Extension(FeatureGate("enable_ssh_tunnels")))
         .layer(Extension(database.clone()));

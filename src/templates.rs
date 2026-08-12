@@ -244,8 +244,16 @@ impl FeatureFlags {
     pub fn from_settings(settings: &[(String, String)]) -> Self {
         Self {
             rdp: crate::settings_merge::toggle_enabled(settings, "enable_rdp", true),
-            ssh_tunnels: crate::settings_merge::toggle_enabled(settings, "enable_ssh_tunnels", true),
-            web_sessions: crate::settings_merge::toggle_enabled(settings, "enable_web_sessions", true),
+            ssh_tunnels: crate::settings_merge::toggle_enabled(
+                settings,
+                "enable_ssh_tunnels",
+                true,
+            ),
+            web_sessions: crate::settings_merge::toggle_enabled(
+                settings,
+                "enable_web_sessions",
+                true,
+            ),
             vdi: crate::settings_merge::toggle_enabled(settings, "enable_vdi", true),
             spice: crate::settings_merge::toggle_enabled(settings, "enable_spice", true),
             proxmox: crate::settings_merge::toggle_enabled(settings, "enable_proxmox", true),

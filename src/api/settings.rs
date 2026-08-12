@@ -350,9 +350,9 @@ fn canonicalize_custom_fields(key: &str, value: &Value) -> Result<String, AppErr
     let mut seen = std::collections::HashSet::new();
     let mut fields: Vec<Value> = Vec::new();
     for (i, field) in arr.iter().enumerate() {
-        let obj = field.as_object().ok_or_else(|| {
-            AppError::Validation(format!("{key}[{i}] must be an object"))
-        })?;
+        let obj = field
+            .as_object()
+            .ok_or_else(|| AppError::Validation(format!("{key}[{i}] must be an object")))?;
         let name = obj
             .get("name")
             .and_then(|v| v.as_str())
@@ -366,10 +366,7 @@ fn canonicalize_custom_fields(key: &str, value: &Value) -> Result<String, AppErr
                 "{key}: duplicate field name '{name}'"
             )));
         }
-        let field_type = obj
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("text");
+        let field_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("text");
         if field_type != "text" && field_type != "select" {
             return Err(AppError::Validation(format!(
                 "{key}[{i}] '{name}': type must be \"text\" or \"select\""
@@ -384,9 +381,7 @@ fn canonicalize_custom_fields(key: &str, value: &Value) -> Result<String, AppErr
             })?;
             for opt in opts {
                 let s = opt.as_str().ok_or_else(|| {
-                    AppError::Validation(format!(
-                        "{key}[{i}] '{name}': options must be strings"
-                    ))
+                    AppError::Validation(format!("{key}[{i}] '{name}': options must be strings"))
                 })?;
                 let trimmed = s.trim().to_string();
                 if !trimmed.is_empty() && !options.contains(&trimmed) {
@@ -569,7 +564,8 @@ mod tests {
 
     #[test]
     fn custom_fields_stored_to_value_round_trips() {
-        let stored = r#"[{"name":"Environment","type":"select","options":["prod","dev"],"required":true}]"#;
+        let stored =
+            r#"[{"name":"Environment","type":"select","options":["prod","dev"],"required":true}]"#;
         let v = stored_to_value("custom_fields", stored);
         assert_eq!(v[0]["name"], "Environment");
         assert_eq!(v[0]["type"], "select");
@@ -589,7 +585,10 @@ mod tests {
         }]);
         let as_array = canonicalize("custom_fields", &arr).unwrap();
         let as_string = canonicalize("custom_fields", &json!(as_array.clone())).unwrap();
-        assert_eq!(as_array, as_string, "array and JSON-string forms must agree");
+        assert_eq!(
+            as_array, as_string,
+            "array and JSON-string forms must agree"
+        );
         let v: Value = serde_json::from_str(&as_array).unwrap();
         assert_eq!(v[0]["name"], "Environment");
         assert_eq!(v[0]["type"], "select");
@@ -599,11 +598,8 @@ mod tests {
 
     #[test]
     fn custom_fields_rejects_bad_type() {
-        let err = canonicalize(
-            "custom_fields",
-            &json!([{"name": "Env", "type": "radio"}]),
-        )
-        .unwrap_err();
+        let err =
+            canonicalize("custom_fields", &json!([{"name": "Env", "type": "radio"}])).unwrap_err();
         assert!(err.to_string().contains("text"), "got: {}", err);
         assert!(err.to_string().contains("select"), "got: {}", err);
     }
@@ -624,11 +620,8 @@ mod tests {
 
     #[test]
     fn custom_fields_requires_options_for_select() {
-        let err = canonicalize(
-            "custom_fields",
-            &json!([{"name": "Env", "type": "select"}]),
-        )
-        .unwrap_err();
+        let err =
+            canonicalize("custom_fields", &json!([{"name": "Env", "type": "select"}])).unwrap_err();
         assert!(err.to_string().contains("option"), "got: {}", err);
     }
 
@@ -651,7 +644,10 @@ mod tests {
         .unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert!(v[0].get("options").is_none(), "text fields keep no options");
-        assert!(v[0].get("required").is_none(), "default required is omitted");
+        assert!(
+            v[0].get("required").is_none(),
+            "default required is omitted"
+        );
         assert_eq!(v[0]["name"], "Owner");
     }
 

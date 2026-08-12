@@ -156,12 +156,9 @@ fn ab_entry_from_db(row: &db::AbEntry) -> AddressBookEntry {
             .get("description")
             .and_then(|v| v.as_str())
             .map(String::from),
-        custom_fields: protocol_config
-            .get("custom_fields")
-            .and_then(|v| {
-                serde_json::from_value::<std::collections::HashMap<String, String>>(v.clone())
-                    .ok()
-            }),
+        custom_fields: protocol_config.get("custom_fields").and_then(|v| {
+            serde_json::from_value::<std::collections::HashMap<String, String>>(v.clone()).ok()
+        }),
         jump_hosts: protocol_config
             .get("jump_hosts")
             .and_then(|v| serde_json::from_value::<Vec<crate::tunnel::JumpHost>>(v.clone()).ok()),
@@ -1084,10 +1081,9 @@ pub async fn ab_get_custom_fields(
         _ => return Err(AppError::Forbidden("operator role required".into())),
     }
     let db_clone = database.clone();
-    let stored =
-        tokio::task::spawn_blocking(move || super::settings::read_all_settings(&db_clone))
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))??;
+    let stored = tokio::task::spawn_blocking(move || super::settings::read_all_settings(&db_clone))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
     Ok(Json(super::settings::custom_fields_value(&stored)))
 }
 
@@ -1965,27 +1961,29 @@ pub async fn ab_update_entry(
                 };
 
                 AddressBookEntry {
-                    password: payload.entry.password.or(existing.password),
-                    private_key: payload.entry.private_key.or(existing.private_key),
+                    password: payload.entry.password.clone().or(existing.password),
+                    private_key: payload.entry.private_key.clone().or(existing.private_key),
                     container_password: payload
                         .entry
                         .container_password
+                        .clone()
                         .or(existing.container_password),
                     proxmox_token_secret: payload
                         .entry
                         .proxmox_token_secret
+                        .clone()
                         .or(existing.proxmox_token_secret),
                     jump_hosts: merged_jump_hosts,
                     jump_password: None,
                     jump_private_key: None,
-                    ..payload.entry
+                    ..payload.entry.clone()
                 }
             }
             // A missing vault copy (e.g. after a db→vault backend switch)
             // behaves like an empty copy: write the payload as-is. Any OTHER
             // read failure must not proceed — the put below would overwrite
             // the stored credentials with `None`s.
-            Err(VaultError::NotFound) => payload.entry,
+            Err(VaultError::NotFound) => payload.entry.clone(),
             Err(e) => return Err(AppError::Vault(e.to_string())),
         };
         // Preserve metadata the modal doesn't edit (same merge contract as
@@ -2695,6 +2693,10 @@ mod tests {
         db::init_db(std::path::Path::new(":memory:")).expect("Failed to create test DB")
     }
 
+    fn test_addr() -> SocketAddr {
+        "127.0.0.1:0".parse().unwrap()
+    }
+
     fn insert_test_admin(db: &Db, name: &str) -> String {
         let key = format!("test-key-{}", name);
         let key_hash = {
@@ -2951,7 +2953,10 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = body_json(response).await;
         assert!(
-            body["error"].as_str().unwrap_or("").contains("no usable characters"),
+            body["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("no usable characters"),
             "got: {}",
             body
         );
@@ -2982,7 +2987,11 @@ mod tests {
         // List API returns the values.
         let app = build_router(db.clone(), test_vault_state(), None);
         let response = app
-            .oneshot(auth_req("GET", "/api/addressbook/folders/shared/CF/entries", &key))
+            .oneshot(auth_req(
+                "GET",
+                "/api/addressbook/folders/shared/CF/entries",
+                &key,
+            ))
             .await
             .unwrap();
         let body = body_json(response).await;
@@ -3003,7 +3012,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let app = build_router(db.clone(), test_vault_state(), None);
         let response = app
-            .oneshot(auth_req("GET", "/api/addressbook/folders/shared/CF/entries", &key))
+            .oneshot(auth_req(
+                "GET",
+                "/api/addressbook/folders/shared/CF/entries",
+                &key,
+            ))
             .await
             .unwrap();
         let body = body_json(response).await;
@@ -3031,7 +3044,11 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let app = build_router(db.clone(), test_vault_state(), None);
         let response = app
-            .oneshot(auth_req("GET", "/api/addressbook/folders/shared/CF/entries", &key))
+            .oneshot(auth_req(
+                "GET",
+                "/api/addressbook/folders/shared/CF/entries",
+                &key,
+            ))
             .await
             .unwrap();
         let body = body_json(response).await;
@@ -3046,11 +3063,7 @@ mod tests {
         let key = insert_test_admin(&db, "admin");
         db::create_ab_folder(&db, "shared", "CFV", "", "", false).unwrap();
         let mock = Arc::new(crate::testing::MockVault::new());
-        let app = build_router(
-            db.clone(),
-            mock_vault_state(mock.clone()),
-            Some("vault"),
-        );
+        let app = build_router(db.clone(), mock_vault_state(mock.clone()), Some("vault"));
         let response = app
             .oneshot(json_req(
                 "POST",
@@ -3086,13 +3099,13 @@ mod tests {
         assert_eq!(vault_entry.display_name.as_deref(), Some("Prod Web"));
 
         // List API returns the values from the DB row.
-        let app = build_router(
-            db.clone(),
-            mock_vault_state(mock.clone()),
-            Some("vault"),
-        );
+        let app = build_router(db.clone(), mock_vault_state(mock.clone()), Some("vault"));
         let response = app
-            .oneshot(auth_req("GET", "/api/addressbook/folders/shared/CFV/entries", &key))
+            .oneshot(auth_req(
+                "GET",
+                "/api/addressbook/folders/shared/CFV/entries",
+                &key,
+            ))
             .await
             .unwrap();
         let body = body_json(response).await;
@@ -3107,11 +3120,7 @@ mod tests {
         let key = insert_test_admin(&db, "admin");
         db::create_ab_folder(&db, "shared", "CFVM", "", "", false).unwrap();
         let mock = Arc::new(crate::testing::MockVault::new());
-        let app = build_router(
-            db.clone(),
-            mock_vault_state(mock.clone()),
-            Some("vault"),
-        );
+        let app = build_router(db.clone(), mock_vault_state(mock.clone()), Some("vault"));
         let response = app
             .oneshot(json_req(
                 "POST",
@@ -3130,11 +3139,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::CREATED);
 
         // Edit: partial custom_fields map + friendly name, password omitted.
-        let app = build_router(
-            db.clone(),
-            mock_vault_state(mock.clone()),
-            Some("vault"),
-        );
+        let app = build_router(db.clone(), mock_vault_state(mock.clone()), Some("vault"));
         let response = app
             .oneshot(json_req(
                 "PUT",
@@ -3187,8 +3192,7 @@ mod tests {
         let entries = db::list_ab_entries(&db, folder.id).unwrap();
         assert_eq!(entries[0].name, "prod-web");
         assert_eq!(entries[0].display_name, "Prod Web Renamed");
-        let config: Value =
-            serde_json::from_str(&entries[0].protocol_config).unwrap();
+        let config: Value = serde_json::from_str(&entries[0].protocol_config).unwrap();
         assert_eq!(config["custom_fields"]["Environment"], "Production");
         assert_eq!(config["custom_fields"]["Owner"], "bob");
     }
@@ -3218,7 +3222,11 @@ mod tests {
         let session = db::create_auth_session(&db, user.id, 3600).unwrap();
         let app = build_router(db.clone(), test_vault_state(), None);
         let response = app
-            .oneshot(session_req("GET", "/api/addressbook/custom-fields", &session))
+            .oneshot(session_req(
+                "GET",
+                "/api/addressbook/custom-fields",
+                &session,
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -3260,7 +3268,11 @@ mod tests {
         let session = db::create_auth_session(&db2, user.id, 3600).unwrap();
         let app = build_router(db2.clone(), test_vault_state(), None);
         let response = app
-            .oneshot(session_req("GET", "/api/addressbook/custom-fields", &session))
+            .oneshot(session_req(
+                "GET",
+                "/api/addressbook/custom-fields",
+                &session,
+            ))
             .await
             .unwrap();
         let body = body_json(response).await;

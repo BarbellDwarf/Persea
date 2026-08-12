@@ -115,12 +115,10 @@ pub async fn list_recordings(
                     rec["session_type"] = json!(t);
                 }
                 if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&sidecar.created_at) {
-                    rec["display_date"] = json!(
-                        created
-                            .with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d %H:%M")
-                            .to_string()
-                    );
+                    rec["display_date"] = json!(created
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M")
+                        .to_string());
                     if let Ok(modified) = meta.modified() {
                         let mod_dt: chrono::DateTime<chrono::Utc> = modified.into();
                         let dur = (mod_dt - created.with_timezone(&chrono::Utc)).num_seconds();
