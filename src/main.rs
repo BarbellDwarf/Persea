@@ -831,6 +831,36 @@ async fn security_headers(
 #[derive(Clone)]
 struct CspNonce(String);
 
+/// Which `enable_*` admin setting gates a page route. Carried as a request
+/// extension so one middleware serves every gated route.
+#[derive(Clone)]
+struct FeatureGate(&'static str);
+
+/// Request-time page gate: returns a styled 404 when the `enable_*` setting
+/// named by the `FeatureGate` extension is disabled. The route stays
+/// registered; the check runs per request so a settings change (or a DB
+/// overlay) applies without a restart.
+async fn feature_gate(
+    Extension(db): Extension<Db>,
+    Extension(gate): Extension<FeatureGate>,
+    request: Request,
+    next: middleware::Next,
+) -> Response {
+    if crate::settings_merge::read_toggle(&db, gate.0, true) {
+        return next.run(request).await;
+    }
+    let nonce = request
+        .extensions()
+        .get::<CspNonce>()
+        .map(|n| n.0.clone())
+        .unwrap_or_default();
+    crate::templates::render_error_page(
+        axum::http::StatusCode::NOT_FOUND,
+        "The page you requested could not be found",
+        &nonce,
+    )
+}
+
 /// Connect a single Vault backend into `cell`. On a failed initial connect,
 /// spawns a background 30s retry loop; the cell stays `None` (and that scope's
 /// address book stays unavailable) until a connect succeeds. `luks_drive` is
@@ -2053,6 +2083,14 @@ async fn run_server(
             .layer(Extension(totp_enforcement));
     }
 
+    // Feature-gated admin page: /admin/tunnels.html 404s when the
+    // `enable_ssh_tunnels` toggle is off (request-time check).
+    let gated_tunnels_page = Router::new()
+        .route("/admin/tunnels.html", get(handlers::pages::admin_tunnels_page))
+        .layer(middleware::from_fn(feature_gate))
+        .layer(Extension(FeatureGate("enable_ssh_tunnels")))
+        .layer(Extension(database.clone()));
+
     // Branded HTML page routes (served from memory with site_title/logo baked in)
     let protected_html_routes = Router::new()
         .route("/index.html", get(serve_branded_page))
@@ -2092,10 +2130,6 @@ async fn run_server(
             get(handlers::pages::admin_reports_page),
         )
         .route(
-            "/admin/tunnels.html",
-            get(handlers::pages::admin_tunnels_page),
-        )
-        .route(
             "/admin/license.html",
             get(handlers::pages::admin_license_page),
         )
@@ -2105,6 +2139,7 @@ async fn run_server(
         )
         .route("/docs.html", get(handlers::account::docs_page))
         .route("/docs", get(handlers::account::docs_page))
+        .merge(gated_tunnels_page)
         .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));

@@ -42,11 +42,23 @@ fn require_admin(identity: &Option<Extension<AuthIdentity>>) -> Result<(), AppEr
     }
 }
 
+/// Request-time gate: the jump-host/tunnel management API returns 404 when
+/// the admin has turned `enable_ssh_tunnels` off (the routes stay mounted;
+/// the check runs per request so a settings change applies without restart).
+fn require_tunnels_enabled(db: &Db) -> Result<(), AppError> {
+    if crate::settings_merge::read_toggle(db, "enable_ssh_tunnels", true) {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("SSH tunnels are disabled".into()))
+    }
+}
+
 pub async fn list_jump_hosts(
     State(_state): State<AppState>,
     Extension(db): Extension<Db>,
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<Vec<crate::db::JumpHostRecord>>, AppError> {
+    require_tunnels_enabled(&db)?;
     require_admin(&identity)?;
     let hosts = crate::db::list_jump_hosts(&db).map_err(|e| {
         tracing::error!(error = %e, "failed to list jump hosts");
@@ -137,6 +149,7 @@ pub async fn test_jump_host(
     identity: Option<Extension<AuthIdentity>>,
     Path(id): Path<String>,
 ) -> Result<Json<TestResult>, AppError> {
+    require_tunnels_enabled(&db)?;
     require_admin(&identity)?;
     let host = crate::db::get_jump_host(&db, &id)
         .map_err(|e| {

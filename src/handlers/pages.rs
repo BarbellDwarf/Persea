@@ -3,6 +3,7 @@ use axum::Extension;
 
 use crate::api::{SiteTitle, ThemeData};
 use crate::auth::AuthIdentity;
+use crate::db::Db;
 use crate::templates::{
     AdminAuditTemplate, AdminAuthTemplate, AdminBrandingTemplate, AdminGroupsTemplate,
     AdminLicenseTemplate, AdminReportsTemplate, AdminSettingsTemplate, AdminTunnelsTemplate,
