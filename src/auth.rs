@@ -68,6 +68,7 @@ fn ticket_hash(ticket: &str) -> String {
 }
 
 impl WsTicketStore {
+    /// Create a purely in-memory ticket store (legacy single-instance mode).
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
@@ -224,14 +225,20 @@ pub enum AuthIdentity {
     ApiKey(String),
     /// OIDC user with email, display name, role, and group memberships.
     User {
+        /// Email address, used as the canonical identifier.
         email: String,
+        /// Display name; falls back to the email when empty.
         name: String,
+        /// Effective role name (admin, poweruser, operator, viewer).
         role: String,
+        /// OIDC group memberships.
         groups: Vec<String>,
     },
 }
 
 impl AuthIdentity {
+    /// Human-readable name: display name when set, email otherwise,
+    /// or the API key name.
     pub fn display_name(&self) -> &str {
         match self {
             AuthIdentity::ApiKey(name) => name,
@@ -245,6 +252,7 @@ impl AuthIdentity {
         }
     }
 
+    /// Effective role name; API key identities always resolve to admin.
     pub fn role(&self) -> &str {
         match self {
             AuthIdentity::ApiKey(_) => "admin",

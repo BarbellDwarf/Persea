@@ -1620,6 +1620,7 @@ pub struct SamlProvider {
 }
 
 impl SamlProvider {
+    /// Create a provider from the given config. IdP metadata loads lazily on first use.
     pub fn new(config: SamlConfig) -> Self {
         Self {
             config,
