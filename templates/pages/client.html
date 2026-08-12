@@ -221,9 +221,13 @@
             <span id="tb-duration" class="tb-duration">00:00:00</span>
         </div>
         <div class="tb-right">
-            <button class="tb-btn" id="btn-clipboard" title="Paste text to remote (Ctrl+Alt+Shift)">
+            <button class="tb-btn" id="btn-clipboard" title="Paste text to remote (Ctrl+V)">
                 <svg viewBox="0 0 24 24"><path d="M19 2h-4.18C14.4.84 13.3 0 12 0S9.6.84 9.18 2H5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/></svg>
                 Paste
+            </button>
+            <button class="tb-btn" id="btn-copy" title="Copy the remote selection to your clipboard (sends Ctrl+C)" aria-label="Copy remote selection">
+                <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/></svg>
+                Copy
             </button>
             <button class="tb-btn" id="btn-fullscreen" title="Toggle fullscreen (F11)" aria-label="Toggle fullscreen">
                 <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
@@ -760,6 +764,29 @@
                 };
             };
 
+            // ── Copy button: pull the remote clipboard on demand ──
+            // Sends Ctrl+C to the remote; the remote copies the current
+            // selection into ITS clipboard, and guacd pushes that back over
+            // the clipboard stream handled above (which honours the
+            // cfgClipboardSync setting — with sync off the button sends the
+            // keys but nothing is written to the browser clipboard). SSH
+            // terminals have no clipboard concept, so the button is a no-op
+            // there (Ctrl+C would interrupt a foreground process instead).
+            document.getElementById('btn-copy').addEventListener('click', function() {
+                if (!client || !window.__guac_client) return;
+                if (protocol === 'SSH') {
+                    showTransferStatus('error', 'SSH has no clipboard');
+                    setTimeout(hideTransferStatus, 2500);
+                    return;
+                }
+                client.sendKeyEvent(1, 0xFFE3);
+                client.sendKeyEvent(1, 0x63);
+                client.sendKeyEvent(0, 0x63);
+                client.sendKeyEvent(0, 0xFFE3);
+                showTransferStatus('sent', 'Ctrl+C sent — remote selection will sync');
+                setTimeout(hideTransferStatus, 2000);
+            });
+
             // ── File system ──
             var filesystem = null;
             client.onfilesystem = function(object, name) { filesystem = object; };
@@ -967,15 +994,27 @@
 
             // Ctrl+V clipboard sync
             var _pasteIntercepted = false;
+            // After pushing the browser clipboard to the remote, replay the
+            // Ctrl+V as a proper key sequence (Control_L 0xFFE3 + 'v' 0x76)
+            // so the remote app actually pastes. The browser's real Ctrl+V
+            // keydown was swallowed by the capture handler below, so without
+            // this replay nothing would reach the remote. SSH has no
+            // clipboard, so only the stream is sent there — never a bare
+            // 'v' or a stray Ctrl+V into the terminal.
+            function replayCtrlV() {
+                if (protocol === 'SSH') return;
+                client.sendKeyEvent(1, 0xFFE3);
+                client.sendKeyEvent(1, 0x76);
+                client.sendKeyEvent(0, 0x76);
+                client.sendKeyEvent(0, 0xFFE3);
+            }
             document.addEventListener('keydown', function(e) {
                 if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V') && !e.altKey && !e.repeat && cfgClipboardSync) {
                     if (navigator.clipboard && navigator.clipboard.readText) {
                         e.stopPropagation(); e.preventDefault(); _pasteIntercepted = true;
                         navigator.clipboard.readText().then(function(text) {
                             if (text && text !== remoteClipboard) { sendClipboardToRemote(text); remoteClipboard = text; }
-                        }).catch(function() {}).finally(function() {
-                            client.sendKeyEvent(1, 0x76); client.sendKeyEvent(0, 0x76);
-                        });
+                        }).catch(function() {}).finally(replayCtrlV);
                     }
                 }
             }, true);
