@@ -1302,6 +1302,42 @@ async fn import_custom_fields_json() {
 }
 
 #[tokio::test]
+async fn import_custom_fields_sequence_of_pairs_wire_shape() {
+    // The connections-page UI sends custom fields as [[name, value], ...]
+    // pairs (mirroring the CSV columns) — the JSON contract must accept that.
+    let db = test_db();
+    let key = create_admin(&db, "admin");
+    let router = test_router(db.clone());
+    let resp = router
+        .oneshot(admin_post(
+            &key,
+            "/api/addressbook/import",
+            serde_json::json!({
+                "rows": [{
+                    "name": "web01",
+                    "protocol": "ssh",
+                    "hostname": "10.0.0.1",
+                    "port": 22,
+                    "folder": "Root",
+                    "custom_fields": [["Environment", "Production"], ["Owner", "alice"]]
+                }]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["imported"], 1);
+    assert_eq!(json["errors"].as_array().unwrap().len(), 0);
+
+    let folder = db::get_ab_folder(&db, "shared", "Root").unwrap();
+    let entry = db::get_ab_entry(&db, folder.id, "web01").unwrap();
+    let cfg: serde_json::Value = serde_json::from_str(&entry.protocol_config).unwrap();
+    assert_eq!(cfg["custom_fields"]["Environment"], "Production");
+    assert_eq!(cfg["custom_fields"]["Owner"], "alice");
+}
+
+#[tokio::test]
 async fn import_raw_csv_body() {
     let db = test_db();
     let key = create_admin(&db, "admin");

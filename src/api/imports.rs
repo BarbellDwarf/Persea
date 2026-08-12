@@ -21,9 +21,11 @@ use axum::extract::{ConnectInfo, Query};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::Response;
 use axum::{Extension, Json};
+use serde::de::{self, MapAccess, SeqAccess, Visitor};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
+use std::fmt;
 use std::net::SocketAddr;
 
 /// Resolve the credential encryption key: the startup-resolved `StorageKey`
@@ -54,6 +56,51 @@ fn default_mode() -> String {
     "upsert".into()
 }
 
+/// Deserialize custom field values from either a JSON map
+/// (`{"Environment": "prod"}`) or a sequence of `[name, value]` pairs — the
+/// wire shape the connections-page CSV importer sends (it mirrors the
+/// trailing CSV columns one-to-one).
+fn deserialize_custom_fields<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    struct CustomFieldsVisitor;
+
+    impl<'de> Visitor<'de> for CustomFieldsVisitor {
+        type Value = HashMap<String, String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+            formatter.write_str("a map of field names to values, or a sequence of [name, value] pairs")
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            let mut out = HashMap::new();
+            while let Some((key, value)) = map.next_entry::<String, String>()? {
+                out.insert(key, value);
+            }
+            Ok(out)
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut out = HashMap::new();
+            while let Some((key, value)) = seq.next_element::<(String, String)>()? {
+                out.insert(key, value);
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_any(CustomFieldsVisitor)
+}
+
 /// One connection row from the import request body.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImportRow {
@@ -79,8 +126,9 @@ pub struct ImportRow {
     #[serde(default)]
     pub description: String,
     /// Custom field values (field name → value), same shape as the
-    /// connections API's per-entry `protocol_config.custom_fields`.
-    #[serde(default)]
+    /// connections API's per-entry `protocol_config.custom_fields`. Accepts
+    /// a map or `[[name, value], ...]` pairs (the CSV-import UI shape).
+    #[serde(default, deserialize_with = "deserialize_custom_fields")]
     pub custom_fields: HashMap<String, String>,
 }
 
