@@ -326,6 +326,6 @@ When dispatching implementation work to subagents, follow the contract in
 ## Wayfinder planning
 
 - `wayfinder/` — planning artifacts (gitignored, local only — do NOT commit)
-- `wayfinder/security-audit-round3/` — current security audit tickets (R01-R20)
-- Tickets are numbered per round: R01-R13 (round 3 security), R14-R20 (config, login, error pages, process)
+- `wayfinder/security-audit-round3/` — current security audit tickets
+- Tickets are numbered per round (security findings, config, login, error pages, process)
 - Each ticket: `wayfinder:task`, priority, phase, finding, fix, files, deliverable

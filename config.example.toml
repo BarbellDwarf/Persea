@@ -56,7 +56,7 @@ db_path = "./persea.db"
 #
 # Env: PERSEA_DB_URL
 
-# ─── Enterprise HA (R110) ────────────────────────────────────────────────
+# ─── Enterprise HA ────────────────────────────────────────────────────────
 #
 # These two keys matter only for multi-instance deployments sharing one
 # db_url backend with the enterprise HA feature licensed (the 30-day

@@ -7,11 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!--
 Release checklist (delete this comment before tagging v1.1.1):
-- [ ] R110 (enterprise HA) lands — amend "High availability" entries below
+- [ ] Enterprise HA lands — amend "High availability" entries below
 - [ ] `cargo test` + `cargo fmt --check` green on the final commit
 - [ ] CI green for the final push (`gh run list`)
 - [ ] Tag `v1.1.1` (annotated) and push it
-- [ ] Regenerate Playwright visual snapshots (connections page changed: R92/R97-R100)
+- [ ] Regenerate Playwright visual snapshots (connections page changed)
 - [ ] Re-run Playwright E2E suite (`tests/playwright`)
 - [ ] Update `screenshots/screenshots.md` if the new connections UI is captured there
 - [ ] Bump the asset cache-bust version in `templates/base.html` if more static files change
@@ -29,20 +29,20 @@ audit verification).
 
 ### Added
 
-- **Real multi-backend storage** (R102) — `db_url` is no longer a health-ping
+- **Real multi-backend storage** — `db_url` is no longer a health-ping
   only: with `postgres://`, `mysql://`, or `sqlite://` set, ALL core stores
   (users, auth sessions, API keys, address book, audit, system settings,
   session history, RBAC, TOTP secrets, jump hosts) route through the SQLx
   pool. Migrations run automatically at startup (per-backend schema, all
   three kept in sync). No code path silently falls back to SQLite when
   `db_url` is set; without it, the legacy SQLite file behaves exactly as
-  before. Verified by CI on every push against live Postgres and MySQL
-  (R104), including restart persistence and direct-DB row assertions.
-- **First-run setup on the configured backend** (R103) — the setup wizard
+  before. Verified by CI on every push against live Postgres and MySQL,
+  including restart persistence and direct-DB row assertions.
+- **First-run setup on the configured backend** — the setup wizard
   connects, migrates, and installs the pool, then creates the first admin in
   the configured backend (`db_url` field in the wizard). CLI `create-user`
   / `add-admin` are backend-aware too.
-- **Protocol lockdown switches enforced** (R105) — the Settings `enable_*`
+- **Protocol lockdown switches enforced** — the Settings `enable_*`
   toggles (`enable_rdp`, `enable_ssh_tunnels`, `enable_api_keys`,
   `enable_recordings`, `enable_web_sessions`, `enable_spice`,
   `enable_proxmox`, `enable_vmware`, `enable_vdi`, `enable_file_transfer`)
@@ -50,50 +50,50 @@ audit verification).
   creation with a clear error, API-key auth is refused at the middleware,
   drive/SFTP and the recording tee are gated per session. Defaults are
   enabled, so existing deployments are unaffected.
-- **Password policy** (R108) — enforced 15-character minimum
+- **Password policy** — enforced 15-character minimum
   (`password.min_length`) and per-user reuse history (`password.history`,
   default 5 hashes, Argon2id-verified, DB-backed) at every password set
   point: admin users API, CLI `create-user`, setup wizard, and a new
   `POST /api/me/password` change endpoint. The breach-screening (HIBP)
   claims are gone — no external service calls.
-- **Session idle timeout** (R109) — sessions silent past
+- **Session idle timeout** — sessions silent past
   `session_idle_timeout_secs` (default 1800, `0` disables) are reaped with a
   distinguishable `"idle-timeout"` history status. Only real client input
   counts as activity — the server's own keepalive pings do not.
-- **TLS hot-reload** (R107) — SIGHUP re-reads `tls.cert_path` /
+- **TLS hot-reload** — SIGHUP re-reads `tls.cert_path` /
   `tls.key_path` and atomically swaps the served certificate for new
   connections; a failed reload logs the error and keeps serving the previous
   certificate. The docs now describe only this mechanism (the file-watcher
   and admin-upload claims were removed).
-- **Branding reaches the UI** (R95) — `site_title`, `logo_url`, and
+- **Branding reaches the UI** — `site_title`, `logo_url`, and
   `primary_color` from settings now drive the sidebar, login/setup pages,
   and the accent color across the app (logo upload writes to
   `static/uploads/logo/`). Live preview in the branding admin page; theme
   presets still win when a user explicitly chose one.
-- **Recordings: encrypted-at-rest files are watchable** (R94) — the
+- **Recordings: encrypted-at-rest files are watchable** — the
   recordings listing, playback, and delete now handle `.guac.enc` files
   (listing showed only plain `.guac` before).
-- **Connection details** (R98, R99, R100) — the details panel shows grouped
+- **Connection details** — the details panel shows grouped
   fields (Connection / Access / Advanced) plus created/updated timestamps;
   every connection can carry a human description end-to-end (modal → API →
   panel → CSV import/export); folder rows show name + count with scope in
   the tooltip only.
-- **CLA enforcement** (R112) — contributions are now verified CLA-covered:
+- **CLA enforcement** — contributions are now verified CLA-covered:
   a signature registry (`cla/signed/`), a CI check that fails unsigned
   PRs, and a PR template acknowledgment. The fictional "CLA Assistant bot"
   claim is gone.
-- **Maintained guacd fork** (R106) — guacd builds from
+- **Maintained guacd fork** — guacd builds from
   `BarbellDwarf/persea-guacamole-server` (branch `persea-1.6.1-freerdp3`)
   instead of re-applying a 10-patch quilt: Dockerfile, install.sh, the
   release workflow, and the deb/rpm build scripts consume the fork. The
   fork carries the FreeRDP 3.x compile fixes, Kerberos NLA, H.264
   passthrough, RDP resize fixes, SPICE, and multi-monitor as one commit per
   patch.
-- **RDP entry UX** (R88, R92) — explicit Domain field, security /
+- **RDP entry UX** — explicit Domain field, security /
   auth-package selector with guacd error surfacing, and protocol switches
   in the entry modal now reset to the correct default port without
   clobbering manually entered values.
-- **Kerberos NLA in the Docker image** (R90) — krb5.conf generation and
+- **Kerberos NLA in the Docker image** — krb5.conf generation and
   krb5 tooling so Kerberos-authenticated RDP works from the container.
 
 ### Changed
@@ -102,66 +102,66 @@ audit verification).
   AGPL-3.0 (open source) with a commercial license exception. See
   [LICENSE](LICENSE), [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md), and
   [CLA.md](CLA.md). All contributors must sign the CLA.
-- **Connections page layout** (R97) — the folder pane gets real width
+- **Connections page layout** — the folder pane gets real width
   (clamp 260–360px), a rebalanced three-pane layout, and proper ellipsis;
   mobile stacking unchanged.
-- **Settings page handlers are CSP-safe** (R96) — inline `onchange` /
+- **Settings page handlers are CSP-safe** — inline `onchange` /
   `onclick` handlers moved into the nonced script block; toggles now
   actually sync and the save confirmation works.
-- **Account lockout wording** (R111) — documented as "lockout after 5
-  failed attempts" (the progressive-delay ladder was fiction).
-- **Audit verification wording** (R111) — documented as admin UI + API
-  (the CLI-verification claim was fiction).
-- **Docs scrub** (R111) — personal/environment references removed from
-  README, docs, and CHANGELOG; claims now match code.
-- **HA documentation honest** (R101) — spike runbook records what is real
+- **Account lockout wording** — documented as "lockout after 5 failed
+  attempts" (the progressive-delay ladder was fiction).
+- **Audit verification wording** — documented as admin UI + API (the
+  CLI-verification claim was fiction).
+- **Docs scrub** — personal/environment references removed from README,
+  docs, and CHANGELOG; claims now match code.
+- **HA documentation honest** — spike runbook records what is real
   (standalone guacd plain + TLS, multi-backend persistence, shared data
   across instances) and what is not yet (cross-instance session sharing —
-  the R110 work).
+  the enterprise HA work).
 
 ### Fixed
 
-- **Docker first-run crashed on filesystems without chmod support** (R82) —
+- **Docker first-run crashed on filesystems without chmod support** —
   the entrypoint's `chmod 600` on `admin-key.txt` failed with EPERM on
   Windows/WSL bind mounts (`/mnt/g/...`, 9p, virtiofs), and `set -e` killed
   the script before the admin key was created — so the DB never initialized
   and every container restart looped on "First run detected". The chmod is
   now best-effort with a clear warning; POSIX filesystems still get
   `chmod 600`.
-- **Connect failure no longer redirects to login** (R89) — failed /
+- **Connect failure no longer redirects to login** — failed /
   cancelled sessions keep you on the Connections page instead of bouncing
   to the login form.
-- **Entry modal port default** (R92) — switching protocols no longer
+- **Entry modal port default** — switching protocols no longer
   carries SSH's port 22 into RDP (or vice versa).
-- **Recordings `.guac.enc` invisible to the UI** (R94) — encrypted
+- **Recordings `.guac.enc` invisible to the UI** — encrypted
   recordings are listed, playable, and deletable.
-- **CodeQL/security findings** (R83, R84) — global-setup logging fixed;
+- **CodeQL/security findings** — global-setup logging fixed;
   client-side XSS sink hardened.
-- **Settings page saved wrong toggle values** (R96) — CSP was blocking
+- **Settings page saved wrong toggle values** — CSP was blocking
   every inline handler; toggles now save what the admin actually set.
 
 ### Removed
 
-- **RDP relay feature** (R93) — the loopback relay with
+- **RDP relay feature** — the loopback relay with
   proxy/fallback/direct modes and its socat dependency are gone; sessions
   connect directly to the target. The admin "connection mode" setting was
   removed.
-- **HIBP / breach-screening claims** (R108) — no external service, no
+- **HIBP / breach-screening claims** — no external service, no
   claim.
-- **`patches/` quilt from the repo** (R106) — replaced by the maintained
+- **`patches/` quilt from the repo** — replaced by the maintained
   fork; a pointer README remains.
 
 ### Security
 
-- **API key disable** (R105) — `enable_api_keys = false` now rejects
+- **API key disable** — `enable_api_keys = false` now rejects
   API-key authentication at the middleware (admin keys and user tokens).
-- **CSRF-safe settings handlers** (R96) — no inline handlers remain on the
+- **CSRF-safe settings handlers** — no inline handlers remain on the
   settings/branding admin pages.
-- **CLA gate** (R112) — unsigned contributions fail CI.
+- **CLA gate** — unsigned contributions fail CI.
 - **License gates live** — SAML, TOTP enforcement, RBAC, audit-retention
   export, and encrypted recordings are enforced via the enterprise license;
   the admin license API/page manages keys. (HA gate `FEAT_HA` lands with
-  the R110 work.)
+  the enterprise HA work.)
 
 ### Enterprise licensing
 
@@ -174,4 +174,4 @@ audit verification).
 
 ### Added
 
-- **Release hardening (R70–R79)**
+- **Release hardening**
