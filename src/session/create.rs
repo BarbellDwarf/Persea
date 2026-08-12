@@ -1292,24 +1292,30 @@ impl SessionManager {
         let registry_ha = self.ha_enabled();
         tokio::spawn(async move {
             time::sleep(time::Duration::from_secs(timeout_secs)).await;
-            let sessions_read = sessions_ref.read().await;
-            if let Some(session) = sessions_read.get(&session_id) {
-                let mut session = session.lock().await;
-                if session.status == SessionStatus::Pending {
-                    tracing::warn!(session_id = %session_id, "Session expired (no browser connected)");
-                    session.status = SessionStatus::Expired;
-                    session.guacd_stream = None;
-                    super::cleanup_browser(
-                        &browser_mgr,
-                        &mut session,
-                        cleanup_on_close,
-                        retention_secs,
-                    )
-                    .await;
+            let mut was_pending = false;
+            {
+                let sessions_read = sessions_ref.read().await;
+                if let Some(session) = sessions_read.get(&session_id) {
+                    let mut session = session.lock().await;
+                    if session.status == SessionStatus::Pending {
+                        tracing::warn!(session_id = %session_id, "Session expired (no browser connected)");
+                        session.status = SessionStatus::Expired;
+                        was_pending = true;
+                        session.guacd_stream = None;
+                        super::cleanup_browser(
+                            &browser_mgr,
+                            &mut session,
+                            cleanup_on_close,
+                            retention_secs,
+                        )
+                        .await;
+                    }
                 }
             }
-            drop(sessions_read);
-            if registry_ha {
+            // R110: mark the registry row expired only when the session was
+            // still pending — a session that already connected must keep its
+            // live status.
+            if was_pending && registry_ha {
                 if let Some(ref db) = registry_db {
                     let db = db.clone();
                     let sid = session_id.to_string();
