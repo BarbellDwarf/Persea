@@ -13,6 +13,9 @@ use std::net::IpAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+/// Shared handle to the SQLite `Connection`. Every store function in this
+/// module takes `&Db`, locks the mutex for the duration of its query, and
+/// drops the lock when it returns; callers never touch the lock directly.
 pub type Db = Arc<Mutex<Connection>>;
 
 /// Route a store call to the SQLx pool store when one is active (db_url configured).
@@ -103,29 +106,44 @@ macro_rules! qsql {
 /// Admin record (safe to display — no key material).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AdminInfo {
+    /// Primary key.
     pub id: i64,
+    /// Admin name, and the lookup key for the admin management functions.
     pub name: String,
+    /// Comma-separated CIDR allowlist; `None` means any client IP is accepted.
     pub allowed_ips: Option<String>,
+    /// Optional key expiry. An unparseable stored value is treated as expired (fail closed).
     pub expires_at: Option<String>,
+    /// Whether the key is disabled; a disabled key fails validation even with the right hash.
     pub disabled: bool,
+    /// When the row was created (UTC).
     pub created_at: String,
+    /// When the key last passed validation, if ever.
     pub last_used_at: Option<String>,
 }
 
 /// User record from OIDC login.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct User {
+    /// Primary key.
     pub id: i64,
+    /// Login email, and the lookup key for the user management functions.
     pub email: String,
+    /// Display name.
     pub name: String,
+    /// Subject claim from the identity provider; `None` for logins that have no subject.
     pub oidc_subject: Option<String>,
+    /// Fixed 4-tier role: `admin`, `poweruser`, `operator`, or `viewer`.
     pub role: String,
     /// Assigned custom role id (T05); NULL when the user only has a fixed
     /// 4-tier role. Custom roles are additive on top of the role floor.
     #[serde(default)]
     pub custom_role_id: Option<String>,
+    /// Whether the account is disabled; disabled users cannot log in.
     pub disabled: bool,
+    /// When the row was created (UTC).
     pub created_at: String,
+    /// When the user last logged in, if ever.
     pub last_login_at: Option<String>,
     /// Comma-separated OIDC group memberships (updated on each login).
     #[serde(default)]
@@ -146,26 +164,42 @@ impl User {
 /// User API token record (safe to display — no key material).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct UserApiToken {
+    /// Primary key.
     pub id: i64,
+    /// Owning user's `users.id`.
     pub user_id: i64,
+    /// Human-readable token name, shown in the account UI.
     pub name: String,
+    /// Role ceiling: the effective role is the lower of this and the owner's role.
     pub max_role: Option<String>,
+    /// Optional expiry; an expired token is rejected.
     pub expires_at: Option<String>,
+    /// Whether the token is disabled.
     pub disabled: bool,
+    /// When the token was created (UTC).
     pub created_at: String,
+    /// When the token was last used, if ever.
     pub last_used_at: Option<String>,
 }
 
 /// Token audit log entry.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TokenAuditEntry {
+    /// Primary key.
     pub id: i64,
+    /// The `user_api_tokens` row this entry refers to; `None` when that row is gone.
     pub token_id: Option<i64>,
+    /// Token name at audit time, kept after the token is deleted.
     pub token_name: Option<String>,
+    /// Email of the token owner.
     pub user_email: String,
+    /// What happened: `created`, `revoked`, or `shadow_session`.
     pub action: String,
+    /// Client IP the action came from.
     pub ip_addr: Option<String>,
+    /// Free-form details; create events carry the requested role cap and expiry as JSON.
     pub details: Option<String>,
+    /// When the entry was written (UTC).
     pub created_at: String,
 }
 
@@ -175,14 +209,23 @@ pub struct TokenAuditEntry {
 /// be written to `details` — see feedback_audit_log_scope.md.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AddressbookAuditEntry {
+    /// Primary key.
     pub id: i64,
+    /// Email of the user who performed the action.
     pub user_email: String,
+    /// What happened: `create_folder`, `update_folder`, `delete_folder`, `update_entry`, or `delete_entry`.
     pub action: String,
+    /// Address book the action targeted (`shared`, or an instance-scoped book).
     pub scope: String,
+    /// Path of the folder the action targeted.
     pub folder_path: String,
+    /// Name of the entry, for entry-level actions.
     pub entry_name: Option<String>,
+    /// Client IP the action came from.
     pub ip_addr: Option<String>,
+    /// Free-form details; entry values (passwords, keys, usernames) must never land here.
     pub details: Option<String>,
+    /// When the entry was written (UTC).
     pub created_at: String,
 }
 
@@ -637,6 +680,10 @@ fn parse_expires_at(s: &str) -> Option<DateTime<Utc>> {
     None
 }
 
+/// Create a new admin and return the plaintext API key, shown exactly once;
+/// only the salted hash is stored. `allowed_ips` is a comma-separated CIDR
+/// allowlist and `expires_at` an optional expiry. Fails with a unique
+/// constraint error when the name is already taken.
 pub fn add_admin(
     db: &Db,
     name: &str,
@@ -805,11 +852,20 @@ pub fn rotate_key(db: &Db, name: &str) -> rusqlite::Result<Option<String>> {
 
 #[derive(Debug)]
 #[must_use]
+/// Why an API key or session failed validation, returned by
+/// `validate_api_key` and the session checks in `src/auth.rs`. Callers map
+/// each variant to an HTTP 401 response and use the `Display` message as
+/// the body.
 pub enum AuthError {
+    /// The presented key matched no stored hash.
     InvalidKey,
+    /// The admin account is disabled.
     Disabled,
+    /// The key is past its expiry; an unparseable stored expiry also lands here (fail closed).
     Expired,
+    /// The client IP is not in the admin's allowlist.
     IpNotAllowed,
+    /// The session token is invalid or expired.
     InvalidSession,
 }
 
