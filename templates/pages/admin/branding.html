@@ -102,7 +102,7 @@
             <svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
         </div>
         <h2 id="save-confirm-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Branding Saved</h2>
-        <p class="text-sm text-[var(--text-muted)] mb-4">Changes will take effect on the next page load.</p>
+        <p class="text-sm text-[var(--text-muted)] mb-4">Branding settings are stored in the database. They apply to all pages after a server restart (settings are merged into the runtime config at startup).</p>
         <button id="save-confirm-ok"
                 class="btn btn-secondary btn-sm">OK</button>
     </div>
@@ -127,6 +127,32 @@ function showError(message) {
     feedback.appendChild(div);
 }
 
+// Only http(s) URLs and schemeless relative paths are allowed for the logo —
+// a javascript: URI would execute in the page context (DOM XSS, CodeQL
+// flag). Strip whitespace first: browsers drop it during URL parsing, so
+// "java\nscript:..." must not slip past the scheme check.
+function isSafeLogoUrl(raw) {
+    var s = String(raw || '').trim();
+    if (!s) return false;
+    s = s.replace(/\s+/g, '');
+    var m = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(s);
+    if (m) {
+        var scheme = m[1].toLowerCase();
+        return scheme === 'http' || scheme === 'https';
+    }
+    return true;
+}
+
+function darkenHex(hex, amt) {
+    amt = amt === undefined ? 0.82 : amt;
+    var m = /^#([0-9a-fA-F]{6})$/.exec(hex || '');
+    if (!m) return '#059669';
+    var r = Math.round(parseInt(m[1].slice(0, 2), 16) * amt);
+    var g = Math.round(parseInt(m[1].slice(2, 4), 16) * amt);
+    var b = Math.round(parseInt(m[1].slice(4, 6), 16) * amt);
+    return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+}
+
 function updatePreview() {
     var title = document.getElementById('branding-site-title').value || 'persea';
     var color = document.getElementById('branding-primary-color').value || '#10b981';
@@ -138,33 +164,38 @@ function updatePreview() {
     var logoText = document.getElementById('preview-logo-text');
     logoEl.style.background = color;
 
-    // Only http(s) URLs are allowed for the logo — a javascript: URI would
-    // execute in the page context (DOM XSS, CodeQL flag). Parse the URL and
-    // verify the protocol; anything else is rejected outright.
-    var parsedLogo;
-    try { parsedLogo = new URL(logoUrl); } catch (e) { parsedLogo = null; }
-    var logoOk = parsedLogo !== null && (parsedLogo.protocol === 'http:' || parsedLogo.protocol === 'https:');
-    if (logoOk) {
+    var img = logoEl.querySelector('img');
+    if (isSafeLogoUrl(logoUrl)) {
         logoText.style.display = 'none';
-        var img = logoEl.querySelector('img');
         if (!img) {
             img = document.createElement('img');
             img.style.cssText = 'height:28px;width:auto;object-fit:contain';
             logoEl.appendChild(img);
         }
-        img.src = parsedLogo.href;
+        img.src = logoUrl;
         img.style.display = '';
     } else {
-        var img = logoEl.querySelector('img');
         if (img) { img.remove(); }
         logoText.style.display = '';
     }
 }
 
-// Sync color inputs
+// Sync color inputs — and live-apply the brand color to the current page so
+// the admin sees the effect immediately, not just in the preview card.
+function liveApplyColor(color) {
+    if (typeof applyThemeColors === 'function' && /^#[0-9a-fA-F]{6}$/.test(color)) {
+        applyThemeColors({
+            primary: color,
+            accent: color,
+            accent_hover: darkenHex(color),
+            border_focus: color
+        });
+    }
+}
 document.getElementById('branding-primary-color').addEventListener('input', function() {
     document.getElementById('branding-primary-color-hex').value = this.value;
     updatePreview();
+    liveApplyColor(this.value);
 });
 document.getElementById('branding-primary-color-hex').addEventListener('input', function() {
     if (/^#[0-9a-fA-F]{6}$/.test(this.value)) {
@@ -256,6 +287,21 @@ document.getElementById('branding-form').addEventListener('submit', function(e) 
     })
     .then(function() {
         document.getElementById('branding-feedback').innerHTML = '';
+        // Live-apply the saved branding to the current page so the admin sees
+        // it immediately; other users/pages pick it up on the next page load
+        // after a server restart (settings merge into the runtime config at
+        // startup — see src/settings_merge.rs).
+        var title = document.getElementById('branding-site-title').value.trim();
+        var color = document.getElementById('branding-primary-color-hex').value || '#10b981';
+        liveApplyColor(color);
+        var brand = document.querySelector('.sidebar-logo-text');
+        if (brand && title) brand.textContent = title;
+        if (title) document.title = title + ' \u2014 Branding';
+        var logoUrl = document.getElementById('branding-logo-url').value;
+        if (isSafeLogoUrl(logoUrl)) {
+            var logo = document.getElementById('site-logo');
+            if (logo) { logo.src = logoUrl; logo.style.display = ''; }
+        }
         document.getElementById('save-confirm').classList.remove('hidden');
     })
     .catch(function(e) {

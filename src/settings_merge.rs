@@ -23,6 +23,9 @@ pub const SETTINGS_KEYS: &[&str] = &[
     "enable_vdi",
     "vault_enabled",
     "db_only_mode",
+    "site_title",
+    "logo_url",
+    "primary_color",
 ];
 
 /// Read the `system_settings` table as a map of key → string value.
@@ -167,6 +170,25 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                     storage.backend = "db".into();
                 }
             }
+            // Branding (wayfinder R95): overlaid onto the runtime config at
+            // startup so the SiteTitle extension, ThemeData (logo + resolved
+            // colors served via /api/auth/status) and the login page all pick
+            // the saved values up. Takes effect on the next server start.
+            "site_title" if !value.is_empty() => config.site_title = value.clone(),
+            // logo_url has no is_empty guard: saving "" is how an admin clears
+            // a previously-uploaded logo (Some("") renders the placeholder).
+            "logo_url" => {
+                let theme = config
+                    .theme
+                    .get_or_insert_with(crate::config::ThemeConfig::default);
+                theme.logo_url = Some(value.clone());
+            }
+            "primary_color" if !value.is_empty() => {
+                let theme = config
+                    .theme
+                    .get_or_insert_with(crate::config::ThemeConfig::default);
+                theme.primary_color = Some(value.clone());
+            }
             // No Config equivalent: session_idle_timeout_secs,
             // enable_browser_sessions, enable_proxmox, vault_enabled.
             _ => {}
@@ -228,6 +250,53 @@ mod tests {
     fn toggle_enabled_defaults_when_unset() {
         assert!(toggle_enabled(&[], "enable_rdp", true));
         assert!(!toggle_enabled(&[], "enable_rdp", false));
+    }
+
+    #[test]
+    fn applies_branding_overrides() {
+        let mut config = Config::default();
+        assert_eq!(config.site_title, "Persea");
+        assert!(config.theme.is_none());
+        let settings = vec![
+            ("site_title".to_string(), "My Gateway".to_string()),
+            ("logo_url".to_string(), "/uploads/logo/logo.png".to_string()),
+            ("primary_color".to_string(), "#ff0000".to_string()),
+        ];
+        apply_db_settings(&mut config, &settings);
+        assert_eq!(config.site_title, "My Gateway");
+        let theme = config.theme.unwrap();
+        assert_eq!(theme.logo_url.as_deref(), Some("/uploads/logo/logo.png"));
+        assert_eq!(theme.primary_color.as_deref(), Some("#ff0000"));
+    }
+
+    #[test]
+    fn branding_empty_values_fall_back_to_config() {
+        let mut config = Config::default();
+        config.theme = Some(crate::config::ThemeConfig {
+            logo_url: Some("/keep.png".into()),
+            primary_color: Some("#00ff00".into()),
+            ..Default::default()
+        });
+        let settings = vec![
+            ("site_title".to_string(), String::new()),
+            ("primary_color".to_string(), String::new()),
+        ];
+        apply_db_settings(&mut config, &settings);
+        assert_eq!(config.site_title, "Persea");
+        let theme = config.theme.unwrap();
+        assert_eq!(theme.primary_color.as_deref(), Some("#00ff00"));
+    }
+
+    #[test]
+    fn logo_url_empty_clears_the_logo() {
+        let mut config = Config::default();
+        config.theme = Some(crate::config::ThemeConfig {
+            logo_url: Some("/keep.png".into()),
+            ..Default::default()
+        });
+        let settings = vec![("logo_url".to_string(), String::new())];
+        apply_db_settings(&mut config, &settings);
+        assert_eq!(config.theme.unwrap().logo_url, Some(String::new()));
     }
 
     #[test]

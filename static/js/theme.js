@@ -25,20 +25,67 @@ function applyThemeColors(colors) {
     s.textContent = colors.bg_pattern && colors.bg_pattern !== 'none' ? 'body{background-image:' + colors.bg_pattern + ';background-attachment:fixed}' : '';
     localStorage.setItem('persea_theme_colors', JSON.stringify(colors));
 }
-var _themePresets = {}, _adminPreset = 'aurora';
+var _themePresets = {}, _adminPreset = 'aurora', _adminColors = null;
 var _themeDescriptions = { dark: 'Red & teal on navy', light: 'Blue & teal on white', 'high-contrast': 'High-contrast red & green on black', terminal: 'Amber & green on near-black', nord: 'Arctic ice blue & sage', corporate: 'Blue & orange on slate', aurora: 'Blue & cyan on midnight', jaguar: 'Gold & emerald on dark green' };
+
+// Deep-compare two color maps (both produced by serde_json, so key sets are
+// identical for palettes of the same theme set).
+function _sameColors(a, b) {
+    if (!a || !b) return false;
+    var ka = Object.keys(a);
+    if (ka.length !== Object.keys(b).length) return false;
+    for (var i = 0; i < ka.length; i++) {
+        var k = ka[i];
+        if (a[k] !== b[k]) return false;
+    }
+    return true;
+}
+
+// The settings UI exposes a single "primary color". When the admin customized
+// the primary (and didn't separately configure the accent), drive the accent
+// from it too, so buttons, the active nav state and focus rings pick up the
+// brand color — those render with --accent/--border-focus in app.css.
+function _applyAdminAccent(colors, presetName, presets) {
+    var c = {};
+    for (var k in colors) c[k] = colors[k];
+    var base = presets[presetName];
+    if (base && c.primary && c.primary !== base.primary &&
+        (!c.accent || c.accent === base.accent)) {
+        c.accent = c.primary;
+        if (c.primary_hover) c.accent_hover = c.primary_hover;
+    }
+    return c;
+}
+
 function initTheme(t) {
     if (!t) return;
     _themePresets = t.presets || {};
     _adminPreset = t.admin_preset || 'aurora';
     var userTheme = localStorage.getItem('persea_theme');
     var active = userTheme && _themePresets[userTheme] ? userTheme : null;
-    if (active) applyThemeColors(_themePresets[active]);
+    if (active) {
+        // Explicit user choice always wins over admin branding.
+        applyThemeColors(_themePresets[active]);
+        _adminColors = null;
+    } else if (t.admin_colors) {
+        // Admin branding applies when the user never picked a preset. Only
+        // when the admin actually configured something, though — the resolved
+        // default (aurora) must not override the app.css green look.
+        var base = _themePresets[_adminPreset];
+        var customized = _adminPreset !== 'aurora' || !base || !_sameColors(t.admin_colors, base);
+        if (customized) {
+            _adminColors = _applyAdminAccent(t.admin_colors, _adminPreset, _themePresets);
+            applyThemeColors(_adminColors);
+        } else {
+            _adminColors = null;
+        }
+    }
     if (t.logo_url) { var l = document.getElementById('site-logo'); if (l) { if (l.src !== t.logo_url && !l.src.endsWith(t.logo_url)) l.src = t.logo_url; l.style.display = ''; } }
     var menu = document.getElementById('um-theme-list');
     if (menu) {
         menu.innerHTML = '';
         // "Default" option — clears preset, restores CSS green defaults
+        // (or the admin branding when one is configured)
         var defItem = document.createElement('div');
         defItem.className = 'um-item' + (!active ? ' active' : '');
         var defSw = document.createElement('span');
@@ -53,13 +100,14 @@ function initTheme(t) {
         defInfo.appendChild(defNm);
         var defDesc = document.createElement('span');
         defDesc.className = 'um-theme-desc';
-        defDesc.textContent = 'Persea green — the original';
+        defDesc.textContent = _adminColors ? 'Admin branding — colors from settings' : 'Persea green — the original';
         defInfo.appendChild(defDesc);
         defItem.appendChild(defInfo);
         defItem.addEventListener('click', function() {
             localStorage.removeItem('persea_theme');
             localStorage.removeItem('persea_theme_colors');
             document.documentElement.style.cssText = '';
+            if (_adminColors) applyThemeColors(_adminColors);
             menu.querySelectorAll('.um-item').forEach(function(el) { el.classList.remove('active'); });
             defItem.classList.add('active');
             document.getElementById('user-menu').style.display = 'none';
@@ -87,6 +135,7 @@ function initTheme(t) {
             item.addEventListener('click', function() {
                 localStorage.setItem('persea_theme', name);
                 applyThemeColors(_themePresets[name]);
+                _adminColors = null;
                 menu.querySelectorAll('.um-item').forEach(function(el) { el.classList.remove('active'); });
                 item.classList.add('active');
                 document.getElementById('user-menu').style.display = 'none';
@@ -180,30 +229,47 @@ document.addEventListener('click', function() { var m = document.getElementById(
                 applyThemeColors(light);
             }
         } else {
-            // No preset — clear stale color overrides so CSS rules handle it
-            localStorage.removeItem('persea_theme_colors');
-            document.documentElement.style.cssText = '';
-            // No user preset — apply built-in dark/light palette so toggle has visual effect
-            if (!localStorage.getItem('persea_theme')) {
-                var darkPalette = {
-                    bg: '#0a0f1a', surface: '#111827', input: '#1e293b',
-                    text: '#f1f5f9', text_muted: '#94a3b8', text_dim: '#64748b',
-                    border: '#2a3548', accent: '#10b981', accent_hover: '#059669',
-                    primary: '#10b981', primary_hover: '#059669',
-                    bg_pattern: 'none'
-                };
-                var lightPalette = {
-                    bg: '#f8fafc', surface: '#ffffff', input: '#f1f5f9',
-                    text: '#1e293b', text_muted: '#64748b', text_dim: '#94a3b8',
-                    border: '#e2e8f0', accent: '#10b981', accent_hover: '#059669',
-                    primary: '#10b981', primary_hover: '#059669',
-                    bg_pattern: 'none'
-                };
-                var resolved = next === 'auto' ? (mq.matches ? 'dark' : 'light') : next;
-                if (resolved === 'dark') {
-                    applyThemeColors(darkPalette);
-                } else if (resolved === 'light') {
-                    applyThemeColors(lightPalette);
+            // No preset — admin branding still applies; adapt it to the
+            // chosen dark/light mode like the preset branch above does.
+            if (_adminColors) {
+                var admin = {};
+                for (var k in _adminColors) admin[k] = _adminColors[k];
+                if (next === 'dark' || next === 'auto') {
+                    applyThemeColors(admin);
+                } else if (next === 'light') {
+                    admin.bg = '#f8fafc'; admin.bg_pattern = 'none';
+                    admin.surface = '#fff'; admin.input = '#f1f5f9';
+                    admin.text = '#1e293b'; admin.text_muted = '#64748b';
+                    admin.text_dim = '#94a3b8'; admin.border = '#e2e8f0';
+                    admin.text_on_primary = '#fff'; admin.btn_disabled = '#cbd5e1';
+                    applyThemeColors(admin);
+                }
+            } else {
+                // Clear stale color overrides so CSS rules handle it
+                localStorage.removeItem('persea_theme_colors');
+                document.documentElement.style.cssText = '';
+                // No user preset — apply built-in dark/light palette so toggle has visual effect
+                if (!localStorage.getItem('persea_theme')) {
+                    var darkPalette = {
+                        bg: '#0a0f1a', surface: '#111827', input: '#1e293b',
+                        text: '#f1f5f9', text_muted: '#94a3b8', text_dim: '#64748b',
+                        border: '#2a3548', accent: '#10b981', accent_hover: '#059669',
+                        primary: '#10b981', primary_hover: '#059669',
+                        bg_pattern: 'none'
+                    };
+                    var lightPalette = {
+                        bg: '#f8fafc', surface: '#ffffff', input: '#f1f5f9',
+                        text: '#1e293b', text_muted: '#64748b', text_dim: '#94a3b8',
+                        border: '#e2e8f0', accent: '#10b981', accent_hover: '#059669',
+                        primary: '#10b981', primary_hover: '#059669',
+                        bg_pattern: 'none'
+                    };
+                    var resolved = next === 'auto' ? (mq.matches ? 'dark' : 'light') : next;
+                    if (resolved === 'dark') {
+                        applyThemeColors(darkPalette);
+                    } else if (resolved === 'light') {
+                        applyThemeColors(lightPalette);
+                    }
                 }
             }
         }

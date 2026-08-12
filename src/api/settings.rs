@@ -12,6 +12,7 @@ use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::error::AppError;
 use axum::extract::Multipart;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -366,8 +367,9 @@ pub async fn put_settings(
 }
 
 /// POST /api/admin/upload-logo — accept multipart image upload, save to
-/// static/uploads/logo/, return the URL path. Admin-only.
+/// <static_path>/uploads/logo/, return the URL path. Admin-only.
 pub async fn upload_logo(
+    State(state): State<crate::api::AppState>,
     identity: Option<Extension<AuthIdentity>>,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
@@ -415,9 +417,16 @@ pub async fn upload_logo(
         )));
     }
 
-    // Build a deterministic name: logo.<ext>
+    // Build a deterministic name: logo.<ext>. Write under the configured
+    // static_path so the file lands exactly where ServeDir serves it from
+    // (R95: the old CWD-relative "static" diverged when static_path was
+    // customized).
     let out_name = format!("logo.{ext}");
-    let uploads_dir = std::path::Path::new("static").join("uploads").join("logo");
+    let uploads_dir = state
+        .config()
+        .static_path
+        .join("uploads")
+        .join("logo");
     std::fs::create_dir_all(&uploads_dir)
         .map_err(|e| AppError::Internal(format!("failed to create upload dir: {e}")))?;
     let out_path = uploads_dir.join(&out_name);
