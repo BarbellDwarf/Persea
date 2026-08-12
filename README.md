@@ -21,14 +21,9 @@ persea started as a fork of [RustGuac](https://github.com/sol1/rustguac), an ope
 
 Found something broken? Open an issue with logs and screenshots.
 
-## Free vs Enterprise
+## Licensing
 
-persea ships in two versions:
-
-- **Free (self-hosted)**: the open-source edition, licensed under AGPL-3.0. Runs without a license key.
-- **Enterprise**: the free edition plus enterprise features, unlocked by a commercial license key (`PSEA-<base64>`): SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, and high availability / clustering.
-
-Enterprise features are marked **Enterprise** in the feature lists below. Without a license key, they are available during a 30-day evaluation period from first start. See [Licensing](docs/licensing.md) for how to obtain and install a license key.
+persea is a hobby project: Apache-2.0, free. No license keys, no feature gates, no evaluation period. Everything in the feature lists below is available to everyone.
 
 ## Architecture
 
@@ -85,7 +80,7 @@ guacd (C, from guacamole-server)
 - **Per-entry clipboard control**: disable copy and/or paste for data loss prevention
 - **Rate limiting**: per-IP, per-endpoint via tower_governor
 - **Session recording**: Guacamole format with playback UI, disk rotation, per-entry limits
-- **Encrypted session recording**: recordings encrypted at rest (**Enterprise**)
+- **Encrypted session recording**: recordings encrypted at rest
 - **Audit logging**: SHA-256 hash chain with tamper evidence
 - **Audit log retention and compliance exports** (**Enterprise**)
 - **High availability / clustering**: multi-instance deployments behind a load balancer (**Enterprise**)
@@ -204,16 +199,8 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 - [API Reference](docs/api.md): REST API endpoints, the session connection flow, and headless ws-ticket integration
 - [Migration from Apache Guacamole](docs/migration.md): MySQL/MariaDB to Vault
 
-### Licensing
-- [Licensing](docs/licensing.md): free vs enterprise editions, the 30-day evaluation period, and how to install a license key
-
 ## License
 
-persea ships in two versions:
-
-- **Free (self-hosted)**: the open-source edition, licensed under AGPL-3.0. Runs without a license key. Free for self-hosted use, including commercial use, provided all modifications are also released under AGPL-3.0. See [LICENSE](LICENSE).
-- **Enterprise**: the free edition plus enterprise features (SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, high availability / clustering), unlocked by a commercial license key (`PSEA-<base64>`). See [Licensing](docs/licensing.md).
-
-A separate **Commercial License** is available for organizations that need to modify persea without open-sourcing their changes. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) or email licensing@persea.dev.
+persea is free software under the [Apache License 2.0](LICENSE). Use it, modify it, sell it: it is a hobby project, everything is included, nothing is gated.
 
 By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md).

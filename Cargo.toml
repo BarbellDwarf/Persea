@@ -146,7 +146,3 @@ tokio-tungstenite = "0.29"
 [build-dependencies]
 pulldown-cmark = "0.13"
 regex = "1"
-
-[[bin]]
-name = "license_gen"
-path = "license-gen/main.rs"

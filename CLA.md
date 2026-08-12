@@ -38,7 +38,7 @@ You represent and warrant that:
 
 ## 5. License Compatibility
 
-The Licensor intends to license the Project under the **GNU Affero General Public License v3.0 (AGPL-3.0)** as the open-source license. You acknowledge that the Licensor may also offer the Project under a separate **commercial license** for entities that require proprietary modifications. By signing this Agreement, You enable the Licensor to license Your Contribution under both the AGPL-3.0 and any commercial license.
+The Licensor intends to license the Project under the **Apache License 2.0**. By signing this Agreement, You enable the Licensor to license Your Contribution under the Apache License 2.0.
 
 ## 6. No Obligation to Use
 

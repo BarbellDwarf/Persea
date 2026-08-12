@@ -86,11 +86,10 @@ ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
-COPY keys/ keys/
 
 # Create dummy sources so cargo can resolve all [[bin]] targets during the
 # dependency-cache build.  These are overwritten by the real COPYs below.
-RUN mkdir -p src license-gen && echo 'fn main() {}' > src/main.rs && echo 'fn main() {}' > license-gen/main.rs
+RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
 
 # Compile all dependencies once with a dummy main so the dependency layer is
 # only rebuilt when Cargo.toml/Cargo.lock change, not on every source edit.

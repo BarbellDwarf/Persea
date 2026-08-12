@@ -2,7 +2,7 @@
 
 ## License
 
-By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md). This allows your contributions to be licensed under both the AGPL-3.0 open-source license and the commercial license. Signatures are recorded in the `cla/signed/` registry and verified automatically by the CLA check in CI — see [PR Process](#pr-process) step 5.
+By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md). This allows your contributions to be licensed under the Apache License 2.0. Signatures are recorded in the `cla/signed/` registry and verified automatically by the CLA check in CI — see [PR Process](#pr-process) step 5.
 
 ## Development Setup
 

@@ -59,9 +59,7 @@ db_path = "./persea.db"
 # ─── Enterprise HA ────────────────────────────────────────────────────────
 #
 # These two keys matter only for multi-instance deployments sharing one
-# db_url backend with the enterprise HA feature licensed (the 30-day
-# evaluation period includes it). Single-instance deployments can ignore
-# them.
+# db_url backend. Single-instance deployments can ignore them.
 
 # Stable identifier for this instance. Used by the shared session registry
 # to mark which instance owns each live session; the reaper and recording
