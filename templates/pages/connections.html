@@ -113,7 +113,8 @@
         </div>
     </div>
 
-    <!-- vSphere virtual machines (hidden when vSphere is not configured) -->
+    <!-- vSphere virtual machines (hidden when vSphere is not configured or disabled) -->
+    {% if features.vmware %}
     <div id="vsphere-section" class="hidden" style="max-width:1200px;margin:36px auto 0;padding-top:28px;border-top:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
             <h2 style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0">vSphere Virtual Machines</h2>
@@ -125,6 +126,7 @@
         <div id="vsphere-empty" class="hidden" style="text-align:center;padding:32px 0;color:var(--text-muted);font-size:13px">No virtual machines found in vCenter.</div>
         <div id="vsphere-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr));gap:12px"></div>
     </div>
+    {% endif %}
 </div>
 
 <!-- Folder create/edit modal -->
@@ -191,12 +193,8 @@
         <div class="space-y-4">
             <div>
                 <label class="form-label" for="em-name">Name</label>
-                <input type="text" id="em-name" class="form-input" placeholder="e.g. web-server-01" pattern="[a-zA-Z0-9_.-]+" maxlength="64" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Alphanumeric, hyphens, underscores, dots. Used as the Vault key.</p>
-            </div>
-            <div>
-                <label class="form-label" for="em-display-name">Display name</label>
-                <input type="text" id="em-display-name" class="form-input" placeholder="e.g. Web Server 01" autocomplete="off">
+                <input type="text" id="em-name" class="form-input" placeholder="e.g. Web Server 01" maxlength="64" autocomplete="off">
+                <p class="text-xs text-[var(--text-muted)] mt-1"><span id="em-identifier-label">Identifier:</span> <span id="em-identifier-preview" style="font-family:var(--font-mono)"></span></p>
             </div>
             <div>
                 <label class="form-label" for="em-description">Description</label>
@@ -206,12 +204,12 @@
                 <label class="form-label" for="em-type">Type</label>
                 <select id="em-type" class="form-input">
                     <option value="ssh">SSH</option>
-                    <option value="rdp">RDP</option>
+                    {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
                     <option value="vnc">VNC</option>
-                    <option value="spice">SPICE</option>
-                    <option value="web">Web</option>
-                    <option value="vdi">VDI (Docker)</option>
-                    <option value="proxmox">Proxmox VE console</option>
+                    {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
+                    {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
+                    {% if features.vdi %}<option value="vdi">VDI (Docker)</option>{% endif %}
+                    {% if features.proxmox %}<option value="proxmox">Proxmox VE console</option>{% endif %}
                 </select>
                 <div id="em-type-help" class="text-xs text-[var(--text-muted)] mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
             </div>
@@ -230,6 +228,7 @@
                 <input type="text" id="em-container-image" class="form-input" placeholder="registry.example.com/desktop:latest" autocomplete="off">
                 <p class="text-xs text-[var(--text-muted)] mt-1">Required for VDI entries — the Docker image to run.</p>
             </div>
+            {% if features.proxmox %}
             <div id="em-proxmox-fields" style="display:none">
                 <div>
                     <label class="form-label" for="em-proxmox-url">Proxmox API URL</label>
@@ -262,6 +261,7 @@
                 </label>
                 <p class="text-xs text-[var(--text-muted)]" style="margin-top:6px">Leave unchecked if PVE uses its default self-signed certificate.</p>
             </div>
+            {% endif %}
             <div>
                 <label class="form-label" for="em-port">Port</label>
                 <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
@@ -326,10 +326,12 @@
                     <p class="text-xs text-[var(--text-muted)] mt-1">Your AD Kerberos KDC hostname — required when using the Kerberos authentication package.</p>
                 </div>
             </div>
+            {% if features.proxmox %}
             <div id="em-proxmox-secret-field" style="display:none">
                 <label class="form-label" for="em-proxmox-token-secret">Proxmox token secret</label>
                 <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
             </div>
+            {% endif %}
             <div id="em-container-password-field" style="display:none">
                 <label class="form-label" for="em-container-password">Container password</label>
                 <input type="password" id="em-container-password" class="form-input" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
@@ -511,6 +513,40 @@
         proxmox:'proto-proxmox',vdi:'proto-vdi'
     };
     function protoClass(p){return protoClasses[(p||'').toLowerCase()]||''}
+
+    // Friendly name → slug identifier. Mirrors src/slugify.rs: lowercase,
+    // spaces → '-', keep only [a-z0-9._-], collapse separator runs, strip
+    // leading/trailing separators.
+    function slugify(name) {
+        var slug = '';
+        var prevSep = false;
+        String(name || '').trim().split('').forEach(function(c) {
+            var lower = c.toLowerCase();
+            if (lower >= 'a' && lower <= 'z') { slug += lower; prevSep = false; }
+            else if (lower >= '0' && lower <= '9') { slug += lower; prevSep = false; }
+            else if (/\s/.test(c)) {
+                if (!prevSep && slug.length) slug += '-';
+                prevSep = true;
+            } else if (lower === '.' || lower === '_' || lower === '-') {
+                if (!prevSep && slug.length) slug += lower;
+                prevSep = true;
+            }
+        });
+        while (slug.length && '-._'.indexOf(slug.charAt(slug.length - 1)) !== -1) slug = slug.slice(0, -1);
+        return slug;
+    }
+    function updateIdentifierPreview() {
+        var preview = document.getElementById('em-identifier-preview');
+        var label = document.getElementById('em-identifier-label');
+        if (!preview || !label) return;
+        if (entryEditMode) {
+            label.textContent = 'Identifier (read-only):';
+            preview.textContent = entryEditMode.name;
+        } else {
+            label.textContent = 'Identifier:';
+            preview.textContent = slugify(document.getElementById('em-name').value);
+        }
+    }
 
     // ── State ────────────────────────────────────────────────────────
     var folders = [];
@@ -1428,6 +1464,19 @@
         vdi: 'Starts an ephemeral Docker desktop container for the user (requires VDI enabled on the server). <strong>Container image</strong>: any Docker image with an RDP server, e.g. myregistry/desktop:latest.',
         proxmox: 'Streams a Proxmox VM console through the PVE API. <strong>API URL</strong>: https://&lt;pve-host&gt;:8006. <strong>VM ID</strong>: shown in the PVE UI next to the VM name. <strong>Token</strong>: create one in PVE under Datacenter → Permissions → API Tokens — ID format user@realm!tokenname, and grant it Sys.Audit on / plus VM.Audit and VM.Console on the VM. <strong>Node</strong> is auto-detected; leave blank.'
     };
+    function ensureTypeOption(type) {
+        var sel = document.getElementById('em-type');
+        if (!type) return;
+        for (var i = 0; i < sel.options.length; i++) {
+            if (sel.options[i].value === type) return;
+        }
+        var labels = { ssh: 'SSH', rdp: 'RDP', vnc: 'VNC', spice: 'SPICE', web: 'Web', vdi: 'VDI (Docker)', proxmox: 'Proxmox VE console' };
+        var opt = document.createElement('option');
+        opt.value = type;
+        opt.textContent = labels[type] || type.toUpperCase();
+        sel.appendChild(opt);
+        sel.value = type;
+    }
     function updateTypeHelp() {
         var type = document.getElementById('em-type').value;
         var el = document.getElementById('em-type-help');
@@ -1435,13 +1484,14 @@
     }
     function updateEntryTypeFields() {
         var type = document.getElementById('em-type').value;
-        document.getElementById('em-proxmox-secret-field').style.display = type === 'proxmox' ? '' : 'none';
-        document.getElementById('em-container-password-field').style.display = type === 'vdi' ? '' : 'none';
-        document.getElementById('em-url-field').style.display = type === 'web' ? '' : 'none';
-        document.getElementById('em-container-field').style.display = type === 'vdi' ? '' : 'none';
-        document.getElementById('em-proxmox-fields').style.display = type === 'proxmox' ? '' : 'none';
-        document.getElementById('em-ignore-cert-field').style.display = (type === 'rdp' || type === 'spice') ? '' : 'none';
-        document.getElementById('em-rdp-security-field').style.display = type === 'rdp' ? '' : 'none';
+        function show(id, on) { var el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; }
+        show('em-proxmox-secret-field', type === 'proxmox');
+        show('em-container-password-field', type === 'vdi');
+        show('em-url-field', type === 'web');
+        show('em-container-field', type === 'vdi');
+        show('em-proxmox-fields', type === 'proxmox');
+        show('em-ignore-cert-field', type === 'rdp' || type === 'spice');
+        show('em-rdp-security-field', type === 'rdp');
         updateKdcField();
         var portEl = document.getElementById('em-port');
         if (portAutoSet || !portEl.value) {
@@ -1460,14 +1510,20 @@
     }
     function clearEntryFields() {
         portAutoSet = false;
-        var ids = ['em-display-name', 'em-description', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain'];
-        for (var i = 0; i < ids.length; i++) document.getElementById(ids[i]).value = '';
-        document.getElementById('em-password').placeholder = '';
-        document.getElementById('em-private-key').placeholder = '-----BEGIN OPENSSH PRIVATE KEY-----';
-        document.getElementById('em-proxmox-token-secret').placeholder = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
-        document.getElementById('em-container-password').placeholder = 'Leave blank to generate per-connect';
-        document.getElementById('em-rdp-security').value = '';
-        document.getElementById('em-rdp-auth-pkg').value = '';
+        var ids = ['em-description', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain'];
+        for (var i = 0; i < ids.length; i++) { var el = document.getElementById(ids[i]); if (el) el.value = ''; }
+        var pwEl = document.getElementById('em-password');
+        if (pwEl) pwEl.placeholder = '';
+        var pkEl = document.getElementById('em-private-key');
+        if (pkEl) pkEl.placeholder = '-----BEGIN OPENSSH PRIVATE KEY-----';
+        var tsEl = document.getElementById('em-proxmox-token-secret');
+        if (tsEl) tsEl.placeholder = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
+        var cpEl = document.getElementById('em-container-password');
+        if (cpEl) cpEl.placeholder = 'Leave blank to generate per-connect';
+        var secEl = document.getElementById('em-rdp-security');
+        if (secEl) secEl.value = '';
+        var pkgEl = document.getElementById('em-rdp-auth-pkg');
+        if (pkgEl) pkgEl.value = '';
         updateEntryTypeFields();
     }
     function openNewEntry() {
@@ -1479,6 +1535,7 @@
         document.getElementById('em-type').value = 'ssh';
         document.getElementById('em-type').disabled = false;
         clearEntryFields();
+        updateIdentifierPreview();
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
@@ -1495,12 +1552,12 @@
         if (!selectedFolder || !selectedEntry) return;
         entryEditMode = { scope: selectedFolder.scope, folder: selectedFolder.path, name: selectedEntry.name };
         document.getElementById('entry-modal-title').textContent = 'Edit: ' + selectedEntry.name;
-        document.getElementById('em-name').value = selectedEntry.name;
-        document.getElementById('em-name').disabled = true;
+        document.getElementById('em-name').value = selectedEntry.display_name || selectedEntry.name;
+        document.getElementById('em-name').disabled = false;
         document.getElementById('em-type').value = selectedEntry.session_type || 'ssh';
+        ensureTypeOption(selectedEntry.session_type || 'ssh');
         document.getElementById('em-type').disabled = true;
         clearEntryFields();
-        document.getElementById('em-display-name').value = selectedEntry.display_name || '';
         document.getElementById('em-description').value = selectedEntry.description || '';
         document.getElementById('em-hostname').value = selectedEntry.hostname || '';
         if (selectedEntry.port) document.getElementById('em-port').value = String(selectedEntry.port);
@@ -1515,7 +1572,8 @@
             document.getElementById('em-private-key').placeholder = '(stored key unchanged unless you type a new one)';
         }
         if (selectedEntry.has_proxmox_token_secret) {
-            document.getElementById('em-proxmox-token-secret').placeholder = '(leave blank to keep existing)';
+            var pveTsEl = document.getElementById('em-proxmox-token-secret');
+            if (pveTsEl) pveTsEl.placeholder = '(leave blank to keep existing)';
         }
         if (selectedEntry.has_container_password) {
             document.getElementById('em-container-password').placeholder = '(stored password unchanged unless you type a new one)';
@@ -1524,17 +1582,23 @@
         updateEntryTypeFields();
         document.getElementById('em-url').value = selectedEntry.url || '';
         document.getElementById('em-container-image').value = selectedEntry.container_image || '';
-        document.getElementById('em-proxmox-url').value = selectedEntry.proxmox_url || '';
-        if (selectedEntry.proxmox_vmid) document.getElementById('em-proxmox-vmid').value = String(selectedEntry.proxmox_vmid);
-        document.getElementById('em-proxmox-node').value = selectedEntry.proxmox_node || '';
-        document.getElementById('em-proxmox-token-id').value = selectedEntry.proxmox_token_id || '';
-        document.getElementById('em-proxmox-verify-tls').checked = !!selectedEntry.proxmox_verify_tls;
+        var pveUrlEl = document.getElementById('em-proxmox-url');
+        if (pveUrlEl) pveUrlEl.value = selectedEntry.proxmox_url || '';
+        var pveVmidEl = document.getElementById('em-proxmox-vmid');
+        if (pveVmidEl && selectedEntry.proxmox_vmid) pveVmidEl.value = String(selectedEntry.proxmox_vmid);
+        var pveNodeEl = document.getElementById('em-proxmox-node');
+        if (pveNodeEl) pveNodeEl.value = selectedEntry.proxmox_node || '';
+        var pveTokenIdEl = document.getElementById('em-proxmox-token-id');
+        if (pveTokenIdEl) pveTokenIdEl.value = selectedEntry.proxmox_token_id || '';
+        var pveVerifyEl = document.getElementById('em-proxmox-verify-tls');
+        if (pveVerifyEl) pveVerifyEl.checked = !!selectedEntry.proxmox_verify_tls;
         document.getElementById('em-ignore-cert').checked = !!selectedEntry.ignore_cert;
         document.getElementById('em-rdp-security').value = selectedEntry.security || '';
         document.getElementById('em-rdp-auth-pkg').value = selectedEntry.auth_pkg || '';
         document.getElementById('em-rdp-kdc-url').value = selectedEntry.kdc_url || '';
         document.getElementById('em-rdp-domain').value = selectedEntry.domain || '';
         updateKdcField();
+        updateIdentifierPreview();
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
@@ -1582,12 +1646,16 @@
 
     function saveEntry() {
         var name = document.getElementById('em-name').value.trim();
-        var displayName = document.getElementById('em-display-name').value.trim();
         var description = document.getElementById('em-description').value.trim();
         var type = document.getElementById('em-type').value;
         var errEl = document.getElementById('em-error');
-        if (!name || !/^[a-zA-Z0-9_.-]+$/.test(name)) {
-            errEl.textContent = 'Name must be alphanumeric, hyphens, underscores, dots only.';
+        if (!name) {
+            errEl.textContent = 'Name is required.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        if (!entryEditMode && slugify(name) === '') {
+            errEl.textContent = 'The name contains no usable characters — use at least one letter, digit, dot, underscore or dash.';
             errEl.classList.remove('hidden');
             return;
         }
@@ -1613,7 +1681,7 @@
             return;
         }
         var entry = { type: type };
-        if (displayName) entry.display_name = displayName;
+        if (entryEditMode) entry.display_name = name;
         // Always sent (may be empty): lets editing clear a stored description.
         entry.description = description;
         if (hostname) entry.hostname = hostname;
@@ -1661,27 +1729,37 @@
             entry.container_image = image;
         }
         if (type === 'proxmox') {
-            var pveUrl = document.getElementById('em-proxmox-url').value.trim();
-            var vmid = document.getElementById('em-proxmox-vmid').value.trim();
-            var tokenId = document.getElementById('em-proxmox-token-id').value.trim();
-            var tokenSecret = document.getElementById('em-proxmox-token-secret').value.trim();
-            if (!pveUrl || !vmid) {
-                errEl.textContent = 'Proxmox API URL and VM ID are required.';
-                errEl.classList.remove('hidden');
-                return;
+            var pveUrlEl = document.getElementById('em-proxmox-url');
+            var pveVmidEl = document.getElementById('em-proxmox-vmid');
+            var pveTokenIdEl = document.getElementById('em-proxmox-token-id');
+            var pveTokenSecretEl = document.getElementById('em-proxmox-token-secret');
+            if (pveUrlEl && pveVmidEl && pveTokenIdEl && pveTokenSecretEl) {
+                var pveUrl = pveUrlEl.value.trim();
+                var vmid = pveVmidEl.value.trim();
+                var tokenId = pveTokenIdEl.value.trim();
+                var tokenSecret = pveTokenSecretEl.value.trim();
+                if (!pveUrl || !vmid) {
+                    errEl.textContent = 'Proxmox API URL and VM ID are required.';
+                    errEl.classList.remove('hidden');
+                    return;
+                }
+                if (!tokenId || !tokenSecret) {
+                    errEl.textContent = 'Proxmox API token ID and token secret are required (create one in PVE: Datacenter → Permissions → API Tokens).';
+                    errEl.classList.remove('hidden');
+                    return;
+                }
+                entry.proxmox_url = pveUrl;
+                entry.proxmox_vmid = parseInt(vmid, 10);
+                entry.proxmox_token_id = tokenId;
+                entry.proxmox_token_secret = tokenSecret;
+                var nodeEl = document.getElementById('em-proxmox-node');
+                if (nodeEl) {
+                    var node = nodeEl.value.trim();
+                    if (node) entry.proxmox_node = node;
+                }
+                var verifyEl = document.getElementById('em-proxmox-verify-tls');
+                if (verifyEl) entry.proxmox_verify_tls = verifyEl.checked;
             }
-            if (!tokenId || !tokenSecret) {
-                errEl.textContent = 'Proxmox API token ID and token secret are required (create one in PVE: Datacenter → Permissions → API Tokens).';
-                errEl.classList.remove('hidden');
-                return;
-            }
-            entry.proxmox_url = pveUrl;
-            entry.proxmox_vmid = parseInt(vmid, 10);
-            entry.proxmox_token_id = tokenId;
-            entry.proxmox_token_secret = tokenSecret;
-            var node = document.getElementById('em-proxmox-node').value.trim();
-            if (node) entry.proxmox_node = node;
-            entry.proxmox_verify_tls = document.getElementById('em-proxmox-verify-tls').checked;
         }
         if (cp) entry.container_password = cp;
         addGroupFromInput('em');
@@ -1712,6 +1790,11 @@
         }
         req.then(function(res) {
             if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
+            if (res.status === 409) {
+                return res.json().catch(function() { return {}; }).then(function(d) {
+                    throw new Error((d.error || ('An entry with identifier "' + slugify(name) + '" already exists in this folder.')) + ' Choose a different name.');
+                });
+            }
             if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
             var afterSave = function() {
                 closeModal('entry-modal');
@@ -1974,7 +2057,9 @@
     function rbacConnId() {
         var scope = entryEditMode ? entryEditMode.scope : selectedFolder.scope;
         var folder = entryEditMode ? entryEditMode.folder : selectedFolder.path;
-        var name = entryEditMode ? entryEditMode.name : document.getElementById('em-name').value.trim();
+        // RBAC ids use the SLUG identifier; in create mode the server derives
+        // it from the friendly name, so mirror that here.
+        var name = entryEditMode ? entryEditMode.name : slugify(document.getElementById('em-name').value.trim());
         return scope + '/' + folder + '/' + name;
     }
     function loadRbacRefs(cb) {
@@ -2265,6 +2350,7 @@
 
     document.getElementById('em-cancel').addEventListener('click', function() { closeModal('entry-modal'); });
     document.getElementById('em-save').addEventListener('click', saveEntry);
+    document.getElementById('em-name').addEventListener('input', updateIdentifierPreview);
     document.getElementById('em-password-generate').addEventListener('click', function() {
         document.getElementById('em-password').value = generatePassword();
         var hint = document.getElementById('em-password-hint');
