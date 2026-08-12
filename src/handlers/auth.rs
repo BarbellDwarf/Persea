@@ -279,13 +279,7 @@ pub async fn login_submit(
                 .map(|t| t.enforcement)
                 .unwrap_or(TotpEnforcement::Off);
 
-            if check_totp_enforcement(
-                &database,
-                user.id,
-                &effective_role,
-                &totp_enforcement,
-            )
-            .await
+            if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
             {
                 let ttl_secs = 300; // 5 minutes for MFA pending
                 return redirect_to_mfa(
@@ -802,13 +796,7 @@ pub async fn saml_acs(
 
             // Check TOTP enforcement before creating session
             let effective_role = role.clone().unwrap_or_else(|| user.role.clone());
-            if check_totp_enforcement(
-                &database,
-                user.id,
-                &effective_role,
-                &totp_enforcement,
-            )
-            .await
+            if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
             {
                 let ttl_secs = 300; // 5 minutes for MFA pending
                 return redirect_to_mfa(

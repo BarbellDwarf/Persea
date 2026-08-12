@@ -6,8 +6,8 @@ use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::templates::{
     AdminAuditTemplate, AdminAuthTemplate, AdminBrandingTemplate, AdminGroupsTemplate,
-    AdminReportsTemplate, AdminSettingsTemplate, AdminTunnelsTemplate,
-    AdminUsersTemplate, ConnectionsPageTemplate, RecordingsPageTemplate, SessionsPageTemplate,
+    AdminReportsTemplate, AdminSettingsTemplate, AdminTunnelsTemplate, AdminUsersTemplate,
+    ConnectionsPageTemplate, RecordingsPageTemplate, SessionsPageTemplate,
 };
 use crate::CspNonce;
 

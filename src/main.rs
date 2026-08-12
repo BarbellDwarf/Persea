@@ -1428,9 +1428,9 @@ async fn run_server(
         .auth
         .as_ref()
         .and_then(|a| {
-            a.saml.as_ref().map(|cfg| {
-                Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone()))
-            })
+            a.saml
+                .as_ref()
+                .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone())))
         })
         .or_else(|| {
             crate::providers_db::load_providers(&database)
@@ -1445,9 +1445,7 @@ async fn run_server(
                             )
                             .ok()
                         })
-                        .map(|cfg| {
-                            Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg))
-                        })
+                        .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg)))
                 })
         });
     let totp_enforcement = config
