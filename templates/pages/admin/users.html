@@ -9,8 +9,7 @@
             <h1 class="text-2xl font-bold text-[var(--text-primary)]">User Management</h1>
             <p class="text-sm text-[var(--text-muted)] mt-1">Manage OIDC and local users, roles, and access</p>
         </div>
-        <button onclick="document.getElementById('add-user-modal').classList.remove('hidden')"
-                class="btn btn-primary btn-sm">
+        <button id="btn-add-user" type="button" class="btn btn-primary btn-sm">
             + Add User
         </button>
     </div>
@@ -21,7 +20,7 @@
                name="q"
                class="form-input flex-1">
         <select id="role-filter" name="role_filter"
-                class="form-input w-40 flex-shrink-0">
+                class="form-input w-40 shrink-0">
             <option value="">All Roles</option>
             <option value="admin">Admin</option>
             <option value="poweruser">Power User</option>
@@ -29,7 +28,7 @@
             <option value="viewer">Viewer</option>
         </select>
         <select id="status-filter" name="status_filter"
-                class="form-input w-40 flex-shrink-0">
+                class="form-input w-40 shrink-0">
             <option value="">All Status</option>
             <option value="active">Active</option>
             <option value="disabled">Disabled</option>
@@ -65,7 +64,7 @@
 </div>
 
 <!-- Add User Modal -->
-<div id="add-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="add-user-title">
+<div id="add-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="add-user-title">
     <div class="card w-full max-w-md">
         <h2 id="add-user-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Add User</h2>
         <form id="add-user-form">
@@ -93,8 +92,7 @@
                 </div>
             </div>
             <div class="flex justify-end gap-3 mt-6">
-                <button type="button" onclick="document.getElementById('add-user-modal').classList.add('hidden')"
-                        class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="button" id="btn-cancel-add-user" data-close class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" class="btn btn-primary">Create</button>
             </div>
         </form>
@@ -102,7 +100,7 @@
 </div>
 
 <!-- Edit Role Modal -->
-<div id="edit-role-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="edit-role-title">
+<div id="edit-role-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="edit-role-title">
     <div class="card w-full max-w-sm">
         <h2 id="edit-role-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Change Role</h2>
         <form id="edit-role-form">
@@ -117,8 +115,7 @@
                 </select>
             </div>
             <div class="flex justify-end gap-3">
-                <button type="button" onclick="document.getElementById('edit-role-modal').classList.add('hidden')"
-                        class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="button" id="btn-cancel-edit-role" data-close class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" class="btn btn-primary">Save</button>
             </div>
         </form>
@@ -126,15 +123,14 @@
 </div>
 
 <!-- Delete Confirm Modal -->
-<div id="delete-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="delete-user-title">
+<div id="delete-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="delete-user-title">
     <div class="card w-full max-w-sm">
         <h2 id="delete-user-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Delete User</h2>
         <p class="text-sm text-[var(--text-muted)] mb-4">This action cannot be undone. User <span id="delete-user-name" class="text-[var(--text-primary)]"></span> will be permanently removed.</p>
         <form id="delete-user-form">
             <input type="hidden" name="email" id="delete-user-email">
             <div class="flex justify-end gap-3">
-                <button type="button" onclick="document.getElementById('delete-user-modal').classList.add('hidden')"
-                        class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="button" id="btn-cancel-delete-user" data-close class="btn btn-secondary btn-sm">Cancel</button>
                 <button type="submit" class="btn btn-danger btn-sm">Delete</button>
             </div>
         </form>
@@ -149,16 +145,28 @@ function esc(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
 }
 
+function openModal(id) {
+    var m = document.getElementById(id);
+    m.classList.remove('hidden');
+    m.setAttribute('aria-hidden', 'false');
+}
+
+function closeModal(id) {
+    var m = document.getElementById(id);
+    m.classList.add('hidden');
+    m.setAttribute('aria-hidden', 'true');
+}
+
 function editUserRole(email, currentRole) {
     document.getElementById('edit-role-email').value = email;
     document.getElementById('edit-role-value').value = currentRole;
-    document.getElementById('edit-role-modal').classList.remove('hidden');
+    openModal('edit-role-modal');
 }
 
 function deleteUser(email) {
     document.getElementById('delete-user-name').textContent = email;
     document.getElementById('delete-user-email').value = email;
-    document.getElementById('delete-user-modal').classList.remove('hidden');
+    openModal('delete-user-modal');
 }
 
 function toggleUserStatus(email, currentStatus) {
@@ -261,6 +269,19 @@ document.getElementById('user-search').addEventListener('input', renderUsers);
 document.getElementById('role-filter').addEventListener('change', renderUsers);
 document.getElementById('status-filter').addEventListener('change', renderUsers);
 
+document.getElementById('btn-add-user').addEventListener('click', function() {
+    openModal('add-user-modal');
+});
+document.getElementById('btn-cancel-add-user').addEventListener('click', function() {
+    closeModal('add-user-modal');
+});
+document.getElementById('btn-cancel-edit-role').addEventListener('click', function() {
+    closeModal('edit-role-modal');
+});
+document.getElementById('btn-cancel-delete-user').addEventListener('click', function() {
+    closeModal('delete-user-modal');
+});
+
 document.getElementById('add-user-form').addEventListener('submit', function(e) {
     e.preventDefault();
     var form = e.target;
@@ -278,7 +299,7 @@ document.getElementById('add-user-form').addEventListener('submit', function(e) 
     }).then(function(r) {
         if (r.ok) {
             form.reset();
-            document.getElementById('add-user-modal').classList.add('hidden');
+            closeModal('add-user-modal');
             loadUsers();
         } else {
             return r.json().then(function(j) { alert(j.error || 'Failed to create user'); });
@@ -297,7 +318,7 @@ document.getElementById('edit-role-form').addEventListener('submit', function(e)
         body: JSON.stringify({ role: role })
     }).then(function(r) {
         if (r.ok) {
-            document.getElementById('edit-role-modal').classList.add('hidden');
+            closeModal('edit-role-modal');
             loadUsers();
         } else {
             return r.json().then(function(j) { alert(j.error || 'Failed to update role'); });
@@ -313,7 +334,7 @@ document.getElementById('delete-user-form').addEventListener('submit', function(
         headers: apiHeaders(),
         credentials: 'same-origin'
     }).then(function(r) {
-        document.getElementById('delete-user-modal').classList.add('hidden');
+        closeModal('delete-user-modal');
         if (r.ok || r.status === 204) {
             loadUsers();
         } else {

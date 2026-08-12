@@ -407,6 +407,10 @@ body {
     box-shadow: 0 0 0 3px rgba(16,185,129,0.15);
 }
 
+/* Fixed-width filter selects (Users admin page) — loaded after Tailwind and
+   declared after .form-input above, so this wins over both. */
+.form-input.w-40 { width: 10rem; }
+
 /* ── Buttons ─────────────────────────────────────────────── */
 .btn {
     display: inline-flex;
