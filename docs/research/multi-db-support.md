@@ -1,7 +1,24 @@
 # Multi-Database Backend Support for persea
 
-**Date**: 2026-08-01  
-**Status**: **Shipped.** Multi-backend database support via SQLx is implemented: the SQLx pool and per-backend DDL (`migrations/{mysql,postgres,sqlite}/`) ship and the pool is initialized at startup, but all runtime data (session history, audit, address book) still routes through the rusqlite admin DB (`src/db.rs`). Setting `db_url` does not yet redirect data to MySQL/PostgreSQL. The `[storage] backend` key (`"db"` default or `"vault"`) selects where connection credentials live; DB credentials are AES-256-GCM encrypted. This document is kept as a historical record of the original design research.
+> **Design record.** This is a historical design document: the research that decided how persea would support MySQL and PostgreSQL in addition to SQLite. It is not a user guide — see the [Deployment Guide](../deployment-guide.md#database-backends) for configuring `db_url`.
+
+## What this document is
+
+persea was built on a single-file SQLite database, which is fine for one server but a poor fit for shared, multi-instance deployments. This document compared the options for supporting MySQL and PostgreSQL alongside SQLite — SQLx, SeaORM, and Diesel — and decided what to build and how.
+
+**What was decided:**
+
+- **Use SQLx** (not SeaORM, not Diesel): raw SQL keeps the code style consistent with the existing codebase, it is async-native (persea already runs on tokio), it ships connection pooling and migrations built in, and its `Any` driver can select the backend at runtime from the connection URL.
+- **Enum dispatch, not trait objects**: a `DbPool` enum with one variant per backend (`Postgres`, `MySQL`, `SQLite`). The compiler forces every operation to handle every backend — no dynamic dispatch overhead, no missing arms.
+- **Per-backend migration directories**: one schema per backend under `migrations/{mysql,postgres,sqlite}/`, matching Apache Guacamole's own pattern (it keeps separate schema scripts per backend too).
+- **Portable SQL where possible, backend-specific where not**: most queries are portable; the divergences (auto-increment, upsert syntax, timestamp functions, case-sensitive `LIKE`) are handled per backend.
+
+**What shipped and the current status:** the `DbPool` enum, per-backend migrations, and startup pool initialisation all shipped. Today the SQLx pool carries the **high-availability subsystem** — the shared session registry and the cross-instance WebSocket tickets (see [High Availability](../high-availability.md)) — which is why a shared `db_url` backend is required for HA. The rest of the runtime data (users, connections, auth sessions, audit log, session history) still routes through the original rusqlite admin database, so setting `db_url` does **not** yet migrate that data to MySQL/PostgreSQL. The `[storage] backend` key (`"db"` default or `"vault"`) selects where connection credentials live; DB-stored credentials are AES-256-GCM encrypted.
+
+---
+
+**Date**: 2026-08-01
+**Status**: **Partially shipped.** Multi-backend database support via SQLx is implemented: the SQLx pool and per-backend DDL (`migrations/{mysql,postgres,sqlite}/`) ship, and the HA session registry and cross-instance WebSocket tickets run on the pool. The remaining runtime data (session history, audit, address book) still routes through the rusqlite admin DB (`src/db.rs`). This document is kept as a historical record of the original design research.
 
 ## Current State
 
@@ -52,7 +69,7 @@ let pool = AnyPool::connect("postgres://localhost/persea").await?;
 let pool = AnyPool::connect("mysql://localhost/persea").await?;
 ```
 
-**Trade-offs of `Any`**:
+**Trade-offs of `Any`:**
 - Lose compile-time query checking (can't use `query!`)
 - Lose backend-specific type optimizations
 - Runtime dispatch overhead (minimal for most apps)
@@ -360,7 +377,7 @@ impl Database {
 }
 ```
 
-**Why enum over trait objects**:
+**Why enum over trait objects:**
 - No `Box<dyn>` overhead
 - Exhaustive match ensures all backends handle every operation
 - Compiler catches missing match arms

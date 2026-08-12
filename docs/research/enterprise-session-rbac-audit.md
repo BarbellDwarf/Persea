@@ -1,6 +1,22 @@
 # Enterprise Session Management, RBAC, and Audit Patterns for persea
 
-> **Historical decision record.** The findings in this document shipped: session lifecycle controls and RBAC are documented in [Roles and Access Control](../roles-and-access-control.md), and the SHA-256 hash-chain audit log in [Security](../security-hardening.md#hash-chain-audit-logging). Keep reading only for the original design rationale.
+> **Design record.** This is a historical design document: the research that decided which enterprise features persea would build, and how. It is not a user guide — see [Roles and Access Control](../roles-and-access-control.md) for session lifecycle and RBAC, and [Security](../security-hardening.md#audit-log-tamper-evident-hash-chain) for the audit log.
+
+## What this document is
+
+Before persea had session limits, per-connection permissions, or tamper-evident audit logs, this document surveyed how four reference systems handle the problem — Apache Guacamole (the product persea replaces), Teleport, HashiCorp Boundary, plus the NIST 800-53 / 800-63B and SOC 2 compliance frameworks — and decided what persea should build and how.
+
+**What was decided and shipped:**
+
+- **Idle timeout and maximum duration live at the session-proxy layer, not the HTTP session layer.** Closing the WebSocket must tear down the guacd connection with it. Shipped as `session_idle_timeout_secs` (sessions silent past the timeout are reaped) and `session_max_duration_secs` (hard cap, default 8 hours, matching Boundary's default).
+- **Connection-level permissions, not just roles.** Beyond the four-tier role hierarchy (admin > poweruser > operator > viewer), access to individual connections and folders is granted per group via object permissions (`read`, `connect`, `update`, `delete`, `administer`), with recursive inheritance through group nesting. Shipped as the RBAC layer (`src/rbac.rs`).
+- **A tamper-evident audit log.** Every security-relevant event is chained with SHA-256 hashes so any alteration is detectable. Shipped as the hash-chain audit log (`src/audit.rs`).
+- **Password policy aligned with NIST 800-63B.** Argon2id hashing (OWASP parameters), a minimum length of 15 characters, and reuse history (the last 5 hashes per user are kept; reusing one is rejected). Account lockout after repeated failures. Shipped (`src/password.rs`, `src/auth_providers/database.rs`).
+- **Login-time MFA.** A TOTP second factor layered on top of primary authentication, per the two-phase model in the research. Shipped via the auth chain.
+
+**What did not ship** (still future work, not implemented): syslog/SIEM forwarding in CEF/LEEF format, just-in-time (JIT) access requests with approval workflows, per-session MFA re-prompts, time-of-day access windows, and keystroke-level session recording. Vault-backed storage of connection credentials did ship, but through persea's own vault client rather than the "credential injection" workflow researched here.
+
+---
 
 Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-53, NIST 800-63B, and SOC 2 documentation.
 
@@ -459,25 +475,25 @@ CREATE TABLE jit_requests (
 
 ---
 
-## Summary: Priority Implementation Order for persea
+## Summary: What shipped vs what remains
 
-### Phase 1 (Immediate)
-1. **Unified audit event log** — replace scattered audit tables with `audit_events` (AU-2/AU-3 compliant)
-2. **Idle timeout at WebSocket level** — track last activity, terminate both WS and guacd
-3. **Max session duration** — hard cap configurable per-role and per-connection
-4. **Syslog forwarding** — structured JSON to remote SIEM
+### Shipped (implemented)
 
-### Phase 2 (Near-term)
-5. **Connection-level permissions** — `connection_permissions` table with group-based access
-6. **Time-based access windows** — `access_windows` table
-7. **Hash chain for audit integrity** — tamper-evident logging
-8. **Account lockout with progressive delay** — for OIDC fallback and API auth
+1. **Idle timeout at the WebSocket/proxy level** — last-activity tracking terminates both the WebSocket and the guacd connection
+2. **Max session duration** — hard cap (default 8 hours), independent of idle timeout
+3. **Concurrent session limits** — global and per-user caps
+4. **Connection-level permissions** — group-based object permissions (read/connect/update/delete/administer) on connections and folders, with recursive group inheritance
+5. **Hash-chain audit log** — SHA-256 chained events with on-demand verification
+6. **Password policy** — Argon2id with OWASP parameters, 15-character minimum, reuse history, account lockout after repeated failures
+7. **Login-time MFA** — TOTP second factor in the auth chain
 
-### Phase 3 (Future)
-9. **JIT access requests** — time-bound connection permissions with approval workflow
-10. **Per-session MFA** — OIDC prompt for re-authentication on sensitive connections
-11. **Credential injection** — Vault integration for target credentials (Boundary model)
-12. **Enhanced session recording** — keystroke logging, command capture (Teleport eBPF model)
+### Not implemented (future work)
+
+8. **Syslog forwarding** — structured JSON / CEF / LEEF to a remote SIEM
+9. **Time-based access windows** — time-of-day restrictions on connections
+10. **JIT access requests** — approval workflows with auto-expiring permissions
+11. **Per-session MFA** — OIDC re-authentication prompts on sensitive connections
+12. **Keystroke-level session recording** — command capture (Teleport eBPF model)
 
 ---
 

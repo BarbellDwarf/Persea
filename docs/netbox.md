@@ -4,11 +4,9 @@
 > **Next:** [API Reference](api.md) for the exact `/api/connect` and `/api/addressbook/...` endpoints these recipes call.
 > **Status:** recipes only — persea ships **no NetBox integration code**. The endpoints this guide calls (`GET /api/connect`, `/api/addressbook/...`) are stable, shipped API surface, but a built-in NetBox plugin or sync engine is planned, not yet available. If the API surface changes, re-test these recipes.
 
-This guide is **NetBox-side**: it shows how to generate links *into* persea using
-NetBox's built-in Custom Fields, Custom Links, and Event Rules. persea itself
-has no NetBox integration code — it simply serves the REST API these recipes
-call (`GET /api/connect` for quick links, `/api/addressbook/...` for webhook
-sync). No NetBox plugin is required.
+This guide is **NetBox-side**: it shows how to generate links *into* persea using NetBox's built-in Custom Fields, Custom Links, and Event Rules. persea itself has no NetBox integration code — it simply serves the REST API these recipes call (`GET /api/connect` for quick links, `/api/addressbook/...` for webhook sync). No NetBox plugin is required.
+
+The goal: an operator opens a device page in NetBox, clicks one button, and lands in a working remote session on that device — SSH, RDP, VNC, or a web console — without leaving NetBox.
 
 **Note:** NetBox Custom Links and Webhook body templates use **Jinja2** template syntax. Filter arguments use parentheses — `default('ssh')` — not Django's colon syntax (`default:'ssh'`). Only standard Jinja2 filters are available (e.g. `lower`, `default`, `split`). Ansible filters like `regex_replace` and Django filters like `cut` are **not** available. Custom Links use `object.cf.field_name` for custom fields; Webhook body templates use `data.custom_fields.field_name` (the REST API serialization).
 
@@ -19,14 +17,14 @@ Go to **Customization > Custom Fields** and create the following fields. Assign 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `console_enabled` | Boolean | false | Opt-in: enables remote console links on the device page |
-| `console_mode` | Selection: `addressbook`, `adhoc` | — | How to connect: via a stored connections entry (credentials from Vault or encrypted DB) or ad-hoc (direct to IP) |
+| `console_mode` | Selection: `addressbook`, `adhoc` | — | How to connect: via a stored connections entry (credentials managed in persea) or ad-hoc (direct to IP, no stored credentials) |
 | `remote_protocol` | Selection: `ssh`, `rdp`, `vnc`, `web` | — | Protocol for ad-hoc connections (connections entries have their own) |
 | `remote_port` | Integer | — | Port override for ad-hoc connections (leave blank for protocol default) |
 
-The `console_enabled` field is the master switch — no links appear until it's checked. The `console_mode` field controls which link is shown:
+`console_enabled` is the master switch — no links appear until it's checked. `console_mode` decides which link is shown:
 
-- **`addressbook`** — connects via a stored connections entry. Credentials are managed in persea (encrypted DB or Vault) and never appear in the URL. Requires a matching entry name (lowercase device name). Minimum role: **operator**.
-- **`adhoc`** — connects directly to the device's primary IP. No stored credentials — the user sees guacd's login prompt. Minimum role: **poweruser**.
+- **`addressbook`** — connects via a stored connections entry. Credentials are managed in persea (encrypted DB or Vault) and never appear in the URL. Requires a matching entry name (the device name, lowercased). Minimum role: **operator**.
+- **`adhoc`** — connects directly to the device's primary IP. No stored credentials — the user sees guacd's login prompt and enters them. Minimum role: **poweruser**.
 
 ## Custom Links
 
@@ -82,20 +80,20 @@ https://console.example.com/api/connect?hostname={{ object.primary_ip4.address.i
 
 Use NetBox's **bulk edit** to enable across multiple devices at once.
 
-### Role Requirements
+### Role requirements
 
 | Mode | Minimum role | Description |
 |------|-------------|-------------|
-| Connections | operator | Connects via stored entry (credentials from Vault or encrypted DB) |
-| Ad-hoc | poweruser | Creates session directly to hostname |
+| Connections (addressbook) | operator | Connects via stored entry (credentials from Vault or encrypted DB) |
+| Ad-hoc | poweruser | Creates a session directly to a hostname |
 
-## Webhook-Driven Connections Sync
+## Webhook-driven connections sync
 
-Automatically sync NetBox devices to persea's connections using Event Rules and Webhooks. This keeps connections entries in sync with NetBox — when a device is created or updated, the corresponding entry is created in persea via the address-book API.
+You can keep persea's connections in sync with NetBox automatically: when a device is created, updated, or deleted, an Event Rule fires a Webhook that creates or removes the corresponding connections entry via the address-book API.
 
 ### Filtering: control what syncs
 
-Use Event Rule **conditions** to sync only the devices you want. You can filter by any combination of:
+Use Event Rule **conditions** to sync only the devices you want, in any combination:
 
 **By console_enabled field** (recommended):
 ```json
@@ -107,7 +105,7 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 }
 ```
 
-**By tag**:
+**By tag:**
 ```json
 {
   "and": [
@@ -117,7 +115,7 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 }
 ```
 
-**By site**:
+**By site:**
 ```json
 {
   "and": [
@@ -127,7 +125,7 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 }
 ```
 
-**By device role**:
+**By device role:**
 ```json
 {
   "and": [
@@ -137,7 +135,7 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 }
 ```
 
-### Create webhook: device created/updated
+### Webhook: device created/updated
 
 1. **Create an Event Rule** (**Operations > Event Rules**):
    - Name: `persea-sync-create`
@@ -169,7 +167,7 @@ Use Event Rule **conditions** to sync only the devices you want. You can filter 
 
      **Important:** The entry field is `type`, not `session_type` (it matches the Vault storage format). The hostname uses `.split('/')[0]` to strip the CIDR prefix from NetBox IP addresses (e.g. `10.0.0.1/24` → `10.0.0.1`). Avoid `regex_replace` and `cut` filters — they are not available in NetBox's Jinja2 environment.
 
-### Create webhook: device deleted
+### Webhook: device deleted
 
 1. **Create an Event Rule**:
    - Name: `persea-sync-delete`
@@ -206,7 +204,7 @@ curl -X POST https://console.example.com/api/addressbook/folders \
 
 Both NetBox and persea support OIDC authentication. When configured with the same OIDC provider (Authentik, Keycloak, Okta, etc.), users authenticate once and get sessions in both applications. The Custom Link in NetBox opens persea, which recognises the existing SSO session — no second login prompt.
 
-## Example: Full Setup
+## Example: full setup
 
 1. Configure persea with OIDC (see [Integrations > OIDC](integrations.md))
 2. Configure NetBox with the same OIDC provider

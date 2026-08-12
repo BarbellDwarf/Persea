@@ -3,19 +3,17 @@
 > **Audience:** operators running persea across multiple servers (a cluster) for resilience and scale.
 > **Next:** [Deployment Guide](deployment-guide.md#database-backends) for shared-database setup, or [Licensing](licensing.md) for the Enterprise license that unlocks HA.
 
-## Overview
+## What this gives you
 
-persea normally runs as a single instance: one server process plus one guacd daemon. You can run several instances against the **same database** (`db_url`) and they already share the static data — users, the address book, auth sessions, audit log, and settings.
+persea normally runs as a single instance: one server process plus one guacd daemon. You can run several instances against the **same database** (`db_url`) and they already share the static data — users, the connections (address book), auth sessions, audit log, and settings.
 
-The **Enterprise HA feature** (feature `ha`, included in the 30-day evaluation period) goes further: live sessions become visible across the whole fleet. A session started on instance A appears in the session list on instance B, can be joined or shadowed from B, and a user who lands on the "wrong" instance is transparently redirected to the one hosting their session. Recording rotation is shared safely too, so multiple instances never fight over the same files.
+The **Enterprise HA feature** (license feature `ha`, included in the 30-day evaluation period) goes further: live sessions become visible across the whole fleet. A session started on instance A appears in the session list on instance B, can be joined or shadowed from B, and a user who lands on the "wrong" instance is transparently redirected to the one hosting their session. Recording rotation is shared safely too, so multiple instances never fight over the same files.
 
 Without the license (or without a shared `db_url`), every instance behaves exactly as a standalone single instance — nothing changes.
 
 ## What you need
 
-Three things, all covered below:
-
-1. **A shared database backend** — MySQL or PostgreSQL via `db_url`, identical on every instance (SQLite is single-writer and cannot be shared safely).
+1. **A shared database backend** — MySQL or PostgreSQL via `db_url`, identical on every instance. (SQLite is single-writer and cannot be shared safely.)
 2. **An Enterprise license** that includes the `ha` feature (or the 30-day evaluation window). See [Licensing](licensing.md).
 3. **A unique `instance_id` per instance** and a public base URL (`ha_base_url`) per instance, so browsers can be redirected to the right place.
 
@@ -37,13 +35,14 @@ The sweep never touches live sessions owned by this instance. With `session_max_
 
 ### 2. WebSocket tickets that work across instances
 
-persea uses short-lived, single-use WebSocket tickets to open session streams. With HA active, issued tickets are also written to the shared database (only a SHA-256 hash, 30-second lifetime, single-use). Any instance can validate a ticket issued by any other: the in-memory list is checked first, then the database. Consuming a ticket deletes its row, so a ticket cannot be replayed on a different instance. Expired rows are purged hourly.
+persea uses short-lived, single-use WebSocket tickets to open session streams. A ticket is a small token that proves the bearer is allowed to open the stream; it expires in 30 seconds and can only be used once. With HA active, issued tickets are also written to the shared database (only a SHA-256 hash of the ticket, never the ticket itself). Any instance can validate a ticket issued by any other: the in-memory list is checked first, then the database. Consuming a ticket deletes its row, so a ticket cannot be replayed on a different instance. Expired rows are purged hourly.
 
 ### 3. Sessions you can see, join, and shadow from anywhere
 
 - **List** — `GET /api/sessions` (and the Sessions page) merges local sessions with live sessions owned by other instances. Remote sessions carry `"remote": true` and the owning instance's id and base URL.
 
-![Sessions page: sessions from the whole fleet appear here, remote ones flagged](assets/screenshots/sessions.png)
+  ![Sessions page: sessions from the whole fleet appear here, remote ones flagged](assets/screenshots/sessions.png)
+
 - **Join / shadow / reconnect** — the actual session stream lives on the owning instance. When a browser connects to the wrong instance, that instance answers with an **HTTP 307 redirect to the owner's WebSocket endpoint**, minting a fresh ticket for the already-authenticated user first. The browser never needs to know; the hop is transparent to the Guacamole client. The share or shadow token (`?token=`) is preserved verbatim, and shadow tokens for remote sessions are stored on the shared registry row, so `POST /api/sessions/{id}/shadow` works from any instance.
 - **Terminate** — only the owning instance can terminate a session; any other instance returns an explicit error naming the owner.
 
@@ -90,12 +89,19 @@ session_pending_timeout_secs = 30
 session_max_duration_secs = 28800
 ```
 
-1. Set up the shared database (see [Deployment Guide > Database backends](deployment-guide.md#database-backends)) and point every instance at it.
+1. Set up the shared database (see [Deployment Guide > Databases](deployment-guide.md#databases)) and point every instance at it.
 2. Configure `instance_id` and `ha_base_url` per instance, and make sure `ha_base_url` resolves from the browsers that use it.
 3. Install the Enterprise license key on every instance (or rely on the 30-day evaluation). See [Licensing](licensing.md).
 4. Restart each instance and confirm with the health check below that HA is active.
 
 The `ha_base_url` values must be reachable from browsers — typically the same hostname/port users already use to reach each instance.
+
+## What happens when an instance dies
+
+- **Sessions on the dead instance die with it.** The session stream lives on the owning instance; there is no live migration. If an instance crashes, its sessions are gone.
+- **Other instances notice.** The dead instance's registry rows age past the sweeps described above and are removed, so they stop appearing in fleet-wide session lists and do not block recording rotation.
+- **The rest of the fleet keeps working.** Users, connections, join/shadow of sessions on surviving instances — all unaffected.
+- **A browser mid-session on the dead instance** is disconnected; when the user reconnects, their session is gone and they must start a new one.
 
 ## What's supported — and the honest limitations
 
@@ -145,4 +151,4 @@ guacd is a shared resource: point every instance at the same guacd address (or a
 
 - `GET /api/health` returns `200` when an instance is running.
 - `GET /api/system/status` (admin) reports `instance.instance_id` and `instance.ha_enabled`, so you can confirm every instance sees the same registry and the license is active.
-- Create a session on one instance and check the Sessions page on another — the session appears there, marked as remote. That is the whole feature working end to end.
+- The end-to-end test: **start two instances** against the same database with distinct `instance_id`/`ha_base_url` values, create a session on one, and check the Sessions page on the other — the session appears there, marked as remote, and clicking it joins the session through the redirect. That is the whole feature working end to end.
