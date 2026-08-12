@@ -184,6 +184,17 @@
     var listEl = document.getElementById('session-list');
     var emptyEl = document.getElementById('session-empty');
     var countsEl = document.getElementById('session-counts');
+    // Open links honour the session open preference (tab/window/same).
+    // CSP-safe: the anchor only carries a data-open-session attribute;
+    // plain left-clicks are intercepted here, modifier-clicks (middle,
+    // ctrl) keep their native behaviour. Delegated on the persistent
+    // container so re-renders never stack duplicate listeners.
+    listEl.addEventListener('click', function(ev) {
+        var a = ev.target.closest('a[data-open-session]');
+        if (!a) return;
+        ev.preventDefault();
+        openSessionUrl(a.href);
+    });
     function durationStr(createdAt) {
         var secs = Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000));
         if (secs < 60) return secs + 's';
@@ -246,16 +257,6 @@
                     loadSessions();
                 }).catch(function(e) { showError(e.message || 'Failed to terminate session.'); });
             });
-        });
-        // Open links honour the session open preference (tab/window/same).
-        // CSP-safe: the anchor only carries a data-open-session attribute;
-        // plain left-clicks are intercepted here, modifier-clicks (middle,
-        // ctrl) keep their native behaviour.
-        listEl.addEventListener('click', function(ev) {
-            var a = ev.target.closest('a[data-open-session]');
-            if (!a) return;
-            ev.preventDefault();
-            openSessionUrl(a.href);
         });
     }
     function loadSessions() {
