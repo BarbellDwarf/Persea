@@ -33,7 +33,28 @@ static_path = "./static"
 # Path to the SQLite database (admins, OIDC users, auth sessions).
 # Default: "./persea.db"
 # Env: PERSEA_DB_PATH
+# Used only when db_url (below) is NOT set — "legacy mode".
 db_path = "./persea.db"
+
+# Optional: use a managed database backend instead of the SQLite file above.
+# When set, the SQLx pool IS the store: ALL app data (users, connections,
+# address book, session history, audit log, system settings, auth providers)
+# lives in this backend. The schema migrations (migrations/<backend>/*.sql)
+# run automatically at startup, and `db_path` is ignored for data.
+#
+# Supported schemes:
+#   db_url = "postgres://user:password@dbhost:5432/persea"
+#   db_url = "mysql://user:password@dbhost:3306/persea"
+#   db_url = "sqlite:///opt/persea/data/persea.db?mode=rwc"
+#
+# The database user needs CREATE/DDL privileges (migrations run at startup).
+# Connection parameters (TLS, pool size) go in the URL, e.g.
+# postgres://user:password@dbhost:5432/persea?sslmode=require
+#
+# The setup wizard can enter this URL at first run — the first admin is then
+# created directly in the configured backend, no SQLite intermediate step.
+#
+# Env: PERSEA_DB_URL
 
 # Title shown in the browser tab and page header.
 # Default: "persea"

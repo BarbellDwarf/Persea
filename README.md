@@ -126,6 +126,7 @@ guacd (C, from guacamole-server)
 |-----------|--------|-------|
 | guacd | Required | Built from `apache/guacamole-server`, ships in the .deb and Docker image. |
 | Vault or OpenBao | Optional | For the Connections UI. Stores connection credentials server-side when `[storage] backend = "vault"`. By default connections and credentials live in the app database; Vault is not required. Use [`contrib/vault-quickstart.sh`](contrib/vault-quickstart.sh) for one-command setup. |
+| PostgreSQL or MySQL | Optional | Alternative to the built-in SQLite store: set `db_url` in the config (or in the setup wizard at first run) and ALL app data — users, connections, sessions history, audit, settings — lives in that backend. Migrations run automatically at startup. SQLite (`db_path`) remains the default. |
 | OIDC provider | Optional | For SSO. API-key auth works on its own. |
 | Docker | Optional | Only needed for VDI desktop containers. |
 

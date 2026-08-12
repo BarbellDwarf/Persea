@@ -62,7 +62,7 @@ docker run -d \
 
 The Docker image bundles guacd + FreeRDP + dependencies, so it runs cleanly on Ubuntu, RHEL, Rocky, Arch, and other distros where the bare-metal `.deb` would hit a FreeRDP ABI mismatch. See [installation.md](installation.md#other-linux-distributions) for the full story on non-Debian-13 targets.
 
-> **Persistent state:** the three named volumes (`persea-data`, `persea-recordings`, `persea-tls`) keep the SQLite database, recordings, and the TLS certificate across container recreations/upgrades. The `persea-tls` volume is important — without it, the entrypoint generates a fresh self-signed certificate on every container recreate, changing the cert fingerprint and re-triggering browser warnings. For production, mount your own certificate over `/opt/persea/tls/cert.pem` + `key.pem`; when persea generates a self-signed cert itself, it automatically adds `secure_cookies = false` to the config so browsers accept the session cookie over the untrusted connection.
+> **Persistent state:** the three named volumes (`persea-data`, `persea-recordings`, `persea-tls`) keep the SQLite database (or the config file that points at an external database — see [Database backends](#database-backends)), recordings, and the TLS certificate across container recreations/upgrades. The `persea-tls` volume is important — without it, the entrypoint generates a fresh self-signed certificate on every container recreate, changing the cert fingerprint and re-triggering browser warnings. For production, mount your own certificate over `/opt/persea/tls/cert.pem` + `key.pem`; when persea generates a self-signed cert itself, it automatically adds `secure_cookies = false` to the config so browsers accept the session cookie over the untrusted connection.
 
 See [installation.md](installation.md) for all install options.
 
@@ -74,6 +74,7 @@ Nested table keys use `__` as the separator (double underscore).
 Examples:
 - `PERSEA_LISTEN_ADDR`
 - `PERSEA_DB_PATH`
+- `PERSEA_DB_URL` (managed database backend — see [Database backends](#database-backends))
 - `PERSEA_SESSION_MAX_DURATION_SECS`
 - `PERSEA_STORAGE_KEY` (special: storage encryption key)
 
@@ -82,7 +83,8 @@ Examples:
 | listen_addr | PERSEA_LISTEN_ADDR | 127.0.0.1:8089 | Listen address |
 | guacd_addr | PERSEA_GUACD_ADDR | 127.0.0.1:4822 | guacd daemon address |
 | static_path | PERSEA_STATIC_PATH | ./static | Static files directory |
-| db_path | PERSEA_DB_PATH | ./persea.db | SQLite database path |
+| db_path | PERSEA_DB_PATH | ./persea.db | SQLite database path (used when `db_url` is unset) |
+| db_url | PERSEA_DB_URL | (unset) | Managed database backend: `postgres://…`, `mysql://…` or `sqlite://…`. When set, ALL app data is stored there (see [Database backends](#database-backends)) |
 | site_title | PERSEA_SITE_TITLE | Persea | Browser tab title |
 | session_pending_timeout_secs | PERSEA_SESSION_PENDING_TIMEOUT_SECS | 60 | Pending session timeout |
 | session_max_duration_secs | PERSEA_SESSION_MAX_DURATION_SECS | 28800 | Max session duration (8h) |
@@ -125,6 +127,70 @@ On first start (no database yet), persea redirects to the **setup wizard** at
 `https://your-server:8089/setup` — it provisions the first admin user (email,
 display name, password) and applies initial feature toggles. Log in with those
 credentials afterwards.
+
+The wizard's **Database URL** field is optional: leave it empty to store
+everything in the local SQLite file (`db_path`), or enter a `postgres://`,
+`mysql://` or `sqlite://` URL to be born directly on a managed backend — persea
+connects, runs the schema migrations, and creates the first admin **in that
+backend**, no SQLite intermediate step. The URL is written into the generated
+config (`db_url = …`), so it takes effect for every later start.
+
+### Database backends
+
+persea stores its data in one of two ways (since v1.1.1, `db_url` is the real
+store — not a roadmap item):
+
+| Mode | Config | What is stored there |
+|------|--------|----------------------|
+| Legacy SQLite | `db_path = "./persea.db"` (default) | Everything: users, connections/address book, session history, audit log, settings, auth providers |
+| Managed backend | `db_url = "postgres://…"` / `mysql://…` / `sqlite://…` | Everything — the SQLx pool **is** the store |
+
+With `db_url` set, all stores (users, API keys, connections, sessions history,
+audit, settings, auth providers, tokens) route through the SQLx pool and the
+schema migrations (`migrations/postgres/`, `migrations/mysql/`,
+`migrations/sqlite/`) run automatically at startup. `db_path` is ignored for
+data — the legacy SQLite file is only opened for compatibility and holds no
+app data in this mode. The `create-user` / `add-admin` CLI commands and the
+setup wizard are backend-aware and work against the configured backend.
+
+**Per-backend setup**
+
+- **PostgreSQL** — `db_url = "postgres://user:password@dbhost:5432/persea"`.
+  Create the database and user first (`CREATE DATABASE persea;`), grant DDL
+  privileges (`CREATE TABLE`, `ALTER TABLE`, `CREATE INDEX`) — migrations run
+  at every startup. For TLS in transit use
+  `postgres://user:password@dbhost:5432/persea?sslmode=require` (or
+  `sslmode=verify-full` with the right `sslrootcert`).
+- **MySQL/MariaDB** — `db_url = "mysql://user:password@dbhost:3306/persea"`.
+  Same requirements: the user needs DDL privileges on the database. Use
+  `mysql://user:password@dbhost:3306/persea?ssl-mode=REQUIRED` for TLS.
+- **SQLite** — either `db_path` (legacy mode) or
+  `db_url = "sqlite:///opt/persea/data/persea.db?mode=rwc"`.
+
+Fail fast: if the backend is unreachable or the migrations fail, persea exits
+at startup with a `FATAL:` message instead of silently falling back to the
+SQLite file.
+
+**Migrating an existing SQLite deployment**
+
+There is no built-in SQLite→Postgres/MySQL exporter. The supported paths are:
+
+- **Re-create (recommended for new deployments):** point `db_url` at the new
+  backend and run the setup wizard (or `create-user`) to provision the first
+  admin there; re-enter connection entries in the connections UI. Audit
+  history and session recordings from the old SQLite deployment are not
+  carried over — keep the old instance's files if you need them.
+- **Keep SQLite:** stay on `db_path` — the default mode remains fully
+  supported.
+- **Manual export:** dump the relevant tables (`sqlite3 persea.db .dump`) and
+  load them into the target backend with schema adaptations — persea does not
+  ship a converter, and the audit log's hash chain cannot be recomputed after
+  a manual copy.
+
+**HA note:** since v1.1.1 multiple instances can share one database backend
+(users, connections, audit are shared), but **live sessions are still
+in-memory per instance** — session affinity at the load balancer remains
+required. See [high-availability.md](high-availability.md) for the full story.
 
 ### Create admin API keys (for automation, optional)
 

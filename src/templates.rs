@@ -511,6 +511,13 @@ pub struct SetupTemplate {
     pub error: Option<String>,
     pub listen_addr: String,
     pub db_path: String,
+    /// Optional managed-backend URL (Postgres/MySQL/...) entered in the
+    /// wizard; empty means the legacy SQLite file at `db_path`.
+    pub db_url: String,
+    /// Label of the active store backend ("PostgreSQL", "MySQL", "SQLite")
+    /// when a SQLx pool is installed (db_url configured); None = legacy
+    /// SQLite file mode.
+    pub backend: Option<String>,
     pub guacd_mode: String,
     pub guacd_addr: String,
     pub guacd_path: String,

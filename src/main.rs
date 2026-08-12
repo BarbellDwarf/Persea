@@ -1393,6 +1393,9 @@ async fn run_server(
     }
 
     // Create session manager
+    // Clone the config first — the setup wizard (routed below) needs the
+    // configured db_url/db_path to prefill its backend fields.
+    let setup_config = config.clone();
     let manager: AppState = Arc::new(SessionManager::new_with_db(
         config,
         guacd_tls,
@@ -1890,6 +1893,7 @@ async fn run_server(
         .route("/setup", get(handlers::setup::setup_page))
         .route("/setup", post(handlers::setup::setup_submit))
         .layer(csrf::CsrfLayer)
+        .layer(Extension(setup_config))
         .layer(Extension(database.clone()))
         .layer(Extension(site_title.clone()));
 
