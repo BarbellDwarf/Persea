@@ -19,14 +19,23 @@ use crate::tunnel;
 
 // ── Error type ──
 
+/// Errors from Vault operations. Each variant maps to a distinct failure
+/// mode so callers can decide whether to surface the message to the user,
+/// fall back to another backend, or retry.
 #[derive(Debug)]
 #[must_use]
 pub enum VaultError {
+    /// AppRole login or token renewal failed, with a description of the failure.
     Auth(String),
+    /// The requested secret or path does not exist in Vault.
     NotFound,
+    /// Vault denied access (HTTP 403).
     Forbidden,
+    /// A transport-level failure: connection refused, TLS error, or timeout.
     Http(reqwest::Error),
+    /// The response from Vault could not be parsed as expected JSON.
     Parse(String),
+    /// A caller-supplied name, path, or scope failed validation.
     BadName(String),
     /// The backend serving this scope is configured but not currently
     /// connected (initial connect pending or the Vault is down). Distinct from
@@ -59,7 +68,10 @@ impl From<reqwest::Error> for VaultError {
 /// Folder access configuration stored at `<folder>/.config` in Vault.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderConfig {
+    /// OIDC groups allowed to see and use this folder. Empty means open to
+    /// everyone with access to the scope.
     pub allowed_groups: Vec<String>,
+    /// Human-readable folder description shown in the UI.
     #[serde(default)]
     pub description: String,
     /// When true, if the folder's own `allowed_groups` doesn't grant access,
@@ -74,17 +86,30 @@ pub struct FolderConfig {
 /// A connection entry stored in Vault.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AddressBookEntry {
+    /// Protocol of the entry: "ssh", "rdp", "vnc", "spice", "web", or "vdi".
     #[serde(rename = "type")]
     pub session_type: String, // "ssh", "rdp", "vnc", "web"
+    /// Target hostname or IP address.
     pub hostname: Option<String>,
+    /// Target TCP port. Protocol-specific defaults apply when unset.
     pub port: Option<u16>,
+    /// Login username. May be a `$variable` credential reference.
     pub username: Option<String>,
+    /// Login password. May be a `$variable` credential reference. Never
+    /// returned to the browser.
     pub password: Option<String>,
+    /// SSH private key in PEM format for key-based auth. May be a `$variable`
+    /// credential reference.
     pub private_key: Option<String>,
+    /// URL the browser session opens.
     pub url: Option<String>,
+    /// RDP or SSH domain (NTLM or AD domain), when applicable.
     pub domain: Option<String>,
+    /// RDP security mode: "any", "rdp", "nla", or "tls".
     pub security: Option<String>,
+    /// Skip TLS certificate verification for RDP and SPICE connections.
     pub ignore_cert: Option<bool>,
+    /// Human-readable name shown in the UI, distinct from the entry key.
     pub display_name: Option<String>,
     /// Free-form description/notes for this entry (stored in the
     /// `protocol_config` JSON column — no schema change).
@@ -312,12 +337,19 @@ impl AddressBookEntry {
 /// Entry metadata returned to non-admin users (credentials stripped).
 #[derive(Debug, Clone, Serialize)]
 pub struct EntryInfo {
+    /// Entry key, the name within its folder.
     pub name: String,
+    /// Protocol of the entry.
     pub session_type: String,
+    /// Target hostname or IP address.
     pub hostname: Option<String>,
+    /// Target TCP port.
     pub port: Option<u16>,
+    /// Login username.
     pub username: Option<String>,
+    /// URL the browser session opens.
     pub url: Option<String>,
+    /// Human-readable name shown in the UI.
     pub display_name: Option<String>,
     /// DB row creation timestamp (SQLite datetime string; `None` for
     /// vault-backed copies that carry no timestamps).
@@ -332,9 +364,13 @@ pub struct EntryInfo {
     /// Per-entry values for admin-defined custom fields.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_fields: Option<std::collections::HashMap<String, String>>,
+    /// RDP or SSH domain (NTLM or AD domain), when applicable.
     pub domain: Option<String>,
+    /// RDP security mode.
     pub security: Option<String>,
+    /// Whether certificate verification is disabled for this entry.
     pub ignore_cert: Option<bool>,
+    /// Drive/file-transfer override for this entry.
     pub enable_drive: Option<bool>,
     /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
     pub auth_pkg: Option<String>,
@@ -448,22 +484,31 @@ pub struct EntryInfo {
     /// Auto-hide the clipboard/files side tabs when idle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autohide_side_tabs: Option<bool>,
+    /// SPICE: connect using TLS.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spice_tls: Option<bool>,
+    /// SPICE: TLS port when it differs from `port`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spice_tls_port: Option<u16>,
+    /// SPICE: PEM CA certificate used to verify the server TLS.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spice_ca_cert: Option<String>,
+    /// SPICE: expected TLS certificate subject.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spice_cert_subject: Option<String>,
+    /// SPICE: proxy URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spice_proxy: Option<String>,
+    /// Proxmox VE API base URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxmox_url: Option<String>,
+    /// Proxmox node hosting the VM.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxmox_node: Option<String>,
+    /// Proxmox VM id whose console opens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxmox_vmid: Option<u32>,
+    /// Whether the PVE API and SPICE proxy TLS certificates are verified.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxmox_verify_tls: Option<bool>,
     /// Proxmox token id (non-secret; shown in the User column).
@@ -569,7 +614,9 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
 /// Folder info returned to users.
 #[derive(Debug, Clone, Serialize)]
 pub struct FolderInfo {
+    /// Folder name, the last path segment.
     pub name: String,
+    /// Folder description from its `.config`.
     pub description: String,
     /// "shared" or "instance"
     pub scope: String,
@@ -583,6 +630,10 @@ pub struct FolderInfo {
 
 // ── Vault client ──
 
+/// HTTP client for a HashiVault/OpenBao KV v2 secrets engine, authenticated
+/// via AppRole. Holds the mount, base path, namespace, and a renewable client
+/// token. Share it as `Arc<VaultClient>` and call `spawn_renewal_task` once
+/// on startup so the token stays valid.
 pub struct VaultClient {
     http: reqwest::Client,
     addr: String,
