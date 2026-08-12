@@ -270,8 +270,7 @@ async fn mock_guacd(listener: tokio::net::TcpListener, results: Arc<Mutex<Vec<Mo
                                     let _ = sock.write_all(args.encode().as_bytes()).await;
                                 }
                                 "connect" => {
-                                    let ready =
-                                        Instruction::new("ready", vec!["mock-conn".into()]);
+                                    let ready = Instruction::new("ready", vec!["mock-conn".into()]);
                                     let _ = sock.write_all(ready.encode().as_bytes()).await;
                                     conn.handshake_done = true;
                                 }
@@ -336,10 +335,10 @@ async fn boot(tag: &str) -> TestEnv {
     let key = create_admin_key(&config_path, &marker);
     let client = reqwest::Client::new();
     let base = format!("http://127.0.0.1:{port}");
-    let csrf = fetch_csrf_token(&client, &base).await;
 
     let mut app = AppProc::new(&config_path, &log_path);
     wait_healthy(&client, &base, &mut app, &log_path).await;
+    let csrf = fetch_csrf_token(&client, &base).await;
 
     TestEnv {
         base: base.clone(),
@@ -385,7 +384,7 @@ async fn create_session(env: &TestEnv) -> String {
 async fn connect_ws(
     env: &TestEnv,
     session_id: &str,
-) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
     let (status, body) = send_json(
         &env.client,
         reqwest::Method::POST,
@@ -397,18 +396,24 @@ async fn connect_ws(
     .await;
     assert_eq!(status, 200, "POST /api/ws-ticket failed: {body}");
     let v: serde_json::Value = serde_json::from_str(&body).expect("ws-ticket JSON");
-    let ticket = v["ticket"].as_str().expect("ticket in response").to_string();
+    let ticket = v["ticket"]
+        .as_str()
+        .expect("ticket in response")
+        .to_string();
 
     let tcp = tokio::net::TcpStream::connect(&env.host)
         .await
         .expect("tcp connect");
-    let uri = format!("ws://{}/ws/{}?ticket={}", env.host, session_id, ticket);
-    let request = Request::builder()
-        .uri(uri)
-        .header("Origin", format!("http://{}", env.host))
-        .header("Host", &env.host)
-        .body(())
-        .expect("build ws request");
+    let url = format!("ws://{}/ws/{}?ticket={}", env.host, session_id, ticket);
+    // Let tungstenite build the full handshake header set (Host, Connection,
+    // Upgrade, Sec-WebSocket-Version, Sec-WebSocket-Key) from the URL string,
+    // then add the Origin the server expects.
+    let mut request: Request<()> =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(&url)
+            .expect("client request");
+    request
+        .headers_mut()
+        .insert("Origin", format!("http://{}", env.host).parse().unwrap());
     let (ws, _) = tokio_tungstenite::client_async(request, tcp)
         .await
         .expect("ws upgrade");
@@ -417,11 +422,12 @@ async fn connect_ws(
 
 /// Send a `size` instruction and wait for the mock guacd's marker echo —
 /// proof that browser → persea → guacd → persea → browser is fully live.
-async fn sync_on_live_tunnel(
-    ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-) {
+async fn sync_on_live_tunnel(ws: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>) {
     let size = Instruction::new("size", vec!["800".into(), "600".into(), "96".into()]);
-    ws.send(WsMessage::Text(size.encode().into()))
+    // The echo comes back re-encoded with per-element length prefixes
+    // (`4.size,3.800,3.600,2.96;`), so match on the exact encoded form.
+    let expected = size.encode();
+    ws.send(WsMessage::Text(expected.clone().into()))
         .await
         .expect("send size");
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -430,8 +436,8 @@ async fn sync_on_live_tunnel(
             .await
             .expect("timed out waiting for marker echo")
             .expect("ws stream ended before marker");
-        if let WsMessage::Text(t) = msg {
-            if t.contains("size,800,600,96") {
+        if let Ok(WsMessage::Text(t)) = msg {
+            if t.contains(&expected) {
                 return;
             }
         }
@@ -483,7 +489,10 @@ async fn tab_close_actively_ends_guacd_connection() {
         conn.disconnect_instructions >= 1,
         "guacd must receive the disconnect instruction on tab close: {conn:?}"
     );
-    assert!(conn.eof, "guacd socket must reach EOF on tab close: {conn:?}");
+    assert!(
+        conn.eof,
+        "guacd socket must reach EOF on tab close: {conn:?}"
+    );
 
     // The session record leaves "active" (Disconnected — the reconnect
     // window; the record is reaped later). The remote session is dead
@@ -515,7 +524,10 @@ async fn api_terminate_actively_ends_guacd_connection() {
         Some(&env.csrf),
     )
     .await;
-    assert!(status.is_success(), "DELETE session failed: {status} {body}");
+    assert!(
+        status.is_success(),
+        "DELETE session failed: {status} {body}"
+    );
 
     let conn = finished_guacd_connection(&env).await;
     assert!(conn.handshake_done, "handshake completed at mock guacd");
@@ -547,7 +559,10 @@ async fn terminate_pending_session_closes_held_guacd_stream() {
         Some(&env.csrf),
     )
     .await;
-    assert!(status.is_success(), "DELETE session failed: {status} {body}");
+    assert!(
+        status.is_success(),
+        "DELETE session failed: {status} {body}"
+    );
 
     let conn = finished_guacd_connection(&env).await;
     assert!(conn.handshake_done, "handshake completed at mock guacd");

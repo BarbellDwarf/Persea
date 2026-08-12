@@ -928,21 +928,30 @@ async fn proxy_ws_guacd(
     // detached: whichever one is still running holds half of the split
     // guacd socket, so a zombie task keeps the socket (and with it the
     // guacd session) alive forever — this is exactly how a tab close used
-    // to orphan the remote session. Abort both, then wait for them to
-    // actually stop (bounded, in case a task is stuck in a syscall) so the
-    // socket halves are dropped and guacd sees EOF before we return. On the
-    // browser-closed path `ws_to_guacd` has already written a `disconnect`
-    // instruction and shut its write half; the abort covers every other
-    // path: network drop, cancellation, reap, API terminate, and guacd
-    // ending the connection.
+    // to orphan the remote session. Abort the loser(s), then wait for them
+    // to actually stop (bounded, in case a task is stuck in a syscall) so
+    // the socket halves are dropped and guacd sees EOF before we return. On
+    // the browser-closed path `ws_to_guacd` has already written a
+    // `disconnect` instruction and shut its write half; the abort covers
+    // every other path: network drop, cancellation, reap, API terminate,
+    // and guacd ending the connection. NOTE: the handle that won the select
+    // above is already complete — awaiting it would panic ("JoinHandle
+    // polled after completion") — so only the losing handle is awaited.
     guacd_to_browser.abort();
     browser_to_guacd.abort();
-    let _ = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        async {
-            let _ = tokio::join!(guacd_to_browser, browser_to_guacd);
-        },
-    )
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        match &result {
+            ProxyResult::BrowserEnded(_) => {
+                let _ = guacd_to_browser.await;
+            }
+            ProxyResult::GuacdEnded(_) => {
+                let _ = browser_to_guacd.await;
+            }
+            ProxyResult::Cancelled => {
+                let _ = tokio::join!(guacd_to_browser, browser_to_guacd);
+            }
+        }
+    })
     .await;
 
     let guacd_err = guacd_error.lock().await.take();
@@ -1131,7 +1140,7 @@ where
 /// done, so the wrapper then actively ends the guacd side (see
 /// `send_disconnect_to_guacd`).
 async fn ws_to_guacd(
-    ws_read: futures_util::stream::SplitStream<WebSocket>,
+    mut ws_read: futures_util::stream::SplitStream<WebSocket>,
     mut guacd: tokio::io::WriteHalf<GuacdStream>,
     ws_sink: WsSink,
     session_id: Uuid,
@@ -1608,8 +1617,10 @@ mod tests {
         send_disconnect_to_guacd(&mut write).await;
 
         let received = mock_guacd.await.unwrap();
-        // `11.disconnect;` — the exact instruction the JS client sends on
-        // Disconnect — followed by a shut-down write half (EOF above).
-        assert_eq!(received, b"11.disconnect;");
+        // `10.disconnect;` — the length-prefixed wire format persea
+        // synthesizes (encode_element prefixes each element's byte length;
+        // guacd's parser accepts any {len}.{opcode} prefix) — followed by a
+        // shut-down write half (EOF above).
+        assert_eq!(received, b"10.disconnect;");
     }
 }
