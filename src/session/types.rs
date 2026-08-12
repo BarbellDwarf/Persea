@@ -241,7 +241,7 @@ pub struct CreateSessionRequest {
 }
 
 /// Session status in the lifecycle.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
     /// guacd connected, waiting for browser
@@ -297,6 +297,20 @@ pub struct SessionInfo {
     /// session. Read by client.html to show/hide the upload button.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub drive_enabled: bool,
+    /// Enterprise HA (R110): the instance id that owns this session, when it
+    /// is NOT this instance. `remote = true` means the session lives in the
+    /// shared registry only and its guacd stream is on `owner_instance`
+    /// (join/shadow are redirected to `owner_base_url`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_instance: Option<String>,
+    /// Enterprise HA (R110): public base URL of the owning instance, for
+    /// cross-instance join/shadow redirects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_base_url: Option<String>,
+    /// Enterprise HA (R110): true when this session is hosted by another
+    /// instance (seen via the shared registry, not the local map).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub remote: bool,
 }
 
 /// Internal session state including the guacd connection.
@@ -463,7 +477,60 @@ impl Session {
             fullscreen_on_connect: self.fullscreen_on_connect,
             autohide_side_tabs: self.autohide_side_tabs,
             drive_enabled: self.drive_enabled,
+            owner_instance: None,
+            owner_base_url: None,
+            remote: false,
         }
+    }
+}
+
+impl SessionInfo {
+    /// Build the public info for a session that exists only in the shared
+    /// registry (R110): it is owned by another instance, so every field is
+    /// what the registry recorded — no local state, no tokens.
+    pub fn from_registry(row: &crate::db::SessionRegistryRow) -> Option<SessionInfo> {
+        use chrono::NaiveDateTime;
+        let session_type: SessionType = serde_json::from_str(&format!(
+            "\"{}\"",
+            row.session_type.to_lowercase()
+        ))
+        .unwrap_or_default();
+        let status: SessionStatus = serde_json::from_str(&format!("\"{}\"", row.status.to_lowercase()))
+            .unwrap_or(SessionStatus::Error);
+        let created_at = NaiveDateTime::parse_from_str(&row.created_at, "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .map(|ndt| ndt.and_utc())
+            .unwrap_or_else(chrono::Utc::now);
+        let id = Uuid::parse_str(&row.session_id).ok()?;
+        Some(SessionInfo {
+            session_id: id,
+            session_type,
+            status,
+            created_at,
+            client_url: format!("/client/{}", id),
+            share_url: None,
+            ws_url: format!("/ws/{}", id),
+            hostname: row.hostname.clone(),
+            username: row.username.clone(),
+            active_connections: 0,
+            created_by: row.created_by.clone(),
+            banner: None,
+            url: None,
+            address_book_entry: None,
+            address_book_folder: None,
+            entry_display_name: None,
+            thumbnail_url: None,
+            fullscreen_on_connect: false,
+            autohide_side_tabs: false,
+            drive_enabled: false,
+            owner_instance: Some(row.owner_instance.clone()),
+            owner_base_url: if row.owner_base_url.is_empty() {
+                None
+            } else {
+                Some(row.owner_base_url.clone())
+            },
+            remote: true,
+        })
     }
 }
 

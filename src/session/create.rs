@@ -1217,6 +1217,41 @@ impl SessionManager {
 
         crate::metrics::session_total_inc();
 
+        // Enterprise HA (R110): mirror the live session in the shared
+        // registry so other instances can see/join it. No-op without a
+        // shared backend (single-instance mode unchanged).
+        if self.ha_enabled() {
+            if let Some(ref db) = self.db {
+                let db = db.clone();
+                let session_id_str = session_id.to_string();
+                let owner = self.config.instance_id.clone();
+                let base_url = self.config.ha_base_url.clone().unwrap_or_default();
+                let st = format!("{:?}", info.session_type).to_lowercase();
+                let hostname = info.hostname.clone();
+                let username = info.username.clone();
+                let created_by = info.created_by.clone();
+                let created_at = crate::db::registry_ts(info.created_at);
+                let now = crate::db::registry_ts(chrono::Utc::now());
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::db::registry_upsert_session(
+                        &db,
+                        &session_id_str,
+                        &owner,
+                        &base_url,
+                        &st,
+                        "pending",
+                        &hostname,
+                        &username,
+                        &created_by,
+                        &created_at,
+                        &now,
+                        "",
+                    )
+                })
+                .await;
+            }
+        }
+
         // Record in session history (non-blocking)
         if let Some(ref db) = self.db {
             let db = db.clone();
@@ -1251,6 +1286,10 @@ impl SessionManager {
         let browser_mgr = std::sync::Arc::clone(&self.browser_manager);
         let timeout_secs = self.config.session_pending_timeout_secs;
         let (cleanup_on_close, retention_secs) = super::drive_cleanup_settings(&self.config.drive);
+        // R110: mark the registry row expired when the pending window lapses
+        // (the store functions no-op without a shared backend pool).
+        let registry_db = self.db.clone();
+        let registry_ha = self.ha_enabled();
         tokio::spawn(async move {
             time::sleep(time::Duration::from_secs(timeout_secs)).await;
             let sessions_read = sessions_ref.read().await;
@@ -1266,6 +1305,18 @@ impl SessionManager {
                         cleanup_on_close,
                         retention_secs,
                     )
+                    .await;
+                }
+            }
+            drop(sessions_read);
+            if registry_ha {
+                if let Some(ref db) = registry_db {
+                    let db = db.clone();
+                    let sid = session_id.to_string();
+                    let now = crate::db::registry_ts(chrono::Utc::now());
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::db::registry_set_status(&db, &sid, "expired", &now)
+                    })
                     .await;
                 }
             }

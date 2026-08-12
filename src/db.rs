@@ -1872,6 +1872,246 @@ pub fn end_session_history(
     Ok(())
 }
 
+// ── Session registry (R110 enterprise HA) ──────────────────────────────
+
+/// One live-session record in the shared registry. Mirrors the in-memory
+/// `Session` on the owning instance; every other instance reads it to see,
+/// join, and shadow sessions it does not host.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionRegistryRow {
+    pub session_id: String,
+    pub owner_instance: String,
+    pub owner_base_url: String,
+    pub session_type: String,
+    pub status: String,
+    pub hostname: String,
+    pub username: String,
+    pub created_by: String,
+    pub created_at: String,
+    pub last_active_at: String,
+    pub connection_id: String,
+    pub shadow_token_hash: Option<String>,
+    pub shadow_issued_by: Option<String>,
+    pub shadow_expires_at: Option<String>,
+}
+
+/// Fixed-width UTC timestamp used by the registry (all backends, all
+/// columns). Lexicographic comparison is time-ordered.
+pub fn registry_ts(when: chrono::DateTime<chrono::Utc>) -> String {
+    when.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Upsert a live-session registry row. Single-instance mode (no `db_url`
+/// pool) writes nothing — the registry only exists on shared backends.
+#[allow(clippy::too_many_arguments)]
+pub fn registry_upsert_session(
+    _db: &Db,
+    session_id: &str,
+    owner_instance: &str,
+    owner_base_url: &str,
+    session_type: &str,
+    status: &str,
+    hostname: &str,
+    username: &str,
+    created_by: &str,
+    created_at: &str,
+    last_active_at: &str,
+    connection_id: &str,
+) -> rusqlite::Result<()> {
+    if pool_store().is_none() {
+        return Ok(());
+    }
+    db_route!(
+        db,
+        registry_upsert_session_pool,
+        session_id.to_string(),
+        owner_instance.to_string(),
+        owner_base_url.to_string(),
+        session_type.to_string(),
+        status.to_string(),
+        hostname.to_string(),
+        username.to_string(),
+        created_by.to_string(),
+        created_at.to_string(),
+        last_active_at.to_string(),
+        connection_id.to_string()
+    );
+    Ok(())
+}
+
+/// Update a registry row's status (and last_active_at). No-op when no pool.
+pub fn registry_set_status(
+    _db: &Db,
+    session_id: &str,
+    status: &str,
+    last_active_at: &str,
+) -> rusqlite::Result<()> {
+    if pool_store().is_none() {
+        return Ok(());
+    }
+    db_route!(
+        db,
+        registry_set_status_pool,
+        session_id.to_string(),
+        status.to_string(),
+        last_active_at.to_string()
+    );
+    Ok(())
+}
+
+/// Store an admin-minted shadow token on a remote session's registry row so
+/// any instance can validate it (the in-memory copy lives on the owner).
+/// No-op when no pool.
+pub fn registry_set_shadow_token(
+    _db: &Db,
+    session_id: &str,
+    token_hash: &str,
+    issued_by: &str,
+    expires_at: &str,
+) -> rusqlite::Result<()> {
+    if pool_store().is_none() {
+        return Ok(());
+    }
+    db_route!(
+        db,
+        registry_set_shadow_token_pool,
+        session_id.to_string(),
+        token_hash.to_string(),
+        issued_by.to_string(),
+        expires_at.to_string()
+    );
+    Ok(())
+}
+
+/// Remove a session from the registry (session left the owner's map).
+/// No-op when no pool.
+pub fn registry_delete_session(_db: &Db, session_id: &str) -> rusqlite::Result<()> {
+    if pool_store().is_none() {
+        return Ok(());
+    }
+    db_route!(db, registry_delete_session_pool, session_id.to_string());
+    Ok(())
+}
+
+/// Fetch one registry row. No pool → `Ok(None)`.
+pub fn registry_get_session(_db: &Db, session_id: &str) -> rusqlite::Result<Option<SessionRegistryRow>> {
+    if pool_store().is_none() {
+        return Ok(None);
+    }
+    db_route!(db, registry_get_session_pool, session_id.to_string());
+    Ok(None)
+}
+
+/// List every live-session registry row. No pool → empty.
+pub fn registry_list_sessions(_db: &Db) -> rusqlite::Result<Vec<SessionRegistryRow>> {
+    if pool_store().is_none() {
+        return Ok(Vec::new());
+    }
+    db_route!(db, registry_list_sessions_pool);
+    Ok(Vec::new())
+}
+
+/// Session ids in the registry owned by `owner_instance` (recording
+/// rotation filters by this). No pool → empty.
+pub fn registry_list_owned(_db: &Db, owner_instance: &str) -> rusqlite::Result<Vec<String>> {
+    if pool_store().is_none() {
+        return Ok(Vec::new());
+    }
+    db_route!(db, registry_list_owned_pool, owner_instance.to_string());
+    Ok(Vec::new())
+}
+
+/// Delete registry rows owned by OTHER instances that can no longer be live
+/// (their owner died without cleaning up). `pending_cutoff` / `active_cutoff`
+/// are fixed-width timestamps; rows in `pending` status older than the
+/// pending cutoff and rows in any other status older than the active cutoff
+/// are removed. Never touches rows owned by this instance. Returns the
+/// number of rows deleted. No pool → 0.
+pub fn registry_delete_stale(
+    _db: &Db,
+    owner_instance: &str,
+    pending_cutoff: &str,
+    active_cutoff: &str,
+) -> rusqlite::Result<usize> {
+    if pool_store().is_none() {
+        return Ok(0);
+    }
+    db_route!(
+        db,
+        registry_delete_stale_pool,
+        owner_instance.to_string(),
+        pending_cutoff.to_string(),
+        active_cutoff.to_string()
+    );
+    Ok(0)
+}
+
+/// Delete every registry row owned by this instance (graceful shutdown).
+/// No pool → 0.
+pub fn registry_delete_all_owned(_db: &Db, owner_instance: &str) -> rusqlite::Result<usize> {
+    if pool_store().is_none() {
+        return Ok(0);
+    }
+    db_route!(db, registry_delete_all_owned_pool, owner_instance.to_string());
+    Ok(0)
+}
+
+// ── WS ticket persistence (R110 enterprise HA) ─────────────────────────
+
+/// Persist a WebSocket ticket so any instance sharing the backend can
+/// validate it. Only the SHA-256 hash of the raw ticket is stored. No-op
+/// when no pool.
+pub fn ws_ticket_insert(
+    _db: &Db,
+    ticket_hash: &str,
+    identity_json: &str,
+    session_id: Option<&str>,
+    issued_by: &str,
+    expires_at: &str,
+) -> rusqlite::Result<()> {
+    if pool_store().is_none() {
+        return Ok(());
+    }
+    db_route!(
+        db,
+        ws_ticket_insert_pool,
+        ticket_hash.to_string(),
+        identity_json.to_string(),
+        session_id.map(str::to_string),
+        issued_by.to_string(),
+        expires_at.to_string()
+    );
+    Ok(())
+}
+
+/// Fetch a persisted ticket: `(identity_json, expires_at)`. No pool → None.
+pub fn ws_ticket_get(_db: &Db, ticket_hash: &str) -> rusqlite::Result<Option<(String, String)>> {
+    if pool_store().is_none() {
+        return Ok(None);
+    }
+    db_route!(db, ws_ticket_get_pool, ticket_hash.to_string());
+    Ok(None)
+}
+
+/// Delete a persisted ticket (single-use consumption). Returns whether a
+/// row was removed. No pool → false.
+pub fn ws_ticket_delete(_db: &Db, ticket_hash: &str) -> rusqlite::Result<bool> {
+    if pool_store().is_none() {
+        return Ok(false);
+    }
+    db_route!(db, ws_ticket_delete_pool, ticket_hash.to_string());
+    Ok(false)
+}
+
+/// Delete expired persisted tickets. Returns the number removed. No pool → 0.
+pub fn ws_ticket_cleanup_expired(_db: &Db, cutoff: &str) -> rusqlite::Result<usize> {
+    if pool_store().is_none() {
+        return Ok(0);
+    }
+    db_route!(db, ws_ticket_cleanup_expired_pool, cutoff.to_string());
+    Ok(0)
+}
+
 /// Query session history with optional filters. Returns JSON-ready rows.
 #[allow(clippy::too_many_arguments)]
 pub fn query_session_history(
@@ -6147,6 +6387,306 @@ async fn end_session_history_pool(
     .await
     .map_err(map_sqlx_err)?;
     Ok(())
+}
+
+// ── Session registry (R110 enterprise HA) ───────────────────────────────
+
+/// Upsert differs only in the conflict clause: Postgres and SQLite share
+/// `ON CONFLICT (session_id) DO UPDATE SET`, MySQL uses
+/// `ON DUPLICATE KEY UPDATE`.
+fn registry_upsert_sql() -> &'static str {
+    "INSERT INTO session_registry \
+     (session_id, owner_instance, owner_base_url, session_type, status, \
+      hostname, username, created_by, created_at, last_active_at, connection_id) \
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+     ON CONFLICT (session_id) DO UPDATE SET \
+      owner_instance = excluded.owner_instance, \
+      owner_base_url = excluded.owner_base_url, \
+      session_type = excluded.session_type, \
+      status = excluded.status, \
+      hostname = excluded.hostname, \
+      username = excluded.username, \
+      created_by = excluded.created_by, \
+      created_at = excluded.created_at, \
+      last_active_at = excluded.last_active_at, \
+      connection_id = excluded.connection_id"
+}
+
+fn registry_upsert_sql_mysql() -> &'static str {
+    "INSERT INTO session_registry \
+     (session_id, owner_instance, owner_base_url, session_type, status, \
+      hostname, username, created_by, created_at, last_active_at, connection_id) \
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+     ON DUPLICATE KEY UPDATE \
+      owner_instance = VALUES(owner_instance), \
+      owner_base_url = VALUES(owner_base_url), \
+      session_type = VALUES(session_type), \
+      status = VALUES(status), \
+      hostname = VALUES(hostname), \
+      username = VALUES(username), \
+      created_by = VALUES(created_by), \
+      created_at = VALUES(created_at), \
+      last_active_at = VALUES(last_active_at), \
+      connection_id = VALUES(connection_id)"
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn registry_upsert_session_pool(
+    pool: &DbPool,
+    session_id: String,
+    owner_instance: String,
+    owner_base_url: String,
+    session_type: String,
+    status: String,
+    hostname: String,
+    username: String,
+    created_by: String,
+    created_at: String,
+    last_active_at: String,
+    connection_id: String,
+) -> rusqlite::Result<()> {
+    let sql = match pool {
+        DbPool::MySQL(_) => registry_upsert_sql_mysql(),
+        _ => registry_upsert_sql(),
+    };
+    pool_exec(
+        pool,
+        sql,
+        &[
+            Arg::Str(session_id),
+            Arg::Str(owner_instance),
+            Arg::Str(owner_base_url),
+            Arg::Str(session_type),
+            Arg::Str(status),
+            Arg::Str(hostname),
+            Arg::Str(username),
+            Arg::Str(created_by),
+            Arg::Str(created_at),
+            Arg::Str(last_active_at),
+            Arg::Str(connection_id),
+        ],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(())
+}
+
+async fn registry_set_status_pool(
+    pool: &DbPool,
+    session_id: String,
+    status: String,
+    last_active_at: String,
+) -> rusqlite::Result<()> {
+    pool_exec(
+        pool,
+        "UPDATE session_registry SET status = ?, last_active_at = ? WHERE session_id = ?",
+        &[Arg::Str(status), Arg::Str(last_active_at), Arg::Str(session_id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(())
+}
+
+async fn registry_set_shadow_token_pool(
+    pool: &DbPool,
+    session_id: String,
+    token_hash: String,
+    issued_by: String,
+    expires_at: String,
+) -> rusqlite::Result<()> {
+    pool_exec(
+        pool,
+        "UPDATE session_registry SET shadow_token_hash = ?, shadow_issued_by = ?, shadow_expires_at = ? WHERE session_id = ?",
+        &[
+            Arg::Str(token_hash),
+            Arg::Str(issued_by),
+            Arg::Str(expires_at),
+            Arg::Str(session_id),
+        ],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(())
+}
+
+async fn registry_delete_session_pool(
+    pool: &DbPool,
+    session_id: String,
+) -> rusqlite::Result<()> {
+    pool_exec(
+        pool,
+        "DELETE FROM session_registry WHERE session_id = ?",
+        &[Arg::Str(session_id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(())
+}
+
+const REGISTRY_COLUMNS: &str = "session_id, owner_instance, owner_base_url, session_type, status, \
+     hostname, username, created_by, created_at, last_active_at, connection_id, \
+     shadow_token_hash, shadow_issued_by, shadow_expires_at";
+
+fn registry_row_from(r: &RowProxy) -> SessionRegistryRow {
+    SessionRegistryRow {
+        session_id: r.get(0),
+        owner_instance: r.get(1),
+        owner_base_url: r.get(2),
+        session_type: r.get(3),
+        status: r.get(4),
+        hostname: r.get(5),
+        username: r.get(6),
+        created_by: r.get(7),
+        created_at: r.get(8),
+        last_active_at: r.get(9),
+        connection_id: r.get(10),
+        shadow_token_hash: r.get(11),
+        shadow_issued_by: r.get(12),
+        shadow_expires_at: r.get(13),
+    }
+}
+
+async fn registry_get_session_pool(
+    pool: &DbPool,
+    session_id: String,
+) -> rusqlite::Result<Option<SessionRegistryRow>> {
+    let sql = format!("SELECT {REGISTRY_COLUMNS} FROM session_registry WHERE session_id = ?");
+    let row = match pool {
+        DbPool::Postgres(p) => pg_fetch_opt(p, &sql, &[Arg::Str(session_id)]).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, &sql, &[Arg::Str(session_id)]).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, &sql, &[Arg::Str(session_id)]).await,
+        DbPool::None => return Ok(None),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(row.map(|r| registry_row_from(&r)))
+}
+
+async fn registry_list_sessions_pool(pool: &DbPool) -> rusqlite::Result<Vec<SessionRegistryRow>> {
+    let sql = format!("SELECT {REGISTRY_COLUMNS} FROM session_registry ORDER BY created_at");
+    let rows = match pool {
+        DbPool::Postgres(p) => pg_fetch(p, &sql, &[]).await,
+        DbPool::MySQL(p) => mysql_fetch(p, &sql, &[]).await,
+        DbPool::SQLite(p) => sqlite_fetch(p, &sql, &[]).await,
+        DbPool::None => return Ok(Vec::new()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(rows.iter().map(registry_row_from).collect())
+}
+
+async fn registry_list_owned_pool(pool: &DbPool, owner_instance: String) -> rusqlite::Result<Vec<String>> {
+    let sql = "SELECT session_id FROM session_registry WHERE owner_instance = ?";
+    let rows = match pool {
+        DbPool::Postgres(p) => pg_fetch(p, sql, &[Arg::Str(owner_instance)]).await,
+        DbPool::MySQL(p) => mysql_fetch(p, sql, &[Arg::Str(owner_instance)]).await,
+        DbPool::SQLite(p) => sqlite_fetch(p, sql, &[Arg::Str(owner_instance)]).await,
+        DbPool::None => return Ok(Vec::new()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(rows.iter().map(|r| r.get::<String>(0)).collect())
+}
+
+async fn registry_delete_stale_pool(
+    pool: &DbPool,
+    owner_instance: String,
+    pending_cutoff: String,
+    active_cutoff: String,
+) -> rusqlite::Result<usize> {
+    let n = pool_exec(
+        pool,
+        "DELETE FROM session_registry \
+         WHERE owner_instance <> ? \
+           AND ((status = 'pending' AND created_at < ?) \
+             OR (status <> 'pending' AND created_at < ?))",
+        &[
+            Arg::Str(owner_instance),
+            Arg::Str(pending_cutoff),
+            Arg::Str(active_cutoff),
+        ],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(n as usize)
+}
+
+async fn registry_delete_all_owned_pool(
+    pool: &DbPool,
+    owner_instance: String,
+) -> rusqlite::Result<usize> {
+    let n = pool_exec(
+        pool,
+        "DELETE FROM session_registry WHERE owner_instance = ?",
+        &[Arg::Str(owner_instance)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(n as usize)
+}
+
+// ── WS ticket persistence (R110 enterprise HA) ──────────────────────────
+
+async fn ws_ticket_insert_pool(
+    pool: &DbPool,
+    ticket_hash: String,
+    identity_json: String,
+    session_id: Option<String>,
+    issued_by: String,
+    expires_at: String,
+) -> rusqlite::Result<()> {
+    pool_exec(
+        pool,
+        "INSERT INTO ws_tickets (ticket_hash, identity_json, session_id, issued_by, expires_at) \
+         VALUES (?, ?, ?, ?, ?)",
+        &[
+            Arg::Str(ticket_hash),
+            Arg::Str(identity_json),
+            Arg::OptStr(session_id),
+            Arg::Str(issued_by),
+            Arg::Str(expires_at),
+        ],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(())
+}
+
+async fn ws_ticket_get_pool(
+    pool: &DbPool,
+    ticket_hash: String,
+) -> rusqlite::Result<Option<(String, String)>> {
+    let sql = "SELECT identity_json, expires_at FROM ws_tickets WHERE ticket_hash = ?";
+    let row = match pool {
+        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &[Arg::Str(ticket_hash)]).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &[Arg::Str(ticket_hash)]).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &[Arg::Str(ticket_hash)]).await,
+        DbPool::None => return Ok(None),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(row.map(|r| (r.get::<String>(0), r.get::<String>(1))))
+}
+
+async fn ws_ticket_delete_pool(pool: &DbPool, ticket_hash: String) -> rusqlite::Result<bool> {
+    let n = pool_exec(
+        pool,
+        "DELETE FROM ws_tickets WHERE ticket_hash = ?",
+        &[Arg::Str(ticket_hash)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(n > 0)
+}
+
+async fn ws_ticket_cleanup_expired_pool(
+    pool: &DbPool,
+    cutoff: String,
+) -> rusqlite::Result<usize> {
+    let n = pool_exec(
+        pool,
+        "DELETE FROM ws_tickets WHERE expires_at < ?",
+        &[Arg::Str(cutoff)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(n as usize)
 }
 
 /// Build the WHERE conditions and bind args for the dynamic

@@ -616,6 +616,22 @@ pub struct Config {
     /// to work alongside it.
     pub db_url: Option<String>,
 
+    /// Stable identifier for this instance, used by the enterprise HA
+    /// session registry (R110) to mark session ownership. Must be unique
+    /// across the fleet; defaults to `hostname-pid`. Recording rotation and
+    /// the session reaper only operate on sessions/files this instance owns.
+    #[serde(default = "default_instance_id")]
+    pub instance_id: String,
+
+    /// Public base URL of this instance (scheme + host + port), e.g.
+    /// "https://persea-1.example.com". When the HA license is active and a
+    /// session created here is joined from another instance, browsers are
+    /// redirected to this URL so the owner instance can serve the guacd
+    /// stream. Unset: remote joins to this instance's sessions are rejected
+    /// with a clear error.
+    #[serde(default)]
+    pub ha_base_url: Option<String>,
+
     /// Commercial license key (format: `PSEA-<base64>`).
     /// When absent, enterprise features are available during the 30-day
     /// evaluation period.
@@ -1387,6 +1403,7 @@ fn default_toml() -> String {
         "db_path = \"{}\"\n",
         default_db_path().to_string_lossy()
     ));
+    s.push_str(&format!("instance_id = \"{}\"\n", default_instance_id()));
     s.push_str(&format!(
         "session_pending_timeout_secs = {}\n",
         default_session_timeout_secs()
@@ -1496,6 +1513,35 @@ fn default_toml() -> String {
     s
 }
 
+/// Stable per-instance identifier for the HA session registry. Defaults to
+/// `hostname-pid`, which is unique across a fleet even when several
+/// instances run on the same host (the local HA demo runs two instances on
+/// one machine). Operators may set a stable id per host instead; the id
+/// must not change across restarts if per-instance recording rotation is
+/// expected to follow a restarted instance.
+fn default_instance_id() -> String {
+    let hostname = {
+        #[cfg(unix)]
+        {
+            let mut buf = [0u8; 256];
+            // SAFETY: buf is a valid 256-byte buffer; gethostname never
+            // writes past it (it truncates). Returns 0 on success.
+            let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+            if rc == 0 {
+                let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+                String::from_utf8_lossy(&buf[..end]).into_owned()
+            } else {
+                "unknown-host".to_string()
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown-host".to_string())
+        }
+    };
+    format!("{}-{}", hostname, std::process::id())
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -1545,6 +1591,8 @@ impl Default for Config {
             vsphere: None,
             rdp: None,
             db_url: None,
+            instance_id: default_instance_id(),
+            ha_base_url: None,
             storage: None,
             license_key: None,
             password: default_password_config(),
