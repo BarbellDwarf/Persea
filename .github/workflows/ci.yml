@@ -3,6 +3,25 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  secrets-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fail if the license private key is tracked
+        run: |
+          TRACKED=$(git ls-files | grep -E "license_ed25519$" || true)
+          if [ -n "$TRACKED" ]; then
+            echo "license private key file is tracked: $TRACKED"
+            exit 1
+          fi
+      - name: Fail if private key material is committed
+        run: |
+          HITS=$(grep -rIl "BEGIN OPENSSH PRIVATE KEY" --exclude-dir=.git . || true)
+          if [ -n "$HITS" ]; then
+            echo "private key material found in: $HITS"
+            exit 1
+          fi
+
   check:
     runs-on: ubuntu-latest
     steps:
