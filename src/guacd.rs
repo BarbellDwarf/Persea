@@ -33,18 +33,31 @@ pub type GuacdStream = Box<dyn AsyncStream>;
 
 /// SSH connection parameters to pass to guacd.
 pub struct SshParams {
+    /// Remote host to connect to (IP or DNS name).
     pub hostname: String,
+    /// TCP port of the SSH server (usually 22).
     pub port: u16,
+    /// Login user for the SSH session.
     pub username: String,
+    /// Password for the login user; ignored when `private_key` is set.
     pub password: Option<String>,
+    /// PEM-encoded private key for key-based auth instead of a password.
     pub private_key: Option<String>,
+    /// Initial terminal width in character columns.
     pub width: u32,
+    /// Initial terminal height in character rows.
     pub height: u32,
+    /// Reported display density in DPI (affects font rendering).
     pub dpi: u32,
+    /// Mount the SFTP filesystem so the client can transfer files.
     pub enable_sftp: bool,
+    /// Block file downloads from the remote host.
     pub sftp_disable_download: bool,
+    /// Block file uploads to the remote host.
     pub sftp_disable_upload: bool,
+    /// Disable clipboard copying from the remote terminal to the client.
     pub disable_copy: bool,
+    /// Disable clipboard pasting from the client into the remote terminal.
     pub disable_paste: bool,
     /// Terminal scrollback buffer size in lines.
     pub scrollback: u32,
@@ -69,14 +82,23 @@ pub struct SshParams {
 
 /// VNC connection parameters to pass to guacd.
 pub struct VncParams {
+    /// VNC server host (IP or DNS name).
     pub hostname: String,
+    /// VNC server TCP port (usually 5900).
     pub port: u16,
+    /// VNC password; `None` when the server accepts unauthenticated connections.
     pub password: Option<String>,
+    /// Color depth in bits per pixel; `None` falls back to guacd's default (24).
     pub color_depth: Option<u8>,
+    /// Initial display width in pixels.
     pub width: u32,
+    /// Initial display height in pixels.
     pub height: u32,
+    /// Reported display density in DPI.
     pub dpi: u32,
+    /// Disable clipboard copying from the remote desktop to the client.
     pub disable_copy: bool,
+    /// Disable clipboard pasting from the client into the remote desktop.
     pub disable_paste: bool,
 }
 
@@ -88,27 +110,40 @@ pub struct VncParams {
 /// support brokered Proxmox VE consoles (which connect via a SPICE proxy with a
 /// one-time ticket and cluster-CA TLS).
 pub struct SpiceParams {
+    /// SPICE server host (IP or DNS name).
     pub hostname: String,
+    /// Plaintext SPICE port (usually 5900). Sent empty when `tls` is set:
+    /// TLS SPICE connects via `tls_port` only.
     pub port: u16,
     /// SPICE ticket / password, sent as the `password` connect arg.
     pub password: Option<String>,
     /// Optional SPICE username, sent as the `username` connect arg.
     pub username: Option<String>,
+    /// Connect with TLS instead of plaintext.
     pub tls: bool,
+    /// TLS port, used when it differs from `port`.
     pub tls_port: Option<u16>,
     /// PEM CA certificate for verifying the SPICE server's TLS (Proxmox cluster CA).
     pub ca_cert: Option<String>,
     /// Expected TLS certificate subject (Proxmox "host-subject").
     pub cert_subject: Option<String>,
+    /// Skip server certificate verification (self-signed setups).
     pub ignore_cert: bool,
     /// SPICE proxy URL, e.g. "http://proxy.example.com:3128" (Proxmox SPICE proxy).
     pub proxy: Option<String>,
+    /// Color depth in bits per pixel; `None` falls back to guacd's default (24).
     pub color_depth: Option<u8>,
+    /// Initial display width in pixels.
     pub width: u32,
+    /// Initial display height in pixels.
     pub height: u32,
+    /// Reported display density in DPI.
     pub dpi: u32,
+    /// Disable clipboard copying from the remote desktop to the client.
     pub disable_copy: bool,
+    /// Disable clipboard pasting from the client into the remote desktop.
     pub disable_paste: bool,
+    /// Stream audio to the client.
     pub enable_audio: bool,
     /// Number of secondary monitors to allow (beyond the primary). guacd
     /// advertises this to the client as `secondary-monitors` so a multi-monitor
@@ -118,20 +153,35 @@ pub struct SpiceParams {
 
 /// RDP connection parameters to pass to guacd.
 pub struct RdpParams {
+    /// Remote host to connect to (IP or DNS name).
     pub hostname: String,
+    /// TCP port of the RDP server (usually 3389).
     pub port: u16,
+    /// Login user for the RDP session.
     pub username: String,
+    /// Password for the login user.
     pub password: Option<String>,
+    /// Windows domain for the login user (NTLM/Kerberos).
     pub domain: Option<String>,
+    /// RDP security layer: "any", "rdp", "tls", or "nla".
     pub security: Option<String>,
+    /// Initial display width in pixels.
     pub width: u32,
+    /// Initial display height in pixels.
     pub height: u32,
+    /// Reported display density in DPI.
     pub dpi: u32,
+    /// Skip server certificate verification (self-signed setups).
     pub ignore_cert: bool,
+    /// Mount a drive on the remote host so the client can transfer files.
     pub enable_drive: bool,
+    /// Host-side directory backing the mounted drive.
     pub drive_path: Option<String>,
+    /// Name the mounted drive appears under on the remote host.
     pub drive_name: String,
+    /// Block file downloads from the remote host.
     pub disable_download: bool,
+    /// Block file uploads to the remote host.
     pub disable_upload: bool,
     /// NLA authentication package: "kerberos", "ntlm", or empty (negotiate).
     pub auth_pkg: Option<String>,
@@ -145,7 +195,9 @@ pub struct RdpParams {
     pub remote_app_dir: Option<String>,
     /// RemoteApp command-line arguments.
     pub remote_app_args: Option<String>,
+    /// Disable clipboard copying from the remote desktop to the client.
     pub disable_copy: bool,
+    /// Disable clipboard pasting from the client into the remote desktop.
     pub disable_paste: bool,
     /// Enable Graphics Pipeline Extension (GFX/RDPGFX). Enables RemoteFX codec, 32bpp.
     pub enable_gfx: bool,
@@ -169,9 +221,13 @@ pub struct RdpParams {
 
 /// Connection parameters — SSH, VNC, or RDP.
 pub enum ConnectionParams {
+    /// SSH connection parameters.
     Ssh(SshParams),
+    /// VNC connection parameters.
     Vnc(VncParams),
+    /// RDP connection parameters (boxed to keep the enum small).
     Rdp(Box<RdpParams>),
+    /// SPICE connection parameters (boxed to keep the enum small).
     Spice(Box<SpiceParams>),
 }
 
@@ -647,9 +703,15 @@ async fn read_instruction(
 
 #[derive(Debug)]
 #[must_use]
+/// Why a guacd interaction failed. Returned by the handshake and join
+/// functions; the string payloads carry the underlying message.
+#[must_use]
 pub enum GuacdError {
+    /// Could not reach guacd, timed out, or the connection closed early.
     Connection(String),
+    /// An I/O error while reading or writing the guacd socket.
     Io(String),
+    /// guacd sent an unexpected instruction or the data was malformed.
     Protocol(String),
 }
 
