@@ -15,27 +15,43 @@ use serde::Deserialize;
 use serde_json::json;
 use std::net::SocketAddr;
 
+/// Body for `POST /api/tokens` (personal token creation).
 #[derive(Deserialize)]
 pub struct CreateTokenRequest {
+    /// Token name, 1-100 characters, unique per user.
     pub name: String,
+    /// Ceiling role for the token; cannot exceed the caller's role.
     pub max_role: Option<String>,
+    /// Optional RFC 3339 expiry; tokens never expire when absent.
     pub expires_at: Option<String>,
 }
 
+/// Body for `POST /api/admin/users/{email}/tokens`.
 #[derive(Deserialize)]
 pub struct AdminCreateTokenRequest {
+    /// The user the token is minted for.
     pub email: String,
+    /// Token name, 1-100 characters, unique per user.
     pub name: String,
+    /// Ceiling role for the token; cannot exceed the target user's role.
     pub max_role: Option<String>,
+    /// Optional RFC 3339 expiry; tokens never expire when absent.
     pub expires_at: Option<String>,
 }
 
+/// Query parameters for the token and address-book audit endpoints.
 #[derive(Deserialize)]
 pub struct AuditLogQuery {
+    /// Maximum number of events to return.
     pub limit: Option<u32>,
+    /// Restrict to events for this user.
     pub email: Option<String>,
 }
 
+/// `POST /api/tokens`: create a personal API token and return its
+/// plaintext once. Requires poweruser or higher. Returns
+/// `AppError::Forbidden` for lower roles and `AppError::Conflict` when
+/// the token name is already taken.
 pub async fn create_my_token(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -147,6 +163,8 @@ pub async fn create_my_token(
     })))
 }
 
+/// `GET /api/tokens`: list the caller's tokens. Only cookie-session
+/// users may call it; API-key identities get `AppError::Auth`.
 pub async fn list_my_tokens(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -169,6 +187,10 @@ pub async fn list_my_tokens(
     Ok(Json(json!(tokens)))
 }
 
+/// `DELETE /api/tokens/{id}`: revoke one of the caller's tokens.
+/// Requires poweruser or higher. Returns `AppError::Auth` for
+/// non-user identities and `AppError::NotFound` when the token does
+/// not exist or belongs to someone else.
 pub async fn revoke_my_token(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -282,6 +304,8 @@ pub(crate) fn partition_credential_writes(
     (existing_local, existing_shared)
 }
 
+/// `GET /api/tokens/credentials`: the caller's credential variables,
+/// masked per store scope. Requires an authenticated user session.
 pub async fn get_my_credentials(
     identity: Option<Extension<AuthIdentity>>,
     Extension(vault): Extension<VaultState>,
@@ -318,6 +342,11 @@ pub async fn get_my_credentials(
     })))
 }
 
+/// `PUT /api/tokens/credentials`: write the caller's credential
+/// variables, routing each key to the shared or local store by the
+/// optional `scopes` map (default scope from config). Requires
+/// operator or higher. Returns `AppError::Forbidden` below that and
+/// `AppError::Internal` for invalid variable names.
 pub async fn put_my_credentials(
     identity: Option<Extension<AuthIdentity>>,
     Extension(vault): Extension<VaultState>,
@@ -494,6 +523,10 @@ pub async fn put_my_preset_credentials(
     })))
 }
 
+/// `GET /api/tokens/credential-variables`: scan every address book
+/// entry the caller can access and report the template variables
+/// available, grouped by domain, with per-entry counts. Requires
+/// operator or higher.
 pub async fn list_credential_variables(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -616,6 +649,10 @@ pub async fn list_credential_variables(
     Ok(Json(json!({ "variables": all_vars, "domains": domains })))
 }
 
+/// `POST /api/admin/users/{email}/tokens`: mint a token for another
+/// user and return its plaintext once. Admin only. Returns
+/// `AppError::Session` when the user does not exist and
+/// `AppError::Conflict` when the token name is taken.
 pub async fn admin_create_user_token(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -723,6 +760,8 @@ pub async fn admin_create_user_token(
     })))
 }
 
+/// `GET /api/admin/users/{email}/tokens`: list another user's
+/// tokens. Admin only.
 pub async fn admin_list_user_tokens(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -759,6 +798,8 @@ pub async fn admin_list_user_tokens(
     Ok(Json(json!(entries)))
 }
 
+/// `DELETE /api/admin/users/{email}/tokens/{id}`: revoke another
+/// user's token. Admin only.
 pub async fn admin_revoke_user_token(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -800,6 +841,8 @@ pub async fn admin_revoke_user_token(
     }
 }
 
+/// `GET /api/admin/tokens/audit`: token lifecycle events (created,
+/// revoked) with optional user filter. Admin only.
 pub async fn admin_token_audit(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -824,6 +867,8 @@ pub async fn admin_token_audit(
     Ok(Json(json!(entries)))
 }
 
+/// `GET /api/admin/addressbook/audit`: address book change events
+/// with optional user filter. Admin only.
 pub async fn admin_addressbook_audit(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
