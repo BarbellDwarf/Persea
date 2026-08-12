@@ -4,7 +4,7 @@ use crate::db::{self, Db};
 use crate::error::AppError;
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension, Json,
@@ -29,8 +29,15 @@ pub struct ReportQuery {
     pub offset: Option<u32>,
 }
 
+#[derive(Deserialize)]
+pub struct RecordingQuery {
+    /// Case-insensitive substring filter across entry display name, user, and folder.
+    pub q: Option<String>,
+}
+
 pub async fn list_recordings(
     State(manager): State<AppState>,
+    Query(query): Query<RecordingQuery>,
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     match &identity {
@@ -42,6 +49,12 @@ pub async fn list_recordings(
         }
     }
     let recording_path = manager.recording_path().to_path_buf();
+    let q = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase);
 
     let recordings = tokio::task::spawn_blocking(move || {
         let mut recordings = Vec::new();
@@ -102,6 +115,12 @@ pub async fn list_recordings(
                     rec["session_type"] = json!(t);
                 }
                 if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&sidecar.created_at) {
+                    rec["display_date"] = json!(
+                        created
+                            .with_timezone(&chrono::Local)
+                            .format("%Y-%m-%d %H:%M")
+                            .to_string()
+                    );
                     if let Ok(modified) = meta.modified() {
                         let mod_dt: chrono::DateTime<chrono::Utc> = modified.into();
                         let dur = (mod_dt - created.with_timezone(&chrono::Utc)).num_seconds();
@@ -109,6 +128,18 @@ pub async fn list_recordings(
                             rec["duration_secs"] = json!(dur);
                         }
                     }
+                }
+            }
+            if let Some(ref ql) = q {
+                let haystack = [
+                    rec["entry_display_name"].as_str().unwrap_or(""),
+                    rec["user"].as_str().unwrap_or(""),
+                    rec["folder"].as_str().unwrap_or(""),
+                ]
+                .join(" ")
+                .to_lowercase();
+                if !haystack.contains(ql.as_str()) {
+                    continue;
                 }
             }
             recordings.push(rec);

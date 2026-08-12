@@ -2275,7 +2275,8 @@ pub fn stream_session_history_csv(
             ended_at,
             duration_secs,
             status,
-            recording,
+            _recording,
+            raw_entry_display_name,
         ) in rows
         {
             let fields = [
@@ -2303,7 +2304,16 @@ pub fn stream_session_history_csv(
             write!(writer, ",")?;
             csv_escape_field(writer, &status)?;
             write!(writer, ",")?;
-            csv_escape_field(writer, recording.as_deref().unwrap_or(""))?;
+            csv_escape_field(
+                writer,
+                &recording_display_name(
+                    &session_id,
+                    &hostname,
+                    &created_by,
+                    raw_entry_display_name.as_deref(),
+                    &started_at,
+                ),
+            )?;
             writeln!(writer)?;
             count += 1;
         }
@@ -2348,7 +2358,8 @@ pub fn stream_session_history_csv(
         "SELECT session_id, session_type, hostname, port, username, created_by,
                 COALESCE(entry_display_name, address_book_entry, \'\'),
                 COALESCE(address_book_folder, \'\'),
-                started_at, ended_at, duration_secs, status, recording_file
+                started_at, ended_at, duration_secs, status, recording_file,
+                entry_display_name
          FROM session_history WHERE {} ORDER BY started_at DESC",
         where_clause
     );
@@ -2370,6 +2381,7 @@ pub fn stream_session_history_csv(
             row.get::<_, Option<i64>>(10)?,
             row.get::<_, String>(11)?,
             row.get::<_, Option<String>>(12)?,
+            row.get::<_, Option<String>>(13)?,
         ))
     })?;
 
@@ -2387,7 +2399,8 @@ pub fn stream_session_history_csv(
             ended_at,
             duration_secs,
             status,
-            recording,
+            _recording,
+            raw_entry_display_name,
         ) = row?;
         let fields = [
             &session_id,
@@ -2414,11 +2427,65 @@ pub fn stream_session_history_csv(
         write!(writer, ",")?;
         csv_escape_field(writer, &status)?;
         write!(writer, ",")?;
-        csv_escape_field(writer, recording.as_deref().unwrap_or(""))?;
+        csv_escape_field(
+            writer,
+            &recording_display_name(
+                &session_id,
+                &hostname,
+                &created_by,
+                raw_entry_display_name.as_deref(),
+                &started_at,
+            ),
+        )?;
         writeln!(writer)?;
         count += 1;
     }
     Ok(count)
+}
+
+/// Format a `YYYY-MM-DD HH:MM:SS` UTC timestamp (all backends store
+/// `started_at` in this shape) as server-local `YYYY-MM-DD HH:MM`.
+fn local_display_datetime(started_at: &str) -> Option<String> {
+    let naive = chrono::NaiveDateTime::parse_from_str(started_at, "%Y-%m-%d %H:%M:%S").ok()?;
+    Some(
+        Utc.from_utc_datetime(&naive)
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
+    )
+}
+
+/// Human-readable "Recording" column value for CSV export:
+/// `YYYY-MM-DD HH:MM — <entry> — <user>` where `<entry>` falls back from
+/// `entry_display_name` to `hostname` to `session_id` and `<user>` falls
+/// back to `unknown`. Display-only — the on-disk filename (`recording_file`)
+/// is unchanged.
+fn recording_display_name(
+    session_id: &str,
+    hostname: &str,
+    created_by: &str,
+    entry_display_name: Option<&str>,
+    started_at: &str,
+) -> String {
+    let entry = entry_display_name
+        .filter(|e| !e.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if hostname.is_empty() {
+                session_id.to_string()
+            } else {
+                hostname.to_string()
+            }
+        });
+    let user = if created_by.is_empty() {
+        "unknown".to_string()
+    } else {
+        created_by.to_string()
+    };
+    match local_display_datetime(started_at) {
+        Some(d) => format!("{d} — {entry} — {user}"),
+        None => format!("{entry} — {user}"),
+    }
 }
 
 /// OWASP CSV-injection escaping for a single field — `pub` so regression
@@ -7032,6 +7099,7 @@ async fn stream_session_history_csv_pool(
         Option<i64>,
         String,
         Option<String>,
+        Option<String>,
     )>,
     rusqlite::Error,
 > {
@@ -7049,7 +7117,8 @@ async fn stream_session_history_csv_pool(
         "SELECT session_id, session_type, hostname, port, username, created_by, \
                 COALESCE(entry_display_name, address_book_entry, ''), \
                 COALESCE(address_book_folder, ''), \
-                started_at, ended_at, duration_secs, status, recording_file \
+                started_at, ended_at, duration_secs, status, recording_file, \
+                entry_display_name \
          FROM session_history WHERE {where_clause} ORDER BY started_at DESC"
     );
     let rows = match pool {
@@ -7076,6 +7145,7 @@ async fn stream_session_history_csv_pool(
                 row.get::<Option<i64>>(10),
                 row.get::<String>(11),
                 row.get::<Option<String>>(12),
+                row.get::<Option<String>>(13),
             )
         })
         .collect())
