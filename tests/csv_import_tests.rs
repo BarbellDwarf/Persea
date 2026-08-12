@@ -603,7 +603,9 @@ fn parse_optional_settings_invalid_bool_and_depth() {
         result.errors[0].message
     );
     assert!(
-        result.errors[0].message.contains("invalid color_depth '999'"),
+        result.errors[0]
+            .message
+            .contains("invalid color_depth '999'"),
         "{}",
         result.errors[0].message
     );
@@ -1808,7 +1810,10 @@ async fn import_raw_csv_settings_preserved_when_columns_absent() {
 
     // Same row without the settings columns, changed hostname: updated,
     // the stored settings must survive (blank = no change).
-    let plain = format!("{}\nwin,rdp,10.0.0.60,3389,Administrator,,Windows,,gateway", HEADER);
+    let plain = format!(
+        "{}\nwin,rdp,10.0.0.60,3389,Administrator,,Windows,,gateway",
+        HEADER
+    );
     let resp = router
         .oneshot(admin_csv_post(&key, "/api/addressbook/import", &plain))
         .await

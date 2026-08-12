@@ -345,10 +345,7 @@ pub fn parse_rows(input: &str, custom_fields: &[String]) -> Result<ParseResult, 
             let cell = fields.get(HEADERS.len() + j).cloned().unwrap_or_default();
             match kind {
                 TrailingCol::Custom => {
-                    custom_values.push((
-                        custom_cols[custom_idx].clone(),
-                        cell.trim().to_string(),
-                    ));
+                    custom_values.push((custom_cols[custom_idx].clone(), cell.trim().to_string()));
                     custom_idx += 1;
                 }
                 TrailingCol::Optional(pos) => {

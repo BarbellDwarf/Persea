@@ -262,7 +262,10 @@ fn row_settings_map(row: &ImportRow) -> serde_json::Map<String, serde_json::Valu
         ("enable_drive", opt_setting_bool(row.enable_drive)),
         ("disable_copy", opt_setting_bool(row.disable_copy)),
         ("disable_paste", opt_setting_bool(row.disable_paste)),
-        ("prompt_credentials", opt_setting_bool(row.prompt_credentials)),
+        (
+            "prompt_credentials",
+            opt_setting_bool(row.prompt_credentials),
+        ),
         ("color_depth", row.color_depth.map(|v| json!(v))),
     ] {
         if let Some(value) = value {
@@ -336,6 +339,7 @@ fn effective_display_name(friendly_name: &str, display_name_override: &str) -> S
 /// credential, never wipe it. Without an encryption key the value is dropped
 /// and counted. Returns `false` when a credential error was pushed to
 /// `errors`.
+#[allow(clippy::too_many_arguments)]
 fn store_row_credential(
     database: &Db,
     entry_id: i64,
@@ -503,7 +507,8 @@ fn update_existing_row(
         cfg = serde_json::Value::Object(serde_json::Map::new());
     }
     apply_row_metadata(
-        cfg.as_object_mut().expect("config normalized to an object above"),
+        cfg.as_object_mut()
+            .expect("config normalized to an object above"),
         &description,
         &row.custom_fields,
         row,
