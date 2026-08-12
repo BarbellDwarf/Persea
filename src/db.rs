@@ -9144,14 +9144,19 @@ pub(crate) async fn rbac_check_connection_permission_pool(
                 Arg::Str(permission),
             ],
         ),
+        // MySQL/SQLite bind each `?` once, in order: the base CTE takes
+        // (connection_id, permission), the group-grant CTE takes permission,
+        // and the final membership check takes user_id. Binding five args to
+        // four placeholders (with user_id first) made every connection
+        // permission check error out — fail-closed, so group-granted
+        // Connect silently never worked on pool backends.
         _ => (
             sql,
             vec![
-                Arg::I64(user_id),
                 Arg::Str(connection_id.clone()),
                 Arg::Str(permission.clone()),
-                Arg::Str(connection_id),
                 Arg::Str(permission),
+                Arg::I64(user_id),
             ],
         ),
     };
