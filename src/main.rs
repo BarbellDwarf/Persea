@@ -2091,6 +2091,20 @@ async fn run_server(
         .layer(Extension(FeatureGate("enable_ssh_tunnels")))
         .layer(Extension(database.clone()));
 
+    // Feature-gated pages: recordings and API-key account pages 404 when
+    // their `enable_*` toggle is off (request-time check).
+    let gated_recordings_page = Router::new()
+        .route("/recordings.html", get(handlers::pages::recordings_page))
+        .layer(middleware::from_fn(feature_gate))
+        .layer(Extension(FeatureGate("enable_recordings")))
+        .layer(Extension(database.clone()));
+    let gated_tokens_pages = Router::new()
+        .route("/tokens.html", get(handlers::account::tokens_page))
+        .route("/account/tokens.html", get(handlers::account::tokens_page))
+        .layer(middleware::from_fn(feature_gate))
+        .layer(Extension(FeatureGate("enable_api_keys")))
+        .layer(Extension(database.clone()));
+
     // Branded HTML page routes (served from memory with site_title/logo baked in)
     let protected_html_routes = Router::new()
         .route("/index.html", get(serve_branded_page))
@@ -2102,16 +2116,13 @@ async fn run_server(
             get(|| async { axum::response::Redirect::permanent("/connections.html") }),
         )
         .route("/sessions.html", get(handlers::pages::sessions_page))
-        .route("/recordings.html", get(handlers::pages::recordings_page))
         .route("/reports.html", get(handlers::pages::admin_reports_page))
         .route("/admin.html", get(handlers::pages::admin_users_page))
-        .route("/tokens.html", get(handlers::account::tokens_page))
         // Account pages (templates)
         .route(
             "/account/profile.html",
             get(handlers::account::profile_page),
         )
-        .route("/account/tokens.html", get(handlers::account::tokens_page))
         .route("/account/totp.html", get(handlers::account::totp_page))
         // Admin sub-pages (templates)
         .route("/admin/users.html", get(handlers::pages::admin_users_page))
@@ -2140,6 +2151,8 @@ async fn run_server(
         .route("/docs.html", get(handlers::account::docs_page))
         .route("/docs", get(handlers::account::docs_page))
         .merge(gated_tunnels_page)
+        .merge(gated_recordings_page)
+        .merge(gated_tokens_pages)
         .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));

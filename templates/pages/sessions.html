@@ -34,7 +34,7 @@
         </div>
         <div id="new-session-fields" class="hidden space-y-4">
             <div class="form-group"><label class="form-label">Type</label>
-                <select id="session-type" class="form-input"><option value="ssh" selected>SSH</option><option value="rdp">RDP</option><option value="vnc">VNC</option><option value="web">Web</option><option value="vdi">VDI (Docker)</option></select></div>
+                <select id="session-type" class="form-input"><option value="ssh" selected>SSH</option><option value="rdp">RDP</option><option value="vnc">VNC</option>{% if features.web_sessions %}<option value="web">Web</option>{% endif %}{% if features.vdi %}<option value="vdi">VDI (Docker)</option>{% endif %}</select></div>
             <div id="ssh-fields" class="grid grid-cols-2 gap-4">
                 <div class="form-group"><label class="form-label">Host</label><input type="text" id="hostname" placeholder="192.168.1.1" class="form-input"></div>
                 <div class="form-group"><label class="form-label">Port</label><input type="number" id="port" value="22" class="form-input"></div>

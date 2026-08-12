@@ -60,12 +60,22 @@ pub async fn sessions_page(
 }
 
 /// GET /recordings.html — recordings page.
+/// Returns 404 (request-time) when the `enable_recordings` admin toggle is
+/// off, so a disabled feature is indistinguishable from a missing page.
 pub async fn recordings_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
+    Extension(db): Extension<Db>,
 ) -> Response {
+    if !crate::settings_merge::read_toggle(&db, "enable_recordings", true) {
+        return crate::templates::render_error_page(
+            axum::http::StatusCode::NOT_FOUND,
+            "The page you requested could not be found",
+            &nonce.0,
+        );
+    }
     let tmpl = RecordingsPageTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
