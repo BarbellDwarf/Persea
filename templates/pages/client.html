@@ -314,7 +314,7 @@
                 <svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
                 <span>Log Out</span>
             </button>
-            <button class="tb-btn" id="btn-disconnect" title="Disconnect — keep session for reconnection" aria-label="Disconnect session">
+            <button class="tb-btn" id="btn-disconnect" title="Disconnect — end the remote session" aria-label="Disconnect session">
                 <svg viewBox="0 0 24 24"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.13.94-4.05 2.42-5.36L6 5.17A8.94 8.94 0 0 0 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9a8.94 8.94 0 0 0-3.17-6.83z"/></svg>
             </button>
         </div>
@@ -561,9 +561,9 @@
             }
         });
 
-        // ── Disconnect (keep session for reconnection) ──
+        // ── Disconnect (ends the remote session) ──
         document.getElementById('btn-disconnect').addEventListener('click', function() {
-            if (!confirm('Disconnect from this session? The session will remain active and you can reconnect later.')) return;
+            if (!confirm('Disconnect from this session? This will end the remote session.')) return;
             userDisconnected = true;
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
@@ -1303,6 +1303,24 @@
             var connectData = shareToken ? 'token=' + encodeURIComponent(shareToken) : '';
             client.connect(connectData);
         }
+
+        // ── Best-effort teardown on tab close ──
+        // pagehide fires on tab close, navigation and refresh — send the
+        // same `disconnect` instruction the Disconnect button sends so the
+        // remote session ends instead of lingering. This alone is NOT a
+        // guarantee: the browser may tear down before the WebSocket flush
+        // completes. The real guarantee is server-side — persea's proxy
+        // actively ends the guacd connection whenever the WebSocket closes,
+        // for any reason. Mark userDisconnected so no reconnect is
+        // scheduled while the page is dying.
+        var pagehideFired = false;
+        window.addEventListener('pagehide', function() {
+            if (pagehideFired) return;
+            pagehideFired = true;
+            userDisconnected = true;
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+            try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
+        });
     })();
     </script>
 </body>
