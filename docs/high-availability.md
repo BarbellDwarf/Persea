@@ -2,207 +2,252 @@
 
 ## Overview
 
-Persea runs as a single Rust/Axum binary with guacd as a separate C process. The architecture separates stateless request handling from stateful session management, making horizontal scaling feasible with the right configuration.
+Persea runs as a single Rust/Axum binary with guacd as a separate C process.
+The architecture separates stateless request handling from stateful session
+management. With a shared backend (`db_url`) and the enterprise HA feature
+licensed, multiple instances form a real cluster: live sessions are visible,
+joinable, and shadowable from any instance. Without the license (or without
+`db_url`), behavior is byte-for-byte the single-instance mode.
 
-## What the R101 spike proved (2026-08-12)
+## What R110 implements (the real, working topology)
 
-A live local spike (see `wayfinder/v1.1.1/R101-ha-guacd-db-spike.md` for the
-full runbook) verified the current HA reality with two persea instances on a
-shared PostgreSQL backend:
+Enterprise HA (feature `ha` — included in the 30-day evaluation period) is
+built from four cooperating parts, all gated on `FEAT_HA` + a configured
+`db_url` pool:
 
-- **Works across instances today:** address book, users/auth (same API key
-  authenticates on both), audit, settings — all stored in the configured
-  backend (Postgres/MySQL/SQLite via `db_url`), immediately visible from any
-  instance, surviving crash-restart. A settings `PUT` on instance A is
-  visible on instance B and survives A being killed. A shared guacd serves
-  both instances; sessions run through it end-to-end (plain TCP and TLS).
-- **Does NOT work across instances (R110 scope, not current claims):**
-  - **Live sessions are per-process memory.** A session created on A is
-    invisible on B (`GET /api/sessions` returns `[]`; `GET /api/sessions/{id}`
-    → 404) and dies with its instance (SIGKILL demo).
-  - **WS tickets are per-instance** (in-memory `HashMap`, 30s TTL). A ticket
-    issued by A is rejected by B (HTTP 403 on the WS upgrade; B's own ticket
-    is accepted with 101).
-  - Cross-instance join/shadow/reconnect do not exist. Session affinity is
-    mandatory (below).
-- **Standalone guacd is fully supported and proven:** persea connects out to
-  `guacd_addr`, no startup ping (boots fine with guacd down; health reports
-  `guacd: down` / overall `degraded`; session creation fails cleanly with
-  502). Both plain-TCP and TLS (`[tls] guacd_cert_path`) variants verified
-  with real SSH sessions. The Docker image's embedded guacd cannot be
-  disabled — it just sits unused when `guacd_addr` points elsewhere.
+### 1. Shared session registry (`session_registry` table)
+
+Every live session mirrors into the shared backend the moment it is created
+(owner instance, owner base URL, type, status, hostname, username, creator,
+timestamps, guacd connection id). The in-memory `SessionManager` map remains
+the fast path; the registry is the source of truth for anything any other
+instance needs to know about the session. Status transitions update the row;
+terminal sessions (completed/error/expired) keep their row for up to 24h so
+recording rotation can still attribute the recording file, then the stale
+sweep removes it.
+
+Each instance's reaper also sweeps registry rows that can no longer be live:
+rows stuck in `pending` past `2 × pending_timeout`, terminal rows older than
+24h, and live rows owned by other instances older than
+`max_duration + 2h` (the owner would have reaped the session at max
+duration — if the row is older, the owner must be dead). The sweep never
+touches this instance's own live rows. With `session_max_duration_secs = 0`
+(unlimited) the live-row sweep is disabled: no age proves death, so rows of
+other instances are left until their status becomes terminal.
+
+### 2. DB-backed WS tickets (`ws_tickets` table)
+
+`POST /api/ws-ticket` issues tickets as before, but when HA is active they
+are also persisted (SHA-256 hash only, 30s TTL, single-use) to the shared
+backend. Any instance can validate a ticket issued by another: the
+in-memory map is the fast path, a miss falls through to the DB. Consuming on
+one instance deletes the row, so a ticket cannot be replayed on another.
+Expired rows are purged hourly.
+
+### 3. Cross-instance session operations
+
+- **List** — `GET /api/sessions` merges the local map with registry rows for
+  live sessions owned by other instances. Remote sessions carry
+  `"remote": true` and `"owner_instance": "<id>"` (plus
+  `"owner_base_url"` when the owner advertises one).
+- **Get** — `GET /api/sessions/{id}` returns the registry info for a
+  remote session (with the remote flags); terminal remote sessions report
+  404 like any finished session.
+- **Join / shadow / owner-reconnect** — the guacd stream lives on the
+  owning instance, so a WebSocket upgrade that lands on the wrong instance
+  is **redirected (HTTP 307) to the owner's WS endpoint**. The redirect is
+  safe because:
+  - a **fresh WS ticket is minted with the already-authenticated identity**
+    (tickets are DB-backed, so the owner validates it), and
+  - the owner instance skips the Origin/Host match **only** when the
+    request's identity came from a consumed ticket — the ticket itself is
+    the anti-CSWSh credential (minted only by authenticated callers,
+    single-use, 30s TTL). Ticketless upgrades still get the strict Origin
+    check.
+  - the share/shadow token (`?token=`) is preserved verbatim; the owner
+    validates it against its in-memory session. Shadow tokens for remote
+    sessions are written to the registry row (the in-memory session — and
+    its token list — lives on the owner), so `POST /api/sessions/{id}/
+    shadow` works from any instance.
+- **Terminate** — only the owning instance can terminate a session; other
+  instances get an explicit error naming the owner.
+- **After the owner dies** — the registry row is the source of truth, but
+  the guacd stream died with the instance: joins fail (connection refused
+  at the owner's URL) and the row is swept once it is provably stale. There
+  is no live session migration.
+
+### 4. Instance coordination (filesystem state)
+
+- **`instance_id`** config key (default `<hostname>-<pid>`) tags every
+  registry row with its owner. **The reaper only reaps sessions in its own
+  in-memory map; recording rotation only touches files whose session id
+  the registry attributes to this instance.** Two instances never fight
+  over the same files, even on a shared recordings mount.
+- **Rotation leader:** there is no leader election — every instance runs
+  its rotation timer, but each operates **only on its own files**
+  (registry owner filter), so the union of the fleets' rotations is
+  exactly the rotation a single instance would have done. Deletes are
+  idempotent, so even a shared mount cannot double-delete harmfully.
+- **Known limitation:** recording files of sessions whose registry rows
+  were swept (or whose owner crashed without a row ever existing) become
+  orphans and are never auto-rotated — clean them manually. Files of
+  sessions that ended normally stay attributable for up to 24h (the
+  terminal-row window), which covers the normal rotation cadence.
+- Xvnc display ranges, CDP port ranges, drive directories and the per-
+  instance `known_hosts` remain per-instance by design; keep the ranges
+  disjoint across instances on the same host.
+
+## What the R101 spike proved (pre-R110 baseline)
+
+The spike (see `wayfinder/v1.1.1/R101-ha-guacd-db-spike.md`) verified the
+pre-R110 reality: shared *data* (address book, users, auth, audit,
+settings) already worked across instances via `db_url`, but live sessions
+and WS tickets were per-process memory: instance B saw `[]` for A's
+sessions, rejected A's tickets with 403, and SIGKILLing A killed its
+sessions everywhere. Every one of those gaps is what R110 closes (above);
+the R101 environment (two instances on one Postgres + a shared guacd) is
+exactly the topology the demo below exercises.
 
 ## Component Analysis
 
 | Component | State | Where | HA Impact |
 |-----------|-------|-------|-----------|
 | HTTP server (persea) | Stateless per-request | In-memory | Safe to replicate |
-| Session manager | **Stateful** | In-memory (HashMap) | Requires session affinity; cross-instance sharing is R110 |
-| Address book, users, auth sessions, audit, settings | Shared | Configured backend (Postgres/MySQL/SQLite via `db_url`) | **Shared across instances** since R102 |
-| WS tickets | **Stateful** | Per-process in-memory (`WsTicketStore`) | DB-backed tickets are R110 |
-| Recordings | Stateless | Filesystem | Per-instance or shared NFS; rotation leader election is R110 |
-| guacd | **Stateful per-connection** | TCP per-session | Can be pooled and shared (proven in R101 spike) |
+| Session manager | **Stateful** | In-memory (HashMap) + **shared `session_registry`** (R110) | Cross-instance visible/joinable/shadowable (R110) |
+| Address book, users, auth sessions, audit, settings | Shared | Configured backend (Postgres/MySQL/SQLite via `db_url`) | Shared across instances since R102 |
+| WS tickets | **Stateful** | In-memory + **DB-backed** (R110) | Any instance validates any ticket (R110) |
+| Recordings | Stateless | Filesystem | Shared NFS mount; rotation is per-owner (R110) |
+| guacd | **Stateful per-connection** | TCP per-session | Pooled and shared (proven in R101 spike) |
 
-> **Clustering status:** persea has **no active clustering**. There is no
-> shared session store, no leader election, and no cross-instance session
-> migration. Shared *data* (address book, users, auth sessions, audit,
-> settings) is stored in the configured backend and is visible from every
-> instance. Shared *live session state* (registry, tickets, join/shadow/
-> reconnect) does not exist yet — it is R110's scope. Horizontal scaling
-> works only with session affinity (below).
-
-## Session Affinity (Required)
-
-Active sessions live in `SessionManager` (in-memory HashMap keyed by UUID). A WebSocket connection is pinned to the instance that holds the session state. When a browser reconnects, it must hit the same instance.
-
-**Requirement**: Session affinity via sticky cookies or consistent hashing. The session cookie (`persea_session`) identifies the user but NOT the instance. Use a separate LB cookie (e.g., `SERVERID`) set on first response, or hash the session UUID for consistent routing.
-
-**No session migration**: Sessions cannot be moved between instances. When an instance dies, its sessions are lost.
-
-## guacd Pooling
-
-guacd is a per-connection process (one child per protocol connection). persea
-never spawns guacd itself — it always connects to a guacd daemon via
-`guacd_addr`. Two deployment options:
-
-1. **Co-located guacd** (default): guacd runs as a separate process on the
-   same host as persea — the systemd `persea-guacd` service on bare metal,
-   or the entrypoint-spawned guacd in the Docker image. Simple, but each
-   persea instance has its own guacd.
-2. **External guacd pool**: Multiple guacd instances behind a TCP load
-   balancer. Each persea instance connects to a guacd via `guacd_addr`. The
-   LB distributes connections. guacd is stateless per-connection — any
-   instance can serve any session.
-
-For HA, option 2 is recommended. A single guacd handles ~100-500 concurrent sessions on modest hardware, so 2-3 instances provide redundancy.
-
-## Database Options
-
-### SQLite (current default)
-- Single-writer, multiple-reader per file
-- **Cannot** be shared across instances on different machines
-- Acceptable for single-instance deployments
-- For HA: each instance needs its own SQLite (loses cross-instance address book)
-
-### MySQL/PostgreSQL (via SQLx `db_url`) — real shared storage since R102
-- Since R102 the `DbPool` backend (PostgreSQL, MySQL, or SQLite via
-  `db_url`) **is the store**: users, auth sessions, the address book, audit
-  log, settings, and password history all live there, with per-backend
-  migrations run at startup. Any instance pointing at the same `db_url`
-  shares all of it (proven in the R101 spike: entry created on one instance
-  is immediately listable on another; settings and API keys survive
-  crash-restart).
-- **Still NOT shared (R110):** live sessions and WS tickets stay per-process.
-  `db_url` is a config-file/env setting only — there is no UI toggle, and it
-  must match across the fleet.
-- Without `db_url`, persea falls back to the local SQLite file (`db_path`),
-  which is per-instance by definition.
-
-### Live session state — R110 scope (not current claims)
-- Session registry, DB-backed WS tickets, cross-instance join/shadow/
-  reconnect, recordings-rotation leader election, and per-instance
-  filesystem paths (`instance_id`) are R110 enterprise-HA work. Until then,
-  treat live sessions as pinned to one instance (session affinity below).
-
-### Vault (credentials only)
-- With `[storage] backend = "vault"`, connection **credentials** are stored
-  in Vault/OpenBao; folder and entry **metadata lives in the configured
-  backend** (see `src/api/address_book.rs`) — so with `db_url` set, the
-  address book tree is shared across instances even in vault mode.
-- Multiple persea instances can share one Vault for credentials; with a
-  shared `db_url` the metadata is shared too.
-- Session data is still per-instance (in-memory; see "Live session state").
-
-## Cloud Deployment Patterns
-
-> **Status:** the patterns below are illustrative reference architectures,
-> not officially tested or supported configurations. Today a multi-instance
-> deployment shares: recordings (via NFS/EFS), credentials (via Vault), and
-> all app data (address book, users, audit, settings) via a shared
-> `db_url` backend (R102). Live sessions and WS tickets remain
-> per-instance — sticky sessions are required — until R110 lands the
-> shared session registry. The "ElastiCache Redis (session tokens)"
-> element is **not implemented** — there is no Redis integration in persea.
-
-### AWS (ECS + ALB)
-```
-ALB (sticky sessions) → ECS Service (persea containers, min 2)
-    ↳ guacd ECS Service (min 2, TCP target group)
-    ↳ RDS MySQL/PostgreSQL (shared data store — db_url, R102)
-    ↳ EFS (shared recordings)
-    ↳ ElastiCache Redis (session tokens — not implemented)
-```
-
-### Azure (Container Apps)
-```
-Azure Container Apps (persea, min replicas, sticky sessions via affinity)
-    ↳ Azure Database for MySQL (shared data store — db_url, R102)
-    ↳ Azure Files (shared recordings)
-    ↳ Container Apps guacd instances (TCP scaling)
-```
-
-### Kubernetes
-```
-Deployment (persea, replicas: 2+, pod anti-affinity)
-StatefulSet (guacd, replicas: 2)
-PVC (recordings)
-ConfigMap/Secret (persea config)
-Ingress (sticky sessions via annotation)
-```
-
-## Local HA (Single Server)
+## Joining a session from another instance — the flow
 
 ```
-HAProxy (TCP + HTTP mode)
-    ↳ persea-1 (container, port 8081)
-    ↳ persea-2 (container, port 8082)
-    ↳ persea-3 (container, port 8083)
-    ↳ guacd-1 (container, port 4822)
-    ↳ guacd-2 (container, port 4823)
-    ↳ Postgres/MySQL (shared data store via db_url, R102)
-    ↳ Vault (shared credentials, when [storage] backend = "vault")
-    ↳ NFS mount (shared recordings)
+browser on B                              instance B                instance A (owner)
+─────────────                             ──────────                ────────────────
+GET /client/{id} (page, on B)             registry lookup ──────────▶ row: owner=A
+POST /api/ws-ticket ──────────────────▶   ticket minted (DB-backed)
+WS /ws/{id}?ticket=… ──────────────────▶  ticket consumed (DB)
+                                          session is remote
+                                          307 Location: http://A/ws/{id}?ticket=<fresh>
+WS follows redirect ─────────────────────────────────────────────────▶ ticket consumed (DB)
+                                          (origin check skipped: ticket-authenticated)
+                                          share token validated in-memory
+                                          guacd join ──▶ stream bridged
 ```
 
-HAProxy config: sticky sessions via cookie, health check on `/api/health`, TCP mode for guacd passthrough.
+The browser only ever talks to the instance it was pointed at; the 307 hop
+is transparent to the Guacamole client. Cross-instance shadow works the
+same way, with the shadow token written to the registry row so the owner
+can validate it.
 
-## Health Check
-
-Persea exposes `GET /api/health` (check `src/main.rs` for the route). Returns 200 when the server is running. Use this for LB health checks with a 5s interval.
-
-## Scaling Limits
-
-| Resource | Bottleneck | Mitigation |
-|----------|------------|------------|
-| Session count | In-memory per instance | Scale instances horizontally (session affinity) |
-| guacd connections | One child per session | Pool guacd instances |
-| SQLite write contention | Single-writer | Use MySQL/PostgreSQL `db_url` for shared data (R102) |
-| Recordings disk | Per-instance storage | Shared NFS/EFS for cross-instance access |
-| WebSocket connections | Per-instance | Load balancer handles distribution |
-
-## Configuration Changes for HA Mode
+## Configuration for HA mode
 
 ```toml
-# Persea config for HA mode
-listen_addr = "0.0.0.0:8089"
-guacd_addr = "guacd-lb:4822"  # or individual guacd instances
-
 # Shared data store (R102): users, address book, auth sessions, audit,
-# settings all live here and are shared by every instance with the same
-# db_url. Live sessions and WS tickets are still per-instance (R110) —
-# session affinity is required. Set the same db_url on every instance.
-db_url = "mysql://persea:secret@mysql-host:3306/persea"
+# settings, AND the R110 session registry + WS tickets all live here. Set
+# the SAME db_url on every instance.
+db_url = "postgres://persea:secret@pg-host:5432/persea"
 
-# Recordings on shared storage
-[recording]
-path = "/mnt/nfs/recordings"
+# Enterprise HA (R110): unique per instance across the fleet.
+instance_id = "persea-1"
 
-# TLS (required for production)
-[tls]
-cert_path = "/etc/persea/tls/cert.pem"
-key_path = "/etc/persea/tls/key.pem"
+# Public base URL of THIS instance — the cross-instance join/shadow
+# redirect target. Set per instance.
+ha_base_url = "https://persea-1.example.com"
 
 # Session settings tuned for HA
 session_pending_timeout_secs = 30
 session_max_duration_secs = 28800
 ```
+
+License: the HA feature activates with a license key listing `ha`, or during
+the 30-day evaluation period (`LicenseManager::has_feature` returns true for
+every feature while evaluating). Without either, all HA code paths are
+inert: no registry writes, in-memory tickets only, local session lists —
+single-instance behavior, unchanged.
+
+## Deployment Patterns
+
+A reverse proxy or load balancer in front of the fleet can use plain
+round-robin for API traffic; the WS redirect makes session affinity
+unnecessary for join/shadow (the owner instance is always reached via the
+redirect). The `ha_base_url` values must be reachable from browsers.
+
+```
+LB (round-robin)
+    ↳ persea-1 (instance_id=persea-1, ha_base_url=https://persea-1…)
+    ↳ persea-2 (instance_id=persea-2, ha_base_url=https://persea-2…)
+    ↳ guacd pool (shared guacd_addr)
+    ↳ Postgres/MySQL (shared db_url — data + session registry + WS tickets)
+    ↳ Vault (shared credentials, when [storage] backend = "vault")
+    ↳ NFS mount (shared recordings; rotation is per-owner)
+```
+
+## Demonstration (R110 acceptance — two instances, shared Postgres)
+
+Environment (identical to the R101 spike): `persea-test-pg` (postgres:16,
+port 5433, test/test/persea_test), `spike-guacd` (guacamole/guacd:latest,
+host port 4823), `spike-sshd` (alpine+openssh, 172.18.0.3:2222,
+root/spiketest123). Both instances run from the repo root so the license
+evaluation marker (`persea-eval`, first start 2026-08-12, eval window 30d)
+grants FEAT_HA.
+
+Instance A (8096) and B (8097), same `db_url`, `instance_id` set per
+instance, `ha_base_url` set per instance, shared guacd. Full transcript:
+
+```bash
+# 1. A creates a real SSH session (guacd handshake OK, WS not yet connected)
+curl -s -X POST http://127.0.0.1:8096/api/sessions \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"session_type":"ssh","hostname":"172.18.0.3","port":2222,
+       "username":"root","password":"spiketest123","width":1024,"height":768}'
+# → {"session_id":"<SID>","status":"pending", ...}
+
+# 2. B lists sessions — A's session is visible, marked remote
+curl -s http://127.0.0.1:8097/api/sessions?all=true -H "Authorization: Bearer $KEY"
+# → [{...,"session_id":"<SID>","status":"pending","remote":true,
+#      "owner_instance":"persea-a","owner_base_url":"http://127.0.0.1:8096"}]
+
+# 3. B's WS ticket validates on A (DB-backed tickets)
+curl -s -X POST http://127.0.0.1:8097/api/ws-ticket -H "Authorization: Bearer $KEY"
+# → {"ticket":"wst_…"}
+
+# 4. WS upgrade to B is redirected to the owner (A)
+curl -i -N --http1.1 \
+  -H "Origin: http://127.0.0.1:8097" \
+  "http://127.0.0.1:8097/ws/<SID>?ticket=wst_…"
+# → HTTP/1.1 307 Temporary Redirect
+#    location: http://127.0.0.1:8096/ws/<SID>?ticket=wst_…&…
+
+# 5. Following the redirect to A: upgrade accepted, session becomes active
+curl -i -N --http1.1 \
+  -H "Origin: http://127.0.0.1:8097" \
+  "http://127.0.0.1:8096/ws/<SID>?ticket=wst_…"
+# → HTTP/1.1 101 Switching Protocols   (guacd logs: SSH connection successful)
+
+# 6. Shadow from B: token persisted on the registry row, validated on A
+curl -s -X POST http://127.0.0.1:8097/api/sessions/<SID>/shadow \
+  -H "Authorization: Bearer $KEY" -H "X-CSRF-Token: <csrf>" -b cookies.txt
+# → {"url":"/client/<SID>?token=<raw>","expires_at":…,"ttl_seconds":600}
+```
+
+Result: cross-instance visibility, join, and shadow all work and are
+demonstrated; reconnect after the owning instance dies is not possible
+(the stream died with it) — the registry row is swept once provably stale.
+
+## Scaling Limits
+
+| Resource | Bottleneck | Mitigation |
+|----------|------------|------------|
+| Session count | In-memory per instance | Scale instances horizontally; sessions are visible/joinable fleet-wide (R110) |
+| guacd connections | One child per session | Pool guacd instances |
+| SQLite write contention | Single-writer | Use MySQL/PostgreSQL `db_url` for shared data (R102) |
+| Recordings disk | Per-instance storage | Shared NFS/EFS; rotation is per-owner (R110) |
+| WebSocket connections | Per-instance | Load balancer handles distribution |
+
+## Health Check
+
+Persea exposes `GET /api/health` (200 when running). Admin
+`GET /api/system/status` reports `instance.instance_id` and
+`instance.ha_enabled` so operators can confirm the fleet sees the same
+registry.

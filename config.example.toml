@@ -56,6 +56,33 @@ db_path = "./persea.db"
 #
 # Env: PERSEA_DB_URL
 
+# ─── Enterprise HA (R110) ────────────────────────────────────────────────
+#
+# These two keys matter only for multi-instance deployments sharing one
+# db_url backend with the enterprise HA feature licensed (the 30-day
+# evaluation period includes it). Single-instance deployments can ignore
+# them.
+
+# Stable identifier for this instance. Used by the shared session registry
+# to mark which instance owns each live session; the reaper and recording
+# rotation only ever operate on sessions/files this instance owns.
+# Must be unique across the fleet (two instances may NOT share an id).
+# Default: "<hostname>-<pid>" — unique even when several instances run on
+# the same host, but changes across restarts (set a stable value per host
+# if per-instance recording rotation must follow a restarted instance).
+# Env: PERSEA_INSTANCE_ID
+# instance_id = "persea-1"
+
+# Public base URL of this instance (scheme + host + port), as reachable from
+# the other instances/browsers, e.g. "https://persea-1.example.com" or
+# "http://127.0.0.1:8096". When a session created here is joined or shadowed
+# from another instance, the browser is redirected to this URL so THIS
+# instance can serve the guacd stream (the guacd connection lives here).
+# Unset: cross-instance joins to this instance's sessions are rejected with
+# a clear error (the sessions are still listed on other instances).
+# Env: PERSEA_HA_BASE_URL
+# ha_base_url = "https://persea-1.example.com"
+
 # Title shown in the browser tab and page header.
 # Default: "persea"
 # Env: PERSEA_SITE_TITLE
