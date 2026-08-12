@@ -58,11 +58,7 @@ pub async fn create_session(
         let allowed = manager
             .db()
             .map(|db| {
-                rbac::identity_has_system_permission(
-                    db,
-                    id,
-                    rbac::SystemPermission::CreateSession,
-                )
+                rbac::identity_has_system_permission(db, id, rbac::SystemPermission::CreateSession)
             })
             .unwrap_or(false);
         if !allowed {
