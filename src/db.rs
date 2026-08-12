@@ -2021,17 +2021,28 @@ pub fn registry_list_owned(_db: &Db, owner_instance: &str) -> rusqlite::Result<V
     Ok(Vec::new())
 }
 
-/// Delete registry rows owned by OTHER instances that can no longer be live
-/// (their owner died without cleaning up). `pending_cutoff` / `active_cutoff`
-/// are fixed-width timestamps; rows in `pending` status older than the
-/// pending cutoff and rows in any other status older than the active cutoff
-/// are removed. Never touches rows owned by this instance. Returns the
-/// number of rows deleted. No pool → 0.
+/// Delete registry rows that can no longer be live, using three cutoffs
+/// (fixed-width timestamps):
+/// - `pending_cutoff`: rows still in `pending` — the owner would have
+///   marked them `expired` within the pending window.
+/// - `terminal_cutoff`: rows in a terminal status (`completed`/`error`/
+///   `expired`) — kept this long after creation so the owning instance's
+///   recording rotation can still attribute the recording file, then
+///   removed (any instance may delete terminal rows; deletes are
+///   idempotent).
+/// - `live_cutoff`: `Some` — live rows (pending/active/disconnected) owned
+///   by OTHER instances whose owner must be dead (it would have reaped the
+///   session at max duration). `None` disables the live sweep (unlimited
+///   max duration: no age proves death).
+///
+/// Own live rows are never touched (this instance is alive and owns them).
+/// Returns the number of rows deleted. No pool → 0.
 pub fn registry_delete_stale(
     _db: &Db,
     owner_instance: &str,
     pending_cutoff: &str,
-    active_cutoff: &str,
+    terminal_cutoff: &str,
+    live_cutoff: Option<&str>,
 ) -> rusqlite::Result<usize> {
     if pool_store().is_none() {
         return Ok(0);
@@ -2041,7 +2052,8 @@ pub fn registry_delete_stale(
         registry_delete_stale_pool,
         owner_instance.to_string(),
         pending_cutoff.to_string(),
-        active_cutoff.to_string()
+        terminal_cutoff.to_string(),
+        live_cutoff.map(str::to_string)
     );
     Ok(0)
 }
@@ -6589,22 +6601,54 @@ async fn registry_delete_stale_pool(
     pool: &DbPool,
     owner_instance: String,
     pending_cutoff: String,
-    active_cutoff: String,
+    terminal_cutoff: String,
+    live_cutoff: Option<String>,
 ) -> rusqlite::Result<usize> {
-    let n = pool_exec(
-        pool,
-        "DELETE FROM session_registry \
-         WHERE owner_instance <> ? \
-           AND ((status = 'pending' AND created_at < ?) \
-             OR (status <> 'pending' AND created_at < ?))",
-        &[
-            Arg::Str(owner_instance),
-            Arg::Str(pending_cutoff),
-            Arg::Str(active_cutoff),
-        ],
-    )
-    .await
-    .map_err(map_sqlx_err)?;
+    // Terminal rows: any instance may delete them (idempotent). Live rows of
+    // other instances: only when the live sweep is enabled.
+    let (sql, args) = match (pool, live_cutoff) {
+        // Postgres: numbered placeholders — the live clause binds AFTER the
+        // first two, so its `$n` must reflect that.
+        (DbPool::Postgres(_), Some(cutoff)) => (
+            "DELETE FROM session_registry WHERE \
+               (status = 'pending' AND created_at < $1) \
+             OR (status IN ('completed','error','expired') AND created_at < $2) \
+             OR (status NOT IN ('pending','completed','error','expired') \
+                 AND owner_instance <> $3 AND created_at < $4)".to_string(),
+            vec![
+                Arg::Str(pending_cutoff),
+                Arg::Str(terminal_cutoff),
+                Arg::Str(owner_instance),
+                Arg::Str(cutoff),
+            ],
+        ),
+        (_, Some(cutoff)) => (
+            "DELETE FROM session_registry WHERE \
+               (status = 'pending' AND created_at < ?) \
+             OR (status IN ('completed','error','expired') AND created_at < ?) \
+             OR (status NOT IN ('pending','completed','error','expired') \
+                 AND owner_instance <> ? AND created_at < ?)".to_string(),
+            vec![
+                Arg::Str(pending_cutoff),
+                Arg::Str(terminal_cutoff),
+                Arg::Str(owner_instance),
+                Arg::Str(cutoff),
+            ],
+        ),
+        (DbPool::Postgres(_), None) => (
+            "DELETE FROM session_registry WHERE \
+               (status = 'pending' AND created_at < $1) \
+             OR (status IN ('completed','error','expired') AND created_at < $2)".to_string(),
+            vec![Arg::Str(pending_cutoff), Arg::Str(terminal_cutoff)],
+        ),
+        (_, None) => (
+            "DELETE FROM session_registry WHERE \
+               (status = 'pending' AND created_at < ?) \
+             OR (status IN ('completed','error','expired') AND created_at < ?)".to_string(),
+            vec![Arg::Str(pending_cutoff), Arg::Str(terminal_cutoff)],
+        ),
+    };
+    let n = pool_exec(pool, &sql, &args).await.map_err(map_sqlx_err)?;
     Ok(n as usize)
 }
 

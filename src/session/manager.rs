@@ -105,19 +105,6 @@ impl SessionManager {
         }
     }
 
-    fn registry_delete(&self, id: Uuid) {
-        let Some(ref db) = self.db else { return };
-        if let Err(e) = crate::db::registry_delete_session(db, &id.to_string()) {
-            tracing::warn!(session_id = %id, error = %e, "Failed to delete session registry row");
-        }
-    }
-
-    /// Registry rows for sessions this instance still hosts but whose
-    /// in-memory lifecycle writes raced a delete: called when a session is
-    /// dropped from the local map (reap_completed_sessions).
-    fn registry_delete_owned(&self, id: Uuid) {
-        self.registry_delete(id);
-    }
 
     pub fn new(config: Config, guacd_tls: Option<TlsConnector>) -> Self {
         // Ensure recording directory exists with restrictive permissions
@@ -224,8 +211,19 @@ impl SessionManager {
         self.db.as_ref()
     }
 
+    /// Terminal statuses: sessions that can no longer be joined. Remote
+    /// (registry-only) sessions in these states are hidden from list/get —
+    /// the row lives on only so the owning instance can rotate the
+    /// recording file; the stale sweep removes it within 24h.
+    fn row_is_live(row: &crate::db::SessionRegistryRow) -> bool {
+        !matches!(
+            row.status.as_str(),
+            "completed" | "error" | "expired"
+        )
+    }
+
     /// List all sessions: the local map plus (when enterprise HA is active)
-    /// registry rows for sessions owned by other instances. Registry-only
+    /// registry rows for live sessions owned by other instances. Registry-only
     /// sessions are marked `remote` with their owner instance.
     pub async fn list_sessions(&self) -> Vec<SessionInfo> {
         let sessions = self.sessions.read().await;
@@ -248,6 +246,9 @@ impl SessionManager {
                             if local_ids.contains(&row.session_id) {
                                 continue;
                             }
+                            if !Self::row_is_live(&row) {
+                                continue;
+                            }
                             if let Some(info) = SessionInfo::from_registry(&row) {
                                 result.push(info);
                             }
@@ -263,7 +264,8 @@ impl SessionManager {
     }
 
     /// Get a specific session's info: local map first, then the shared
-    /// registry (remote sessions, enterprise HA only).
+    /// registry (remote sessions, enterprise HA only). Terminal remote
+    /// sessions are reported as absent (nothing joinable remains).
     pub async fn get_session(&self, id: Uuid) -> Option<SessionInfo> {
         {
             let sessions = self.sessions.read().await;
@@ -275,6 +277,9 @@ impl SessionManager {
         if self.ha_enabled() {
             if let Some(ref db) = self.db {
                 if let Ok(Some(row)) = crate::db::registry_get_session(db, &id.to_string()) {
+                    if !Self::row_is_live(&row) {
+                        return None;
+                    }
                     return SessionInfo::from_registry(&row);
                 }
             }
@@ -471,12 +476,15 @@ impl SessionManager {
         Some((raw, expires_at))
     }
 
-    /// Delete registry rows owned by OTHER instances that can no longer be
-    /// live (their owning instance died): pending rows past
-    /// `max(pending_timeout × 2, 60s)` and any other status past
-    /// `max_duration + 2h` (when max_duration > 0; unlimited-max-duration
-    /// deployments disable the sweep — sessions can legitimately run
-    /// forever, so no age is proof of death).
+    /// Delete registry rows that can no longer be live (R110):
+    /// - rows still `pending` past `max(pending_timeout × 2, 60s)` — the
+    ///   owner's pending-timeout task would have marked them `expired`;
+    /// - rows in a terminal status past 24h — kept so the owning instance's
+    ///   recording rotation can still attribute the recording file;
+    /// - live rows owned by OTHER instances past `max_duration + 2h` (their
+    ///   owner must be dead — a live owner would have reaped the session at
+    ///   max duration). Disabled when max_duration is 0 (unlimited): no age
+    ///   proves death.
     pub fn registry_sweep_stale(&self) -> usize {
         if !self.ha_enabled() {
             return 0;
@@ -487,22 +495,25 @@ impl SessionManager {
         let pending_cutoff = crate::db::registry_ts(
             now - chrono::Duration::seconds(pending_cutoff_secs as i64),
         );
-        let active_cutoff_secs = if self.config.session_max_duration_secs > 0 {
-            self.config.session_max_duration_secs + 7200
+        let terminal_cutoff =
+            crate::db::registry_ts(now - chrono::Duration::hours(24));
+        let live_cutoff = if self.config.session_max_duration_secs > 0 {
+            Some(crate::db::registry_ts(
+                now - chrono::Duration::seconds(self.config.session_max_duration_secs as i64 + 7200),
+            ))
         } else {
-            return 0;
+            None
         };
-        let active_cutoff =
-            crate::db::registry_ts(now - chrono::Duration::seconds(active_cutoff_secs as i64));
         match crate::db::registry_delete_stale(
             db,
             &self.config.instance_id,
             &pending_cutoff,
-            &active_cutoff,
+            &terminal_cutoff,
+            live_cutoff.as_deref(),
         ) {
             Ok(n) => {
                 if n > 0 {
-                    tracing::info!(deleted = n, "Reaped stale session registry rows (dead owners)");
+                    tracing::info!(deleted = n, "Reaped stale session registry rows");
                 }
                 n
             }
@@ -513,8 +524,11 @@ impl SessionManager {
         }
     }
 
-    /// Remove every registry row owned by this instance (graceful shutdown:
-    /// other instances must not see our sessions as live once we are gone).
+    /// Remove every registry row owned by this instance. Kept as an
+    /// operational tool (e.g. a deliberately retired instance clearing its
+    /// rows); NOT called on graceful shutdown — rows are left in terminal
+    /// state so recording rotation can still attribute the files, and the
+    /// stale sweep bounds their lifetime.
     pub fn registry_delete_all_owned(&self) -> usize {
         if !self.ha_enabled() {
             return 0;
@@ -781,7 +795,10 @@ impl SessionManager {
             tracing::info!(session_id = %id, "Session terminated by API");
             drop(session);
             drop(sessions);
-            self.registry_delete(id);
+            // R110: keep the registry row in a terminal state so the owning
+            // instance's recording rotation can still attribute the file;
+            // the stale sweep removes the row within 24h.
+            self.registry_set_status(id, "completed");
             true
         } else {
             false
@@ -883,7 +900,9 @@ impl SessionManager {
             let mut sessions = self.sessions.write().await;
             for id in &to_remove {
                 sessions.remove(id);
-                self.registry_delete_owned(*id);
+                // R110: the registry row intentionally stays (terminal
+                // state) so recording rotation can still attribute the
+                // file — the stale sweep removes it within 24h.
             }
         }
 

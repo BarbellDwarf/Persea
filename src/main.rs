@@ -1500,6 +1500,10 @@ async fn run_server(
                 if idle_reaped > 0 {
                     tracing::info!("Reaped {} idle sessions", idle_reaped);
                 }
+                // R110: sweep shared-registry rows that can no longer be
+                // live (dead owners, expired pendings, old terminal rows).
+                // No-op without the HA license or a shared backend.
+                reaper_manager.registry_sweep_stale();
             }
         });
     }
@@ -1602,14 +1606,29 @@ async fn run_server(
                 rec_config.max_recordings,
                 interval_secs
             );
+            let rotate_manager = manager.clone();
             tokio::spawn(async move {
                 let mut interval =
                     tokio::time::interval(std::time::Duration::from_secs(interval_secs));
                 interval.tick().await; // skip immediate first tick
                 loop {
                     interval.tick().await;
-                    let cfg = rec_config.clone();
-                    let _ = tokio::task::spawn_blocking(move || recording::rotate(&cfg)).await;
+                    if rotate_manager.ha_enabled() {
+                        // R110: with a shared backend, rotate ONLY files
+                        // owned by this instance (registry owner filter) —
+                        // another instance's live recordings are never
+                        // touched (see rotate_owned below).
+                        let cfg = rec_config.clone();
+                        let db = rotate_manager.db().cloned();
+                        let owner = rotate_manager.instance_id().to_string();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            rotate_owned(&cfg, db.as_ref(), &owner)
+                        })
+                        .await;
+                    } else {
+                        let cfg = rec_config.clone();
+                        let _ = tokio::task::spawn_blocking(move || recording::rotate(&cfg)).await;
+                    }
                 }
             });
         }
@@ -2368,10 +2387,109 @@ async fn run_server(
     }
 }
 
+/// R110: recording rotation scoped to THIS instance's files. With a shared
+/// backend, `recording::rotate` cannot be used as-is — it would delete the
+/// oldest files in the shared directory regardless of which instance wrote
+/// them, so one instance could rotate another's live recording. This variant
+/// filters the file set down to session ids the registry attributes to
+/// `owner_instance` (terminal rows are kept in the registry for up to 24h
+/// precisely so their files stay attributable), then enforces the same
+/// count/disk limits on that subset. Orphaned files (sessions whose registry
+/// rows were swept, or whose owner never wrote one) are never touched — a
+/// documented limitation (see docs/high-availability.md).
+fn rotate_owned(config: &crate::config::RecordingConfig, db: Option<&Db>, owner_instance: &str) -> usize {
+    let Some(db) = db else { return 0 };
+    let owned: std::collections::HashSet<String> =
+        crate::db::registry_list_owned(db, owner_instance)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    if owned.is_empty() {
+        return 0;
+    }
+    let dir = &config.path;
+    let mut deleted = 0;
+
+    // A recording is owned when its filename stem (minus the ".guac" that
+    // ".guac.enc" stems carry) is a session id this instance owns.
+    let owned_recs = |recordings: &[(std::path::PathBuf, std::time::SystemTime, u64)]| -> Vec<std::path::PathBuf> {
+        recordings
+            .iter()
+            .filter(|(p, _, _)| {
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let base = stem.strip_suffix(".guac").unwrap_or(stem);
+                owned.contains(base)
+            })
+            .map(|(p, _, _)| p.clone())
+            .collect()
+    };
+
+    if config.max_recordings > 0 {
+        let all = recording::list_recordings_by_age(dir);
+        let mine = owned_recs(&all);
+        let over = mine.len().saturating_sub(config.max_recordings as usize);
+        for path in mine.iter().take(over) {
+            delete_recording_file(path);
+            deleted += 1;
+        }
+    }
+
+    if config.max_disk_percent > 0 {
+        let threshold = config.max_disk_percent as f64;
+        loop {
+            let usage = match recording::disk_usage_percent(dir) {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!("Failed to check disk usage: {}", e);
+                    break;
+                }
+            };
+            if usage <= threshold {
+                break;
+            }
+            let mine = owned_recs(&recording::list_recordings_by_age(dir));
+            if let Some(path) = mine.first() {
+                delete_recording_file(path);
+                deleted += 1;
+            } else {
+                break; // no more of our recordings to delete
+            }
+        }
+    }
+
+    if deleted > 0 {
+        tracing::info!("Recording rotation (instance-owned): deleted {} files", deleted);
+    }
+    deleted
+}
+
+/// Delete a recording file and its sidecars (.meta, and the counterpart
+/// .guac / .guac.enc). Mirrors `recording::delete_recording` semantics
+/// (which is private); deletes are idempotent across instances.
+fn delete_recording_file(path: &std::path::Path) {
+    if let Err(e) = std::fs::remove_file(path) {
+        tracing::warn!("Failed to delete recording {}: {}", path.display(), e);
+    } else {
+        tracing::info!("Rotated recording: {}", path.display());
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let meta_path = if stem.ends_with(".guac") {
+        path.with_file_name(format!("{}.meta", stem))
+    } else {
+        path.with_extension("meta")
+    };
+    let _ = std::fs::remove_file(&meta_path);
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext == "enc" {
+        let _ = std::fs::remove_file(path.with_extension("guac"));
+    } else if ext == "guac" {
+        let _ = std::fs::remove_file(path.with_extension("guac.enc"));
+    }
+}
+
 /// Build a TLS connector for the guacd connection, if `[tls] guacd_cert_path` is configured.
 /// This is independent of server HTTPS — you can use guacd TLS without cert_path/key_path.
-fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {
-    let cert_path = config.tls.as_ref()?.guacd_cert_path.as_ref()?;
+fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {    let cert_path = config.tls.as_ref()?.guacd_cert_path.as_ref()?;
 
     let pem_data = std::fs::read(cert_path)
         .unwrap_or_else(|e| panic!("Failed to read guacd cert {}: {}", cert_path.display(), e));
