@@ -10,8 +10,28 @@
 
 use std::collections::HashSet;
 
-/// Column names, in order, for the CSV header and template.
-pub const HEADERS: [&str; 10] = [
+/// Fixed column names, in order, for the CSV header and template.
+///
+/// Optional TRAILING columns (beyond the 9 fixed ones) are custom-field
+/// columns whose names must match the configured custom field definitions
+/// exactly — see [`parse_rows`]. The `name` column holds the friendly name;
+/// the stored identifier is `slugify(name)` (applied by the importer).
+pub const HEADERS: [&str; 9] = [
+    "name",
+    "protocol",
+    "hostname",
+    "port",
+    "username",
+    "password",
+    "folder",
+    "allowed_groups",
+    "description",
+];
+
+/// The pre-T08 template header (had a `display_name` column). Recognized so
+/// the rejection error can point the user at the current template instead of
+/// a generic column mismatch.
+pub const LEGACY_HEADERS: [&str; 10] = [
     "name",
     "protocol",
     "hostname",
@@ -30,6 +50,7 @@ pub const VALID_PROTOCOLS: [&str; 7] = ["ssh", "rdp", "vnc", "spice", "web", "vd
 /// A single validated connection row ready to be imported.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
+    /// Friendly name; the importer slugifies it into the stored identifier.
     pub name: String,
     pub protocol: String,
     pub hostname: String,
@@ -39,11 +60,14 @@ pub struct Row {
     pub password: String,
     /// Normalized folder path, e.g. `Production/Web` or `""` for the root.
     pub folder: String,
-    pub display_name: String,
     /// Trimmed, de-duplicated group names (in file order).
     pub allowed_groups: Vec<String>,
     /// Free-form description/notes (may be empty).
     pub description: String,
+    /// Custom field values: (configured column name → trimmed cell value)
+    /// for every trailing column in the file header. Empty values are kept
+    /// verbatim; the importer decides what to persist.
+    pub custom_fields: Vec<(String, String)>,
 }
 
 /// A per-row or file-level parse problem.
@@ -67,10 +91,13 @@ pub struct ParseResult {
 /// Parse and validate a CSV document.
 ///
 /// The first record must be a header matching [`HEADERS`] (case-insensitive,
-/// optional UTF-8 BOM, columns may be trimmed). Blank lines are ignored.
+/// optional UTF-8 BOM, columns may be trimmed) followed by 0..N trailing
+/// columns that match the configured custom field names EXACTLY (trimmed,
+/// case-sensitive). The legacy 10-column header (with `display_name`) is
+/// rejected with a pointer to the current template. Blank lines are ignored.
 /// Returns `Err` only for file-level problems (empty input, invalid header,
 /// unterminated quoted field); per-row problems are collected in the result.
-pub fn parse_rows(input: &str) -> Result<ParseResult, CsvError> {
+pub fn parse_rows(input: &str, custom_fields: &[String]) -> Result<ParseResult, CsvError> {
     let records = tokenize(input)?;
     let Some(header) = records.first() else {
         return Err(CsvError {
@@ -79,42 +106,91 @@ pub fn parse_rows(input: &str) -> Result<ParseResult, CsvError> {
         });
     };
 
-    let mut normalized: Vec<String> = header
-        .iter()
-        .map(|f| f.trim().to_ascii_lowercase())
-        .collect();
+    // Raw (trimmed, case-preserving) header fields: the 9 fixed columns are
+    // matched case-insensitively, custom-field columns case-sensitively.
+    let raw_header: Vec<String> = header.iter().map(|f| f.trim().to_string()).collect();
+    let mut normalized: Vec<String> = raw_header.iter().map(|f| f.to_ascii_lowercase()).collect();
     if let Some(first) = normalized.first_mut() {
         *first = first.trim_start_matches('\u{feff}').to_string();
     }
-    if normalized != HEADERS {
+
+    // Recognize the old template so the error can point at the new one.
+    if normalized.len() == LEGACY_HEADERS.len()
+        && normalized
+            .iter()
+            .zip(LEGACY_HEADERS.iter())
+            .all(|(a, b)| a == b)
+    {
         return Err(CsvError {
             row: 0,
-            message: format!("invalid header: expected {}", HEADERS.join(",")),
+            message: "invalid header: this file uses the OLD 10-column template with a \
+                      'display_name' column; the template has changed — download the current \
+                      one from /api/addressbook/import-template and re-export your data"
+                .into(),
         });
+    }
+
+    for (i, expected) in HEADERS.iter().enumerate() {
+        if normalized.get(i).map(String::as_str) != Some(expected) {
+            return Err(CsvError {
+                row: 0,
+                message: format!(
+                    "invalid header: column {} should be '{}' but is '{}' (template: {})",
+                    i + 1,
+                    expected,
+                    normalized.get(i).map(String::as_str).unwrap_or("(missing)"),
+                    HEADERS.join(",")
+                ),
+            });
+        }
+    }
+
+    // Trailing columns are custom-field columns; each must match a configured
+    // definition exactly (trimmed, case-sensitive).
+    let mut custom_cols: Vec<String> = Vec::new();
+    for (i, col) in raw_header.iter().skip(HEADERS.len()).enumerate() {
+        let name = col.trim();
+        if !custom_fields.iter().any(|d| d == name) {
+            return Err(CsvError {
+                row: 0,
+                message: format!(
+                    "invalid header: column {} '{}' is not a configured custom field{}",
+                    HEADERS.len() + i + 1,
+                    name,
+                    if custom_fields.is_empty() {
+                        " (none are configured)".to_string()
+                    } else {
+                        format!(" (configured: {})", custom_fields.join(", "))
+                    }
+                ),
+            });
+        }
+        custom_cols.push(name.to_string());
     }
 
     let mut result = ParseResult::default();
     let mut seen: HashSet<(String, String)> = HashSet::new();
+    let header_len = HEADERS.len() + custom_cols.len();
 
     for (idx, record) in records.iter().skip(1).enumerate() {
         let row_index = idx + 1;
         if record.iter().all(|f| f.is_empty()) {
             continue;
         }
-        if record.len() > HEADERS.len() {
+        if record.len() > header_len {
             result.errors.push(CsvError {
                 row: row_index,
                 message: format!(
                     "too many columns: got {}, expected {}",
                     record.len(),
-                    HEADERS.len()
+                    header_len
                 ),
             });
             continue;
         }
 
         let mut fields: Vec<String> = record.clone();
-        fields.resize(HEADERS.len(), String::new());
+        fields.resize(header_len, String::new());
 
         let name = fields[0].trim().to_string();
         let protocol = fields[1].trim().to_ascii_lowercase();
@@ -123,9 +199,8 @@ pub fn parse_rows(input: &str) -> Result<ParseResult, CsvError> {
         let username = fields[4].trim().to_string();
         let password = fields[5].to_string();
         let folder = normalize_folder(&fields[6]);
-        let display_name = fields[7].trim().to_string();
-        let allowed_groups = parse_groups(&fields[8]);
-        let description = fields[9].trim().to_string();
+        let allowed_groups = parse_groups(&fields[7]);
+        let description = fields[8].trim().to_string();
 
         let mut messages = Vec::new();
         if let Err(msg) = &port {
@@ -153,6 +228,15 @@ pub fn parse_rows(input: &str) -> Result<ParseResult, CsvError> {
             continue;
         }
 
+        let custom_values = custom_cols
+            .iter()
+            .enumerate()
+            .map(|(i, col)| {
+                let value = fields.get(HEADERS.len() + i).cloned().unwrap_or_default();
+                (col.clone(), value.trim().to_string())
+            })
+            .collect();
+
         result.rows.push(Row {
             name,
             protocol,
@@ -161,9 +245,9 @@ pub fn parse_rows(input: &str) -> Result<ParseResult, CsvError> {
             username,
             password,
             folder,
-            display_name,
             allowed_groups,
             description,
+            custom_fields: custom_values,
         });
     }
 
@@ -231,11 +315,19 @@ fn parse_port(input: &str) -> Result<Option<u16>, String> {
 }
 
 /// Render the downloadable template: header row plus one example row.
-pub fn render_template() -> String {
-    format!(
-        "{}\nMy Server,ssh,10.0.0.1,22,root,secret,Production/Web,My Server,\"group1,group2\",Production web server\n",
-        HEADERS.join(",")
-    )
+///
+/// When custom fields are configured their columns are appended (with an
+/// example value) so the template stays in sync with the importer.
+pub fn render_template(custom_fields: &[String]) -> String {
+    let mut header = HEADERS.join(",");
+    let mut example = "My Server,ssh,10.0.0.1,22,root,secret,Production/Web,\"group1,group2\",Production web server"
+        .to_string();
+    for f in custom_fields {
+        header.push(',');
+        header.push_str(f);
+        example.push_str(",Example value");
+    }
+    format!("{}\n{}\n", header, example)
 }
 
 /// Tokenize a CSV document into records of fields (RFC-4180 style).
