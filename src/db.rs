@@ -9377,7 +9377,11 @@ pub(crate) async fn rbac_update_custom_role_pool(
             "UPDATE custom_roles SET name = $1, description = $2 WHERE id = $3",
             "UPDATE custom_roles SET name = ?, description = ? WHERE id = ?"
         ),
-        &[Arg::Str(name), Arg::OptStr(description), Arg::Str(id.clone())],
+        &[
+            Arg::Str(name),
+            Arg::OptStr(description),
+            Arg::Str(id.clone()),
+        ],
     )
     .await
     .map_err(map_sqlx_err)?;
@@ -9557,7 +9561,11 @@ pub(crate) async fn rbac_check_group_object_permission_pool(
             pg_fetch_opt(
                 p,
                 direct_sql,
-                &[Arg::I64(user_id), Arg::Str(object_id.clone()), Arg::Str(permission.clone())],
+                &[
+                    Arg::I64(user_id),
+                    Arg::Str(object_id.clone()),
+                    Arg::Str(permission.clone()),
+                ],
             )
             .await
         }
@@ -9565,7 +9573,11 @@ pub(crate) async fn rbac_check_group_object_permission_pool(
             mysql_fetch_opt(
                 p,
                 direct_sql,
-                &[Arg::I64(user_id), Arg::Str(object_id.clone()), Arg::Str(permission.clone())],
+                &[
+                    Arg::I64(user_id),
+                    Arg::Str(object_id.clone()),
+                    Arg::Str(permission.clone()),
+                ],
             )
             .await
         }
@@ -9573,7 +9585,11 @@ pub(crate) async fn rbac_check_group_object_permission_pool(
             sqlite_fetch_opt(
                 p,
                 direct_sql,
-                &[Arg::I64(user_id), Arg::Str(object_id.clone()), Arg::Str(permission.clone())],
+                &[
+                    Arg::I64(user_id),
+                    Arg::Str(object_id.clone()),
+                    Arg::Str(permission.clone()),
+                ],
             )
             .await
         }
@@ -9627,7 +9643,11 @@ pub(crate) async fn rbac_check_group_object_permission_pool(
             pg_fetch_opt(
                 p,
                 cte_sql,
-                &[Arg::Str(object_id.clone()), Arg::Str(permission.clone()), Arg::I64(user_id)],
+                &[
+                    Arg::Str(object_id.clone()),
+                    Arg::Str(permission.clone()),
+                    Arg::I64(user_id),
+                ],
             )
             .await
         }
@@ -9635,7 +9655,11 @@ pub(crate) async fn rbac_check_group_object_permission_pool(
             mysql_fetch_opt(
                 p,
                 cte_sql,
-                &[Arg::Str(object_id.clone()), Arg::Str(permission.clone()), Arg::I64(user_id)],
+                &[
+                    Arg::Str(object_id.clone()),
+                    Arg::Str(permission.clone()),
+                    Arg::I64(user_id),
+                ],
             )
             .await
         }
@@ -9643,7 +9667,11 @@ pub(crate) async fn rbac_check_group_object_permission_pool(
             sqlite_fetch_opt(
                 p,
                 cte_sql,
-                &[Arg::Str(object_id.clone()), Arg::Str(permission.clone()), Arg::I64(user_id)],
+                &[
+                    Arg::Str(object_id.clone()),
+                    Arg::Str(permission.clone()),
+                    Arg::I64(user_id),
+                ],
             )
             .await
         }
@@ -9669,9 +9697,13 @@ async fn rbac_insert_role_permissions_pool(
             continue;
         }
         seen.push(permission.as_str());
-        pool_exec(pool, sql, &[Arg::Str(role_id.to_string()), Arg::Str(permission.clone())])
-            .await
-            .map_err(map_sqlx_err)?;
+        pool_exec(
+            pool,
+            sql,
+            &[Arg::Str(role_id.to_string()), Arg::Str(permission.clone())],
+        )
+        .await
+        .map_err(map_sqlx_err)?;
     }
     Ok(())
 }

@@ -183,11 +183,11 @@ fn parse_valid_csv() {
     let csv = format!(
         "{}\n\
          web01,ssh,10.0.0.1,22,root,secret,Production/Web,group1,Production web server\n\
-         portal,web,,443,,,Internal,,,",
+         portal,web,,443,,,Internal,,",
         HEADER
     );
     let result = csv_import::parse_rows(&csv, &[]).unwrap();
-    assert!(result.errors.is_empty());
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
     assert!(result.skipped.is_empty());
     assert_eq!(result.rows.len(), 2);
 
@@ -214,7 +214,7 @@ fn parse_valid_csv() {
 #[test]
 fn parse_description_with_commas_quoted() {
     let csv = format!(
-        "{}\nweb,ssh,10.0.0.1,22,,,Root,,\"a,b\",\"Web server, DMZ\"",
+        "{}\nweb,ssh,10.0.0.1,22,,,Root,\"a,b\",\"Web server, DMZ\"",
         HEADER
     );
     let result = csv_import::parse_rows(&csv, &[]).unwrap();
@@ -238,7 +238,7 @@ fn parse_with_bom() {
 #[test]
 fn parse_quoted_allowed_groups_with_commas() {
     let csv = format!(
-        "{}\nweb,ssh,10.0.0.1,22,,,Root,,\"group1,group2, group3\"",
+        "{}\nweb,ssh,10.0.0.1,22,,,Root,\"group1,group2, group3\"",
         HEADER
     );
     let result = csv_import::parse_rows(&csv, &[]).unwrap();
@@ -411,14 +411,18 @@ fn parse_legacy_header_rejected() {
     let csv = format!("{}\nweb,ssh,10.0.0.1,22,,,Root,Web 1,,", LEGACY_HEADER);
     let err = csv_import::parse_rows(&csv, &[]).unwrap_err();
     assert_eq!(err.row, 0);
-    assert!(err.message.contains("OLD 10-column template"), "{}", err.message);
+    assert!(
+        err.message.contains("OLD 10-column template"),
+        "{}",
+        err.message
+    );
     assert!(err.message.contains("display_name"), "{}", err.message);
     assert!(err.message.contains("import-template"), "{}", err.message);
 }
 
 #[test]
 fn parse_header_case_insensitive() {
-    let csv = "Name,Protocol,Hostname,Port,Username,Password,Folder,Allowed_Groups,Description\nx,ssh,1.2.3.4,22,,,Root,,,";
+    let csv = "Name,Protocol,Hostname,Port,Username,Password,Folder,Allowed_Groups,Description\nx,ssh,1.2.3.4,22,,,Root,,";
     let result = csv_import::parse_rows(csv, &[]).unwrap();
     assert_eq!(result.rows.len(), 1);
     assert_eq!(result.rows[0].name, "x");
@@ -467,7 +471,7 @@ fn parse_short_row_padded() {
 
 #[test]
 fn parse_duplicate_groups_deduped() {
-    let csv = format!("{}\nx,ssh,1.2.3.4,22,,,Root,,\"a,b,a, c\"", HEADER);
+    let csv = format!("{}\nx,ssh,1.2.3.4,22,,,Root,\"a,b,a, c\"", HEADER);
     let result = csv_import::parse_rows(&csv, &[]).unwrap();
     assert_eq!(result.rows[0].allowed_groups, vec!["a", "b", "c"]);
 }
@@ -476,7 +480,7 @@ fn parse_duplicate_groups_deduped() {
 fn parse_custom_field_columns() {
     let defs = vec!["Environment".to_string(), "Owner".to_string()];
     let csv = format!(
-        "{}\nweb01,ssh,10.0.0.1,22,root,secret,Prod,group1,desc,Production,alice\nweb02,ssh,10.0.0.2,22,,,Prod,,,,",
+        "{},Environment,Owner\nweb01,ssh,10.0.0.1,22,root,secret,Prod,group1,desc,Production,alice\nweb02,ssh,10.0.0.2,22,,,Prod,,,,",
         HEADER
     );
     let result = csv_import::parse_rows(&csv, &defs).unwrap();
@@ -502,7 +506,10 @@ fn parse_custom_field_columns() {
 fn parse_custom_field_column_case_sensitive() {
     let defs = vec!["Environment".to_string()];
     // Wrong case must be rejected (trimmed + case-sensitive match).
-    let csv = format!("{}\nweb01,ssh,10.0.0.1,22,,,Prod,,,production", HEADER);
+    let csv = format!(
+        "{},environment\nweb01,ssh,10.0.0.1,22,,,Prod,,,production",
+        HEADER
+    );
     let err = csv_import::parse_rows(&csv, &defs).unwrap_err();
     assert!(err.message.contains("column 10"), "{}", err.message);
     assert!(err.message.contains("'environment'"), "{}", err.message);
@@ -511,10 +518,17 @@ fn parse_custom_field_column_case_sensitive() {
 
 #[test]
 fn parse_custom_field_column_when_none_configured_rejected() {
-    let csv = format!("{}\nweb01,ssh,10.0.0.1,22,,,Prod,,,production", HEADER);
+    let csv = format!(
+        "{},Environment\nweb01,ssh,10.0.0.1,22,,,Prod,,,production",
+        HEADER
+    );
     let err = csv_import::parse_rows(&csv, &[]).unwrap_err();
     assert!(err.message.contains("column 10"), "{}", err.message);
-    assert!(err.message.contains("none are configured"), "{}", err.message);
+    assert!(
+        err.message.contains("none are configured"),
+        "{}",
+        err.message
+    );
 }
 
 #[test]
@@ -744,6 +758,7 @@ async fn import_skips_in_file_duplicates() {
             &key,
             "/api/addressbook/import",
             serde_json::json!({
+                "mode": "create",
                 "rows": [
                     {"name": "dup", "protocol": "ssh", "hostname": "10.0.0.1", "port": 22, "folder": "Root"},
                     {"name": "dup", "protocol": "ssh", "hostname": "10.0.0.2", "port": 22, "folder": "Root"}
@@ -1284,16 +1299,22 @@ async fn import_custom_fields_json() {
 
     // A changed custom field counts as an update.
     let resp = router
-        .oneshot(admin_post(&key, "/api/addressbook/import", serde_json::json!({
-        "rows": [{
-            "name": "web01",
-            "protocol": "ssh",
-            "hostname": "10.0.0.1",
-            "port": 22,
-            "folder": "Root",
-            "custom_fields": {"Environment": "Staging", "Owner": "alice"}
-        }]
-    }))).await.unwrap();
+        .oneshot(admin_post(
+            &key,
+            "/api/addressbook/import",
+            serde_json::json!({
+                "rows": [{
+                    "name": "web01",
+                    "protocol": "ssh",
+                    "hostname": "10.0.0.1",
+                    "port": 22,
+                    "folder": "Root",
+                    "custom_fields": {"Environment": "Staging", "Owner": "alice"}
+                }]
+            }),
+        ))
+        .await
+        .unwrap();
     let json = body_json(resp).await;
     assert_eq!(json["updated"], 1);
     let entry = db::get_ab_entry(&db, folder.id, "web01").unwrap();
@@ -1343,7 +1364,7 @@ async fn import_raw_csv_body() {
     let key = create_admin(&db, "admin");
     let router = test_router(db.clone());
     let csv = format!(
-        "{}\nweb01,ssh,10.0.0.1,22,root,secret,Production/Web,group1,Production web server\nportal,web,,443,,,Internal,,,",
+        "{}\nweb01,ssh,10.0.0.1,22,root,secret,Production/Web,group1,Production web server\nportal,web,,443,,,Internal,,",
         HEADER
     );
     let resp = router
@@ -1411,7 +1432,11 @@ async fn import_raw_csv_mode_query() {
     // entry matches the row's importable fields incl. username).
     let csv_identical = format!("{}\ndup,ssh,10.0.0.1,22,root,,Root,,", HEADER);
     let resp = router
-        .oneshot(admin_csv_post(&key, "/api/addressbook/import", &csv_identical))
+        .oneshot(admin_csv_post(
+            &key,
+            "/api/addressbook/import",
+            &csv_identical,
+        ))
         .await
         .unwrap();
     let json = body_json(resp).await;
@@ -1430,6 +1455,7 @@ async fn import_raw_csv_custom_field_columns() {
         HEADER
     );
     let resp = router
+        .clone()
         .oneshot(admin_csv_post(&key, "/api/addressbook/import", &csv))
         .await
         .unwrap();

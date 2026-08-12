@@ -60,9 +60,7 @@ fn default_mode() -> String {
 /// (`{"Environment": "prod"}`) or a sequence of `[name, value]` pairs — the
 /// wire shape the connections-page CSV importer sends (it mirrors the
 /// trailing CSV columns one-to-one).
-fn deserialize_custom_fields<'de, D>(
-    deserializer: D,
-) -> Result<HashMap<String, String>, D::Error>
+fn deserialize_custom_fields<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -72,7 +70,8 @@ where
         type Value = HashMap<String, String>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-            formatter.write_str("a map of field names to values, or a sequence of [name, value] pairs")
+            formatter
+                .write_str("a map of field names to values, or a sequence of [name, value] pairs")
         }
 
         fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -239,7 +238,9 @@ fn store_row_password(
     let encrypted = match crate::crypto::encrypt_value(&key, password) {
         Ok(e) => e,
         Err(e) => {
-            errors.push(json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}));
+            errors.push(
+                json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}),
+            );
             return false;
         }
     };
@@ -400,7 +401,8 @@ fn row_matches_entry(
         || entry.port != row.port
         || entry.username != row.username.trim()
         || entry.allowed_groups
-            != row.allowed_groups
+            != row
+                .allowed_groups
                 .iter()
                 .map(|g| g.trim())
                 .filter(|g| !g.is_empty())
@@ -411,7 +413,12 @@ fn row_matches_entry(
     }
 
     let cfg: serde_json::Value = serde_json::from_str(&entry.protocol_config).unwrap_or_default();
-    if cfg.get("description").and_then(|v| v.as_str()).unwrap_or("") != row.description.trim() {
+    if cfg
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        != row.description.trim()
+    {
         return false;
     }
     let stored_fields: HashMap<String, String> = cfg
@@ -634,7 +641,10 @@ pub async fn import_csv(
         // almost certainly a typo — surface it instead of importing a twin.
         if !exists && mode != "update" {
             if let Ok(entries) = db::list_ab_entries(&database, folder_id) {
-                if let Some(hit) = entries.iter().find(|e| fuzzy_key(&e.name) == fuzzy_key(&slug)) {
+                if let Some(hit) = entries
+                    .iter()
+                    .find(|e| fuzzy_key(&e.name) == fuzzy_key(&slug))
+                {
                     errors.push(json!({
                         "row": row_index,
                         "error": format!(
@@ -685,7 +695,14 @@ pub async fn import_csv(
             }
             // upsert: skip rows that are completely identical, update the rest.
             let entry = existing.unwrap();
-            if row_matches_entry(&database, &entry, row, &protocol, &hostname, &encryption_key) {
+            if row_matches_entry(
+                &database,
+                &entry,
+                row,
+                &protocol,
+                &hostname,
+                &encryption_key,
+            ) {
                 unchanged += 1;
                 continue;
             }

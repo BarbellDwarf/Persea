@@ -108,6 +108,7 @@ pub async fn create_user(
     let role = body.role.unwrap_or_else(|| "viewer".to_string());
     let db_clone = database.clone();
     let email = body.email.clone();
+    let email_for_assign = email.clone();
     let name = body.name.clone();
     let password = body.password.clone();
     let role_clone = role.clone();
@@ -165,7 +166,6 @@ pub async fn create_user(
 
     if let Some(ref role_id) = custom_role_id {
         let db_for_assign = database.clone();
-        let email_for_assign = email.clone();
         let role_id_for_assign = role_id.clone();
         tokio::task::spawn_blocking(move || {
             rbac::set_user_custom_role(&db_for_assign, &email_for_assign, Some(&role_id_for_assign))
@@ -484,10 +484,11 @@ pub async fn me(
             .unwrap_or(Ok("unknown".to_string()))
             .unwrap_or_else(|_| "unknown".to_string());
             let name = user_result
+                .0
                 .as_ref()
                 .map(|u| u.name.clone())
                 .unwrap_or_else(|| id.display_name().to_string());
-            let created_at = user_result.as_ref().map(|u| u.created_at.clone());
+            let created_at = user_result.0.as_ref().map(|u| u.created_at.clone());
             Ok(Json(json!({
                 "name": name,
                 "email": email,

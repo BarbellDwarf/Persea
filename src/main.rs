@@ -761,7 +761,9 @@ fn cmd_set_role(database: &Db, email: &str, role: &str) {
                 }
             }
             Ok(None) => {
-                eprintln!("Role must be admin, poweruser, operator, viewer, or a custom role name.");
+                eprintln!(
+                    "Role must be admin, poweruser, operator, viewer, or a custom role name."
+                );
                 std::process::exit(1);
             }
             Err(e) => {
@@ -2004,14 +2006,8 @@ async fn run_server(
             delete(handlers::rbac::revoke_connection_permission),
         )
         // Custom roles management endpoints (T05)
-        .route(
-            "/api/admin/roles",
-            get(handlers::rbac::list_custom_roles),
-        )
-        .route(
-            "/api/admin/roles",
-            post(handlers::rbac::create_custom_role),
-        )
+        .route("/api/admin/roles", get(handlers::rbac::list_custom_roles))
+        .route("/api/admin/roles", post(handlers::rbac::create_custom_role))
         .route(
             "/api/admin/roles/{id}",
             get(handlers::rbac::get_custom_role),
@@ -2209,10 +2205,7 @@ async fn run_server(
             "/admin/license.html",
             get(handlers::pages::admin_license_page),
         )
-        .route(
-            "/admin/roles.html",
-            get(handlers::rbac::admin_roles_page),
-        )
+        .route("/admin/roles.html", get(handlers::rbac::admin_roles_page))
         .route(
             "/admin/branding.html",
             get(handlers::pages::admin_branding_page),

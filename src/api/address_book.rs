@@ -848,7 +848,12 @@ pub async fn ab_list_folders(
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id))
+            if id.has_role("operator")
+                || rbac::identity_has_custom_permission(&database, id, "read") =>
+        {
+            id
+        }
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
@@ -893,7 +898,12 @@ pub async fn ab_list_subfolders(
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id))
+            if id.has_role("operator")
+                || rbac::identity_has_custom_permission(&database, id, "read") =>
+        {
+            id
+        }
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
@@ -955,7 +965,12 @@ pub async fn ab_list_all(
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id))
+            if id.has_role("operator")
+                || rbac::identity_has_custom_permission(&database, id, "read") =>
+        {
+            id
+        }
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
@@ -1016,7 +1031,12 @@ pub async fn ab_search_index(
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id))
+            if id.has_role("operator")
+                || rbac::identity_has_custom_permission(&database, id, "read") =>
+        {
+            id
+        }
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
@@ -1089,7 +1109,12 @@ pub async fn ab_list_entries(
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id,
+        Some(Extension(ref id))
+            if id.has_role("operator")
+                || rbac::identity_has_custom_permission(&database, id, "read") =>
+        {
+            id
+        }
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
@@ -1122,7 +1147,9 @@ pub async fn ab_get_custom_fields(
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("operator") => {}
+        Some(Extension(id))
+            if id.has_role("operator")
+                || rbac::identity_has_custom_permission(&database, id, "read") => {}
         _ => return Err(AppError::Forbidden("operator role required".into())),
     }
     let db_clone = database.clone();
@@ -1176,7 +1203,12 @@ pub async fn ab_connect_entry(
     Json(req): Json<ConnectRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id.clone(),
+        Some(Extension(ref id))
+            if id.has_role("operator")
+                || rbac::identity_has_custom_permission(&database, id, "connect") =>
+        {
+            id.clone()
+        }
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 

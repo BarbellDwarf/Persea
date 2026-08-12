@@ -5,12 +5,7 @@ use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::error::AppError;
 use crate::rbac;
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    response::IntoResponse,
-    Extension, Json,
-};
+use axum::{extract::Path, http::StatusCode, response::IntoResponse, Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
@@ -522,7 +517,10 @@ pub async fn update_custom_role(
         .description
         .clone()
         .or_else(|| existing.description.clone());
-    let permissions = req.permissions.clone().unwrap_or(existing.permissions.clone());
+    let permissions = req
+        .permissions
+        .clone()
+        .unwrap_or(existing.permissions.clone());
     validate_custom_role_permissions(&permissions)?;
 
     let db_clone = database.clone();
@@ -567,7 +565,9 @@ pub async fn update_custom_role(
         .await;
     }
 
-    Ok(Json(json!({"ok": true, "id": role_id, "name": name, "permissions": permissions})))
+    Ok(Json(
+        json!({"ok": true, "id": role_id, "name": name, "permissions": permissions}),
+    ))
 }
 
 /// DELETE /api/admin/roles/{id}

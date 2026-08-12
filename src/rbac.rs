@@ -522,17 +522,15 @@ pub fn list_custom_roles(db: &Db) -> rusqlite::Result<Vec<CustomRole>> {
     let conn = db.lock().unwrap();
     let mut roles = Vec::new();
     {
-        let mut stmt = conn.prepare(
-            "SELECT id, name, description, created_at FROM custom_roles ORDER BY name",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT id, name, description, created_at FROM custom_roles ORDER BY name")?;
         let rows = stmt.query_map([], custom_role_from_row)?;
         for row in rows {
             roles.push(row?);
         }
     }
-    let mut stmt = conn.prepare(
-        "SELECT role_id, permission FROM custom_role_permissions ORDER BY permission",
-    )?;
+    let mut stmt = conn
+        .prepare("SELECT role_id, permission FROM custom_role_permissions ORDER BY permission")?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
@@ -675,11 +673,7 @@ pub fn delete_custom_role(db: &Db, id: &str) -> rusqlite::Result<bool> {
 /// Assign (or clear, with `None`) a user's custom role by email. Returns
 /// false when the user does not exist. The fixed 4-tier role is untouched —
 /// custom roles are additive.
-pub fn set_user_custom_role(
-    db: &Db,
-    email: &str,
-    role_id: Option<&str>,
-) -> rusqlite::Result<bool> {
+pub fn set_user_custom_role(db: &Db, email: &str, role_id: Option<&str>) -> rusqlite::Result<bool> {
     if crate::db::pool_active() {
         let __email = email.to_string();
         let __role_id = role_id.map(str::to_string);
@@ -862,9 +856,8 @@ fn insert_role_permissions(
     permissions: &[String],
 ) -> rusqlite::Result<()> {
     let mut seen: Vec<&str> = Vec::new();
-    let mut stmt = conn.prepare(
-        "INSERT INTO custom_role_permissions (role_id, permission) VALUES (?1, ?2)",
-    )?;
+    let mut stmt =
+        conn.prepare("INSERT INTO custom_role_permissions (role_id, permission) VALUES (?1, ?2)")?;
     for permission in permissions {
         if seen.contains(&permission.as_str()) {
             continue;
