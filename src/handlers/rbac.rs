@@ -11,29 +11,46 @@ use serde_json::json;
 
 // ── Request types ──
 
+/// Request body for creating an RBAC group
+/// (POST /api/admin/rbac/groups).
 #[derive(Deserialize)]
 pub struct CreateGroupRequest {
+    /// Group name; must be unique among groups.
     pub name: String,
+    /// Id of the parent group when this group nests under another.
     #[serde(default)]
     pub parent_id: Option<String>,
+    /// Free-form description shown in the admin UI.
     #[serde(default)]
     pub description: Option<String>,
 }
 
+/// Request body for adding a user to a group
+/// (POST /api/admin/rbac/groups/{id}/members).
 #[derive(Deserialize)]
 pub struct AddMemberRequest {
+    /// Database id of the user to add.
     pub user_id: i64,
 }
 
+/// Request body for granting or revoking a connection permission
+/// (POST/DELETE /api/admin/rbac/connections/{id}/permissions).
 #[derive(Deserialize)]
 pub struct GrantPermissionRequest {
+    /// Entity the permission applies to, "u:{user_id}" or "g:{group_id}";
+    /// a bare id is treated as a user.
     pub entity_id: String,
+    /// Permission name from the object-permission vocabulary
+    /// (read, connect, update, delete, administer).
     pub permission: String,
 }
 
+/// Request body for creating a custom role (POST /api/admin/roles).
 #[derive(Deserialize)]
 pub struct CreateCustomRoleRequest {
+    /// Role name; must be unique among custom roles.
     pub name: String,
+    /// Free-form description shown in the admin UI.
     #[serde(default)]
     pub description: Option<String>,
     /// Permission strings from the fixed vocabulary (object perms
@@ -43,12 +60,18 @@ pub struct CreateCustomRoleRequest {
     pub permissions: Vec<String>,
 }
 
+/// Request body for updating a custom role (PUT /api/admin/roles/{id}).
+///
+/// Omitted fields keep their current values.
 #[derive(Deserialize)]
 pub struct UpdateCustomRoleRequest {
+    /// Replacement role name; None keeps the current name.
     #[serde(default)]
     pub name: Option<String>,
+    /// Replacement description; None keeps the current description.
     #[serde(default)]
     pub description: Option<String>,
+    /// Replacement permission list; None keeps the current list.
     #[serde(default)]
     pub permissions: Option<Vec<String>>,
 }
