@@ -79,7 +79,7 @@ fn backend_label(kind: DbKind) -> &'static str {
 fn current_backend() -> Option<String> {
     crate::db::active_pool()
         .and_then(|p| p.kind())
-        .map(backend_label)
+        .map(|b| backend_label(b).to_string())
 }
 
 /// Check if setup is needed (no users in the active store at all).

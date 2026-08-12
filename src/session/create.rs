@@ -73,10 +73,14 @@ impl SessionManager {
         let settings: Vec<(String, String)> = match &self.db {
             Some(db) => {
                 let db = db.clone();
-                tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db))
-                    .await
-                    .unwrap_or_default()
-                    .unwrap_or_default()
+                match tokio::task::spawn_blocking(move || {
+                    crate::settings_merge::load_db_settings(&db)
+                })
+                .await
+                {
+                    Ok(rows) => rows.unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                }
             }
             None => Vec::new(),
         };
@@ -1460,7 +1464,7 @@ async fn check_allowed_network(
 
 /// Which `enable_*` lockdown toggle gates a session type. `Vnc` has no
 /// toggle (the settings page offers none) and is never blocked here.
-fn protocol_toggle(session_type: SessionType) -> Option<&'static str> {
+fn protocol_toggle(session_type: &SessionType) -> Option<&'static str> {
     match session_type {
         SessionType::Rdp => Some("enable_rdp"),
         // The settings page has no `enable_ssh` toggle; SSH sessions are
@@ -1475,7 +1479,7 @@ fn protocol_toggle(session_type: SessionType) -> Option<&'static str> {
 }
 
 /// Human label for the disabled-protocol error message.
-fn protocol_label(session_type: SessionType) -> &'static str {
+fn protocol_label(session_type: &SessionType) -> &'static str {
     match session_type {
         SessionType::Rdp => "RDP",
         SessionType::Ssh => "SSH",
@@ -1497,11 +1501,11 @@ fn check_session_type_enabled(
     address_book_entry: Option<&str>,
     toggle: impl Fn(&str) -> bool,
 ) -> Result<(), SessionError> {
-    if let Some(key) = protocol_toggle(session_type) {
+    if let Some(key) = protocol_toggle(&session_type) {
         if !toggle(key) {
             return Err(SessionError::ValidationError(format!(
                 "{} sessions are disabled by an administrator",
-                protocol_label(session_type)
+                protocol_label(&session_type)
             )));
         }
     }
@@ -1766,7 +1770,7 @@ mod tests {
         SessionType::Proxmox,
     ];
 
-    fn only_off(disabled: &[&str]) -> impl Fn(&str) -> bool {
+    fn only_off<'a>(disabled: &'a [&'a str]) -> impl Fn(&str) -> bool + 'a {
         let disabled = disabled.to_vec();
         move |k: &str| !disabled.contains(&k)
     }
@@ -1775,7 +1779,7 @@ mod tests {
     fn all_protocols_allowed_when_toggles_unset() {
         for st in ALL_TYPES {
             assert!(
-                check_session_type_enabled(st, None, |_| true).is_ok(),
+                check_session_type_enabled(st.clone(), None, |_| true).is_ok(),
                 "{:?} should be allowed when everything is enabled",
                 st
             );
@@ -1787,7 +1791,7 @@ mod tests {
         let err = check_session_type_enabled(SessionType::Rdp, None, only_off(&["enable_rdp"]))
             .unwrap_err();
         assert!(
-            format!("{}", err).contains("RDP is disabled by an administrator"),
+            format!("{}", err).contains("RDP sessions are disabled by an administrator"),
             "got: {}",
             err
         );
@@ -1813,7 +1817,7 @@ mod tests {
             (SessionType::Web, "enable_web_sessions", "Web browser"),
             (SessionType::Vdi, "enable_vdi", "VDI"),
         ] {
-            let err = check_session_type_enabled(st, None, only_off(&[key])).unwrap_err();
+            let err = check_session_type_enabled(st.clone(), None, only_off(&[key])).unwrap_err();
             assert!(
                 format!("{}", err).contains(&format!(
                     "{} sessions are disabled by an administrator",
@@ -1829,10 +1833,14 @@ mod tests {
     fn a_disabled_toggle_only_blocks_its_own_protocol() {
         for st in ALL_TYPES {
             if st == SessionType::Spice {
-                assert!(check_session_type_enabled(st, None, only_off(&["enable_spice"])).is_err());
+                assert!(
+                    check_session_type_enabled(st.clone(), None, only_off(&["enable_spice"]))
+                        .is_err()
+                );
             } else {
                 assert!(
-                    check_session_type_enabled(st, None, only_off(&["enable_spice"])).is_ok(),
+                    check_session_type_enabled(st.clone(), None, only_off(&["enable_spice"]))
+                        .is_ok(),
                     "{:?} must not be affected by enable_spice",
                     st
                 );
@@ -1863,8 +1871,12 @@ mod tests {
                 .is_ok()
         );
         assert!(
-            check_session_type_enabled(SessionType::Rdp, Some("shared/folder/entry"), |_| false)
-                .is_ok(),
+            check_session_type_enabled(
+                SessionType::Rdp,
+                Some("shared/folder/entry"),
+                only_off(&["enable_vmware"]),
+            )
+            .is_ok(),
             "non-vSphere entries must not be gated by enable_vmware"
         );
     }
