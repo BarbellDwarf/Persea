@@ -7,18 +7,18 @@
 
 Parallel subagents do NOT build concurrently. Cargo serializes builds via the
 `target/` lock, so N parallel `cargo check` runs queue and slow each other
-down — and concurrent `git add`/`commit` contend on `.git/index.lock`
+down, and concurrent `git add`/`commit` contend on `.git/index.lock`
 (which has already wiped an agent's work once in this project).
 
 Instead:
 
-1. **Subagents edit files and commit immediately** — no `cargo check`, no
+1. **Subagents edit files and commit immediately**: no `cargo check`, no
    `cargo test`, no `cargo fmt` inside the subagent. Fast edits, fast
    commits, minimal git contention.
-2. **A single verification pass runs AFTER all subagents land** — the
+2. **A single verification pass runs AFTER all subagents land**: the
    dispatcher runs `cargo check` + `cargo test` + `cargo fmt --check` once
    and fixes any issues. One build instead of N queued builds.
-3. **Subagents work on disjoint files only** — no two agents touch the same
+3. **Subagents work on disjoint files only**: no two agents touch the same
    file, so a broken commit is isolated and fixed in the verification pass.
 
 ## Mandatory rules for subagents
@@ -37,12 +37,12 @@ Instead:
 
 After all subagents in a batch land:
 
-1. `cargo check` — must pass with 0 errors
-2. `cargo test` — must pass. Fix any NEW failures introduced by the batch.
+1. `cargo check`: must pass with 0 errors
+2. `cargo test`: must pass. Fix any NEW failures introduced by the batch.
    Pre-existing failures (unrelated to the batch) are noted, not fixed.
-3. `cargo fmt --check` — must pass. Run `cargo fmt` if not.
-4. `git status` — confirm only intended files changed; commit any strays.
-5. Push, then check CI (`gh run list`) — CI must be green before moving on.
+3. `cargo fmt --check`: must pass. Run `cargo fmt` if not.
+4. `git status`: confirm only intended files changed; commit any strays.
+5. Push, then check CI (`gh run list`): CI must be green before moving on.
 
 ## Why this exists
 

@@ -1,7 +1,7 @@
 # Reports
 
-This page explains the usage reports persea can produce — who used what, when,
-and for how long — and how to export the data. Reports are for **powerusers
+This page explains the usage reports persea can produce: who used what, when,
+and for how long, and how to export the data. Reports are for **powerusers
 and admins**; operators and viewers get a 403 on every reports endpoint.
 
 The Reports page lives at **Admin → Reports** (`/admin/reports.html`) and
@@ -14,10 +14,10 @@ can also script.
 
 The top of the page shows four numbers:
 
-- **Total Sessions** — lifetime session count (within the retention window).
-- **Total Hours** — cumulative session time.
-- **Unique Users** — how many distinct users created sessions.
-- **Active Now** — sessions currently in progress.
+- **Total Sessions**: lifetime session count (within the retention window).
+- **Total Hours**: cumulative session time.
+- **Unique Users**: how many distinct users created sessions.
+- **Active Now**: sessions currently in progress.
 
 ---
 
@@ -31,9 +31,9 @@ exists.
 
 The table supports:
 
-- **Text filter** — narrow results across all visible columns.
-- **Column sorting** — click a column header to sort.
-- **Pagination** — 100 rows at a time.
+- **Text filter**: narrow results across all visible columns.
+- **Column sorting**: click a column header to sort.
+- **Pagination**: 100 rows at a time.
 
 ### CSV export
 
@@ -45,7 +45,7 @@ current page.
 CSV columns: `Session ID, Type, Hostname, Username, User, Entry, Folder,
 Started, Ended, Duration (secs), Status, Recording`.
 
-Example — last month's SSH sessions via the API:
+Example, last month's SSH sessions via the API:
 
 ```bash
 curl -H "Authorization: Bearer YOUR_API_KEY" \
@@ -67,9 +67,9 @@ default. The API's `hours` parameter extends the window to anything from
 
 Two side-by-side panels at the bottom of the page:
 
-- **Top Connections** — the most-used connections, ranked by session count,
+- **Top Connections**: the most-used connections, ranked by session count,
   with total hours.
-- **Top Users** — the most active users, ranked by session count, with total
+- **Top Users**: the most active users, ranked by session count, with total
   hours and last session time.
 
 ---
@@ -85,7 +85,7 @@ or download the file.
 - **poweruser and above**: list and play recordings.
 - **admin**: delete recordings.
 - Automatic cleanup is governed by the `[recording]` section (max count,
-  disk-usage percentage) — see [Configuration](configuration.md#recording-section).
+  disk-usage percentage), see [Configuration](configuration.md#recording-section).
 
 ---
 

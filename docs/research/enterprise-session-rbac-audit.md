@@ -1,10 +1,10 @@
 # Enterprise Session Management, RBAC, and Audit Patterns for persea
 
-> **Design record.** This is a historical design document: the research that decided which enterprise features persea would build, and how. It is not a user guide — see [Roles and Access Control](../roles-and-access-control.md) for session lifecycle and RBAC, and [Security](../security-hardening.md#audit-log-tamper-evident-hash-chain) for the audit log.
+> **Design record.** This is a historical design document: the research that decided which enterprise features persea would build, and how. It is not a user guide: see [Roles and Access Control](../roles-and-access-control.md) for session lifecycle and RBAC, and [Security](../security-hardening.md#audit-log-tamper-evident-hash-chain) for the audit log.
 
 ## What this document is
 
-Before persea had session limits, per-connection permissions, or tamper-evident audit logs, this document surveyed how four reference systems handle the problem — Apache Guacamole (the product persea replaces), Teleport, HashiCorp Boundary, plus the NIST 800-53 / 800-63B and SOC 2 compliance frameworks — and decided what persea should build and how.
+Before persea had session limits, per-connection permissions, or tamper-evident audit logs, this document surveyed how four reference systems handle the problem: Apache Guacamole (the product persea replaces), Teleport, HashiCorp Boundary, plus the NIST 800-53 / 800-63B and SOC 2 compliance frameworks, and decided what persea should build and how.
 
 **What was decided and shipped:**
 
@@ -36,7 +36,7 @@ Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-
 
 **Idle Timeout:**
 - `api-session-timeout` (default 60 minutes) controls **authentication token** expiry, NOT remote desktop connection idle timeout
-- Guacamole considers an open remote desktop connection as "user activity" regardless of mouse/keyboard input — so `api-session-timeout` does NOT close idle remote sessions
+- Guacamole considers an open remote desktop connection as "user activity" regardless of mouse/keyboard input: so `api-session-timeout` does NOT close idle remote sessions
 - Remote desktop idle timeout must be configured on the **target server** (e.g., Windows Group Policy "Idle session limit", SSH `ClientAliveInterval`/`ClientAliveCountMax`)
 - **Key insight for persea**: idle timeout must be implemented at the WebSocket/guacd level, not at the HTTP session level
 
@@ -54,7 +54,7 @@ Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-
 **Session Recording:**
 - Four recording modes: `node-sync`, `node`, `proxy-sync`, `proxy`
   - `node` (default): recording at SSH node, async
-  - `proxy`: recording at proxy, decrypts SSH traffic — tamper-resistant from agent side
+  - `proxy`: recording at proxy, decrypts SSH traffic: tamper-resistant from agent side
   - `*-sync` variants: synchronous, blocks session until recording is flushed
 - Enhanced session recording: eBPF-based, captures commands, disk access, network connections
 - Recordings stored as structured JSON events + video, in S3/GCS
@@ -64,7 +64,7 @@ Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-
 
 **Per-Session MFA:**
 - Enabled via `require_session_mfa: true` on role
-- Can be set cluster-wide or per-role (logical OR — if any role requires it, MFA is enforced)
+- Can be set cluster-wide or per-role (logical OR: if any role requires it, MFA is enforced)
 - `mfa_verification_interval` controls re-verification frequency
 - Applies to resources in the role's `allow` section only
 
@@ -85,7 +85,7 @@ Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-
 - `session_connection_limit`: max connections per session (-1 = unlimited)
 
 **Session Termination:**
-- Permissions evaluated only at session establishment — role changes don't affect existing sessions
+- Permissions evaluated only at session establishment: role changes don't affect existing sessions
 - Sessions terminated when: user disconnects, max duration reached, admin cancels, or credential expires
 
 **Scope-Based Access:**
@@ -103,13 +103,13 @@ Research compiled from Apache Guacamole, Teleport, HashiCorp Boundary, NIST 800-
 **Idle Timeout Implementation:**
 - Track last WebSocket activity timestamp per session
 - On timeout: close WebSocket → sends disconnect to guacd → guacd closes protocol connection
-- What gets terminated: **both** — the WebSocket proxy connection AND the guacd TCP connection
+- What gets terminated: **both**: the WebSocket proxy connection AND the guacd TCP connection
 - The guacd connection is a child of the WebSocket; closing the parent kills the child
 - Implement at the proxy layer (persea websocket.rs), not at HTTP session level
 
 **Max Duration:**
 - Hard cap per-session (configurable, default 8 hours like Boundary)
-- Separate from idle timeout — forces re-authentication even for active sessions
+- Separate from idle timeout: forces re-authentication even for active sessions
 
 ---
 
@@ -180,7 +180,7 @@ spec:
 - **Grant strings**: `id=;type=;actions=output_fields`
 - **Resources**: targets, host-catalogs, credential-stores, sessions, etc.
 - **Actions**: list, read, update, delete, authorize-session, etc.
-- **`authorize-session`**: the critical permission — who can connect to what
+- **`authorize-session`**: the critical permission: who can connect to what
 - **Managed groups**: auto-populated from IdP group membership
 
 ### persea Role Assessment
@@ -233,14 +233,14 @@ CREATE TABLE connection_permissions (
 - **Timestamp** (when)
 - **Source location** (where in the system)
 - **Outcome** (success/failure)
-- **Identity** (who — user, process)
+- **Identity** (who: user, process)
 - **Additional context** (source IP, target resource, session ID)
 
 ### SOC 2 Requirements (CC6.1, CC6.6, CC6.7)
 
-- CC6.1: Logical access controls — restrict who can access what
-- CC6.6: Restrict remote access — system boundary protection
-- CC6.7: Monitor and control remote access — session logging, audit trails
+- CC6.1: Logical access controls: restrict who can access what
+- CC6.6: Restrict remote access: system boundary protection
+- CC6.7: Monitor and control remote access: session logging, audit trails
 - Evidence required: session logs showing who connected, when, which device, session activity
 
 ### Apache Guacamole Audit Model
@@ -253,7 +253,7 @@ CREATE TABLE connection_permissions (
 - Tracks active sessions with: user, duration, source IP, connection name
 
 **Key limitations:**
-- No structured JSON events — just database rows
+- No structured JSON events: just database rows
 - No syslog/SIEM integration built-in
 - Recordings are proprietary format (`.guac`)
 
@@ -293,12 +293,12 @@ CREATE INDEX IF NOT EXISTS idx_ae_outcome ON audit_events(outcome);
 
 ### Syslog/CEF/LEEF Format for SIEM Integration
 
-**CEF (Common Event Format)** — preferred for Splunk, ArcSight, QRadar:
+**CEF (Common Event Format)**, preferred for Splunk, ArcSight, QRadar:
 ```
 CEF:0|persea|persea|1.0|session.start|Session Started|5|src=10.0.0.1 suser=admin@example.com destinationServiceName=ssh-target1 cs1=uuid-here cs1Label=sessionId cs2=ssh cs2Label=sessionType
 ```
 
-**LEEF (Log Event Extended Format)** — IBM QRadar native:
+**LEEF (Log Event Extended Format)**, IBM QRadar native:
 ```
 LEEF:1.0|persea|persea|1.0|session.start|devTime=2024-01-15T10:30:00Z|src=10.0.0.1 usrName=admin@example.com sessionId=uuid-here sessionType=ssh target=ssh-target1
 ```
@@ -399,7 +399,7 @@ CREATE TABLE password_history (
 );
 ```
 
-**Account Lockout — Progressive vs Permanent:**
+**Account Lockout: Progressive vs Permanent**
 
 NIST recommends **progressive delay**, not permanent lockout:
 - 1st-5th failure: no delay
@@ -479,21 +479,21 @@ CREATE TABLE jit_requests (
 
 ### Shipped (implemented)
 
-1. **Idle timeout at the WebSocket/proxy level** — last-activity tracking terminates both the WebSocket and the guacd connection
-2. **Max session duration** — hard cap (default 8 hours), independent of idle timeout
-3. **Concurrent session limits** — global and per-user caps
-4. **Connection-level permissions** — group-based object permissions (read/connect/update/delete/administer) on connections and folders, with recursive group inheritance
-5. **Hash-chain audit log** — SHA-256 chained events with on-demand verification
-6. **Password policy** — Argon2id with OWASP parameters, 15-character minimum, reuse history, account lockout after repeated failures
-7. **Login-time MFA** — TOTP second factor in the auth chain
+1. **Idle timeout at the WebSocket/proxy level**: last-activity tracking terminates both the WebSocket and the guacd connection
+2. **Max session duration**: hard cap (default 8 hours), independent of idle timeout
+3. **Concurrent session limits**: global and per-user caps
+4. **Connection-level permissions**: group-based object permissions (read/connect/update/delete/administer) on connections and folders, with recursive group inheritance
+5. **Hash-chain audit log**: SHA-256 chained events with on-demand verification
+6. **Password policy**: Argon2id with OWASP parameters, 15-character minimum, reuse history, account lockout after repeated failures
+7. **Login-time MFA**: TOTP second factor in the auth chain
 
 ### Not implemented (future work)
 
-8. **Syslog forwarding** — structured JSON / CEF / LEEF to a remote SIEM
-9. **Time-based access windows** — time-of-day restrictions on connections
-10. **JIT access requests** — approval workflows with auto-expiring permissions
-11. **Per-session MFA** — OIDC re-authentication prompts on sensitive connections
-12. **Keystroke-level session recording** — command capture (Teleport eBPF model)
+8. **Syslog forwarding**: structured JSON / CEF / LEEF to a remote SIEM
+9. **Time-based access windows**: time-of-day restrictions on connections
+10. **JIT access requests**: approval workflows with auto-expiring permissions
+11. **Per-session MFA**: OIDC re-authentication prompts on sensitive connections
+12. **Keystroke-level session recording**: command capture (Teleport eBPF model)
 
 ---
 

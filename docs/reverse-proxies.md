@@ -9,15 +9,15 @@ A **reverse proxy** is a server that sits in front of persea and
 forwards web traffic to it, so visitors talk to the proxy instead of to
 persea directly. Typical reasons to use one:
 
-- **TLS termination** — the proxy holds a real CA-issued certificate
+- **TLS termination**: the proxy holds a real CA-issued certificate
   (Let's Encrypt, etc.) and handles HTTPS; persea can stay on plain
   HTTP on the loopback interface.
-- **A friendly hostname and port** — one public address can host
+- **A friendly hostname and port**: one public address can host
   persea alongside other services, with routing by hostname.
 - **Rate limiting, access control, and request filtering** at the edge,
   where HAProxy/Knocknoc-style gateways integrate with your network
   policies.
-- **Protection from exposure** — persea listens only on loopback
+- **Protection from exposure**: persea listens only on loopback
   (`127.0.0.1:8089` by default), so it is never directly reachable.
 
 persea is designed for this: it runs happily behind a TLS-terminating
@@ -26,7 +26,7 @@ trust, and forwards WebSocket connections for session streams. The
 primary supported path is **HAProxy + Knocknoc** (see
 [`haproxy.example.cfg`](../haproxy.example.cfg) and
 [`integrations.md`](integrations.md)), which is what persea runs in
-production. This document covers nginx, Caddy, Apache, and Traefik —
+production. This document covers nginx, Caddy, Apache, and Traefik,
 and one gotcha that affects nested folder paths across several of them.
 
 ## Tell persea about the proxy
@@ -47,7 +47,7 @@ This does two things:
    based on `X-Forwarded-Proto: https` when the immediate peer is
    trusted. A client-supplied header from an untrusted source is
    ignored. This matters because the session cookie gets the `Secure`
-   attribute only when persea believes the connection is HTTPS — and a
+   attribute only when persea believes the connection is HTTPS, and a
    `Secure` cookie over plain HTTP would never be sent by the browser.
 
 Without `trusted_proxies`, every request appears to come from the
@@ -61,7 +61,7 @@ Session streams run over WebSockets (paths `/ws/{id}` and
 
 - Forward the `Upgrade`/`Connection` headers (nginx and Apache need
   explicit directives; Caddy and Traefik handle it automatically).
-- Allow long-lived connections. A session can run for hours — proxy
+- Allow long-lived connections. A session can run for hours: proxy
   timeouts that are too short kill sessions mid-stream. Match persea's
   `session_max_duration_secs` (default 8 hours) where possible.
 
@@ -117,7 +117,7 @@ Notes:
 
 Caddy's `reverse_proxy` directive forwards the raw request URI by
 default, so nested folders work out of the box, and WebSocket support
-is automatic — no extra directives needed:
+is automatic; no extra directives needed:
 
 ```caddyfile
 console.example.com {
@@ -245,10 +245,10 @@ you get a 404 on every subfolder click. Top-level folders work fine
 because they have no `%2F` in their URLs.
 
 **Symptom:** HTTP 404 from persea specifically for nested subfolder
-operations — top-level folders work, subfolders don't.
+operations; top-level folders work, subfolders don't.
 
-**Fix per proxy:** nginx — `proxy_pass` with no path component (above).
-Apache — `nocanon` (above). Caddy, Traefik, HAProxy — nothing needed;
+**Fix per proxy:** nginx: `proxy_pass` with no path component (above).
+Apache: `nocanon` (above). Caddy, Traefik, HAProxy: nothing needed;
 they pass the URI through by default.
 
 **Verify the fix:**
@@ -278,11 +278,11 @@ extra path segments along the way).
   `session_max_duration_secs` (8 h default).
 - **TLS mismatch on the upstream.** The examples above use
   `https://localhost:8089` because a self-signed loopback cert is the
-  common setup — so the proxy must skip verification
+  common setup, so the proxy must skip verification
   (`tls_insecure_skip_verify` in Caddy, `SSLProxyVerify none` in
   Apache, `insecureSkipVerify` in Traefik). If you run persea on plain
   HTTP, use `http://localhost:8089` instead and drop those directives.
-- **Exposing `/metrics`.** It is unauthenticated — restrict it via the
+- **Exposing `/metrics`.** It is unauthenticated: restrict it via the
   proxy's ACL rules (see [API Reference](api.md#get-metrics--prometheus-metrics)).
 
 ## Self-signed certs and `secure_cookies`
@@ -293,5 +293,5 @@ attribute is omitted from all cookies regardless of headers, and
 `X-Forwarded-Proto` is not consulted. Browsers block `Secure` cookies
 over untrusted connections, so this is what makes login work behind a
 self-signed loopback cert. With a real CA-issued certificate, leave
-`secure_cookies` at its default (`true`) — see
+`secure_cookies` at its default (`true`): see
 [Security Hardening](security-hardening.md#cookies-and-the-secure-attribute).

@@ -3,9 +3,9 @@
 This page covers how the persea web UI looks and how to change it. There are
 two independent layers:
 
-1. **Per-user appearance** — every user can pick a colour preset and a
+1. **Per-user appearance**: every user can pick a colour preset and a
    dark/light mode. Stored per browser.
-2. **Deployment branding** — the site title, logo, and primary colour shown
+2. **Deployment branding**: the site title, logo, and primary colour shown
    to everyone, set by an admin.
 
 They combine: a user who hasn't picked anything sees the deployment's
@@ -19,11 +19,11 @@ branding; a user who picks a preset sees their own choice.
   at the top-right of every page (it cycles **auto → dark → light**), and
   pick a colour preset under **My Profile → Appearance → Color Accent**. Your
   choices are stored in your browser and follow you across sessions on that
-  machine — they don't affect anyone else.
+  machine; they don't affect anyone else.
 - **Want to brand the whole deployment?** Use the admin **Branding** page
-  (title, logo, colour) — see below — or the `[theme]` block in
+  (title, logo, colour; see below) or the `[theme]` block in
   `config.toml` for full control.
-- **Want a custom palette?** Drop a theme file into the themes directory —
+- **Want a custom palette?** Drop a theme file into the themes directory:
   no recompiling, no patches.
 
 ---
@@ -47,10 +47,10 @@ Plus any user-supplied themes you've added (see below).
 
 ## Per-user appearance
 
-- **Mode** — the header toggle cycles **auto → dark → light** (auto follows
+- **Mode**: the header toggle cycles **auto → dark → light** (auto follows
   your operating system's preference). The same choice is under **My Profile
   → Appearance → Mode**.
-- **Color Accent** — **My Profile → Appearance → Color Accent** lists
+- **Color Accent**: **My Profile → Appearance → Color Accent** lists
   **default** plus every built-in and user-supplied preset.
 
 Both choices persist in browser storage (localStorage), so they follow the
@@ -59,7 +59,7 @@ user across sessions on that browser but don't affect anyone else.
 > **How presets and branding interact:** the frontend only applies a preset
 > when the user has *explicitly chosen one*. A user on **default** (or who
 > has never picked anything) sees the deployment's branding if the admin
-> configured any — otherwise the app's original green look. The admin
+> configured any: otherwise the app's original green look. The admin
 > configured preset is **not** force-applied to users who haven't chosen it.
 
 ---
@@ -69,11 +69,11 @@ user across sessions on that browser but don't affect anyone else.
 The **Admin → Branding** page (`/admin/branding.html`) is the quick way to
 brand the deployment. It lets an admin set:
 
-- **Site title** — shown in the sidebar and page titles.
-- **Logo** — either a URL (`https://...` or a relative path like
+- **Site title**: shown in the sidebar and page titles.
+- **Logo**: either a URL (`https://...` or a relative path like
   `/uploads/logo/logo.png`) or an uploaded file (PNG, SVG, JPG, or ICO,
   max 2 MB).
-- **Primary colour** — used for the sidebar active state, buttons, and
+- **Primary colour**: used for the sidebar active state, buttons, and
   accents.
 
 The page shows a live preview as you type. Saved values are stored in the
@@ -103,7 +103,7 @@ primary_color = "#003366"    # any of the per-field overrides below
 
 Every colour in a theme can be overridden individually; the override wins and
 the preset provides the rest. All values are CSS colour strings (`"#003366"`,
-`"rgb(0,51,102)"`, `"hsl(210 100% 20%)"` — anything CSS accepts).
+`"rgb(0,51,102)"`, `"hsl(210 100% 20%)"`, anything CSS accepts).
 
 | Key | What it colours |
 |-----|-----------------|
@@ -153,7 +153,7 @@ and can be selected as `preset = "<name>"` in `config.toml`.
 ### File format
 
 A theme file is a flat TOML table with one entry per colour. The filename
-(minus `.toml`) is the theme's id — there is **no** `name` field inside the
+(minus `.toml`) is the theme's id: there is **no** `name` field inside the
 file. Field names match the per-field overrides above **without** the
 `_color` suffix (`primary`, not `primary_color`); the sole exception is
 `bg_pattern`, which defaults to `"none"` if omitted. All other fields are
@@ -195,7 +195,7 @@ bg_pattern       = "none"
 ```
 
 A complete example ships with persea at
-`static/themes/catppuccin-macchiato.toml` — copy it and tweak.
+`static/themes/catppuccin-macchiato.toml`: copy it and tweak.
 
 ### Naming rules
 
@@ -214,7 +214,7 @@ own `aurora.toml` rather than patching the source.
 
 ### Loading rules
 
-- Themes are loaded **once at startup** — restart persea after adding,
+- Themes are loaded **once at startup**: restart persea after adding,
   editing, or removing a theme file.
 - Only `.toml` files are loaded.
 - Files missing required fields are skipped with a parse warning.

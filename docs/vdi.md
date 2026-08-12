@@ -3,7 +3,7 @@
 > **Audience:** admins enabling VDI sessions (Docker desktop containers per user).
 > **Next:** [Configuration](configuration.md#vdi-section) for the `[vdi]` section, or [Installation](installation.md) to set up Docker.
 
-VDI (Virtual Desktop Infrastructure) gives each user their **own Linux desktop running in a Docker container**, streamed to their browser over RDP. persea creates the container on demand, connects guacd to it, and the user gets a full desktop — no client software installed, nothing running on their machine.
+VDI (Virtual Desktop Infrastructure) gives each user their **own Linux desktop running in a Docker container**, streamed to their browser over RDP. persea creates the container on demand, connects guacd to it, and the user gets a full desktop, no client software installed, nothing running on their machine.
 
 Use it when users need a real desktop environment (file manager, graphical apps, multiple windows) rather than a single application streamed by a web session.
 
@@ -30,7 +30,7 @@ Use it when users need a real desktop environment (file manager, graphical apps,
   sudo systemctl restart persea
   ```
 
-- **At least one Docker image with xrdp** pre-pulled on the host. persea never pulls images automatically — the image must already exist locally (see [Docker image requirements](#docker-image-requirements)).
+- **At least one Docker image with xrdp** pre-pulled on the host. persea never pulls images automatically: the image must already exist locally (see [Docker image requirements](#docker-image-requirements)).
 
 ## Configuration
 
@@ -52,7 +52,7 @@ enabled = true
 # allowed_images = ["myregistry/desktop:latest"]   # whitelist, empty = allow all
 ```
 
-VDI can also be toggled from **Admin → Settings** — the `enable_vdi` switch gates the feature (default: on). Sessions are refused while either the setting or `[vdi] enabled` is off.
+VDI can also be toggled from **Admin → Settings**: the `enable_vdi` switch gates the feature (default: on). Sessions are refused while either the setting or `[vdi] enabled` is off.
 
 ## Docker image requirements
 
@@ -63,8 +63,8 @@ The image must run an xrdp server on port 3389. There are two ways to handle the
 The image's entrypoint reads `VDI_USERNAME` and `VDI_PASSWORD` from its environment, creates the account, and starts xrdp. This is the default flow:
 
 - `VDI_USERNAME` derives from the operator's identity (everything before `@`, lowercased, non-alphanumeric characters replaced with `_`)
-- `VDI_PASSWORD` is freshly generated per connect (32 random hex characters) — the user never sees it, because persea uses it for the RDP login automatically
-- Container names are deterministic per operator — `persea-vdi-<username>` for ad-hoc sessions, `persea-vdi-<username>-<entry>` when connecting via a connections entry — so reconnects reuse the same container
+- `VDI_PASSWORD` is freshly generated per connect (32 random hex characters): the user never sees it, because persea uses it for the RDP login automatically
+- Container names are deterministic per operator, `persea-vdi-<username>` for ad-hoc sessions, `persea-vdi-<username>-<entry>` when connecting via a connections entry, so reconnects reuse the same container
 - xrdp is configured with TLS certificates
 
 A minimal example image lives at `contrib/vdi-test-image/` (Debian + xfce4).
@@ -111,7 +111,7 @@ exec xrdp --nodaemon
 1. Create a folder in the connections (or use an existing one)
 2. Add a new entry with type **VDI (Docker)**
 3. Set the **Container Image** (e.g. `persea-vdi-test:latest`)
-4. Optionally set per-entry overrides — CPU limit, memory limit, environment variables, idle timeout — as entry fields (`container_cpu_limit`, `container_memory_limit`, `container_env`, `container_idle_timeout_mins`). These are part of the entry schema/API; the Connections UI currently exposes only the container image and container password, so set the rest via the address-book API if needed
+4. Optionally set per-entry overrides (CPU limit, memory limit, environment variables, idle timeout) as entry fields (`container_cpu_limit`, `container_memory_limit`, `container_env`, `container_idle_timeout_mins`). These are part of the entry schema/API; the Connections UI currently exposes only the container image and container password, so set the rest via the address-book API if needed
 5. For Pattern B images, set `container_username` / `container_password` to match the baked-in account (the UI exposes the password; the username is set via the entry API). Otherwise leave them blank and the image's entrypoint provisions the account from `VDI_USERNAME` / `VDI_PASSWORD`
 6. Click Save
 
@@ -130,7 +130,7 @@ Users in the folder's allowed groups can now click Connect to get a desktop.
 
 ## Persistent home directories
 
-Set `home_base` to give users persistent storage — files survive container restarts:
+Set `home_base` to give users persistent storage: files survive container restarts:
 
 ```toml
 [vdi]
@@ -139,7 +139,7 @@ home_base = "/vdi-homes"
 
 Each user gets `{home_base}/{username}` mounted as `/home/{username}` inside the container. The directory is created automatically on first use.
 
-In the Docker image, the `vdi-homes` volume is mounted at `/opt/persea/vdi-homes` — set `home_base` to that path there. On bare metal any writable directory works (e.g. `/vdi-homes`).
+In the Docker image, the `vdi-homes` volume is mounted at `/opt/persea/vdi-homes`: set `home_base` to that path there. On bare metal any writable directory works (e.g. `/vdi-homes`).
 
 ## Active Sessions
 
@@ -147,30 +147,30 @@ The connections page shows an **Active Sessions** section with thumbnail preview
 
 ## Container hook
 
-Set `container_hook_script` when persea needs an external command to prepare or tear down access to a container's mapped RDP port — for example, to program a firewall rule so the localhost port is reachable. persea calls the script as:
+Set `container_hook_script` when persea needs an external command to prepare or tear down access to a container's mapped RDP port, for example, to program a firewall rule so the localhost port is reachable. persea calls the script as:
 
 ```bash
 /opt/persea/vdi-container-hook.sh up   <port> <container_id> <container_name>
 /opt/persea/vdi-container-hook.sh down <port> <container_id> <container_name>
 ```
 
-`up` runs after Docker has assigned the RDP port and before persea checks whether xrdp is ready on `127.0.0.1:<port>` — the script should return only once the local listener is available. `down` runs before persea stops and removes the container. Execution is limited by `container_hook_timeout_secs` (default: 10 seconds).
+`up` runs after Docker has assigned the RDP port and before persea checks whether xrdp is ready on `127.0.0.1:<port>`: the script should return only once the local listener is available. `down` runs before persea stops and removes the container. Execution is limited by `container_hook_timeout_secs` (default: 10 seconds).
 
 ## Per-entry settings
 
 Each VDI connections entry can override:
 
-- **CPU limit** (cores) — overrides `default_cpu_limit`
-- **Memory limit** (MB) — overrides `default_memory_limit`
-- **Idle timeout** (minutes) — overrides `idle_timeout_mins`
-- **Environment variables** — custom `KEY=VALUE` pairs passed to the container
-- **Banner** — message shown before the session starts
+- **CPU limit** (cores): overrides `default_cpu_limit`
+- **Memory limit** (MB): overrides `default_memory_limit`
+- **Idle timeout** (minutes): overrides `idle_timeout_mins`
+- **Environment variables**: custom `KEY=VALUE` pairs passed to the container
+- **Banner**: message shown before the session starts
 
 ## Resource notes
 
 - Every active desktop is a running container: CPU, memory, and disk. Size the Docker host for the expected peak number of concurrent desktops, and use `default_cpu_limit` / `default_memory_limit` (and per-entry overrides) so one heavy desktop cannot starve the host.
-- `idle_timeout_mins` (default 60) controls how long a disconnected container lingers. Lower it to reclaim resources faster; note that users lose unsaved work when an idle container is reaped.
-- Images must be pre-pulled on the host — plan for image size and disk space.
+- `idle_timeout_mins` (default 60) controls how long a disconnected container lingers. Lower it to reclaim resources faster; users lose unsaved work when an idle container is reaped.
+- Images must be pre-pulled on the host: plan for image size and disk space.
 - When `port_range_start`/`port_range_end` are set, Docker binds each container's RDP port inside that localhost range; when unset, Docker picks a random free port.
 
 ## Security notes

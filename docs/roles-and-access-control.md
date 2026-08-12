@@ -7,9 +7,9 @@ limits.
 
 There are two separate layers of access control, and they work together:
 
-1. **Roles** — a coarse, system-wide level (viewer → operator → poweruser →
+1. **Roles**: a coarse, system-wide level (viewer → operator → poweruser →
    admin) that decides what a user can do at all.
-2. **Object permissions** — fine-grained grants on individual connections or
+2. **Object permissions**: fine-grained grants on individual connections or
    folders, for cases where roles are too blunt.
 
 ---
@@ -41,7 +41,7 @@ can do everything an operator can, plus the poweruser extras.
 | Own API tokens (self-service) | | | ✓ | ✓ |
 | All API tokens (any user) | | | | ✓ |
 
-(Data APIs — sessions, connections, recordings — start at **operator**; list/play
+(Data APIs: sessions, connections, recordings start at **operator**; list/play
 recordings additionally requires **poweruser**, and deleting recordings
 requires **admin**. A viewer can sign in but gets no data back from the API.)
 
@@ -51,12 +51,12 @@ requires **admin**. A viewer can sign in but gets no data back from the API.)
 
 A user's role comes from three places, in this order of precedence:
 
-1. **Group-to-role mappings** — if the user's groups (from OIDC, LDAP, or
+1. **Group-to-role mappings**: if the user's groups (from OIDC, LDAP, or
    SAML) match a mapping, the highest matching role applies. Re-evaluated on
    every OIDC login.
-2. **Manual assignment** — an admin sets the role directly (Admin page, API,
+2. **Manual assignment**: an admin sets the role directly (Admin page, API,
    or CLI).
-3. **Default role** — brand-new users start with the `default_role` from the
+3. **Default role**: brand-new users start with the `default_role` from the
    `[oidc]` config (default: `operator`).
 
 ---
@@ -64,7 +64,7 @@ A user's role comes from three places, in this order of precedence:
 ## Folder access
 
 The address book is organised into folders. Each folder has an `allowed_groups`
-list — the group names (from your identity provider) that may see it.
+list, the group names (from your identity provider) that may see it.
 
 - **Admins** see all folders.
 - **Operators and powerusers** see only folders where one of their groups is
@@ -83,9 +83,9 @@ list.
 
 **Example:** a folder with `allowed_groups: ["engineering", "devops"]`:
 
-- A user with groups `["engineering", "marketing"]` — **can** access it.
-- A user with groups `["marketing", "sales"]` — **cannot**.
-- An admin — **always can**.
+- A user with groups `["engineering", "marketing"]`: **can** access it.
+- A user with groups `["marketing", "sales"]`: **cannot**.
+- An admin: **always can**.
 
 ---
 
@@ -132,7 +132,7 @@ Per-connection (or per-folder) grants:
 
 When a non-admin starts a session from an entry, persea checks the `connect`
 grant (direct or inherited) and **fails closed** with "No permission to
-connect to this entry" if none matches — an entry with no grants at all is
+connect to this entry" if none matches: an entry with no grants at all is
 connectable only by admins. Folder access is checked first; an RBAC grant
 cannot bypass a folder's `allowed_groups`. Admins bypass all object permission
 checks.
@@ -143,13 +143,13 @@ Connection groups are hierarchical containers you create and manage via the
 admin API (`/api/admin/rbac/groups`):
 
 - Each group has a `parent_id`; grants inherit up the tree.
-- **Membership is explicit** — admins add users by numeric user ID. It is
+- **Membership is explicit**: admins add users by numeric user ID. It is
   *not* derived from your IdP's groups; provider groups feed folder access
   instead (see below).
 - Permission grants reference `u:<user-id>` or `g:<group-id>`.
 
 **Example:** grant `connect` on the "Production Servers" group to the support
-team's connection group — every member can open those servers without any
+team's connection group: every member can open those servers without any
 role change.
 
 > Fine-grained RBAC is an enterprise feature: the management API returns 403
@@ -164,11 +164,11 @@ role change.
 persea maps group memberships from your login provider into the folder-access
 and role system:
 
-- **OIDC** — the `groups` claim from the ID token (configurable via
+- **OIDC**: the `groups` claim from the ID token (configurable via
   `groups_claim`).
-- **LDAP** — resolved from your directory via `group_search_base` /
+- **LDAP**: resolved from your directory via `group_search_base` /
   `group_search_filter`.
-- **SAML** — the attribute named in `groups_attribute`.
+- **SAML**: the attribute named in `groups_attribute`.
 
 These provider groups are what folder `allowed_groups` and group-to-role
 mappings match against. On the **Admin → Groups** page you can see the groups
@@ -200,7 +200,7 @@ API keys and user tokens authenticate to the REST API as a bearer token.
 ### Admin API keys
 
 Created with the CLI (see below). API key holders **always get full admin
-access** — there's no way to scope a key to a lower role. Keys are for
+access**: there's no way to scope a key to a lower role. Keys are for
 automation, CI/CD, and administration. Send them as
 `Authorization: Bearer <key>` or `X-API-Key: <key>`.
 
@@ -243,29 +243,29 @@ access. Operators and viewers can *view* tokens an admin created for them.
 
 ## Setting it up in the admin UI
 
-**1. Create users and set roles** — Admin → Users (`/admin/users.html`): add
+**1. Create users and set roles**, Admin → Users (`/admin/users.html`): add
 users, change roles, disable accounts, and see who logged in from where.
 
-**2. Map groups to roles** — Admin page (`/admin.html`): once people have
+**2. Map groups to roles**, Admin page (`/admin.html`): once people have
 logged in, the groups persea has seen appear here; map them to roles so
 membership assigns roles automatically.
 
-**3. Manage provider groups** — Admin → Groups (`/admin/groups.html`):
+**3. Manage provider groups**, Admin → Groups (`/admin/groups.html`):
 inspect the local groups used for folder access and group-to-role mappings.
 (These are different from RBAC connection groups.)
 
-**4. Restrict folders** — when creating/editing a folder in the Connections
+**4. Restrict folders**, when creating/editing a folder in the Connections
 page, set its `allowed_groups` and inheritance options.
 
-**5. Grant connection permissions** — the Connections page's entry editor
+**5. Grant connection permissions**, the Connections page's entry editor
 (admin only) has a **Connect permissions (RBAC)** section for granting or
 revoking `connect` on that entry to groups or users. Connection groups
 themselves are created via the admin API (`POST /api/admin/rbac/groups`).
 
-**6. Check the audit log** — Admin → Audit Log (`/admin/audit.html`): the
+**6. Check the audit log**, Admin → Audit Log (`/admin/audit.html`): the
 hash-chain audit trail with chain-integrity verification.
 
-**7. Let powerusers automate** — they create their own tokens on the Tokens
+**7. Let powerusers automate**: they create their own tokens on the Tokens
 page (`/tokens.html`, also under Account).
 
 ---
@@ -372,6 +372,6 @@ permission name.
 
 | Endpoint | Notes |
 |----------|-------|
-| `GET /api/health` | Always 200 — for load balancers |
+| `GET /api/health` | Always 200: for load balancers |
 | `GET /api/auth/status` | OIDC-enabled status |
 | `GET /api/me` | Current user info |

@@ -35,7 +35,7 @@ persea generate-cert --hostname your-hostname.example.com --out-dir /opt/persea/
 The install script generates a self-signed certificate by default. If
 you're behind a TLS-terminating reverse proxy (nginx, Caddy, Traefik,
 HAProxy), omit `cert_path`/`key_path` and let persea serve plain HTTP
-on loopback — see [Reverse Proxies](reverse-proxies.md).
+on loopback: see [Reverse Proxies](reverse-proxies.md).
 
 *How to check:* browse to the site and confirm the padlock; or
 `curl -skI https://your-host` and look for a successful TLS handshake.
@@ -46,7 +46,7 @@ on loopback — see [Reverse Proxies](reverse-proxies.md).
 encrypting when they talk over a network; on the same host it is less
 critical.
 
-*How to enable:* set `guacd_cert_path` — persea then connects to guacd
+*How to enable:* set `guacd_cert_path`: persea then connects to guacd
 over TLS, trusting that certificate. This is independent of server
 HTTPS (you can encrypt the guacd leg while a proxy handles the browser
 leg), and guacd must be started with matching TLS flags:
@@ -69,25 +69,25 @@ process. It re-reads `tls.cert_path`/`tls.key_path`, validates the pair
 atomically swaps the served certificate for **new connections**;
 existing connections keep their established session. If the new files
 are invalid, persea logs the error and keeps serving the previous
-certificate. There is no file watcher and no admin-UI upload — SIGHUP
+certificate. There is no file watcher and no admin-UI upload: SIGHUP
 is the only trigger.
 
 ## Cookies and the `Secure` attribute
 
 *What it protects:* session hijacking. The login session cookie
-(`persea_session`) is set with `HttpOnly; Secure; SameSite=Lax` — the
+(`persea_session`) is set with `HttpOnly; Secure; SameSite=Lax`: the
 `HttpOnly` flag keeps page JavaScript from reading it, `Secure` keeps
 it from being sent over plain HTTP, and `SameSite=Lax` stops it being
 attached to cross-site requests.
 
 *How to enable:* `Secure` is added automatically whenever persea
-believes the connection is HTTPS — either persea's own TLS, or a
+believes the connection is HTTPS, either persea's own TLS, or a
 trusted proxy's `X-Forwarded-Proto: https` (see
 [Reverse Proxies](reverse-proxies.md) for the `trusted_proxies`
 requirement).
 
 **The self-signed-cert caveat (important).** Browsers refuse to send
-`Secure` cookies over a connection whose certificate is invalid —
+`Secure` cookies over a connection whose certificate is invalid,
 *even after you click through the certificate warning*. So a
 self-signed cert with `secure_cookies = true` (the default) breaks
 login completely. If you serve a self-signed certificate, set:
@@ -101,7 +101,7 @@ secure_cookies = false
 generate their own self-signed cert; set it by hand if you supplied
 your own cert. With a real CA-issued certificate, leave it `true`.
 
-*How to check:* log in and inspect the cookie — in the browser dev
+*How to check:* log in and inspect the cookie, in the browser dev
 tools or:
 
 ```bash
@@ -114,7 +114,7 @@ no `Secure` when `secure_cookies = false`).
 ## Authentication methods
 
 *What it protects:* the front door. persea supports a pluggable chain
-of methods, tried in config order — first success wins — with an
+of methods, tried in config order, first success wins, with an
 optional TOTP second factor on top. See [Configuration](configuration.md#auth-section)
 for the exact keys.
 
@@ -124,12 +124,12 @@ for the exact keys.
 | **OIDC** | Single sign-on with an existing IdP (Authentik, Keycloak, Okta, Azure AD, Google, ...) | PKCE and nonce validation on every login; 24 h session TTL by default (`auth_session_ttl_secs`) |
 | **LDAP / AD** | Corporate directories | Bind+search; supports `ldaps://`, StartTLS, and group resolution |
 | **RADIUS** | Organisations with an existing RADIUS server | PAP/CHAP/MSCHAPv2; can serve as first factor or MFA step |
-| **SAML 2.0** | Enterprise single sign-on | Enterprise feature — see [Licensing](licensing.md) |
+| **SAML 2.0** | Enterprise single sign-on | Enterprise feature: see [Licensing](licensing.md) |
 | **API key** | Scripts and integrations | See below |
 
 ### TOTP / MFA
 
-*What it protects:* accounts whose password alone is not enough —
+*What it protects:* accounts whose password alone is not enough:
 stolen or weak credentials can't log in without the second factor.
 
 *How to enable:* configure the TOTP provider and pick an enforcement
@@ -145,7 +145,7 @@ Users enroll by scanning a QR code into an authenticator app (Google
 Authenticator, Authy, ...). TOTP enforcement is an Enterprise feature
 (see [Licensing](licensing.md)).
 
-*How to check:* log out and log back in — you should be prompted for a
+*How to check:* log out and log back in: you should be prompted for a
 six-digit code.
 
 ## Account lockout
@@ -157,7 +157,7 @@ tracked per user and source IP. After **5 failed attempts within a
 rolling 15-minute window**, the account is locked: further attempts
 are rejected while more than 5 recent failures remain. The counter
 resets on successful authentication. Users are not told "N attempts
-remaining" — the lockout counter is deliberately not exposed, so an
+remaining": the lockout counter is deliberately not exposed, so an
 attacker can't tell a real account from a fake one.
 
 *How to check:* deliberately enter a wrong password 5 times; the 6th
@@ -168,9 +168,9 @@ out of the window.
 
 *What they protect:* programmatic access. Two kinds exist:
 
-- **Admin API keys** — created in the admin UI. 256-bit random values
+- **Admin API keys**: created in the admin UI. 256-bit random values
   stored as SHA-256 hashes; the plaintext is shown once at creation.
-- **User API tokens** — self-service tokens for OIDC users
+- **User API tokens**: self-service tokens for OIDC users
   (`rgu_`-prefixed, 60 hex chars, also stored as SHA-256 hashes).
   The `rgu_` prefix lets secret scanners recognise a leaked token. The
   effective role is always `min(user_role, token_max_role)`, so a
@@ -189,12 +189,12 @@ out of the window.
   task; revocation is immediate (the hash is deleted).
 
 *How to check:* `GET /api/admin/token-audit` (admin) shows the token
-audit trail — creation, revocation, and use events with IP addresses,
+audit trail: creation, revocation, and use events with IP addresses,
 retained for 90 days.
 
 ## CSRF protection
 
-*What it protects:* cross-site request forgery — a malicious page
+*What it protects:* cross-site request forgery, a malicious page
 tricking a logged-in browser into performing state-changing requests
 against persea.
 
@@ -202,12 +202,12 @@ against persea.
 PUT, DELETE, PATCH) must carry an `X-CSRF-Token` header that exactly
 matches the `csrf_token` cookie (the "double-submit" pattern). Every
 response sets a fresh `csrf_token` cookie; it is deliberately **not**
-`HttpOnly`, so page JavaScript can read it and echo it back — the web
+`HttpOnly`, so page JavaScript can read it and echo it back; the web
 UI's htmx and `fetch()` calls do this automatically. A mismatch
 returns `403` with `{"error": "CSRF token missing or invalid"}`.
 
 *For API scripts:* make one request to learn the cookie, then send it
-back — see the curl workflow in [API Reference](api.md#csrf-requirement).
+back: see the curl workflow in [API Reference](api.md#csrf-requirement).
 
 *How to check:* send a POST without the header and confirm the 403.
 
@@ -227,12 +227,12 @@ back — see the curl workflow in [API Reference](api.md#csrf-requirement).
 The API and session-creation limits are off by default
 (`rate_limit = false`) because behind a rate-limiting reverse proxy or
 access gateway (HAProxy, Knocknoc) limiting is done upstream. The
-WebSocket limit is unconditional — bursts of reconnects (or many users
+WebSocket limit is unconditional; bursts of reconnects (or many users
 behind one NAT) can still be throttled with a 429.
 
 ## Security headers
 
-*What they protect:* browser-level attacks — cross-site scripting
+*What they protect:* browser-level attacks, cross-site scripting
 (XSS), clickjacking, MIME-sniffing, and downgrade attacks.
 
 *How it works (on by default):* every response carries:
@@ -248,7 +248,7 @@ behind one NAT) can still be throttled with a 429.
 
 Every page gets a fresh per-request CSP nonce, and inline scripts in
 the UI carry it (`nonce="{csp_nonce}"`), so an attacker who manages to
-inject a `<script>` tag can't run it — their script lacks the nonce.
+inject a `<script>` tag can't run it: their script lacks the nonce.
 Inline styles are allowed intentionally, for enterprise compatibility.
 
 *How to check:* `curl -skI https://your-host/` and look for the
@@ -256,7 +256,7 @@ headers above.
 
 ## Network allowlists (SSRF protection)
 
-*What it protects:* "server-side request forgery" — a user tricking the
+*What it protects:* "server-side request forgery", a user tricking the
 server into connecting to hosts it shouldn't, such as internal
 infrastructure the browser itself can't reach.
 
@@ -288,9 +288,9 @@ inside the session. Both can be active at once.
 
 ## Audit log (tamper-evident hash chain)
 
-*What it protects:* accountability. Security-relevant events —
-authentication failures, session creation/termination, WebSocket
-connect/disconnect, admin operations — are written to an audit log
+*What it protects:* accountability. Security-relevant events
+(authentication failures, session creation/termination, WebSocket
+connect/disconnect, admin operations) are written to an audit log
 with the client IP. If someone alters a record, the log proves it.
 
 *How it works:* persea maintains a SHA-256 hash chain. Each event
@@ -300,7 +300,7 @@ flags it plus every subsequent event.
 
 *How to check:* two ways.
 
-1. **Admin UI** — Admin → Audit shows the log and a chain-verification
+1. **Admin UI**: Admin → Audit shows the log and a chain-verification
    result:
    ```
    Chain status: Verified
@@ -314,29 +314,29 @@ flags it plus every subsequent event.
      Event #234: hash mismatch (expected abc123, got def456)
      Event #235: prev_hash mismatch (expected def456, got ...)
    ```
-2. **API** — `GET /api/audit/verify` (admin) returns the same verdict
+2. **API**: `GET /api/audit/verify` (admin) returns the same verdict
    as JSON, which makes it easy to script nightly verification.
 
 Compliance exports (filtered CSV/JSON download of the audit log) are an
-Enterprise feature gated by the license — basic viewing and tamper
+Enterprise feature gated by the license: basic viewing and tamper
 verification stay free. See [Licensing](licensing.md).
 
 ## Credential storage
 
-*What it protects:* stored secrets — connection passwords, SSH private
+*What it protects:* stored secrets, connection passwords, SSH private
 keys, API keys.
 
 | Credential | How it is protected |
 |------------|---------------------|
-| Address-book credentials (DB backend) | AES-256-GCM encrypted at rest with `[storage].encryption_key` (or `PERSEA_STORAGE_KEY`); encrypted values carry an `enc:v1:` prefix. Unencrypted if no key is set — set one. |
+| Address-book credentials (DB backend) | AES-256-GCM encrypted at rest with `[storage].encryption_key` (or `PERSEA_STORAGE_KEY`); encrypted values carry an `enc:v1:` prefix. Unencrypted if no key is set: set one. |
 | Address-book credentials (Vault backend) | Stored in Vault/OpenBao KV v2; the server reads them at connect time and they never reach the browser. |
 | Admin API keys / user tokens | Only SHA-256 hashes stored; plaintext shown once at creation. |
 | OIDC client secret | `OIDC_CLIENT_SECRET` environment variable keeps it out of the config file. |
-| LUKS drive key | Stored in Vault, passed to cryptsetup via stdin — never on the command line or disk. |
+| LUKS drive key | Stored in Vault, passed to cryptsetup via stdin: never on the command line or disk. |
 | Ephemeral SSH keys | Exist only in memory during the guacd handshake; never stored or returned by the API. |
 
-*How to check:* `[storage] encryption_key` set, Vault reachable, and —
-for a spot audit — `GET /api/audit/verify` and the token audit log.
+*How to check:* `[storage] encryption_key` set, Vault reachable, and,
+for a spot audit, `GET /api/audit/verify` and the token audit log.
 
 ## Password policy
 
@@ -353,9 +353,9 @@ Passwords are never logged or included in error messages.
 
 ## Enterprise license gates
 
-*What they protect:* enterprise features — SAML SSO, fine-grained RBAC,
+*What they protect:* enterprise features (SAML SSO, fine-grained RBAC,
 TOTP/MFA enforcement, audit-log compliance exports, encrypted session
-recording, and high availability — are locked behind the commercial
+recording, and high availability) are locked behind the commercial
 license key (or the 30-day evaluation period). Without a license, the
 UI shows these features as **Locked** and their endpoints refuse with a
 license error. See [Licensing](licensing.md) for the full picture.
@@ -377,21 +377,21 @@ on disk.
 
 These are on by default and need no configuration:
 
-- **SQL injection** — all queries use parameterised statements; no
+- **SQL injection**: all queries use parameterised statements; no
   string concatenation in SQL.
-- **Path traversal** — recording file access validates filenames
+- **Path traversal**: recording file access validates filenames
   (blocks `/`, `\`, `..`); address-book entry/folder names are
   restricted to alphanumerics, hyphens, underscores and dots (1–64
   chars).
-- **XSS** — the UI builds user content with DOM APIs
+- **XSS**: the UI builds user content with DOM APIs
   (`createElement`, `textContent`, ...) rather than `innerHTML`, on top
   of the CSP header.
-- **Body size limits** — request bodies capped at 64 KB (4 MB for
+- **Body size limits**: request bodies capped at 64 KB (4 MB for
   address-book CSV import, 2 MB for logo upload).
-- **WebSocket Origin check** — upgrades are rejected when the `Origin`
+- **WebSocket Origin check**: upgrades are rejected when the `Origin`
   header doesn't match the `Host` (or when it is missing), preventing
   cross-site WebSocket hijacking.
-- **Session hygiene** — pending sessions (no browser attached) expire
+- **Session hygiene**: pending sessions (no browser attached) expire
   after 60 s; active sessions are terminated after 8 h
   (`session_max_duration_secs`); non-admins can only terminate their
   own sessions; share links are time-limited join-only tokens.
@@ -399,14 +399,14 @@ These are on by default and need no configuration:
 ## Session-level controls
 
 - **Clipboard control:** copy (server → client) and paste (client →
-  server) can be disabled independently per connection entry —
-  `disable_copy`/`disable_paste` — useful for data-loss prevention and
+  server) can be disabled independently per connection entry,
+  `disable_copy`/`disable_paste`, useful for data-loss prevention and
   for stopping users pasting malicious content into remote sessions.
 - **Web browser sessions** get extra hardening: a managed Chromium
   policy (installed at `/etc/chromium/policies/managed/persea.json`)
   that blocks downloads, printing, file dialogs, extensions, sign-in
   and sync; per-entry domain allowlisting; a fresh, per-session
   Chromium profile (deleted when the session ends); and the normal
-  Chromium sandbox. Note the policy is **global** — it affects all
+  Chromium sandbox. Note the policy is **global**: it affects all
   Chromium instances on that machine, so don't install persea on a
   machine where Chromium is used for normal browsing.

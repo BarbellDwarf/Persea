@@ -11,24 +11,24 @@ logs, and checking health. The web UI itself is built on these same
 endpoints, so anything the UI can do, a script can do.
 
 This document is organised by task. It covers the endpoints most people
-need to script — check health, list connections, create sessions,
-manage users — and summarises the rest.
+need to script, check health, list connections, create sessions,
+manage users, and summarises the rest.
 
 ## Authentication
 
 Every request to `/api/*` (except the few endpoints noted as public)
 must authenticate one of three ways:
 
-1. **API key** — `Authorization: Bearer <key>` or `X-API-Key: <key>`
+1. **API key**: `Authorization: Bearer <key>` or `X-API-Key: <key>`
    header. Admin API keys are created in the admin UI; users can create
    their own tokens (see [Tokens](#user-api-tokens-self-service)).
    Admins can disable API-key auth entirely via the `enable_api_keys`
    system setting.
-2. **User API token** — the same headers, with a personal token
+2. **User API token**: the same headers, with a personal token
    (`rgu_...`). The token's effective role is the *lower* of the user's
    current role and the token's `max_role` cap, so a demoted user's
    tokens lose power immediately.
-3. **Login session cookie** — `persea_session`, set by the web login.
+3. **Login session cookie**: `persea_session`, set by the web login.
    Useful in browsers; for scripts, an API key is simpler.
 
 ## CSRF requirement
@@ -104,13 +104,13 @@ higher" (an admin can do everything).
 
 ## Health and metrics
 
-### `GET /api/health` — is the server alive?
+### `GET /api/health`: is the server alive?
 
 No authentication required for the shallow check:
 `{"status": "ok"}`. Authenticated requests with **operator** role or
 higher get a deep check: guacd TCP connect, database query, Vault
 health (when configured), recording-disk usage, and the active session
-count — reported as `{"status": "healthy"|"degraded", "checks": {...}}`
+count, reported as `{"status": "healthy"|"degraded", "checks": {...}}`
 with per-check `status` and `latency_ms`.
 
 ```bash
@@ -121,23 +121,23 @@ curl -s -H "Authorization: Bearer $API_KEY" https://persea.example.com/api/healt
 # → {"status":"healthy","checks":{"guacd":{"status":"up",...},...},"uptime_seconds":1234,"active_sessions":3}
 ```
 
-### `GET /metrics` — Prometheus metrics
+### `GET /metrics`: Prometheus metrics
 
 Prometheus text exposition format, **unauthenticated**: `persea_sessions_active`,
 `persea_sessions_total`, `persea_requests_total`, `persea_errors_total`,
 `persea_uptime_seconds`. Because it is unauthenticated, do not expose
-`/metrics` to untrusted networks — scrape it via a reverse-proxy ACL or
+`/metrics` to untrusted networks: scrape it via a reverse-proxy ACL or
 on the loopback interface.
 
 ## Identity
 
-### `GET /api/auth/status` — what is this server?
+### `GET /api/auth/status`: what is this server?
 
 No authentication. Returns whether OIDC is enabled, the site title,
 whether drive/file transfer is configured, and the available theme
 presets. Useful for integration code that must adapt to the server.
 
-### `GET /api/me` — who am I?
+### `GET /api/me`: who am I?
 
 Requires authentication. Returns the current user's name, email, role,
 group memberships, auth source, and whether Vault is configured.
@@ -157,7 +157,7 @@ Creating a session only opens the connection to the target; a browser
 then attaches over a WebSocket to stream it (see
 [Connecting to a session](#connecting-to-a-session)).
 
-### `POST /api/sessions` — create a session
+### `POST /api/sessions`: create a session
 
 Requires **poweruser** role or higher. The body selects the session
 type and target. Examples:
@@ -200,7 +200,7 @@ Common fields (all optional unless noted):
 | `domain` | RDP | Windows domain |
 | `security` | RDP | `tls`, `nla`, or `rdp` |
 | `ignore_cert` | RDP | Ignore TLS certificate errors |
-| `jump_hosts` | all | Ordered chain of SSH bastion hops; each hop connects through the previous one, the last forwards to the target. Each hop takes `hostname`, `port` (default 22), `username`, and `password` or `private_key`. |
+| `jump_hosts` | all | Ordered chain of SSH bastion hops; each hop connects through the previous one; the last forwards to the target. Each hop takes `hostname`, `port` (default 22), `username`, and `password` or `private_key`. |
 | `enable_recording` | all | Override the global recording setting for this session |
 | `disable_copy` / `disable_paste` | all | Disable clipboard copy/paste for the session |
 | `width`, `height`, `dpi` | all | Display geometry |
@@ -225,31 +225,31 @@ Legacy single jump host fields (`jump_host`, `jump_port`,
 - `client_url` opens the session in the built-in client page.
 - `ws_url` is the raw WebSocket endpoint for custom clients.
 - `share_url` (present only when sharing is allowed) lets a second
-  viewer **join** an active session — it is not owner access.
+  viewer **join** an active session: it is not owner access.
 
-### `GET /api/sessions` — list sessions
+### `GET /api/sessions`: list sessions
 
 Any authenticated user sees their own sessions; `?all=true` as an
 **admin** lists every user's. Optional `limit` truncates the result
 (most recent first).
 
-### `GET /api/sessions/{id}` — session details
+### `GET /api/sessions/{id}`: session details
 
 The session owner or an **admin**.
 
-### `DELETE /api/sessions/{id}` (or `POST /api/sessions/{id}/terminate`) — end a session
+### `DELETE /api/sessions/{id}` (or `POST /api/sessions/{id}/terminate`): end a session
 
 Requires **operator** role or higher; non-admins can only terminate
 their own sessions.
 
-### `POST /api/sessions/{id}/shadow` — take over a session
+### `POST /api/sessions/{id}/shadow`: take over a session
 
 Admins can shadow (watch or take over) another user's active session.
 
 ### `GET /api/sessions/{id}/banner`
 
 Gets a session's banner text. Authenticates via share token rather than
-credentials — this is how the ephemeral-keypair banner page works.
+credentials: this is how the ephemeral-keypair banner page works.
 
 ## Connecting to a session (owner vs. join)
 
@@ -269,7 +269,7 @@ WebSocket with 403, no browser attaches, and guacd eventually reports
 `User is not responding` (its timeout for a session whose client never
 arrived, roughly 15 seconds after creation).
 
-### `POST /api/ws-ticket` — hand a session to a browser without exposing your API key
+### `POST /api/ws-ticket`: hand a session to a browser without exposing your API key
 
 Exchange an API key or login session for a **single-use, 30-second**
 WebSocket ticket that inherits the caller's identity:
@@ -326,7 +326,7 @@ curl -s -H "Authorization: Bearer $API_KEY" \
 ```
 
 Folders can restrict access to certain groups; admins see all folders.
-Note that nested folder names are encoded with `%2F` in URLs — see
+Nested folder names are encoded with `%2F` in URLs: see
 [Reverse Proxies](reverse-proxies.md) if your reverse proxy breaks
 those paths.
 
@@ -338,7 +338,7 @@ folder group access. Credentials (including jump-host credentials) are
 read server-side from the stored entry; nothing sensitive is sent to
 the browser.
 
-The optional body overrides or supplies credentials at connect time —
+The optional body overrides or supplies credentials at connect time,
 useful for entries with `prompt_credentials` enabled:
 
 ```json
@@ -389,15 +389,15 @@ Ad-hoc parameters: `protocol` (`ssh`, `rdp`, `vnc`, `web`; default
 ad-hoc mode; if the target requires authentication, the user sees
 guacd's login prompt. If the entry has `prompt_credentials` or no
 stored password, the endpoint returns an inline credential form instead
-— the user's input is POSTed back and used for that session only.
+; the user's input is POSTed back and used for that session only.
 
 ## Users and roles (admin)
 
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /api/users` | List all users |
-| `POST /api/users` | Create a user (`{"name":"...","email":"...","password":"...","role":"operator"}`) — the password is checked against the password policy |
-| `PUT /api/users/{email}/role` | Set a role: `{"role":"poweruser"}` — roles: `admin`, `poweruser`, `operator`, `viewer` |
+| `POST /api/users` | Create a user (`{"name":"...","email":"...","password":"...","role":"operator"}`): the password is checked against the password policy |
+| `PUT /api/users/{email}/role` | Set a role: `{"role":"poweruser"}` (roles: `admin`, `poweruser`, `operator`, `viewer`) |
 | `POST /api/users/{email}/disable` / `enable` | Block / unblock login |
 | `DELETE /api/users/{email}` | Delete a user (their tokens are cascade-deleted) |
 | `DELETE /api/users/{email}/sessions` | Force-logout: delete all the user's auth sessions |
@@ -420,7 +420,7 @@ sharing their login session or an admin API key.
 | `POST /api/me/tokens` | poweruser+ | Create a personal token: `{"name":"my-ci-token","max_role":"operator","expires_at":"2026-12-31T23:59:59Z"}`. The plaintext token (`rgu_...`) is returned **once** at creation and cannot be retrieved again. |
 | `GET /api/me/tokens` | any user | List your own tokens (metadata only) |
 | `DELETE /api/me/tokens/{id}` | poweruser+ | Revoke a token (immediately invalid) |
-| `POST /api/admin/user-tokens` | admin | Create a token for any user: `{"email":"...","name":"...","max_role":"operator","expires_at":"..."}` — useful for operators who cannot create their own |
+| `POST /api/admin/user-tokens` | admin | Create a token for any user: `{"email":"...","name":"...","max_role":"operator","expires_at":"..."}`: useful for operators who cannot create their own |
 | `GET /api/admin/user-tokens` | admin | List all tokens across all users |
 | `DELETE /api/admin/user-tokens/{id}` | admin | Revoke any token |
 | `GET /api/admin/token-audit` | admin | Token audit log (`limit`, `email` query params) |
@@ -432,7 +432,7 @@ sharing their login session or an admin API key.
 | `GET /api/recordings` | poweruser+ | List recording files |
 | `GET /api/recordings/{name}` | poweruser+ | Serve a recording for playback (filename validated against path traversal) |
 | `DELETE /api/recordings/{name}` | admin | Delete a recording |
-| `GET /api/typescripts` | poweruser+ | List SSH typescripts (name/size/time only — the text content is deliberately not downloadable through the API; see [Configuration](configuration.md#ssh-typescript-recording)) |
+| `GET /api/typescripts` | poweruser+ | List SSH typescripts (name/size/time only: the text content is deliberately not downloadable through the API; see [Configuration](configuration.md#ssh-typescript-recording)) |
 
 ## Audit log
 

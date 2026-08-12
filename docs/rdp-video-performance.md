@@ -3,42 +3,42 @@
 > **Audience:** admins tuning RDP video quality (H.264 passthrough, GFX pipeline) for persea sessions.
 > **Next:** [Deployment Guide](deployment-guide.md#step-4-prepare-rdp-targets) for the full RDP target setup, or [Configuration](configuration.md) for the entry-level RDP settings.
 
-This guide explains what makes RDP sessions look good or run smoothly through persea, and what to change when they don't — aimed at video monitoring and media-heavy workloads, but the same settings govern ordinary desktop use.
+This guide explains what makes RDP sessions look good or run smoothly through persea, and what to change when they don't, aimed at video monitoring and media-heavy workloads, but the same settings govern ordinary desktop use.
 
 ## What affects RDP quality
 
 Five things, roughly in order of impact:
 
-1. **Network bandwidth and latency** — every frame of the remote desktop has to travel from the RDP server to your browser. On a slow link, quality must drop or the session stutters.
-2. **The encoding path** — the two big choices are the **GFX pipeline** (the RDP Graphics Pipeline Extension, which enables modern codecs including H.264) and the **legacy GDI path** (which re-encodes screen updates as JPEG/WebP/PNG on the server). With H.264 passthrough, the RDP server's own H.264 stream goes straight to your browser — the highest quality per bit.
-3. **Lossless vs lossy** — forcing lossless (PNG-only) preserves every pixel but consumes dramatically more bandwidth; lossy codecs (JPEG/WebP/H.264) trade a little fidelity for a lot of throughput.
-4. **Resize behaviour** — persea resizes the remote desktop through the RDP Display Control channel rather than reconnecting (see [The mod-16 quirk](#the-mod-16-quirk)).
-5. **Multi-monitor** — each extra monitor adds a separate stream; total bandwidth and server load scale with the combined desktop size.
+1. **Network bandwidth and latency**: every frame of the remote desktop has to travel from the RDP server to your browser. On a slow link, quality must drop or the session stutters.
+2. **The encoding path**: the two big choices are the **GFX pipeline** (the RDP Graphics Pipeline Extension, which enables modern codecs including H.264) and the **legacy GDI path** (which re-encodes screen updates as JPEG/WebP/PNG on the server). With H.264 passthrough, the RDP server's own H.264 stream goes straight to your browser: the highest quality per bit.
+3. **Lossless vs lossy**: forcing lossless (PNG-only) preserves every pixel but consumes dramatically more bandwidth; lossy codecs (JPEG/WebP/H.264) trade a little fidelity for a lot of throughput.
+4. **Resize behaviour**: persea resizes the remote desktop through the RDP Display Control channel rather than reconnecting (see [The mod-16 quirk](#the-mod-16-quirk)).
+5. **Multi-monitor**: each extra monitor adds a separate stream; total bandwidth and server load scale with the combined desktop size.
 
 ## Per-entry settings
 
 Four per-entry fields control RDP video behaviour (settable via the address-book entry API; the Connections UI does not currently expose them):
 
-- **`enable_gfx` — Graphics Pipeline.** Activates the RDP Graphics Pipeline Extension (RDPGFX), which enables the RemoteFX codec and, on supporting servers, H.264. Recommended for video monitoring and media-heavy sessions. persea always negotiates 32-bit colour depth, which GFX requires.
-- **`enable_desktop_composition` — Desktop Composition.** Enables Windows Desktop Window Manager (DWM) compositing in the remote session. Improves rendering of video overlays, transparency, and smooth scrolling. Increases bandwidth slightly.
-- **`force_lossless` — Force Lossless.** Forces PNG-only encoding (no JPEG/WebP lossy compression). Better for text-heavy workloads where visual fidelity matters. Uses significantly more bandwidth — not recommended for video content.
-- **`enable_h264` — H.264 Passthrough.** Lets guacd forward the server's raw H.264 (AVC420/AVC444) stream to the browser's WebCodecs decoder instead of decoding and re-encoding it (see [H.264 passthrough](#h264-passthrough-pipeline)). Default: on. Requires GFX and an H.264-capable server (e.g. xrdp rebuilt with x264, or Windows with AVC enabled).
+- **`enable_gfx`: Graphics Pipeline.** Activates the RDP Graphics Pipeline Extension (RDPGFX), which enables the RemoteFX codec and, on supporting servers, H.264. Recommended for video monitoring and media-heavy sessions. persea always negotiates 32-bit colour depth, which GFX requires.
+- **`enable_desktop_composition`: Desktop Composition.** Enables Windows Desktop Window Manager (DWM) compositing in the remote session. Improves rendering of video overlays, transparency, and smooth scrolling. Increases bandwidth slightly.
+- **`force_lossless`: Force Lossless.** Forces PNG-only encoding (no JPEG/WebP lossy compression). Better for text-heavy workloads where visual fidelity matters. Uses significantly more bandwidth: not recommended for video content.
+- **`enable_h264`: H.264 Passthrough.** Lets guacd forward the server's raw H.264 (AVC420/AVC444) stream to the browser's WebCodecs decoder instead of decoding and re-encoding it (see [H.264 passthrough](#h264-passthrough-pipeline)). Default: on. Requires GFX and an H.264-capable server (e.g. xrdp rebuilt with x264, or Windows with AVC enabled).
 
 ## For slow connections
 
 When sessions feel sluggish on a constrained link:
 
 - **Make sure H.264 passthrough is on** (`enable_h264`, the default). It is the most bandwidth-efficient path: one encoding pass, sent straight to the browser.
-- **If the server cannot do H.264**, the fallback is guacd's JPEG/WebP re-encode — keep `force_lossless` off (lossless PNG is the most expensive option by far).
-- **Turn off Desktop Composition** unless the workload needs it — DWM increases bandwidth.
+- **If the server cannot do H.264**, the fallback is guacd's JPEG/WebP re-encode: keep `force_lossless` off (lossless PNG is the most expensive option by far).
+- **Turn off Desktop Composition** unless the workload needs it: DWM increases bandwidth.
 - **Use a smaller window size.** The desktop resolution is what must travel over the wire; a 1920×1080 session uses roughly four times the bandwidth of a 960×540 one. Remember the [mod-16 sizing rule](#the-mod-16-quirk) when picking dimensions.
-- **Avoid multi-monitor sessions** on slow links — each monitor adds bandwidth.
+- **Avoid multi-monitor sessions** on slow links: each monitor adds bandwidth.
 - On the Windows server side, the `wan` profile in the xrdp tuning example below caps bitrate; the equivalent on Windows is a lower colour depth / resolution policy (see [Windows RDP server tuning](#windows-rdp-server-tuning)).
 
 ## For maximum quality
 
-- **Video content:** GFX + Desktop Composition on, H.264 passthrough on (the default). The server must support H.264 — on Linux that means xrdp rebuilt with x264 ([below](#linux-xrdp-tuning-debian-13)); on Windows, AVC 4:4:4 enabled ([below](#windows-rdp-server-tuning)).
-- **Text-heavy content:** `force_lossless` on — PNG preserves crisp text at the cost of bandwidth. Best combined with a fast network.
+- **Video content:** GFX + Desktop Composition on, H.264 passthrough on (the default). The server must support H.264: on Linux that means xrdp rebuilt with x264 ([below](#linux-xrdp-tuning-debian-13)); on Windows, AVC 4:4:4 enabled ([below](#windows-rdp-server-tuning)).
+- **Text-heavy content:** `force_lossless` on: PNG preserves crisp text at the cost of bandwidth. Best combined with a fast network.
 - **Everything:** run the RDP server at 60 FPS and, on Windows, enable GPU hardware encoding where available (see below).
 
 ## The mod-16 quirk
@@ -47,23 +47,23 @@ The RDP graphics pipeline encodes H.264 video in **16×16 pixel blocks** (macrob
 
 To prevent this, persea's guacd rounds every requested desktop size **down to a multiple of 16** before negotiating it with the server:
 
-- **1080p (1920×1080) becomes 1920×1072** — 1080 is not divisible by 16
-- **4K (3840×2160) stays 3840×2160** — both dimensions are divisible by 16
+- **1080p (1920×1080) becomes 1920×1072**: 1080 is not divisible by 16
+- **4K (3840×2160) stays 3840×2160**: both dimensions are divisible by 16
 - Multi-monitor layouts are rounded per monitor and tiled left-to-right, top-aligned
 
 **Workarounds:**
 
-- The green band itself is prevented by the rounding — you should never see it.
-- The visible cost is a slim unused margin (up to 15 pixels) at the bottom (or right) of the canvas. To eliminate it, pick a session size whose width and height are already multiples of 16 — e.g. 1920×1056 or 1920×1088 instead of 1920×1080, 1600×1024, or 3840×2160.
+- The green band itself is prevented by the rounding: you should never see it.
+- The visible cost is a slim unused margin (up to 15 pixels) at the bottom (or right) of the canvas. To eliminate it, pick a session size whose width and height are already multiples of 16: e.g. 1920×1056 or 1920×1088 instead of 1920×1080, 1600×1024, or 3840×2160.
 - Resizes use the RDP Display Control channel (`resize-method: display-update`), so the desktop renegotiates its size live instead of reconnecting.
 
 ## Which browsers support the H.264 path
 
 H.264 passthrough decodes video in the browser with the **WebCodecs API** (`VideoDecoder`):
 
-- **Chrome / Edge 94+** — supported
-- **Firefox 130+** — supported
-- **Older browsers without WebCodecs** — the H.264 stream is discarded client-side; the session still renders, because guacd also runs the normal decode for frame sync (the "standard pipeline" below). You lose the bandwidth and quality benefits, but not the session.
+- **Chrome / Edge 94+**: supported
+- **Firefox 130+**: supported
+- **Older browsers without WebCodecs**: the H.264 stream is discarded client-side; the session still renders, because guacd also runs the normal decode for frame sync (the "standard pipeline" below). You lose the bandwidth and quality benefits, but not the session.
 
 ## How it works
 
@@ -75,7 +75,7 @@ H.264 passthrough decodes video in the browser with the **WebCodecs API** (`Vide
 4. **persea** relays the result over WebSocket to the browser
 5. **Browser** decodes and renders to an HTML canvas
 
-Note: guacd does not implement latency-based quality adaptation in this codebase — no such logic exists in the server or the bundled client, so JPEG/WebP quality is whatever guacd applies by default. (The JPEG Quality slider in the session toolbar is a UI control only and is not wired to the encoder.)
+Note: guacd does not implement latency-based quality adaptation in this codebase: no such logic exists in the server or the bundled client, so JPEG/WebP quality is whatever guacd applies by default. (The JPEG Quality slider in the session toolbar is a UI control only and is not wired to the encoder.)
 
 ### H.264 passthrough pipeline (xrdp with x264, or Windows with AVC)
 
@@ -90,9 +90,9 @@ When the RDP server sends H.264 (AVC420/AVC444), guacd passes the raw H.264 data
 
 Benefits:
 
-- **Lower server CPU** — no decode + re-encode cycle on the server
-- **Lower latency** — one fewer encoding pass
-- **Consistent quality** — a single lossy encoding pass (x264/AVC) instead of H.264 → bitmap → JPEG/WebP
+- **Lower server CPU**: no decode + re-encode cycle on the server
+- **Lower latency**: one fewer encoding pass
+- **Consistent quality**: a single lossy encoding pass (x264/AVC) instead of H.264 → bitmap → JPEG/WebP
 
 H.264 passthrough is on by default (`enable_h264`) and becomes active when the RDP server sends AVC420/AVC444 data. Servers that don't support H.264 use the standard pipeline automatically.
 
@@ -148,8 +148,8 @@ Any DirectX 11+ GPU (NVIDIA, Intel iGPU, AMD) can offload H.264 encoding. Enable
 
 Check Windows Event Viewer at `Applications and Services Logs > Microsoft > Windows > RemoteDesktopServices-RdpCoreTS`:
 
-- **Event ID 162** — AVC444 mode is active
-- **Event ID 170** — Hardware encoding is active
+- **Event ID 162**: AVC444 mode is active
+- **Event ID 170**: Hardware encoding is active
 
 ## Linux xrdp tuning (Debian 13)
 
@@ -157,7 +157,7 @@ Debian 13 (trixie) ships xrdp 0.10.x, but the stock package does **not** include
 
 ### Quick setup
 
-A single setup script handles everything — desktop, audio, xrdp rebuild, and configuration. Run **on the xrdp target machine** (not the persea server):
+A single setup script handles everything: desktop, audio, xrdp rebuild, and configuration. Run **on the xrdp target machine** (not the persea server):
 
 ```bash
 wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/BarbellDwarf/persea/main/contrib/setup-xrdp-gfx.sh
@@ -251,7 +251,7 @@ fps_den = 1
 threads = 1
 
 [x264.lan]
-# inherits default — uncapped bitrate, 60fps
+# inherits default: uncapped bitrate, 60fps
 
 [x264.wan]
 vbv_max_bitrate = 15000
@@ -265,7 +265,7 @@ vbv_buffer_size = 800
 
 #### Audio redirection
 
-Debian 13 does not package `pulseaudio-module-xrdp` — it must be built from source. The `contrib/setup-xrdp-audio.sh` script automates this, or manually:
+Debian 13 does not package `pulseaudio-module-xrdp`: it must be built from source. The `contrib/setup-xrdp-audio.sh` script automates this, or manually:
 
 ```bash
 # Install build deps

@@ -11,7 +11,7 @@ with full comments.
 
 ## How configuration is loaded: three layers
 
-persea merges configuration from three sources, in order — the first
+persea merges configuration from three sources, in order: the first
 one wins:
 
 1. **Built-in defaults.** Compiled into the binary. Everything in this
@@ -43,7 +43,7 @@ default SQLite file).
 
 | Key | Default | What it controls |
 |-----|---------|------------------|
-| `listen_addr` | `127.0.0.1:8089` | Address and port persea listens on. Loopback only by default — intended for use behind a reverse proxy. Change to `0.0.0.0:8089` (or `0.0.0.0:443` with TLS) to expose persea directly. |
+| `listen_addr` | `127.0.0.1:8089` | Address and port persea listens on. Loopback only by default: intended for use behind a reverse proxy. Change to `0.0.0.0:8089` (or `0.0.0.0:443` with TLS) to expose persea directly. |
 | `guacd_addr` | `127.0.0.1:4822` | TCP address of the guacd daemon, the component that translates SSH/RDP/VNC traffic. Change only if guacd runs on another host. |
 | `static_path` | `./static` | Directory with the web UI's static files (CSS, JS, logos). |
 | `db_path` | `./persea.db` | SQLite database file used when `db_url` is not set. Holds users, API keys, auth sessions, the address book, audit log and history. |
@@ -55,7 +55,7 @@ default SQLite file).
 ## License key
 
 persea ships in a free edition and an Enterprise edition. Enterprise
-features are unlocked by a commercial license key — or by the built-in
+features are unlocked by a commercial license key, or by the built-in
 30-day evaluation period. See [Licensing](licensing.md) for details.
 
 | Key | Default | What it controls |
@@ -111,7 +111,7 @@ history = 5
 ## Connection allowlists (SSRF protection)
 
 These CIDR ranges decide which hosts sessions are *allowed* to connect
-to — SSH, RDP, and VNC targets are validated against the list before
+to: SSH, RDP, and VNC targets are validated against the list before
 any connection is attempted (hostnames are resolved and every returned
 IP must match). They protect you against "server-side request forgery"
 (SSRF): a user tricking the server into connecting to something it
@@ -123,7 +123,7 @@ reach.
 | `ssh_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` | Allowed SSH session targets: private (RFC 1918) networks plus loopback. |
 | `rdp_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` | Allowed RDP session targets: private networks plus loopback. |
 | `vnc_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` | Allowed VNC session targets: private networks plus loopback. |
-| `web_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed hosts for web browser session URLs — loopback only by default. Use `["0.0.0.0/0", "::/0"]` to allow any host. |
+| `web_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed hosts for web browser session URLs: loopback only by default. Use `["0.0.0.0/0", "::/0"]` to allow any host. |
 
 To reach targets on other networks (for example a VPN range or a public
 jump server), add the CIDR to the relevant list:
@@ -156,14 +156,14 @@ trusted_proxies = ["127.0.0.1/32"]
 ```
 
 Without `trusted_proxies`, every request from behind the proxy looks
-like it comes from the proxy's own IP — and a client-supplied
+like it comes from the proxy's own IP, and a client-supplied
 `X-Forwarded-Proto` header from an untrusted source is ignored, so
 cookies may not get `Secure` even though the browser is on HTTPS.
 
 ## `[tls]` section
 
 Controls TLS for the web server and/or for the connection to guacd.
-There is no `enabled` switch — the presence of the fields controls the
+There is no `enabled` switch; the presence of the fields controls the
 behaviour:
 
 - **Server HTTPS:** provide both `cert_path` and `key_path` and persea
@@ -172,7 +172,7 @@ behaviour:
   TLS is not configured at all, because credentials and session tokens
   would travel unencrypted.
 - **guacd TLS:** provide `guacd_cert_path` and persea connects to guacd
-  over TLS, trusting that certificate. Independent of server HTTPS —
+  over TLS, trusting that certificate. Independent of server HTTPS,
   you can encrypt the guacd leg while a proxy handles the browser leg.
 
 | Key | Default | What it controls |
@@ -180,7 +180,7 @@ behaviour:
 | `cert_path` | *(unset)* | HTTPS certificate file (PEM). Both `cert_path` and `key_path` must be set for HTTPS. |
 | `key_path` | *(unset)* | HTTPS private key file (PEM). |
 | `guacd_cert_path` | *(unset)* | Certificate to trust for the guacd TLS connection. The same self-signed cert can serve both purposes. |
-| `secure_cookies` | `true` | Whether session cookies carry the `Secure` attribute. Set to `false` when serving a **self-signed** certificate — browsers refuse to send `Secure` cookies over connections with invalid certificates, which breaks login even after you click through the certificate warning. `install.sh` and the Docker image set this automatically when they generate their own self-signed cert; set it by hand if you generated or supplied the cert yourself. Leave `true` for a real CA-issued certificate. |
+| `secure_cookies` | `true` | Whether session cookies carry the `Secure` attribute. Set to `false` when serving a **self-signed** certificate: browsers refuse to send `Secure` cookies over connections with invalid certificates, which breaks login even after you click through the certificate warning. `install.sh` and the Docker image set this automatically when they generate their own self-signed cert; set it by hand if you generated or supplied the cert yourself. Leave `true` for a real CA-issued certificate. |
 
 Generate a self-signed certificate with:
 
@@ -220,15 +220,15 @@ API key authentication continues to work alongside it.
 
 | Key | Default | What it controls |
 |-----|---------|------------------|
-| `issuer_url` | *(required)* | Your provider's issuer URL. Must match the discovered issuer **exactly**, including default ports and trailing slashes — `https://idp.example.com/` and `https://idp.example.com` can be treated as different issuers. Check your provider's `.well-known/openid-configuration` for the canonical value. |
+| `issuer_url` | *(required)* | Your provider's issuer URL. Must match the discovered issuer **exactly**, including default ports and trailing slashes: `https://idp.example.com/` and `https://idp.example.com` can be treated as different issuers. Check your provider's `.well-known/openid-configuration` for the canonical value. |
 | `client_id` | *(required)* | OIDC client ID registered with the provider. |
 | `client_secret` | *(required)* | OIDC client secret. Prefer the `OIDC_CLIENT_SECRET` environment variable over putting it in the config file. |
 | `redirect_uri` | *(required)* | Where the provider sends users after login: `https://your-host/auth/callback`. |
 | `default_role` | `operator` | Role assigned to new users on first login. Options: `admin`, `poweruser`, `operator`, `viewer`. |
 | `groups_claim` | `groups` | Name of the JWT claim that carries group memberships. |
 | `extra_scopes` | `[]` | Extra OIDC scopes to request beyond `openid/email/profile` (for example `["groups"]`). |
-| `ca_cert` | *(unset)* | Path to a CA certificate (PEM) for verifying the provider — use when your IdP uses a private/internal CA not in the system trust store. |
-| `tls_skip_verify` | `false` | Skip TLS verification for OIDC connections. Debugging only — exposes the client secret and tokens to man-in-the-middle attacks. |
+| `ca_cert` | *(unset)* | Path to a CA certificate (PEM) for verifying the provider: use when your IdP uses a private/internal CA not in the system trust store. |
+| `tls_skip_verify` | `false` | Skip TLS verification for OIDC connections. Debugging only: exposes the client secret and tokens to man-in-the-middle attacks. |
 
 ```toml
 [oidc]
@@ -247,12 +247,12 @@ second factor can be layered on top of any primary method.
 | Key | Default | What it controls |
 |-----|---------|------------------|
 | `methods` | `["database"]` | Ordered list of primary auth methods. Available: `database`, `ldap`, `oidc`, `saml`, `radius`, `api_key`. |
-| `ldap` | — | LDAP/Active Directory provider config (below). |
-| `radius` | — | RADIUS provider config (below). |
-| `saml` | — | SAML 2.0 provider config (below). |
-| `totp` | — | TOTP MFA second factor config (below). |
+| `ldap` | - | LDAP/Active Directory provider config (below). |
+| `radius` | - | RADIUS provider config (below). |
+| `saml` | - | SAML 2.0 provider config (below). |
+| `totp` | - | TOTP MFA second factor config (below). |
 
-Example — LDAP primary with TOTP MFA for everyone:
+Example, LDAP primary with TOTP MFA for everyone:
 ```toml
 [auth]
 methods = ["ldap", "database"]
@@ -272,7 +272,7 @@ enforcement = "All"
 ## `[auth.ldap]` section
 
 LDAP/Active Directory authentication. persea binds with a service
-account, searches for the user, then verifies their password — and can
+account, searches for the user, then verifies their password, and can
 optionally resolve group memberships.
 
 | Key | Default | What it controls |
@@ -282,8 +282,8 @@ optionally resolve group memberships.
 | `bind_password` | *(required)* | Service account password. |
 | `user_search_base` | *(required)* | Base DN under which users are searched, e.g. `ou=users,dc=example,dc=com`. |
 | `user_search_filter` | *(required)* | Search filter with `{}` as the username placeholder, e.g. `(uid={})` or `(sAMAccountName={})`. |
-| `group_search_base` | — | Base DN for group searches. If omitted, groups are not resolved (users get no group memberships). |
-| `group_search_filter` | — | Group search filter with `{}` as the user DN placeholder, e.g. `(member={})`. |
+| `group_search_base` | - | Base DN for group searches. If omitted, groups are not resolved (users get no group memberships). |
+| `group_search_filter` | - | Group search filter with `{}` as the user DN placeholder, e.g. `(member={})`. |
 | `tls_skip_verify` | `false` | Skip TLS certificate verification (self-signed directory certs). |
 | `starttls` | `false` | Use StartTLS instead of `ldaps://`: connect on port 389 and upgrade to TLS in-band. |
 | `connect_timeout_secs` | `10` | Connection timeout in seconds. |
@@ -316,13 +316,13 @@ the signed response. Enterprise feature (see [Licensing](licensing.md)).
 
 | Key | Default | What it controls |
 |-----|---------|------------------|
-| `idp_metadata_url` | — | URL of the IdP metadata endpoint (XML). Either this or `idp_metadata_file` is required. |
-| `idp_metadata_file` | — | Local path to the IdP metadata XML file (alternative to the URL). |
-| `entity_id` | *(required)* | SP entity ID — must match what is registered at the IdP. |
-| `acs_url` | *(required)* | Assertion Consumer Service URL — where the IdP POSTs the login response. |
-| `certificate` | — | Base64-encoded SP X.509 certificate (for signing AuthnRequests). |
-| `private_key` | — | PEM-encoded SP private key (for signing AuthnRequests). |
-| `groups_attribute` | — | SAML attribute name to extract group memberships from. |
+| `idp_metadata_url` | - | URL of the IdP metadata endpoint (XML). Either this or `idp_metadata_file` is required. |
+| `idp_metadata_file` | - | Local path to the IdP metadata XML file (alternative to the URL). |
+| `entity_id` | *(required)* | SP entity ID: must match what is registered at the IdP. |
+| `acs_url` | *(required)* | Assertion Consumer Service URL: where the IdP POSTs the login response. |
+| `certificate` | - | Base64-encoded SP X.509 certificate (for signing AuthnRequests). |
+| `private_key` | - | PEM-encoded SP private key (for signing AuthnRequests). |
+| `groups_attribute` | - | SAML attribute name to extract group memberships from. |
 | `strict_mode` | `true` | When true, reject responses with missing or expired assertions. |
 
 ## `[auth.totp]` section
@@ -342,15 +342,15 @@ top of the primary auth method. Enterprise feature when enforced (see
 | `enforcement` | `Off` | Enforcement policy: `Off` (optional), `AdminsOnly` (required for admin/poweruser), `All` (required for everyone). |
 
 **Enforcement policies:**
-- `Off` — enrollment optional; users who enrolled are verified.
-- `AdminsOnly` — required for admin and poweruser roles.
-- `All` — required for all users.
+- `Off`: enrollment optional; users who enrolled are verified.
+- `AdminsOnly`: required for admin and poweruser roles.
+- `All`: required for all users.
 
 ## Multi-database backend
 
 By default persea stores everything in a single SQLite file. With
 `db_url` you can instead use PostgreSQL or MySQL (or SQLite through a
-different driver) — needed for multi-instance high availability, and
+different driver), needed for multi-instance high availability, and
 nice-to-have for shared infrastructure:
 
 ```toml
@@ -505,7 +505,7 @@ The graphical recording above captures the session as a replayable
 Guacamole stream. For SSH sessions you can additionally write a
 **typescript**: a plain-text log of the full terminal output,
 compatible with the standard `script` / `scriptreplay` tools and
-trivially greppable — aimed at audit and compliance (a human-readable
+trivially greppable, aimed at audit and compliance (a human-readable
 record of what was typed and seen on a switch or server).
 
 Typescript recording is **per-connection opt-in and off by default**.
@@ -513,7 +513,7 @@ Two things are required: `typescript_path` must be set here (the global
 "where"), and the individual connection entry must have **Enable
 typescript recording for this session** ticked in its Recording
 Settings (Connections page, SSH entries only). A connection with the
-box unticked — or any session that is not SSH — writes no typescript.
+box unticked, or any session that is not SSH, writes no typescript.
 Ad-hoc SSH sessions from the Sessions page have no entry and so never
 record a typescript.
 
@@ -614,7 +614,7 @@ server; nothing is stored on the persea host for SSH).
 | `allow_upload` | `true` | Allow file upload to the remote session. |
 | `cleanup_on_close` | `true` | Delete the session drive directory on disconnect. |
 | `retention_secs` | `0` | Delay before cleanup (`0` = immediate). |
-| `luks_device` | *(unset)* | LUKS container file path — encrypts the drive volume at rest. |
+| `luks_device` | *(unset)* | LUKS container file path: encrypts the drive volume at rest. |
 | `luks_name` | `persea-drives` | Device-mapper name. |
 | `luks_key_path` | *(unset)* | Vault KV path for the LUKS encryption key. |
 
@@ -647,7 +647,7 @@ default_auth_pkg = "ntlm"
 
 Web browser sessions run a headless Chromium on a per-session Xvnc
 virtual display, streamed to the user over VNC. These settings control
-the process paths and the resource ranges — the defaults support up to
+the process paths and the resource ranges: the defaults support up to
 100 concurrent web sessions.
 
 | Key | Default | What it controls |
@@ -777,7 +777,7 @@ Every config key can also be set as an environment variable with the
 | `VAULT_LOCAL_SECRET_ID` | Vault AppRole secret ID for `[vault_local]` (only if configured). |
 | `PERSEA_STORAGE_KEY` | 64-char hex encryption key for DB credential storage (alternative to `[storage].encryption_key`). |
 | `PERSEA_LICENSE_KEY` | Commercial license key (alternative to the `license_key` config option). |
-| `VSPHERE_PASSWORD` | VMware vSphere password — the default variable referenced by `[vsphere].password_env` (override the name with `password_env` if you prefer another variable). |
+| `VSPHERE_PASSWORD` | VMware vSphere password: the default variable referenced by `[vsphere].password_env` (override the name with `password_env` if you prefer another variable). |
 | `RUST_LOG` | Log level (e.g. `info`, `debug`, `persea=debug`). |
 | `RUST_LOG_FORMAT` | Log format: `text` (default) or `json` for JSON lines (structured logging). Equivalent to the `--log-format` CLI flag, which takes precedence. |
 
@@ -785,7 +785,7 @@ Every config key can also be set as an environment variable with the
 
 The shipped systemd unit (`persea.service`) already includes
 `EnvironmentFile=-/opt/persea/env` (the `-` prefix means the file is
-optional — the service starts even if it does not exist). To provide
+optional: the service starts even if it does not exist). To provide
 secrets like `VAULT_SECRET_ID` and `OIDC_CLIENT_SECRET`, just create
 the env file:
 
@@ -806,7 +806,7 @@ chown persea:persea /opt/persea/env
 sudo systemctl restart persea
 ```
 
-No drop-in override is needed — the shipped unit loads
+No drop-in override is needed: the shipped unit loads
 `/opt/persea/env` already. If you are using a custom unit or a Docker
 deployment, load the file yourself (e.g. `-e` flags for Docker, or a
 drop-in with `EnvironmentFile=/opt/persea/env`).

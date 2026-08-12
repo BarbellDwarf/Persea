@@ -5,15 +5,15 @@
 
 ## What this gives you
 
-persea normally runs as a single instance: one server process plus one guacd daemon. You can run several instances against the **same database** (`db_url`) and they already share the static data — users, the connections (address book), auth sessions, audit log, and settings.
+persea normally runs as a single instance: one server process plus one guacd daemon. You can run several instances against the **same database** (`db_url`) and they already share the static data: users, the connections (address book), auth sessions, audit log, and settings.
 
 The **Enterprise HA feature** (license feature `ha`, included in the 30-day evaluation period) goes further: live sessions become visible across the whole fleet. A session started on instance A appears in the session list on instance B, can be joined or shadowed from B, and a user who lands on the "wrong" instance is transparently redirected to the one hosting their session. Recording rotation is shared safely too, so multiple instances never fight over the same files.
 
-Without the license (or without a shared `db_url`), every instance behaves exactly as a standalone single instance — nothing changes.
+Without the license (or without a shared `db_url`), every instance behaves exactly as a standalone single instance: nothing changes.
 
 ## What you need
 
-1. **A shared database backend** — MySQL or PostgreSQL via `db_url`, identical on every instance. (SQLite is single-writer and cannot be shared safely.)
+1. **A shared database backend**: MySQL or PostgreSQL via `db_url`, identical on every instance. (SQLite is single-writer and cannot be shared safely.)
 2. **An Enterprise license** that includes the `ha` feature (or the 30-day evaluation window). See [Licensing](licensing.md).
 3. **A unique `instance_id` per instance** and a public base URL (`ha_base_url`) per instance, so browsers can be redirected to the right place.
 
@@ -29,7 +29,7 @@ Each instance also sweeps registry rows that can no longer be live:
 
 - sessions stuck in `pending` past twice the pending timeout,
 - finished sessions older than 24 hours,
-- **live sessions owned by other instances** that are older than the maximum session duration plus 2 hours — if the row is that old, the owning instance must be dead.
+- **live sessions owned by other instances** that are older than the maximum session duration plus 2 hours: if the row is that old, the owning instance must be dead.
 
 The sweep never touches live sessions owned by this instance. With `session_max_duration_secs = 0` (unlimited duration), the third sweep is disabled: no age proves an instance dead, so other instances' rows are left alone until they finish normally.
 
@@ -39,16 +39,16 @@ persea uses short-lived, single-use WebSocket tickets to open session streams. A
 
 ### 3. Sessions you can see, join, and shadow from anywhere
 
-- **List** — `GET /api/sessions` (and the Sessions page) merges local sessions with live sessions owned by other instances. Remote sessions carry `"remote": true` and the owning instance's id and base URL.
+- **List**: `GET /api/sessions` (and the Sessions page) merges local sessions with live sessions owned by other instances. Remote sessions carry `"remote": true` and the owning instance's id and base URL.
 
   ![Sessions page: sessions from the whole fleet appear here, remote ones flagged](assets/screenshots/sessions.png)
 
-- **Join / shadow / reconnect** — the actual session stream lives on the owning instance. When a browser connects to the wrong instance, that instance answers with an **HTTP 307 redirect to the owner's WebSocket endpoint**, minting a fresh ticket for the already-authenticated user first. The browser never needs to know; the hop is transparent to the Guacamole client. The share or shadow token (`?token=`) is preserved verbatim, and shadow tokens for remote sessions are stored on the shared registry row, so `POST /api/sessions/{id}/shadow` works from any instance.
-- **Terminate** — only the owning instance can terminate a session; any other instance returns an explicit error naming the owner.
+- **Join / shadow / reconnect**: the actual session stream lives on the owning instance. When a browser connects to the wrong instance, that instance answers with an **HTTP 307 redirect to the owner's WebSocket endpoint**, minting a fresh ticket for the already-authenticated user first. The browser never needs to know; the hop is transparent to the Guacamole client. The share or shadow token (`?token=`) is preserved verbatim, and shadow tokens for remote sessions are stored on the shared registry row, so `POST /api/sessions/{id}/shadow` works from any instance.
+- **Terminate**: only the owning instance can terminate a session; any other instance returns an explicit error naming the owner.
 
 ### 4. Instances that don't step on each other
 
-Every registry row is tagged with its owner's `instance_id` (default: `<hostname>-<pid>`). The session reaper only ever touches sessions in its own memory, and **recording rotation only deletes files whose session the registry attributes to this instance** — so two instances can share one recordings mount without double-deleting or stealing each other's files. There is no leader election; each instance runs its own rotation timer over its own files, which together is exactly what one instance would have done.
+Every registry row is tagged with its owner's `instance_id` (default: `<hostname>-<pid>`). The session reaper only ever touches sessions in its own memory, and **recording rotation only deletes files whose session the registry attributes to this instance**, so two instances can share one recordings mount without double-deleting or stealing each other's files. There is no leader election; each instance runs its own rotation timer over its own files, which together is exactly what one instance would have done.
 
 ## Joining a session hosted on another instance
 
@@ -65,7 +65,7 @@ WS follows redirect ────────────────────
                                           guacd join ──▶ stream bridged
 ```
 
-The 307 hop is transparent to the browser and the Guacamole client; the user simply sees their session. For security, the strict cross-origin (Origin/Host) check on the WebSocket endpoint is relaxed **only** for requests authenticated by a consumed ticket — ticketless upgrades still get the full check.
+The 307 hop is transparent to the browser and the Guacamole client; the user simply sees their session. For security, the strict cross-origin (Origin/Host) check on the WebSocket endpoint is relaxed **only** for requests authenticated by a consumed ticket; ticketless upgrades still get the full check.
 
 ## Setting it up
 
@@ -80,7 +80,7 @@ db_url = "postgres://persea:secret@pg-host:5432/persea"
 # Unique per instance across the fleet.
 instance_id = "persea-1"
 
-# Public base URL of THIS instance — the target of cross-instance
+# Public base URL of THIS instance: the target of cross-instance
 # join/shadow redirects. Must be reachable from users' browsers.
 ha_base_url = "https://persea-1.example.com"
 
@@ -94,16 +94,16 @@ session_max_duration_secs = 28800
 3. Install the Enterprise license key on every instance (or rely on the 30-day evaluation). See [Licensing](licensing.md).
 4. Restart each instance and confirm with the health check below that HA is active.
 
-The `ha_base_url` values must be reachable from browsers — typically the same hostname/port users already use to reach each instance.
+The `ha_base_url` values must be reachable from browsers, typically the same hostname/port users already use to reach each instance.
 
 ## What happens when an instance dies
 
 - **Sessions on the dead instance die with it.** The session stream lives on the owning instance; there is no live migration. If an instance crashes, its sessions are gone.
 - **Other instances notice.** The dead instance's registry rows age past the sweeps described above and are removed, so they stop appearing in fleet-wide session lists and do not block recording rotation.
-- **The rest of the fleet keeps working.** Users, connections, join/shadow of sessions on surviving instances — all unaffected.
+- **The rest of the fleet keeps working.** Users, connections, join/shadow of sessions on surviving instances: all unaffected.
 - **A browser mid-session on the dead instance** is disconnected; when the user reconnects, their session is gone and they must start a new one.
 
-## What's supported — and the honest limitations
+## What's supported, and the honest limitations
 
 **Supported:**
 
@@ -111,14 +111,14 @@ The `ha_base_url` values must be reachable from browsers — typically the same 
 - Join and shadow from any instance, including share links and shadow tokens.
 - Cross-instance owner reconnect when a browser drops (guacd keeps the session alive long enough for the redirect to route back to the owner).
 - Safe recording rotation on a shared mount, per-owner.
-- Load balancers can use plain round-robin — no sticky sessions needed, because join/shadow always reach the owner via the redirect.
+- Load balancers can use plain round-robin: no sticky sessions needed, because join/shadow always reach the owner via the redirect.
 
 **Limitations:**
 
 - **No live session migration.** The session stream lives on the owning instance; if that instance dies (or is SIGKILLed), its sessions die with it. The registry row lingers until it is provably stale and is then swept. Sessions are not migrated to another instance.
 - **Termination is owner-only.** Other instances refuse to terminate a remote session (with an explicit error naming the owner).
-- **Orphaned recordings.** A recording whose registry row was swept — or whose owner crashed before the row existed — is never auto-rotated; clean those up manually. Normally finished sessions stay attributable for up to 24 hours, which covers the normal rotation cadence.
-- **Per-instance resources stay per-instance.** Xvnc display ranges, CDP port ranges, drive directories, and the `known_hosts` file are local to each instance — keep the ranges disjoint across instances on the same host.
+- **Orphaned recordings.** A recording whose registry row was swept, or whose owner crashed before the row existed, is never auto-rotated; clean those up manually. Normally finished sessions stay attributable for up to 24 hours, which covers the normal rotation cadence.
+- **Per-instance resources stay per-instance.** Xvnc display ranges, CDP port ranges, drive directories, and the `known_hosts` file are local to each instance: keep the ranges disjoint across instances on the same host.
 - **SQLite is not suitable** as the shared backend (single-writer); use MySQL or PostgreSQL.
 
 ## Deployment patterns
@@ -130,12 +130,12 @@ LB (round-robin)
     ↳ persea-1 (instance_id=persea-1, ha_base_url=https://persea-1…)
     ↳ persea-2 (instance_id=persea-2, ha_base_url=https://persea-2…)
     ↳ guacd pool (shared guacd_addr)
-    ↳ Postgres/MySQL (shared db_url — data + session registry + WS tickets)
+    ↳ Postgres/MySQL (shared db_url, data + session registry + WS tickets)
     ↳ Vault (shared credentials, when [storage] backend = "vault")
     ↳ NFS mount (shared recordings; rotation is per-owner)
 ```
 
-guacd is a shared resource: point every instance at the same guacd address (or a pool of guacd daemons) — guacd connections are stateless per session and can live anywhere the instances can reach them.
+guacd is a shared resource: point every instance at the same guacd address (or a pool of guacd daemons); guacd connections are stateless per session and can live anywhere the instances can reach them.
 
 ## Scaling limits
 
@@ -151,4 +151,4 @@ guacd is a shared resource: point every instance at the same guacd address (or a
 
 - `GET /api/health` returns `200` when an instance is running.
 - `GET /api/system/status` (admin) reports `instance.instance_id` and `instance.ha_enabled`, so you can confirm every instance sees the same registry and the license is active.
-- The end-to-end test: **start two instances** against the same database with distinct `instance_id`/`ha_base_url` values, create a session on one, and check the Sessions page on the other — the session appears there, marked as remote, and clicking it joins the session through the redirect. That is the whole feature working end to end.
+- The end-to-end test: **start two instances** against the same database with distinct `instance_id`/`ha_base_url` values, create a session on one, and check the Sessions page on the other: the session appears there, marked as remote, and clicking it joins the session through the redirect. That is the whole feature working end to end.

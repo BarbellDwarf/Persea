@@ -30,7 +30,7 @@ Start everything:
 sudo systemctl enable --now persea
 ```
 
-This starts both services. Then open `https://your-server:8089` in a browser and complete the setup wizard (see [The setup wizard](#the-setup-wizard) below). The server generates a self-signed TLS certificate during install, so the browser will show a certificate warning — click through it. The certificate is set up so login works anyway; this is handled automatically.
+This starts both services. Then open `https://your-server:8089` in a browser and complete the setup wizard (see [The setup wizard](#the-setup-wizard) below). The server generates a self-signed TLS certificate during install, so the browser will show a certificate warning: click through it. The certificate is set up so login works anyway; this is handled automatically.
 
 Configuration lives in `/opt/persea/config.toml`. Secrets that should not sit in the config file (for example the Vault secret ID or the OIDC client secret) go in `/opt/persea/env`, which the service reads at start.
 
@@ -77,7 +77,7 @@ config.toml         configuration file
 env                 environment variables for secrets
 ```
 
-Start with `sudo systemctl enable --now persea`, then open the web interface at `https://your-server` (the script's default config listens on port 443) — or `http://your-server:8089` if you installed with `--no-tls`. Follow the setup wizard from there.
+Start with `sudo systemctl enable --now persea`, then open the web interface at `https://your-server` (the script's default config listens on port 443), or `http://your-server:8089` if you installed with `--no-tls`. Follow the setup wizard from there.
 
 ## Option C: Docker
 
@@ -101,10 +101,10 @@ docker run -d -p 8089:8089 persea
 
 What the image does on first start:
 
-- Generates a self-signed TLS certificate (kept in the `persea-tls` volume so it survives container upgrades — **keep that volume**, otherwise the certificate changes on every recreate and browsers warn again).
+- Generates a self-signed TLS certificate (kept in the `persea-tls` volume so it survives container upgrades: **keep that volume**, otherwise the certificate changes on every recreate and browsers warn again).
 - Starts guacd inside the container (TLS on loopback port 4822), then persea.
 - Serves HTTPS on port 8089 with the self-signed cert. For production, put a reverse proxy with a real certificate in front, or mount your own certificate over `/opt/persea/tls/cert.pem` and `key.pem`.
-- Writes an admin API key to `/opt/persea/data/admin-key.txt` for automation. You can still create a human admin account through the setup wizard — the two are independent.
+- Writes an admin API key to `/opt/persea/data/admin-key.txt` for automation. You can still create a human admin account through the setup wizard: the two are independent.
 
 ### Customising the configuration
 
@@ -184,22 +184,22 @@ Both applications can share the same guacd. Recordings are shared too, but each 
 
 ## The setup wizard
 
-The first time you open the web interface (before any user account exists), persea redirects to the setup wizard at `/setup` on your persea address — `https://your-server:8089/setup` for the package and Docker installs, `https://your-server/setup` for the install script's default config. It asks for everything persea needs to create the first admin account and write a starter config. Fill it in like this:
+The first time you open the web interface (before any user account exists), persea redirects to the setup wizard at `/setup` on your persea address, `https://your-server:8089/setup` for the package and Docker installs, `https://your-server/setup` for the install script's default config. It asks for everything persea needs to create the first admin account and write a starter config. Fill it in like this:
 
 **Server**
-- **Listen Address** — where the web server should listen. It is pre-filled with the machine's address, usually `0.0.0.0:8089` (all interfaces, port 8089). Behind a reverse proxy, `127.0.0.1:8089` is safer — the proxy is the only thing that talks to persea directly.
-- **Database Path** — where the SQLite database file will live (default `/opt/persea/data/persea.db`). This is the file that holds users, connections, session history, and settings. Back it up.
-- **Database URL (optional)** — leave empty to use the SQLite file above. To store everything in a managed database instead, enter a `postgres://`, `mysql://`, or `sqlite://` URL here. persea connects, creates the tables, and puts the admin account straight into that database; the URL is written into the config for every later start. If the server was already started with `db_url` configured, this field is pre-filled and cannot be changed here — edit the config file instead.
+- **Listen Address**: where the web server should listen. It is pre-filled with the machine's address, usually `0.0.0.0:8089` (all interfaces, port 8089). Behind a reverse proxy, `127.0.0.1:8089` is safer: the proxy is the only thing that talks to persea directly.
+- **Database Path**: where the SQLite database file will live (default `/opt/persea/data/persea.db`). This is the file that holds users, connections, session history, and settings. Back it up.
+- **Database URL (optional)**: leave empty to use the SQLite file above. To store everything in a managed database instead, enter a `postgres://`, `mysql://`, or `sqlite://` URL here. persea connects, creates the tables, and puts the admin account straight into that database; the URL is written into the config for every later start. If the server was already started with `db_url` configured, this field is pre-filled and cannot be changed here: edit the config file instead.
 
 **guacd**
-- **Mode** — *Embedded* means guacd runs on this same machine (the Debian package and install script set it up as the `persea-guacd` service; in Docker it starts automatically). *External* means you run guacd elsewhere — then fill in its **guacd Address** (default `127.0.0.1:4822`). For *Embedded*, leave the **guacd Binary Path** at its detected value (usually `/usr/sbin/guacd`). Either way, what matters is that guacd is actually running and reachable at the address in the config — persea never starts it on its own.
+- **Mode**: *Embedded* means guacd runs on this same machine (the Debian package and install script set it up as the `persea-guacd` service; in Docker it starts automatically). *External* means you run guacd elsewhere: then fill in its **guacd Address** (default `127.0.0.1:4822`). For *Embedded*, leave the **guacd Binary Path** at its detected value (usually `/usr/sbin/guacd`). Either way, what matters is that guacd is actually running and reachable at the address in the config: persea never starts it on its own.
 
 **Admin Account**
-- **Email** — the admin's login name (for example `admin@example.com`).
-- **Display Name** — the name shown in the interface.
-- **Password** — at least 8 characters, and at least the password-policy minimum (15 characters by default). Pick something long; this is the master account.
+- **Email**: the admin's login name (for example `admin@example.com`).
+- **Display Name**: the name shown in the interface.
+- **Password**: at least 8 characters, and at least the password-policy minimum (15 characters by default). Pick something long; this is the master account.
 
-**Features** — tick the optional features you plan to use: Proxmox VE, VMware vSphere, Session Recording, SSH Tunnels, Web Browser Sessions, and VDI Containers. Recording, tunnels, and Proxmox are ticked by default and need no further setup. The VMware checkbox writes a commented-out configuration template for you. The others are switched on by adding their configuration sections to `config.toml` (see the [Deployment Guide](deployment-guide.md) and the [Configuration reference](configuration.md)).
+**Features**: tick the optional features you plan to use (Proxmox VE, VMware vSphere, Session Recording, SSH Tunnels, Web Browser Sessions, and VDI Containers). Recording, tunnels, and Proxmox are ticked by default and need no further setup. The VMware checkbox writes a commented-out configuration template for you. The others are switched on by adding their configuration sections to `config.toml` (see the [Deployment Guide](deployment-guide.md) and the [Configuration reference](configuration.md)).
 
 Press **Complete Setup**. persea creates the admin account, writes the config file, and sends you to the login page. If you entered a Database URL, restart the service once afterwards (`sudo systemctl restart persea`) so the running server matches the config file.
 
@@ -219,17 +219,17 @@ Press **Complete Setup**. persea creates the admin account, writes the config fi
    curl -k https://localhost:8089/api/health
    ```
 
-   (For an install-script default config, use `https://localhost/api/health` — it listens on 443.) A healthy server replies `{"status":"ok"}`. Logged-in operators get a deeper report (guacd, database, disk) — see [Troubleshooting](troubleshooting.md).
+   (For an install-script default config, use `https://localhost/api/health`: it listens on 443.) A healthy server replies `{"status":"ok"}`. Logged-in operators get a deeper report (guacd, database, disk): see [Troubleshooting](troubleshooting.md).
 
-3. **Open the web interface** at the address persea listens on — `https://your-server:8089` (package and Docker installs) or `https://your-server` (install script without `--no-tls`). You should see the login page — or the setup wizard, if you haven't completed it yet.
+3. **Open the web interface** at the address persea listens on: `https://your-server:8089` (package and Docker installs) or `https://your-server` (install script without `--no-tls`). You should see the login page, or the setup wizard if you haven't completed it yet.
 
 4. **Log in** with the admin email and password from the wizard.
 
-5. **Create a connection.** Go to the **Connections** page and click to add a new entry. Pick a type you can test against — for example SSH to `localhost` or to another machine on your network — and fill in the host, port (22 for SSH), username, and a password or key.
+5. **Create a connection.** Go to the **Connections** page and click to add a new entry. Pick a type you can test against, for example SSH to `localhost` or to another machine on your network, and fill in the host, port (22 for SSH), username, and a password or key.
 
 6. **Connect.** Click the connect button on the entry. A terminal or desktop should appear in the browser. That is the whole loop working: browser → persea → guacd → target.
 
-If any step fails, start with the [Troubleshooting](troubleshooting.md) guide — it covers the login page, failing logins, and sessions that won't start.
+If any step fails, start with the [Troubleshooting](troubleshooting.md) guide: it covers the login page, failing logins, and sessions that won't start.
 
 ## Other Linux distributions
 
@@ -241,7 +241,7 @@ Building from source on Ubuntu 24.04 is possible but unsupported: Ubuntu ships F
 
 ## Optional extras after install
 
-- **Encrypted file-transfer storage** — `sudo /opt/persea/bin/drive-setup.sh` sets up a LUKS-encrypted volume for RDP drive redirection. See [Integrations](integrations.md).
-- **VDI desktop containers** — install Docker and add the `persea` user to the `docker` group, then enable `[vdi]` in the config. See [VDI Desktop Containers](vdi.md).
-- **Vault-backed connections** — by default connection credentials are stored encrypted in the database. To store them in HashiCorp Vault or OpenBao instead, run `./contrib/vault-quickstart.sh` (or follow the manual steps in [Integrations](integrations.md)).
-- **Production hardening** — reverse proxy with a real certificate, sign-in via OIDC/SAML/LDAP, and the rest of the checklist: see the [Deployment Guide](deployment-guide.md).
+- **Encrypted file-transfer storage**: `sudo /opt/persea/bin/drive-setup.sh` sets up a LUKS-encrypted volume for RDP drive redirection. See [Integrations](integrations.md).
+- **VDI desktop containers**: install Docker and add the `persea` user to the `docker` group, then enable `[vdi]` in the config. See [VDI Desktop Containers](vdi.md).
+- **Vault-backed connections**: by default connection credentials are stored encrypted in the database. To store them in HashiCorp Vault or OpenBao instead, run `./contrib/vault-quickstart.sh` (or follow the manual steps in [Integrations](integrations.md)).
+- **Production hardening**: reverse proxy with a real certificate, sign-in via OIDC/SAML/LDAP, and the rest of the checklist: see the [Deployment Guide](deployment-guide.md).

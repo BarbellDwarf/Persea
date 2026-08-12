@@ -25,8 +25,8 @@ Found something broken? Open an issue with logs and screenshots.
 
 persea ships in two versions:
 
-- **Free (self-hosted)** — the open-source edition, licensed under AGPL-3.0. Runs without a license key.
-- **Enterprise** — the free edition plus enterprise features, unlocked by a commercial license key (`PSEA-<base64>`): SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, and high availability / clustering.
+- **Free (self-hosted)**: the open-source edition, licensed under AGPL-3.0. Runs without a license key.
+- **Enterprise**: the free edition plus enterprise features, unlocked by a commercial license key (`PSEA-<base64>`): SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, and high availability / clustering.
 
 Enterprise features are marked **Enterprise** in the feature lists below. Without a license key, they are available during a 30-day evaluation period from first start. See [Licensing](docs/licensing.md) for how to obtain and install a license key.
 
@@ -71,13 +71,13 @@ guacd (C, from guacamole-server)
 
 - **OIDC single sign-on**: Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
 - **LDAP / Active Directory**: bind + search authentication
-- **SAML 2.0**: service provider with signature verification — **Enterprise**
+- **SAML 2.0**: service provider with signature verification (**Enterprise**)
 - **RADIUS**: PAP authentication for network equipment integration
 - **Database auth**: local password accounts with Argon2id hashing
 - **TOTP two-factor**: enrollment, QR codes, recovery codes
-- **TOTP / MFA enforcement**: mandatory two-factor policies — **Enterprise**
+- **TOTP / MFA enforcement**: mandatory two-factor policies (**Enterprise**)
 - **4-tier role system**: admin, poweruser, operator, viewer with OIDC group mapping
-- **Fine-grained RBAC**: connection-level permissions and group inheritance — **Enterprise**
+- **Fine-grained RBAC**: connection-level permissions and group inheritance (**Enterprise**)
 - **API key auth**: SHA-256 hashed keys with IP allowlists and expiry
 - **Vault-backed connections**: credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
 - **TLS everywhere**: HTTPS for clients, TLS between persea and guacd
@@ -85,10 +85,10 @@ guacd (C, from guacamole-server)
 - **Per-entry clipboard control**: disable copy and/or paste for data loss prevention
 - **Rate limiting**: per-IP, per-endpoint via tower_governor
 - **Session recording**: Guacamole format with playback UI, disk rotation, per-entry limits
-- **Encrypted session recording**: recordings encrypted at rest — **Enterprise**
+- **Encrypted session recording**: recordings encrypted at rest (**Enterprise**)
 - **Audit logging**: SHA-256 hash chain with tamper evidence
-- **Audit log retention and compliance exports** — **Enterprise**
-- **High availability / clustering**: multi-instance deployments behind a load balancer — **Enterprise**
+- **Audit log retention and compliance exports** (**Enterprise**)
+- **High availability / clustering**: multi-instance deployments behind a load balancer (**Enterprise**)
 
 ### Connectivity
 
@@ -126,7 +126,7 @@ guacd (C, from guacamole-server)
 |-----------|--------|-------|
 | guacd | Required | Built from `apache/guacamole-server`, ships in the .deb and Docker image. |
 | Vault or OpenBao | Optional | For the Connections UI. Stores connection credentials server-side when `[storage] backend = "vault"`. By default connections and credentials live in the app database; Vault is not required. Use [`contrib/vault-quickstart.sh`](contrib/vault-quickstart.sh) for one-command setup. |
-| PostgreSQL or MySQL | Optional | Alternative to the built-in SQLite store: set `db_url` in the config (or in the setup wizard at first run) and ALL app data — users, connections, sessions history, audit, settings — lives in that backend. Migrations run automatically at startup. SQLite (`db_path`) remains the default. |
+| PostgreSQL or MySQL | Optional | Alternative to the built-in SQLite store: set `db_url` in the config (or in the setup wizard at first run) and ALL app data (users, connections, sessions history, audit, settings) lives in that backend. Migrations run automatically at startup. SQLite (`db_path`) remains the default. |
 | OIDC provider | Optional | For SSO. API-key auth works on its own. |
 | Docker | Optional | Only needed for VDI desktop containers. |
 
@@ -211,8 +211,8 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 
 persea ships in two versions:
 
-- **Free (self-hosted)** — the open-source edition, licensed under AGPL-3.0. Runs without a license key. Free for self-hosted use, including commercial use, provided all modifications are also released under AGPL-3.0. See [LICENSE](LICENSE).
-- **Enterprise** — the free edition plus enterprise features (SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, high availability / clustering), unlocked by a commercial license key (`PSEA-<base64>`). See [Licensing](docs/licensing.md).
+- **Free (self-hosted)**: the open-source edition, licensed under AGPL-3.0. Runs without a license key. Free for self-hosted use, including commercial use, provided all modifications are also released under AGPL-3.0. See [LICENSE](LICENSE).
+- **Enterprise**: the free edition plus enterprise features (SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, high availability / clustering), unlocked by a commercial license key (`PSEA-<base64>`). See [Licensing](docs/licensing.md).
 
 A separate **Commercial License** is available for organizations that need to modify persea without open-sourcing their changes. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) or email licensing@persea.dev.
 

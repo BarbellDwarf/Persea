@@ -1,17 +1,17 @@
 # Auth Provider Architecture for persea
 
-> **Design record.** This is a historical design document: the research that led to persea's pluggable authentication chain. It is not a user guide — see [Configuration](../configuration.md#auth-section) for how auth is configured and [Roles and Access Control](../roles-and-access-control.md) for the role/permission model.
+> **Design record.** This is a historical design document: the research that led to persea's pluggable authentication chain. It is not a user guide: see [Configuration](../configuration.md#auth-section) for how auth is configured and [Roles and Access Control](../roles-and-access-control.md) for the role/permission model.
 
 ## What this document is
 
-Before persea had multiple ways to log in, this document worked out how authentication should be structured. The question was: persea can authenticate users against a local database, an LDAP/AD directory, an OIDC identity provider, RADIUS, or a TOTP app — how should the code be organised so that each of these is a self-contained module and the behaviour of the whole is predictable?
+Before persea had multiple ways to log in, this document worked out how authentication should be structured. The question was: persea can authenticate users against a local database, an LDAP/AD directory, an OIDC identity provider, RADIUS, or a TOTP app; how should the code be organised so that each of these is a self-contained module and the behaviour of the whole is predictable?
 
 **What was decided:**
 
-- One `AuthProvider` trait (an interface every login method implements) with **capability flags** — a provider advertises what it can do (password auth, redirect to an external identity provider, MFA, group resolution, user auto-provisioning) and the rest of the system adapts.
-- Providers are tried **in order** — the config's `methods = [...]` list, first success or redirect wins. This mirrors Apache Guacamole's "poll all providers" pattern.
-- **MFA is layered** — at most one second-factor provider (TOTP) runs after the primary provider succeeds.
-- **No plugin system** — persea is a single binary; the trait exists for clean code organisation, not for third-party extensions.
+- One `AuthProvider` trait (an interface every login method implements) with **capability flags**: a provider advertises what it can do (password auth, redirect to an external identity provider, MFA, group resolution, user auto-provisioning) and the rest of the system adapts.
+- Providers are tried **in order**: the config's `methods = [...]` list, first success or redirect wins. This mirrors Apache Guacamole's "poll all providers" pattern.
+- **MFA is layered**: at most one second-factor provider (TOTP) runs after the primary provider succeeds.
+- **No plugin system**: persea is a single binary; the trait exists for clean code organisation, not for third-party extensions.
 
 **What shipped, and how it differs from the proposal:** the trait, capability flags, ordered chain, and MFA layering all shipped as designed. Two details evolved during implementation: the proposed `AuthResult` struct became an enum (`Success` / `Failure` / `Redirect` / `Unavailable`), and the proposed provider registry became a `from_config` builder on the chain itself. Two proposals did **not** ship: per-provider session lifetimes, and a reauthentication middleware for sensitive operations (session expiry is governed by the global `auth_session_ttl_secs` setting instead).
 
@@ -20,9 +20,9 @@ Before persea had multiple ways to log in, this document worked out how authenti
 ## State at the time of writing (before this design shipped)
 
 persea had two auth mechanisms in a single `auth.rs` + `oidc.rs`:
-- **API key auth** — `Authorization: Bearer <key>` or `X-API-Key` header, validated against SQLite `admins` and `user_api_tokens` tables
-- **OIDC session cookie** — `persea_session` cookie, validated against `auth_sessions` table
-- **WebSocket tickets** — single-use tokens for API-key users connecting via WebSocket
+- **API key auth**: `Authorization: Bearer <key>` or `X-API-Key` header, validated against SQLite `admins` and `user_api_tokens` tables
+- **OIDC session cookie**: `persea_session` cookie, validated against `auth_sessions` table
+- **WebSocket tickets**: single-use tokens for API-key users connecting via WebSocket
 
 The `AuthIdentity` enum carried the identity through the request:
 ```rust
@@ -160,10 +160,10 @@ pub trait AuthProvider: Send + Sync + fmt::Debug {
 
 Guacamole uses a single `AuthenticationProvider` interface. Keycloak splits `Authenticator` from `CredentialProvider` from `UserStorageProvider`. For persea, a **single trait with capability flags** is better because:
 
-1. **Simpler registration** — one provider, one struct, one `dyn AuthProvider`
-2. **Capability flags let middleware decide** — check `capabilities().requires_redirect` instead of downcasting
-3. **Providers can be incomplete** — return `Err(AuthError::Internal("not supported"))` or `Ok(None)` for methods they don't implement
-4. **Matches Guacamole's model** — `SimpleAuthenticationProvider` is a single class; persea is a single binary, not a plugin system
+1. **Simpler registration**: one provider, one struct, one `dyn AuthProvider`
+2. **Capability flags let middleware decide**: check `capabilities().requires_redirect` instead of downcasting
+3. **Providers can be incomplete**: return `Err(AuthError::Internal("not supported"))` or `Ok(None)` for methods they don't implement
+4. **Matches Guacamole's model**: `SimpleAuthenticationProvider` is a single class; persea is a single binary, not a plugin system
 
 ---
 
@@ -203,16 +203,16 @@ UserContext (interface)
 
 ### Key Design Patterns
 
-1. **Poll-all-providers** — Guacamole polls ALL installed providers in lexicographic order. First non-`null` result wins. This is the "chain of responsibility" pattern.
-2. **Decoupled auth from data** — An auth provider only needs to authenticate; it can delegate user/connection storage to another provider (e.g. the JDBC extension).
-3. **Credentials object** — Wraps username, password, and arbitrary HTTP request parameters. Providers extract what they need.
-4. **UserContext** — After auth, the provider returns a context that provides access to directories (users, connections, groups). This is the "session scope" concept.
+1. **Poll-all-providers**: Guacamole polls ALL installed providers in lexicographic order. First non-`null` result wins. This is the "chain of responsibility" pattern.
+2. **Decoupled auth from data**: An auth provider only needs to authenticate; it can delegate user/connection storage to another provider (e.g. the JDBC extension).
+3. **Credentials object**: Wraps username, password, and arbitrary HTTP request parameters. Providers extract what they need.
+4. **UserContext**: After auth, the provider returns a context that provides access to directories (users, connections, groups). This is the "session scope" concept.
 
 ### What persea Should Borrow
 
 - **Poll-all pattern**: Try each configured provider until one succeeds
 - **Separation of auth from storage**: Auth provider just authenticates; user upsert is a separate step
-- **Credentials abstraction**: Don't pass raw headers — pass a structured credentials object
+- **Credentials abstraction**: Don't pass raw headers: pass a structured credentials object
 - **UserContext equivalent**: The `AuthIdentity` already serves this role
 
 ---
@@ -253,16 +253,16 @@ AuthenticatorFactory (extends ProviderFactory<Authenticator>)
 
 ### Key Design Patterns
 
-1. **Factory + Provider separation** — Factory is singleton (created once), Provider is per-request (created via `factory.create(session)`). This avoids holding request-scoped state in the factory.
-2. **ServiceLoader discovery** — Providers register via `META-INF/services/` files. Keycloak scans at startup.
-3. **Flow-based composition** — Multiple authenticators are composed into "authentication flows" (sequences of steps). Each step can be REQUIRED, ALTERNATIVE, OPTIONAL, or CONDITIONAL.
-4. **Configurable via Admin Console** — Factories expose `ConfigProperty` lists that the admin console renders as forms.
+1. **Factory + Provider separation**: Factory is singleton (created once), Provider is per-request (created via `factory.create(session)`). This avoids holding request-scoped state in the factory.
+2. **ServiceLoader discovery**: Providers register via `META-INF/services/` files. Keycloak scans at startup.
+3. **Flow-based composition**: Multiple authenticators are composed into "authentication flows" (sequences of steps). Each step can be REQUIRED, ALTERNATIVE, OPTIONAL, or CONDITIONAL.
+4. **Configurable via Admin Console**: Factories expose `ConfigProperty` lists that the admin console renders as forms.
 
 ### What persea Should Borrow
 
-- **Factory pattern for provider registration** — `AuthProviderFactory` creates `AuthProvider` instances. Factories are cheap to create; providers hold state.
-- **Capability/requirement metadata** — Providers advertise what they need (redirect? password form? TOTP?) so the UI can adapt.
-- **NOT the flow system** — Keycloak's flow system is overkill for persea. A simple "try providers in order" or "primary + optional second factor" is sufficient.
+- **Factory pattern for provider registration**: `AuthProviderFactory` creates `AuthProvider` instances. Factories are cheap to create; providers hold state.
+- **Capability/requirement metadata**: Providers advertise what they need (redirect? password form? TOTP?) so the UI can adapt.
+- **NOT the flow system**: Keycloak's flow system is overkill for persea. A simple "try providers in order" or "primary + optional second factor" is sufficient.
 
 ---
 
@@ -275,7 +275,7 @@ AuthenticatorFactory (extends ProviderFactory<Authenticator>)
 | Known set of types | Works | Best (match-based, no vtable) |
 | Open set (plugins) | Best | Can't add new variants |
 | Hot path (millions/sec) | 3-4x slower (vtable indirection) | Near-static dispatch speed |
-| Auth middleware (cold path) | Fine — auth happens once per request | Fine |
+| Auth middleware (cold path) | Fine: auth happens once per request | Fine |
 | Binary size | Smaller (one code path) | Larger (monomorphized per variant) |
 | Object safety | Required | N/A |
 
@@ -439,9 +439,9 @@ impl AuthRegistry {
 
 ### Two-Phase Model
 
-Phase 1: **Primary Auth** — Establish identity (API key, session cookie, password form, OIDC redirect, SAML redirect)
+Phase 1: **Primary Auth**, establish identity (API key, session cookie, password form, OIDC redirect, SAML redirect)
 
-Phase 2: **Second Factor** — TOTP/OTP after primary auth succeeds (if configured)
+Phase 2: **Second Factor**, TOTP/OTP after primary auth succeeds (if configured)
 
 ### Middleware Architecture
 
@@ -475,7 +475,7 @@ pub async fn require_auth(
         return next.run(request).await;
     }
 
-    // No auth — 401
+    // No auth, 401
     (StatusCode::UNAUTHORIZED, Json(json!({
         "error": "authentication required"
     }))).into_response()
@@ -487,7 +487,7 @@ pub async fn require_auth(
 ```rust
 /// Auth response from providers that need redirects (OIDC, SAML).
 pub enum AuthResponse {
-    /// Identity resolved inline — continue processing.
+    /// Identity resolved inline, continue processing.
     Identity(AuthResult),
     /// Need to redirect to external IdP. Contains redirect URL + state.
     Redirect {
@@ -626,7 +626,7 @@ src/
 ├── auth/
 │   ├── mod.rs              # AuthIdentity, role_level, require_auth, optional_auth
 │   ├── provider.rs         # AuthProvider trait, AuthResult, AuthError, ProviderCapabilities
-│   ├── registry.rs         # AuthRegistry — provider collection, lookup, iteration
+│   ├── registry.rs         # AuthRegistry, provider collection, lookup, iteration
 │   ├── providers/
 │   │   ├── mod.rs
 │   │   ├── api_key.rs      # ApiKeyProvider (built-in, always available)
@@ -654,13 +654,13 @@ src/
 
 ## 8. Key Recommendations
 
-1. **Use `dyn AuthProvider`** — Auth is cold path, open set of providers, no performance concern
-2. **Single trait with capability flags** — Simpler than splitting into Authenticator/CredentialProvider/UserStorage like Keycloak
-3. **Poll-all pattern from Guacamole** — Try providers in order, first success wins
-4. **Factory pattern from Keycloak** — `AuthProviderFactory` creates per-request providers (not critical for persea since providers are stateless, but good for future)
-5. **Keep `AuthIdentity` enum** — It's the equivalent of Guacamole's `AuthenticatedUser` and already works
-6. **Add provider metadata to sessions** — Track which provider authenticated each session for audit and TTL management
-7. **Two-phase auth** — Primary (password/SSO) → Optional TOTP, checked via middleware chain
-8. **Config-driven registration** — `[auth]` section in TOML, providers registered at startup based on `methods = [...]` list
-9. **Redirect providers get their own routes** — `/auth/login?provider=oidc`, `/auth/callback` — these don't go through `require_auth`
-10. **Reauthentication for sensitive ops** — Separate middleware that checks recent auth verification
+1. **Use `dyn AuthProvider`**: Auth is cold path, open set of providers, no performance concern
+2. **Single trait with capability flags**: Simpler than splitting into Authenticator/CredentialProvider/UserStorage like Keycloak
+3. **Poll-all pattern from Guacamole**: Try providers in order, first success wins
+4. **Factory pattern from Keycloak**: `AuthProviderFactory` creates per-request providers (not critical for persea since providers are stateless, but good for future)
+5. **Keep `AuthIdentity` enum**: It's the equivalent of Guacamole's `AuthenticatedUser` and already works
+6. **Add provider metadata to sessions**: Track which provider authenticated each session for audit and TTL management
+7. **Two-phase auth**: Primary (password/SSO) → Optional TOTP, checked via middleware chain
+8. **Config-driven registration**: `[auth]` section in TOML, providers registered at startup based on `methods = [...]` list
+9. **Redirect providers get their own routes**: `/auth/login?provider=oidc`, `/auth/callback`; these don't go through `require_auth`
+10. **Reauthentication for sensitive ops**: Separate middleware that checks recent auth verification

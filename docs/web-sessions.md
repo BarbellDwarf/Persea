@@ -3,14 +3,14 @@
 > **Audience:** admins enabling web browser sessions (domain allowlists, login scripts, clipboard control).
 > **Next:** [Security](security-hardening.md#web-session-hardening) for hardening, or [Configuration](configuration.md#browser-session-settings) for the browser settings.
 
-A web session is a full Chromium browser running **on the persea server**, streamed to the user's own browser through the same Guacamole pipeline used for SSH and RDP. The user sees and operates a real browser — a corporate portal, an internal web app, an IPMI console — without installing anything locally, and without the target site ever seeing the user's real machine.
+A web session is a full Chromium browser running **on the persea server**, streamed to the user's own browser through the same Guacamole pipeline used for SSH and RDP. The user sees and operates a real browser, a corporate portal, an internal web app, an IPMI console, without installing anything locally, and without the target site ever seeing the user's real machine.
 
 This is useful for:
 
-- **Controlled web access** — let operators reach specific internal web applications without exposing credentials or giving them network access
-- **Credential isolation** — passwords and session cookies stay on the server, never reach the user's machine
-- **Kiosk-style portals** — lock the browser to specific sites with domain allowlisting
-- **Automated login** — a login script can fill in the login form for the user (see [Login scripts](#login-scripts))
+- **Controlled web access**: let operators reach specific internal web applications without exposing credentials or giving them network access
+- **Credential isolation**: passwords and session cookies stay on the server, never reach the user's machine
+- **Kiosk-style portals**: lock the browser to specific sites with domain allowlisting
+- **Automated login**: a login script can fill in the login form for the user (see [Login scripts](#login-scripts))
 
 ## How it works
 
@@ -83,24 +83,24 @@ By default, web sessions can only connect to `localhost`. To allow external URLs
 web_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12"]
 ```
 
-This is a server-side CIDR check (CIDR = a compact way of writing an IP range) applied when the session is created. The URL's hostname is resolved and the session is created only if at least one of the resolved IPs falls inside an allowed range. Note that a hostname resolving to a mix of allowed and disallowed addresses passes — one match is enough. See [Domain allowlisting](#domain-allowlisting) for the separate, stricter control over which sites the user can visit inside the session.
+This is a server-side CIDR check (CIDR = a compact way of writing an IP range) applied when the session is created. The URL's hostname is resolved and the session is created only if at least one of the resolved IPs falls inside an allowed range. A hostname resolving to a mix of allowed and disallowed addresses passes: one match is enough. See [Domain allowlisting](#domain-allowlisting) for the separate, stricter control over which sites the user can visit inside the session.
 
 ## Domain allowlisting
 
 A connections entry can restrict which websites the browser can reach. This is enforced **inside Chromium** via the `--host-rules` flag, which blocks DNS resolution for every domain except the ones you list.
 
 - Set `allowed_domains` on the entry (via the address-book API; the Connections UI does not currently expose it).
-- Subdomains are included automatically — adding `example.com` also allows `*.example.com`.
+- Subdomains are included automatically: adding `example.com` also allows `*.example.com`.
 - `localhost` (`127.0.0.1`) is always allowed.
 
 ### Two layers of restriction
 
 | Layer | Config | Applied | Scope |
 |-------|--------|---------|-------|
-| **`web_allowed_networks`** | `config.toml` (global) | Server-side, at session creation | CIDR ranges — which IPs persea will connect to |
-| **`allowed_domains`** | Connections entry | Client-side, inside Chromium at runtime | Domain names — which sites the user can navigate to |
+| **`web_allowed_networks`** | `config.toml` (global) | Server-side, at session creation | CIDR ranges: which IPs persea will connect to |
+| **`allowed_domains`** | Connections entry | Client-side, inside Chromium at runtime | Domain names: which sites the user can navigate to |
 
-Both can be active at once for defence in depth. `web_allowed_networks` stops persea from initiating connections to networks it shouldn't reach (SSRF protection — it stops an attacker using the server as a proxy to internal systems). `allowed_domains` stops a user inside an already-running session from navigating anywhere outside the allowlist.
+Both can be active at once for defence in depth. `web_allowed_networks` stops persea from initiating connections to networks it shouldn't reach (SSRF protection: it stops an attacker using the server as a proxy to internal systems). `allowed_domains` stops a user inside an already-running session from navigating anywhere outside the allowlist.
 
 **Example:** the config allows `10.0.0.0/8` (server-side). A connections entry for the internal wiki sets `allowed_domains: ["wiki.internal.example.com"]`. The session can only reach the wiki, even though the server-side allowlist permits the whole `10.0.0.0/8` range.
 
@@ -127,7 +127,7 @@ The script gets these environment variables:
 | `RUSTGUAC_URL` | Target URL |
 | `RUSTGUAC_SESSION_ID` | Session UUID |
 
-Credentials are **not** passed as environment variables — they arrive as JSON on **stdin**, which is more secure (environment variables are readable via `/proc/<pid>/environ` on Linux):
+Credentials are **not** passed as environment variables: they arrive as JSON on **stdin**, which is more secure (environment variables are readable via `/proc/<pid>/environ` on Linux):
 
 ```json
 {
@@ -143,9 +143,9 @@ Credentials are **not** passed as environment variables — they arrive as JSON 
 
 - The script must live in `login_scripts_dir` (default: `/opt/persea/scripts`)
 - It must be executable (`chmod +x`)
-- Path traversal is blocked — the filename is validated against the scripts directory
+- Path traversal is blocked: the filename is validated against the scripts directory
 - Scripts are killed after a timeout (default: 120 seconds, configurable via `login_script_timeout_secs`)
-- Script failure is **not fatal** — the session continues and the user can log in manually
+- Script failure is **not fatal**: the session continues and the user can log in manually
 
 ### Example: Playwright login script
 
@@ -153,11 +153,11 @@ This example uses [Playwright](https://playwright.dev/) to automate a login flow
 
 ```javascript
 #!/usr/bin/env node
-// login-example.js — Playwright login script for persea
+// login-example.js, Playwright login script for persea
 //
 // Install: npm install playwright-core  (in /opt/persea/scripts or globally)
 // The script uses playwright-core (no bundled browsers) since Chromium is
-// already running — it connects via CDP rather than launching a new browser.
+// already running, it connects via CDP rather than launching a new browser.
 
 'use strict';
 
@@ -210,7 +210,7 @@ async function main() {
     }
 
     if (!creds.cdp_port) {
-        console.error('[login] No CDP port — exiting');
+        console.error('[login] No CDP port, exiting');
         process.exit(1);
     }
 
@@ -240,10 +240,10 @@ async function main() {
         await page.waitForURL('**/dashboard**', { timeout: 10000 });
         console.log('[login] Login successful');
     } catch {
-        console.error('[login] Login may have failed — user can retry manually');
+        console.error('[login] Login may have failed, user can retry manually');
     }
 
-    // Disconnect CDP — browser stays running for the user
+    // Disconnect CDP, browser stays running for the user
     await browser.close();
 }
 
@@ -269,11 +269,11 @@ main().catch((err) => {
 | `cdp_port_range_start` | `9200` | First CDP port in the allocation pool |
 | `cdp_port_range_end` | `9299` | Last CDP port |
 
-## Native autofill — disabled
+## Native autofill (disabled)
 
 > **Status: disabled.** The `autofill` field is still accepted by the entry schema and API, but persea no longer writes credentials into Chromium's password store: the population step is a no-op and Chromium is launched with `--disable-autofill`. No login data is ever written to disk. For automated login, use [login scripts](#login-scripts).
 
-Because the field is accepted for compatibility, entries may still carry it — it simply has no effect. The intended JSON shape, if you encounter it in existing data, is an array of credential objects:
+Because the field is accepted for compatibility, entries may still carry it; it simply has no effect. The intended JSON shape, if you encounter it in existing data, is an array of credential objects:
 
 ```json
 [
@@ -285,7 +285,7 @@ Because the field is accepted for compatibility, entries may still carry it — 
 ]
 ```
 
-The `$USERNAME` and `$PASSWORD` placeholders would be resolved server-side from the entry's credentials, and the result passed to the browser spawner — which then ignores it.
+The `$USERNAME` and `$PASSWORD` placeholders would be resolved server-side from the entry's credentials, and the result passed to the browser spawner, which then ignores it.
 
 ## URL placeholders
 
@@ -321,7 +321,7 @@ Clipboard copy and paste can be disabled per connections entry. This uses guacd'
 
 Additional behaviour:
 
-- `Esc` exits browser fullscreen natively (browser behaviour — not intercepted)
+- `Esc` exits browser fullscreen natively (browser behaviour: not intercepted)
 - The entry-level `fullscreen_on_connect` field opens the session fullscreen automatically
 - All other keys pass through to the remote host
 - `disable_copy` / `disable_paste` still apply regardless of local shortcuts
@@ -344,9 +344,9 @@ Every web session runs Chromium with a comprehensive managed policy and an isola
 - Dangerous URL schemes (`file://`, `chrome://`, `javascript:`) are blocked
 - Browser sign-in and sync are disabled
 - Each session gets a fresh UUID-based profile directory, deleted on session end
-- Chromium runs with its normal SUID sandbox — `--no-sandbox` is only appended when persea itself runs as root (e.g. local development); production installs (install.sh, Docker) run as the `persea` system user and keep the sandbox active
+- Chromium runs with its normal SUID sandbox: `--no-sandbox` is only appended when persea itself runs as root (e.g. local development); production installs (install.sh, Docker) run as the `persea` system user and keep the sandbox active
 
-**Warning:** the managed policy is installed globally at `/etc/chromium/policies/managed/persea.json`. It affects **all** Chromium instances on the machine, not just persea sessions. Do not install persea on a desktop machine where you want to use Chromium for normal browsing — persea is designed to run on a dedicated server or VM.
+**Warning:** the managed policy is installed globally at `/etc/chromium/policies/managed/persea.json`. It affects **all** Chromium instances on the machine, not just persea sessions. Do not install persea on a desktop machine where you want to use Chromium for normal browsing: persea is designed to run on a dedicated server or VM.
 
 ## Display and port ranges
 
@@ -364,21 +364,21 @@ If a range is exhausted, session creation fails with "no X display numbers avail
 **Browser shows a blank/black screen:**
 - Check the persea logs for Xvnc startup errors. persea waits up to 2 seconds for Xvnc to listen on its VNC port and logs Xvnc's stderr on failure.
 - Verify `chromium_path` and `xvnc_path` point at valid binaries (defaults: `Xvnc`, `chromium` on the `PATH`).
-- Ensure the `persea` system user has a real home directory (`/home/persea`) — Chromium's crashpad handler crashes without one, and persea will log "Chromium exited immediately" with the reason.
-- If Chromium exits within the first 500 ms, persea captures and logs its stderr — look for missing libraries or sandbox errors there.
+- Ensure the `persea` system user has a real home directory (`/home/persea`): Chromium's crashpad handler crashes without one, and persea will log "Chromium exited immediately" with the reason.
+- If Chromium exits within the first 500 ms, persea captures and logs its stderr: look for missing libraries or sandbox errors there.
 
 **"Controlled by automated test software" banner:**
 - Cosmetic. It appears when `allowed_domains` is set, because `--enable-automation` is used to suppress a different infobar about `--host-rules`. It does not affect functionality.
 
 **Domain blocking is too strict:**
-- Subdomains are automatically included — adding `example.com` allows `*.example.com`.
+- Subdomains are automatically included: adding `example.com` allows `*.example.com`.
 - CDN domains may need to be added separately (e.g. `cdn.example.com`, `fonts.googleapis.com`).
 - If the browser shows "This site can't be reached", the domain is being blocked by `allowed_domains`.
 
 **Login script doesn't run:**
 - The script must be executable: `chmod +x /opt/persea/scripts/my-script.js`
 - Check `login_scripts_dir` points at the right directory.
-- Check persea logs for `[login-script]` messages — script stdout/stderr is captured.
+- Check persea logs for `[login-script]` messages: script stdout/stderr is captured.
 - The script has a 120-second default timeout. Increase `login_script_timeout_secs` if the flow needs longer.
 
 **Certificate errors when using SSH tunnels:**
@@ -416,7 +416,7 @@ POST /api/sessions
 | `width` | integer | No | Browser width in pixels (default: 1920, range: 640–8192) |
 | `height` | integer | No | Browser height in pixels (default: 1080, range: 480–8192) |
 | `dpi` | integer | No | Display DPI (default: 96) |
-| `autofill` | string | No | JSON array of autofill credentials — accepted for compatibility but currently has no effect |
+| `autofill` | string | No | JSON array of autofill credentials: accepted for compatibility but currently has no effect |
 | `allowed_domains` | array | No | Domain allowlist (see [Domain allowlisting](#domain-allowlisting)) |
 | `login_script` | string | No | Script filename in `login_scripts_dir` |
 | `disable_copy` | boolean | No | Disable clipboard copy (default: false) |

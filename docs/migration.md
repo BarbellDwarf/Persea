@@ -16,7 +16,7 @@ persea can import the address book from an Apache Guacamole MySQL/MariaDB databa
 ### Before you start
 
 - A MySQL/MariaDB dump of your Guacamole database (see next step).
-- The storage encryption key. In DB mode this is required — a 64-character hex string set via `PERSEA_STORAGE_KEY` or `[storage].encryption_key`, generated with `openssl rand -hex 32`. Without it, imported passwords and private keys are **not** stored; entries import with no credentials.
+- The storage encryption key. In DB mode this is required: a 64-character hex string set via `PERSEA_STORAGE_KEY` or `[storage].encryption_key`, generated with `openssl rand -hex 32`. Without it, imported passwords and private keys are **not** stored; entries import with no credentials.
 - If you store credentials in Vault instead (`backend = "vault"`): a working Vault/OpenBao with `[vault]` configured and `VAULT_SECRET_ID` set.
 
 ### Step 1: Export the Guacamole database
@@ -35,7 +35,7 @@ Both the default dump format and `--skip-extended-insert` single-row dumps work,
 
 ### Step 2: Preview the import
 
-Run with `--dry-run` first — it shows exactly what would be imported without writing anything:
+Run with `--dry-run` first; it shows exactly what would be imported without writing anything:
 
 ```bash
 persea --config /opt/persea/config.toml \
@@ -97,7 +97,7 @@ Options:
 
 ### What gets imported
 
-SSH, RDP (including RemoteApp), and VNC connections. The importer maps the Guacamole parameters it understands — hostname, port, username, password, private key, domain, security mode, certificate ignore, color depth, drive redirection, and the RemoteApp settings — onto the corresponding persea entry fields.
+SSH, RDP (including RemoteApp), and VNC connections. The importer maps the Guacamole parameters it understands (hostname, port, username, password, private key, domain, security mode, certificate ignore, color depth, drive redirection, and the RemoteApp settings) onto the corresponding persea entry fields.
 
 **Folders.** Guacamole's connection-group hierarchy becomes persea's folder structure, with each group a subfolder under the target folder and its connections inside it. A connection named "Firewall" in the group "Production > DMZ" imports as `imported/Production/DMZ/Firewall`. Connections without a parent group land directly in the target folder.
 
@@ -105,7 +105,7 @@ SSH, RDP (including RemoteApp), and VNC connections. The importer maps the Guaca
 
 ### After the import
 
-The imported entries appear in the Connections page. You can then edit them to add things Guacamole didn't have — login scripts, autofill, domain allowlists, clipboard restrictions — and set folder-level access controls (`allowed_groups`).
+The imported entries appear in the Connections page. You can then edit them to add things Guacamole didn't have: login scripts, autofill, domain allowlists, clipboard restrictions, and set folder-level access controls (`allowed_groups`).
 
 Notes:
 
@@ -115,7 +115,7 @@ Notes:
 
 ## Moving connections from Vault into the database
 
-If you currently store connection credentials in Vault and want to move them into the database (`backend = "db"`), the `db-migrate-from-vault` command copies the whole address book — folders, entries, and per-user credential variables — out of Vault and into the database, encrypting the credential fields (password, private key, container password, Proxmox token) with AES-256-GCM as it goes. Everything else, including jump-host credentials, is carried over as plain entry parameters.
+If you currently store connection credentials in Vault and want to move them into the database (`backend = "db"`), the `db-migrate-from-vault` command copies the whole address book (folders, entries, and per-user credential variables) out of Vault and into the database, encrypting the credential fields (password, private key, container password, Proxmox token) with AES-256-GCM as it goes. Everything else, including jump-host credentials, is carried over as plain entry parameters.
 
 The command is safe to re-run: entries that already exist in the database are skipped unless you pass `--overwrite`. It exits with a non-zero status if anything failed to migrate.
 
@@ -149,8 +149,8 @@ Options:
 ### Requirements and cut-over
 
 - `[vault]` must be configured in `config.toml` (it is the source) and `VAULT_SECRET_ID` set.
-- `PERSEA_STORAGE_KEY` must be the same 64-character key persea will run with afterwards — it encrypts the database credentials, and a different key at runtime means the credentials cannot be decrypted (`ENCRYPTION_KEY` is accepted as a legacy name for the same variable).
-- Credential-variable references (values like `$corp_password` — see [Credential Variables](credential-variables.md)) are encrypted like any other value but decrypted before use at connect time, so they keep working after the migration.
+- `PERSEA_STORAGE_KEY` must be the same 64-character key persea will run with afterwards: it encrypts the database credentials, and a different key at runtime means the credentials cannot be decrypted (`ENCRYPTION_KEY` is accepted as a legacy name for the same variable).
+- Credential-variable references (values like `$corp_password`: see [Credential Variables](credential-variables.md)) are encrypted like any other value but decrypted before use at connect time, so they keep working after the migration.
 
 Once the migration succeeds, switch persea to the database backend:
 
@@ -160,11 +160,11 @@ backend = "db"
 encryption_key = "<64-char-hex-key>"
 ```
 
-or set `PERSEA_STORAGE_KEY` in the environment. With `backend = "db"`, connection credentials come exclusively from the database — Vault is not consulted for them. Vault is still used for per-user credential variables (My Credentials) and the LUKS drive key, so keep `[vault]` configured if you use either of those, and remove it once you no longer do.
+or set `PERSEA_STORAGE_KEY` in the environment. With `backend = "db"`, connection credentials come exclusively from the database, Vault is not consulted for them. Vault is still used for per-user credential variables (My Credentials) and the LUKS drive key, so keep `[vault]` configured if you use either of those, and remove it once you no longer do.
 
 ## Moving between database backends
 
-persea can *store* its data in SQLite, PostgreSQL, or MySQL, but it does not ship a converter between them — a SQLite database cannot be handed to Postgres as-is, and there is no built-in export/import between backends. Two supported paths:
+persea can *store* its data in SQLite, PostgreSQL, or MySQL, but it does not ship a converter between them; a SQLite database cannot be handed to Postgres as-is, and there is no built-in export/import between backends. Two supported paths:
 
 **Re-create on the new backend (recommended).** Point `db_url` at the new database in the config:
 
@@ -172,7 +172,7 @@ persea can *store* its data in SQLite, PostgreSQL, or MySQL, but it does not shi
 db_url = "postgres://user:password@dbhost:5432/persea"
 ```
 
-Restart persea so it connects and creates the schema, then provision users again (the setup wizard or `create-user` creates the first admin on the new backend; other users and role mappings can be recreated via Admin → Users). Re-enter connection entries in the Connections UI. The old instance's session history, audit log, and recordings do not move — keep the old files if you need them for compliance.
+Restart persea so it connects and creates the schema, then provision users again (the setup wizard or `create-user` creates the first admin on the new backend; other users and role mappings can be recreated via Admin → Users). Re-enter connection entries in the Connections UI. The old instance's session history, audit log, and recordings do not move: keep the old files if you need them for compliance.
 
 **Manual export.** Dump the relevant tables from the old database and load them into the new one with schema adjustments:
 
@@ -180,11 +180,11 @@ Restart persea so it connects and creates the schema, then provision users again
 sqlite3 persea.db .dump
 ```
 
-persea does not ship a converter, so column names and formats must be adapted by hand — and note that the audit log's hash chain cannot be recomputed after a manual copy, so the copied audit history will not verify as untampered. This path is best avoided except for read-only historical data.
+persea does not ship a converter, so column names and formats must be adapted by hand, and the audit log's hash chain cannot be recomputed after a manual copy, so the copied audit history will not verify as untampered. This path is best avoided except for read-only historical data.
 
 ## Splitting connections across multiple Vault servers
 
-If you run one Vault serving both the `shared` and `instance` scopes and want to move one scope onto its own Vault (a central fleet-wide Vault and a per-host local one — see [Multiple Vault backends](configuration.md)), the `vault-migrate` command copies a scope's entire subtree between two configured backends. Because the folder layout is identical in every backend, this is a straight copy: entries move **and** each folder's access config (`.config`, i.e. `allowed_groups` and inheritance) travels with them.
+If you run one Vault serving both the `shared` and `instance` scopes and want to move one scope onto its own Vault (a central fleet-wide Vault and a per-host local one, see [Multiple Vault backends](configuration.md)), the `vault-migrate` command copies a scope's entire subtree between two configured backends. Because the folder layout is identical in every backend, this is a straight copy: entries move **and** each folder's access config (`.config`, i.e. `allowed_groups` and inheritance) travels with them.
 
 ### Step 1: Preview
 
@@ -212,11 +212,11 @@ Options:
 | `--from` / `--to` | (required) | Backend names: `vault`, `vault_shared`, or `vault_local` |
 | `--dry-run` | off | Preview without writing to the destination |
 | `--overwrite` | off | Overwrite entries already present at the destination (default: skip) |
-| `--users` | off | Also copy every per-user credential secret (`users/*`) — this makes those credentials shared; normally you toggle that per credential in My Credentials instead |
+| `--users` | off | Also copy every per-user credential secret (`users/*`): this makes those credentials shared; normally you toggle that per credential in My Credentials instead |
 
 ### Step 3: Cut over
 
-Routing is single-source: once `[vault_shared]` is configured, the `shared` scope reads only from it — there is no fallback to `[vault]`. So the order matters:
+Routing is single-source: once `[vault_shared]` is configured, the `shared` scope reads only from it: there is no fallback to `[vault]`. So the order matters:
 
 1. Copy the subtree first (Step 2).
 2. Then add the `[vault_shared]` block and restart persea.
