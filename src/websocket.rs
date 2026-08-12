@@ -76,10 +76,9 @@ struct TransferAuditEvent {
 fn base64_blob_len(data: &str) -> u64 {
     let data = data.trim_end();
     let mut len = data.len() as u64;
-    if len > 0 && data.ends_with('=') {
-        len -= 1;
-    }
-    if len > 0 && data.ends_with('=') {
+    if data.ends_with("==") {
+        len -= 2;
+    } else if len > 0 && data.ends_with('=') {
         len -= 1;
     }
     len * 3 / 4
@@ -223,7 +222,9 @@ fn emit_transfer_audit(
     user: Option<&str>,
     event: TransferAuditEvent,
 ) {
-    let Some(db) = database else { return; };
+    let Some(db) = database else {
+        return;
+    };
     let db = db.clone();
     let sid = session_id.to_string();
     let user = user.unwrap_or("unknown").to_string();
@@ -851,8 +852,9 @@ async fn proxy_ws_guacd(
     // browser → guacd) can be failed by guacd's error acks (guacd → browser)
     // and vice versa. Stream indices are connection-global, so the key space
     // never collides.
-    let pending_transfers =
-        Arc::new(tokio::sync::Mutex::new(HashMap::<i64, PendingTransfer>::new()));
+    let pending_transfers = Arc::new(tokio::sync::Mutex::new(
+        HashMap::<i64, PendingTransfer>::new(),
+    ));
 
     // guacd → browser (also tee to recording)
     let recording_clone = recording.clone();
@@ -1137,10 +1139,7 @@ async fn ws_to_guacd(
                     let mut parser = crate::protocol::InstructionParser::new();
                     for parsed in parser.receive(&text) {
                         if let Ok(instr) = parsed {
-                            if matches!(
-                                instr.opcode.as_str(),
-                                "file" | "blob" | "ack" | "end"
-                            ) {
+                            if matches!(instr.opcode.as_str(), "file" | "blob" | "ack" | "end") {
                                 let mut pending = pending_transfers.lock().await;
                                 for event in sniff_transfer_instruction(
                                     &instr,
@@ -1440,10 +1439,12 @@ mod tests {
         );
         sniff_transfer_instruction(&file2, TransferDirection::BrowserToGuacd, &mut pending);
         let ok_ack = Instruction::new("ack", vec!["8".into(), "SFTP: OK".into(), "0".into()]);
-        assert!(
-            sniff_transfer_instruction(&ok_ack, TransferDirection::GuacdToBrowser, &mut pending)
-                .is_empty()
-        );
+        assert!(sniff_transfer_instruction(
+            &ok_ack,
+            TransferDirection::GuacdToBrowser,
+            &mut pending
+        )
+        .is_empty());
         assert!(pending.contains_key(&8));
     }
 

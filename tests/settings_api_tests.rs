@@ -21,6 +21,9 @@ mod error {
 mod api {
     pub use persea::api::{AppState, SettingsBaseline};
 }
+mod settings_merge {
+    pub use persea::settings_merge::*;
+}
 
 #[path = "../src/api/settings.rs"]
 mod settings;
