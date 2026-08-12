@@ -1,9 +1,63 @@
 # API Reference
 
-> **Audience:** developers and integration engineers building clients, scripts, or NetBox/webhook integrations against persea.
-> **Next:** [NetBox Integration](netbox.md) for a concrete `GET /api/connect` integration example.
+> **Audience:** developers and integration engineers building clients or
+> scripts against persea.
+> **Next:** [NetBox Integration](netbox.md) for a concrete
+> `GET /api/connect` integration example.
 
-All API endpoints are under `/api/`. Authentication is via `Authorization: Bearer <api-key>` header, `X-API-Key: <key>` header, or OIDC session cookie.
+persea exposes a JSON API under `/api/` for automation: creating
+sessions, managing the address book, administering users, reading audit
+logs, and checking health. The web UI itself is built on these same
+endpoints, so anything the UI can do, a script can do.
+
+This document is organised by task. It covers the endpoints most people
+need to script — check health, list connections, create sessions,
+manage users — and summarises the rest.
+
+## Authentication
+
+Every request to `/api/*` (except the few endpoints noted as public)
+must authenticate one of three ways:
+
+1. **API key** — `Authorization: Bearer <key>` or `X-API-Key: <key>`
+   header. Admin API keys are created in the admin UI; users can create
+   their own tokens (see [Tokens](#user-api-tokens-self-service)).
+   Admins can disable API-key auth entirely via the `enable_api_keys`
+   system setting.
+2. **User API token** — the same headers, with a personal token
+   (`rgu_...`). The token's effective role is the *lower* of the user's
+   current role and the token's `max_role` cap, so a demoted user's
+   tokens lose power immediately.
+3. **Login session cookie** — `persea_session`, set by the web login.
+   Useful in browsers; for scripts, an API key is simpler.
+
+## CSRF requirement
+
+All state-changing requests (POST, PUT, DELETE, PATCH) must also carry
+an `X-CSRF-Token` header whose value exactly matches the `csrf_token`
+cookie. Every response sets a `csrf_token` cookie, so the workflow for
+a script is: make one request to receive the cookie, then echo it back
+as the header:
+
+```bash
+# 1. Learn the CSRF token from a GET request (it sets the cookie)
+curl -s -c /tmp/persea-cookies.txt https://persea.example.com/api/health
+
+# 2. Read it back and send it with every state-changing request
+CSRF=$(awk '$6 == "csrf_token" {print $7}' /tmp/persea-cookies.txt)
+curl -s -b /tmp/persea-cookies.txt \
+     -H "X-CSRF-Token: $CSRF" \
+     -H "Authorization: Bearer $API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"session_type":"ssh","hostname":"10.0.0.1"}' \
+     https://persea.example.com/api/sessions
+```
+
+A missing or mismatched token returns `403` with
+`{"error": "CSRF token missing or invalid"}`. GET/HEAD/OPTIONS are
+exempt. The `csrf_token` cookie is deliberately readable by page
+JavaScript (that is how the web UI echoes it back); `HttpOnly` is only
+set on the session cookie.
 
 ## Error response format
 
@@ -17,13 +71,11 @@ Every API endpoint returns errors in a unified JSON shape:
 }
 ```
 
-| Field | Type | Description |
-|-------|------|-------------|
+| Field | Type | Meaning |
+|-------|------|---------|
 | `error` | string | Human-readable error message |
 | `code` | integer | The HTTP status code, repeated in the body |
-| `error_code` | string | Machine-readable error category (see table below) |
-
-`error_code` values are derived from the HTTP status:
+| `error_code` | string | Machine-readable error category |
 
 | `error_code` | HTTP status | Meaning |
 |--------------|-------------|---------|
@@ -35,338 +87,128 @@ Every API endpoint returns errors in a unified JSON shape:
 | `FORBIDDEN` | 403 | Authenticated but not allowed |
 | `SERVICE_UNAVAILABLE` | 503 | Feature not enabled or backend unavailable |
 | `GATEWAY_TIMEOUT` | 504 | Upstream timed out (e.g. VDI container readiness) |
-| `PAYLOAD_TOO_LARGE` | 413 | Request body over the 64 KB limit |
+| `PAYLOAD_TOO_LARGE` | 413 | Request body over the 64 KB limit (4 MB for address-book import, 2 MB for logo upload) |
 | `INTERNAL_ERROR` | 500 | Server-side failure (also the fallback for any unmapped status) |
 
-The HTTP status is set per error variant (`src/error.rs`). The mapping is:
+Two middleware-level rejections return the same JSON shape but with
+only the `error` field: the CSRF layer (403, see above) and the
+WebSocket Origin check (`cross-origin WebSocket request rejected` /
+`WebSocket upgrade requires Origin header`, both 403).
 
-| Error variant | HTTP status | Meaning |
-|---------------|-------------|---------|
-| `Auth` | 401 | Authentication failed or missing |
-| `Forbidden` | 403 | Insufficient role / permissions |
-| `Conflict` | 409 | State conflict |
-| `Validation` | 400 | Invalid request body or parameters |
-| `Session` | 404 / 400 / 409 / 502 | Message-dependent: "not found" → 404, "validation" → 400, "not active" → 409, otherwise 502 |
-| `Guacd` | 502 | guacd unreachable or protocol error |
-| `Vault` | 404 / 403 / 503 / 400 / 502 | Message-dependent: "not found" → 404, "forbidden"/"access denied" → 403, "unavailable" → 503, "invalid name" → 400, otherwise 502 |
-| `Browser` | 502 | Web browser session backend failure |
-| `Vdi` | 503 / 504 / 502 | "not enabled" → 503, "timeout" → 504, otherwise 502 |
-| `Tunnel` | 502 | SSH tunnel chain failure |
-| `Protocol` | 502 | Guacamole protocol error |
-| `Drive` | 500 | Drive / file transfer failure |
-| `Pve` | 502 | Proxmox VE API failure |
-| `Vsphere` | 502 | VMware vSphere API failure |
-| `Internal` | 500 | Unexpected server error |
+## Roles
 
-Two middleware-level rejections return the same JSON shape but with only the `error` field (no `code`/`error_code`): the CSRF layer (`{"error": "CSRF token missing or invalid"}` with 403 — see [Security](security-hardening.md#csrf-protection)) and the WebSocket Origin check (`{"error": "cross-origin WebSocket request rejected"}` / `{"error": "WebSocket upgrade requires Origin header"}` with 403).
+Endpoints require a minimum role. The four roles, strongest first:
+`admin`, `poweruser`, `operator`, `viewer`. Requirements below are
+stated relative to these names; a role requirement is always "or
+higher" (an admin can do everything).
 
-## Health
+## Health and metrics
 
-### `GET /api/health`
+### `GET /api/health` — is the server alive?
 
-No authentication required for the shallow check, which returns `{"status": "ok"}` when the server is running.
+No authentication required for the shallow check:
+`{"status": "ok"}`. Authenticated requests with **operator** role or
+higher get a deep check: guacd TCP connect, database query, Vault
+health (when configured), recording-disk usage, and the active session
+count — reported as `{"status": "healthy"|"degraded", "checks": {...}}`
+with per-check `status` and `latency_ms`.
 
-Authenticated requests with **operator** role or higher get a deep check: guacd TCP connect, database `SELECT 1`, Vault `/v1/sys/health` (when configured), recording-disk usage, and the active session count. The response is `{"status": "healthy"|"degraded", "checks": {...}, "uptime_seconds": ..., "active_sessions": ...}`. Each check object reports `status` (`up`/`down`/`ok`/`warning`/`unavailable`) and `latency_ms`; the disk check reports `usage_percent`. See [Troubleshooting](troubleshooting.md) for how to read the results.
+```bash
+curl -s https://persea.example.com/api/health
+# → {"status":"ok"}
 
-## Metrics
+curl -s -H "Authorization: Bearer $API_KEY" https://persea.example.com/api/health
+# → {"status":"healthy","checks":{"guacd":{"status":"up",...},...},"uptime_seconds":1234,"active_sessions":3}
+```
 
-### `GET /metrics`
+### `GET /metrics` — Prometheus metrics
 
-Prometheus text exposition format, **unauthenticated**. Five metrics are exposed:
+Prometheus text exposition format, **unauthenticated**: `persea_sessions_active`,
+`persea_sessions_total`, `persea_requests_total`, `persea_errors_total`,
+`persea_uptime_seconds`. Because it is unauthenticated, do not expose
+`/metrics` to untrusted networks — scrape it via a reverse-proxy ACL or
+on the loopback interface.
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `persea_sessions_active` | gauge | Currently active sessions |
-| `persea_sessions_total` | counter | Total sessions created |
-| `persea_requests_total` | counter | Total HTTP requests |
-| `persea_errors_total` | counter | Total 5xx responses |
-| `persea_uptime_seconds` | gauge | Server uptime in seconds |
+## Identity
 
-Because it is unauthenticated, do not expose `/metrics` to untrusted networks (scrape it via a reverse-proxy ACL or on the loopback interface).
+### `GET /api/auth/status` — what is this server?
 
-## Quick Connect
+No authentication. Returns whether OIDC is enabled, the site title,
+whether drive/file transfer is configured, and the available theme
+presets. Useful for integration code that must adapt to the server.
 
-### `GET /api/connect`
+### `GET /api/me` — who am I?
 
-Quick-connect endpoint for external integrations (e.g., NetBox Custom Links). Creates a session and redirects to the client page. If the user is not authenticated and OIDC is configured, redirects to SSO login and back after authentication.
+Requires authentication. Returns the current user's name, email, role,
+group memberships, auth source, and whether Vault is configured.
 
-**Ad-hoc mode** (poweruser+):
+### `GET /auth/login`, `GET /auth/callback`, `GET /auth/logout`
 
-    /api/connect?hostname=10.0.1.50&protocol=ssh
-
-**Connections mode** (operator+):
-
-    /api/connect?scope=shared&folder=production&entry=web-server-01
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `protocol` | string | `ssh`, `rdp`, `vnc`, or `web` (default: ssh) |
-| `hostname` | string | Target hostname or IP |
-| `port` | integer | Target port (uses protocol default if omitted) |
-| `username` | string | Username (optional) |
-| `url` | string | Target URL (web sessions) |
-| `scope` | string | Connections scope: `shared` or `instance` |
-| `folder` | string | Connections folder name |
-| `entry` | string | Connections entry name |
-| `width` | integer | Display width in pixels |
-| `height` | integer | Display height in pixels |
-| `dpi` | integer | Display DPI |
-
-When `scope`, `folder`, and `entry` are all provided, the endpoint connects via the connections (credentials from the [Vault or DB backend](configuration.md#storage-section)). Otherwise it creates an ad-hoc session. No credentials are passed in the URL for ad-hoc mode. If the target requires authentication, the user will see guacd's login prompt.
-
-If the connections entry has `prompt_credentials: true` or has no stored password/key, the endpoint returns an inline credential form instead of creating the session immediately. The user enters credentials, which are POSTed to the connect endpoint and used for that session only (never stored).
-
-See [NetBox Integration](netbox.md) for usage with NetBox Custom Links.
+Browser flow: `/auth/login` redirects to the OIDC provider (when
+configured), `/auth/callback` completes the login, `/auth/logout`
+clears the session cookie. (`POST /auth/login` is the local database
+login form; the UI uses it, scripts normally don't need to.)
 
 ## Sessions
 
-### `POST /api/sessions`
+Sessions are the heart of persea: a session is a connection to one
+target (SSH, RDP, VNC, SPICE, Proxmox, web browser, or VDI container).
+Creating a session only opens the connection to the target; a browser
+then attaches over a WebSocket to stream it (see
+[Connecting to a session](#connecting-to-a-session)).
 
-Create a new session. Requires **poweruser** role or higher.
+### `POST /api/sessions` — create a session
 
-**SSH session (password):**
+Requires **poweruser** role or higher. The body selects the session
+type and target. Examples:
 
-```json
-{
-  "session_type": "ssh",
-  "hostname": "10.0.0.1",
-  "port": 22,
-  "username": "root",
-  "password": "secret"
-}
+```bash
+# SSH with a password
+curl -s -X POST https://persea.example.com/api/sessions \
+  -H "Authorization: Bearer $API_KEY" -H "X-CSRF-Token: $CSRF" \
+  -H "Content-Type: application/json" \
+  -d '{"session_type":"ssh","hostname":"10.0.0.1","username":"root","password":"secret"}'
+
+# SSH with an ephemeral keypair (public key returned in banner_text)
+#   {"session_type":"ssh","hostname":"10.0.0.1","username":"root","generate_keypair":true}
+
+# RDP
+#   {"session_type":"rdp","hostname":"10.0.0.1","username":"Administrator","password":"secret","ignore_cert":true}
+
+# VNC
+#   {"session_type":"vnc","hostname":"10.0.0.1","password":"vnc-secret"}
+
+# Web browser session
+#   {"session_type":"web","url":"https://example.com"}
+
+# RDP reached through an SSH bastion (jump_hosts works for any type)
+#   {"session_type":"rdp","hostname":"10.10.10.1","username":"Administrator","password":"secret",
+#    "jump_hosts":[{"hostname":"bastion.example.com","username":"jump-user","password":"jump-pass"}]}
 ```
 
-**SSH session (ephemeral keypair):**
+Common fields (all optional unless noted):
 
-```json
-{
-  "session_type": "ssh",
-  "hostname": "10.0.0.1",
-  "username": "root",
-  "generate_keypair": true
-}
-```
+| Field | Used by | Meaning |
+|-------|---------|---------|
+| `session_type` | all (required) | `ssh`, `rdp`, `vnc`, `spice`, `proxmox`, `web`, or `vdi` |
+| `hostname` | SSH/RDP/VNC | Target hostname or IP |
+| `port` | SSH/RDP/VNC | Target port (defaults: SSH=22, RDP=3389, VNC=5900) |
+| `username` / `password` | SSH/RDP/VNC | Credentials |
+| `private_key` | SSH | OpenSSH PEM private key |
+| `generate_keypair` | SSH | Generate an ephemeral Ed25519 keypair; the public key is returned in `banner_text` |
+| `url` | web | Target URL for browser sessions |
+| `domain` | RDP | Windows domain |
+| `security` | RDP | `tls`, `nla`, or `rdp` |
+| `ignore_cert` | RDP | Ignore TLS certificate errors |
+| `jump_hosts` | all | Ordered chain of SSH bastion hops; each hop connects through the previous one, the last forwards to the target. Each hop takes `hostname`, `port` (default 22), `username`, and `password` or `private_key`. |
+| `enable_recording` | all | Override the global recording setting for this session |
+| `disable_copy` / `disable_paste` | all | Disable clipboard copy/paste for the session |
+| `width`, `height`, `dpi` | all | Display geometry |
+| `banner` | all | Banner message shown before the session starts |
 
-The response includes the public key in the `banner_text` field. The SSH connection is deferred until the user clicks "Continue" on the banner page.
-
-**SSH session (private key):**
-
-```json
-{
-  "session_type": "ssh",
-  "hostname": "10.0.0.1",
-  "username": "root",
-  "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
-}
-```
-
-**RDP session:**
-
-```json
-{
-  "session_type": "rdp",
-  "hostname": "10.0.0.1",
-  "port": 3389,
-  "username": "Administrator",
-  "password": "secret",
-  "ignore_cert": true,
-  "domain": "EXAMPLE"
-}
-```
-
-**RDP session with Kerberos NLA:**
-
-```json
-{
-  "session_type": "rdp",
-  "hostname": "fileserver.corp.example.com",
-  "port": 3389,
-  "username": "jdoe@CORP.EXAMPLE.COM",
-  "password": "secret",
-  "domain": "CORP.EXAMPLE.COM",
-  "security": "nla",
-  "auth_pkg": "kerberos",
-  "kdc_url": "https://dc.corp.example.com/KdcProxy"
-}
-```
-
-**VNC session:**
-
-```json
-{
-  "session_type": "vnc",
-  "hostname": "10.0.0.1",
-  "port": 5900,
-  "password": "vnc-secret"
-}
-```
-
-**Web browser session:**
-
-```json
-{
-  "session_type": "web",
-  "url": "https://example.com"
-}
-```
-
-**Web session with autofill and domain restriction:**
-
-```json
-{
-  "session_type": "web",
-  "url": "https://www.saucedemo.com",
-  "username": "standard_user",
-  "password": "secret_sauce",
-  "autofill": "[{\"url\":\"https://www.saucedemo.com\",\"username\":\"$USERNAME\",\"password\":\"$PASSWORD\"}]",
-  "allowed_domains": ["saucedemo.com"],
-  "disable_copy": true
-}
-```
-
-The `autofill` field is a JSON string containing an array of objects with `url`, `username`, and `password`. The placeholders `$USERNAME` and `$PASSWORD` are substituted with the session's credentials. Multiple entries support SSO redirect chains where credentials are needed on different domains.
-
-**Session with multi-hop SSH tunnel (any type):**
-
-```json
-{
-  "session_type": "rdp",
-  "hostname": "10.10.10.1",
-  "port": 3389,
-  "username": "Administrator",
-  "password": "secret",
-  "jump_hosts": [
-    {
-      "hostname": "bastion.example.com",
-      "port": 22,
-      "username": "jump-user",
-      "password": "jump-pass"
-    },
-    {
-      "hostname": "internal-gw.corp.local",
-      "port": 22,
-      "username": "gw-user",
-      "private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\n..."
-    }
-  ]
-}
-```
-
-**Web session with SSH tunnel:**
-
-```json
-{
-  "session_type": "web",
-  "url": "https://internal-app.corp.local:8443/dashboard",
-  "jump_hosts": [
-    {
-      "hostname": "bastion.example.com",
-      "port": 22,
-      "username": "jump-user",
-      "password": "jump-pass"
-    }
-  ]
-}
-```
-
-For web sessions, the tunnel forwards to the URL's host and port (inferred from the scheme: 80 for HTTP, 443 for HTTPS, or explicit port in the URL). The URL is rewritten to `{scheme}://127.0.0.1:{tunnel_port}{path}` for Chromium. HTTPS targets will show certificate warnings since the hostname changes.
-
-The `jump_hosts` array defines an ordered chain of SSH bastion hops. Each hop connects through the previous hop's tunnel. The final hop forwards to the session target. Jump hosts are supported for all session types.
-
-**Legacy single jump host fields** (`jump_host`, `jump_port`, `jump_username`, `jump_password`, `jump_private_key`) are still accepted for backward compatibility but `jump_hosts` takes precedence when both are provided.
-
-**All session fields:**
-
-| Field | Type | Used by | Description |
-|-------|------|---------|-------------|
-| `session_type` | string | All | `ssh`, `rdp`, `vnc`, `spice`, `proxmox`, `web`, or `vdi` (required) |
-| `hostname` | string | SSH, RDP, VNC | Target hostname or IP |
-| `port` | integer | SSH, RDP, VNC | Target port (defaults: SSH=22, RDP=3389, VNC=5900) |
-| `username` | string | SSH, RDP | Username for authentication |
-| `password` | string | SSH, RDP, VNC | Password (VNC uses this as the VNC password) |
-| `private_key` | string | SSH | OpenSSH PEM private key |
-| `generate_keypair` | boolean | SSH | Generate an ephemeral Ed25519 keypair |
-| `url` | string | Web | Target URL for web browser session |
-| `domain` | string | RDP | Windows domain |
-| `security` | string | RDP | `tls`, `nla`, or `rdp` |
-| `ignore_cert` | boolean | RDP | Ignore TLS certificate errors |
-| `auth_pkg` | string | RDP | NLA auth package: `kerberos`, `ntlm`, or empty (negotiate) |
-| `kdc_url` | string | RDP | Kerberos KDC or KDC Proxy URL |
-| `kerberos_cache` | string | RDP | Path to Kerberos credential cache (advanced) |
-| `color_depth` | integer | RDP | Color depth in bits (8, 16, 24, 32) |
-| `enable_drive` | boolean | RDP, SSH | Enable file transfer / drive redirection |
-| `disable_copy` | boolean | All | Disable clipboard copy (server → client) |
-| `disable_paste` | boolean | All | Disable clipboard paste (client → server) |
-| `autofill` | string | Web | JSON array of autofill credentials (see below) |
-| `allowed_domains` | array | Web | Domain allowlist — browser can only reach these domains |
-| `login_script` | string | Web | Login script filename (relative to `login_scripts_dir`) |
-| `jump_hosts` | array | All | Multi-hop SSH tunnel chain (see below) |
-| `width` | integer | All | Display width in pixels |
-| `height` | integer | All | Display height in pixels |
-| `dpi` | integer | All | Display DPI |
-| `banner` | string | All | Banner message shown before session starts |
-| `max_monitors` | integer | All | Number of monitors to offer (default 1) |
-| `enable_recording` | boolean | All | Override the global recording setting for this session |
-| `max_recordings` | integer | All | Per-session recording retention cap |
-| `allow_sharing` | boolean | All | Allow generating a Share URL for this session (entry-derived sessions only) |
-| `fullscreen_on_connect` | boolean | All | Open the client in fullscreen on connect |
-| `autohide_side_tabs` | boolean | All | Auto-hide the clipboard/files side tabs when idle |
-| `record_typescript` | boolean | SSH | Enable SSH typescript recording (requires `[recording].typescript_path` configured) |
-| `remote_app` | string | RDP | RemoteApp program alias (RAIL) |
-| `remote_app_dir` | string | RDP | Working directory for RemoteApp |
-| `remote_app_args` | string | RDP | Command-line arguments for RemoteApp |
-| `enable_gfx` | boolean | RDP | Enable the RDP Graphics Pipeline Extension (GFX) |
-| `enable_h264` | boolean | RDP | Enable H.264 passthrough |
-| `enable_desktop_composition` | boolean | RDP | Enable desktop composition (DWM) |
-| `enable_wallpaper` | boolean | RDP | Show the remote desktop wallpaper |
-| `enable_theming` | boolean | RDP | Enable window/control theming |
-| `enable_full_window_drag` | boolean | RDP | Show window contents while dragging |
-| `force_lossless` | boolean | RDP | Force lossless encoding (PNG only) |
-| `container_image` | string | VDI | Docker image for the VDI container |
-| `container_cpu_limit` | float | VDI | CPU limit for the container (fractional cores) |
-| `container_memory_limit` | integer | VDI | Memory limit for the container in MB |
-| `container_env` | object | VDI | Extra environment variables for the container |
-| `container_idle_timeout_mins` | integer | VDI | Override the container idle timeout in minutes |
-| `container_username` | string | VDI | Fixed container username override (auto-derived when unset) |
-| `container_password` | string | VDI | Fixed container password override (ephemerally generated when unset) |
-
-**SPICE fields** (`session_type: spice`, direct connection to a SPICE server):
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `hostname` | string | SPICE server hostname or IP (required) |
-| `port` | integer | SPICE port (default 5900) |
-| `password` | string | SPICE password / ticket |
-| `spice_tls` | boolean | Connect using TLS |
-| `spice_tls_port` | integer | TLS port, when different from `port` |
-| `spice_ca_cert` | string | PEM CA certificate for TLS verification |
-| `spice_cert_subject` | string | Expected TLS certificate subject |
-| `spice_proxy` | string | SPICE proxy URL, e.g. `http://host:3128` |
-| `ignore_cert` | boolean | Accept any TLS certificate (insecure) |
-| `color_depth` | integer | Color depth in bits |
-
-**Proxmox VE console fields** (`session_type: proxmox`, SPICE brokered through the PVE API):
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `proxmox_url` | string | PVE API base URL including scheme and port, e.g. `https://pve.example.com:8006` (required) |
-| `proxmox_vmid` | integer | VM id whose console to open (required) |
-| `proxmox_node` | string | Cluster node hosting the VM. Optional: auto-resolved from the VM id (via `/cluster/resources`) when left blank |
-| `proxmox_token_id` | string | API token id, formatted `user@realm!tokenname` |
-| `proxmox_token_secret` | string | API token secret (the UUID half) |
-| `proxmox_verify_tls` | boolean | Verify the PVE / SPICE-proxy TLS certificate (default false; PVE ships a self-signed cluster cert) |
-
-The token needs `VM.Console` (and `VM.Audit` for node auto-detect) on the target VM. persea calls the PVE `spiceproxy` API at connect to fetch a one-time SPICE ticket, so nothing sensitive is stored beyond the token.
-
-**Jump host object fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `hostname` | string | Yes | SSH bastion hostname |
-| `port` | integer | No | SSH port (default: 22) |
-| `username` | string | Yes | SSH username |
-| `password` | string | No | SSH password |
-| `private_key` | string | No | OpenSSH PEM private key |
+Legacy single jump host fields (`jump_host`, `jump_port`,
+`jump_username`, ...) are still accepted for backward compatibility but
+`jump_hosts` takes precedence.
 
 **Response:**
 
@@ -380,391 +222,273 @@ The token needs `VM.Console` (and `VM.Audit` for node auto-detect) on the target
 }
 ```
 
-- `client_url` opens the session in the built-in client (see [Connecting to a session](#connecting-to-a-session)).
-- `ws_url` is the raw WebSocket endpoint for a custom client.
-- `share_url` is present only when sharing is allowed; its `token` lets a second viewer **join** an active session (it is not owner access).
+- `client_url` opens the session in the built-in client page.
+- `ws_url` is the raw WebSocket endpoint for custom clients.
+- `share_url` (present only when sharing is allowed) lets a second
+  viewer **join** an active session — it is not owner access.
 
-### `GET /api/sessions`
+### `GET /api/sessions` — list sessions
 
-List sessions. Any authenticated user sees their own sessions; pass `?all=true` as an **admin** to list every user's sessions. Optional `limit` truncates the result (most recent first).
+Any authenticated user sees their own sessions; `?all=true` as an
+**admin** lists every user's. Optional `limit` truncates the result
+(most recent first).
 
-### `GET /api/sessions/:id`
+### `GET /api/sessions/{id}` — session details
 
-Get session details. The session owner or an **admin**.
+The session owner or an **admin**.
 
-### `DELETE /api/sessions/:id`
+### `DELETE /api/sessions/{id}` (or `POST /api/sessions/{id}/terminate`) — end a session
 
-Terminate a session. Requires **operator** role or higher. Non-admins can only delete their own sessions.
+Requires **operator** role or higher; non-admins can only terminate
+their own sessions.
 
-### `GET /api/sessions/:id/banner`
+### `POST /api/sessions/{id}/shadow` — take over a session
 
-Get session banner text. Authenticates via share token (not credentials). Used for the ephemeral keypair banner display.
+Admins can shadow (watch or take over) another user's active session.
 
-## Connecting to a session
+### `GET /api/sessions/{id}/banner`
 
-Creating a session (`POST /api/sessions`) only opens the connection to the target; it does **not** display anything. A browser then attaches over a WebSocket to stream the session. The two connection roles (owner and join) are the most common source of integration confusion.
+Gets a session's banner text. Authenticates via share token rather than
+credentials — this is how the ephemeral-keypair banner page works.
 
-### Owner vs. join
+## Connecting to a session (owner vs. join)
 
-- The **first** connection to a freshly created session is the **owner** connection. It requires an authenticated identity with the **operator** role or higher.
-- A **share token** (`share_url`) only lets a second viewer **join** a session that is already active. It is not an identity and cannot open the owner connection.
+Creating a session does not display anything; a browser attaches over a
+WebSocket to stream it. The two connection roles are the most common
+source of integration confusion:
 
-If the owner connection is not authenticated, persea rejects the WebSocket with `403`, no browser attaches, and guacd eventually reports `User is not responding` (its timeout for a session whose client never arrived, roughly 15 seconds after creation). If you see `User is not responding`, the browser did not connect as an authenticated owner.
+- The **first** connection to a freshly created session is the **owner**
+  connection. It requires an authenticated identity with **operator**
+  role or higher.
+- A **share token** (`share_url`) only lets a second viewer **join** a
+  session that is already active. It is not an identity and cannot open
+  the owner connection.
 
-### Authenticating the owner connection
+If the owner connection is not authenticated, persea rejects the
+WebSocket with 403, no browser attaches, and guacd eventually reports
+`User is not responding` (its timeout for a session whose client never
+arrived, roughly 15 seconds after creation).
 
-The built-in client (`client_url`) authenticates the owner WebSocket one of three ways:
+### `POST /api/ws-ticket` — hand a session to a browser without exposing your API key
 
-1. **OIDC session cookie** — the user is logged into persea in that browser. Open `client_url` and the cookie authenticates.
-2. **`sessionStorage.persea_api_key`** — the client exchanges the key for a single-use ticket before connecting.
-3. **A ws-ticket in the URL** — `client_url?ticket=<ticket>`. Used for headless integrations (below).
-
-### `POST /api/ws-ticket`
-
-Exchange an API key or OIDC session for a **single-use, short-lived** WebSocket ticket. Requires any authenticated identity — the endpoint itself enforces no role. The ticket inherits the caller's identity, and the owner WebSocket connection still requires the **operator** role or higher (see [Owner vs. join](#owner-vs-join)).
+Exchange an API key or login session for a **single-use, 30-second**
+WebSocket ticket that inherits the caller's identity:
 
 ```
 POST /api/ws-ticket
 Authorization: Bearer <api-key>
+→ { "ticket": "wst_1a2b3c..." }
 ```
 
-```json
-{ "ticket": "wst_1a2b3c..." }
-```
-
-The ticket is valid for 30 seconds, may be used once, and inherits the caller's role. Present it on the WebSocket as `/ws/{id}?ticket=<ticket>`, or on the built-in client as `/client/{id}?ticket=<ticket>` (the page GET does not consume it; the WebSocket does).
-
-### Headless API integration
-
-When the browser has no persea login of its own (no OIDC cookie), a backend that holds an API key can still hand off a ready-to-open session without exposing that key to the browser:
+Then send the browser to `/client/{id}?ticket=wst_...`. This is the
+recommended pattern for headless integrations, where the browser has no
+persea login of its own:
 
 1. `POST /api/sessions` (Bearer API key) to create the session.
 2. `POST /api/ws-ticket` (Bearer API key) to mint a ticket.
-3. Send the browser to `client_url?ticket=<ticket>` (i.e. `/client/{id}?ticket=wst_...`).
+3. Send the browser to `client_url?ticket=<ticket>`.
 
-The single-use, 30-second ticket is safe to place in a URL; the durable API key never leaves the backend. Because guacd drops a session whose client has not attached within ~15 seconds, mint the ticket and open the browser promptly after creating the session (on a reload, mint a fresh ticket).
+The single-use, 30-second ticket is safe to place in a URL; the durable
+API key never leaves the backend. Because guacd drops a session whose
+client has not attached within ~15 seconds, mint the ticket and open
+the browser promptly after creating the session (on a reload, mint a
+fresh ticket).
 
 ### Custom clients
 
-To build your own client, open the WebSocket at `ws_url` with the `guacamole` sub-protocol and a `?ticket=<ticket>` query parameter, then speak the [Guacamole protocol](https://guacamole.apache.org/doc/gug/guacamole-protocol.html). This is the same endpoint the built-in client uses.
+To build your own client, open the WebSocket at `ws_url` with the
+`guacamole` sub-protocol and a `?ticket=<ticket>` query parameter, then
+speak the [Guacamole protocol](https://guacamole.apache.org/doc/gug/guacamole-protocol.html).
+This is the same endpoint the built-in client uses. WebSocket upgrades
+are validated against a strict Origin check (cross-origin requests are
+rejected) and rate-limited unconditionally.
 
-## Recordings
+## Address book (connections)
 
-### `GET /api/recordings`
+The address book stores named, reusable connections in folders. Entries
+have stored credentials (in the database or Vault), so users connect
+without typing passwords.
 
-List all recording files. Requires **poweruser** role or higher.
+### Listing connections
 
-### `GET /api/recordings/:name`
+```bash
+# All folders you can see
+curl -s -H "Authorization: Bearer $API_KEY" \
+  https://persea.example.com/api/addressbook/folders
 
-Serve a recording file for playback. Requires **poweruser** role or higher. Filename is validated against path traversal.
+# Entries in a folder (scope is "shared" or "instance")
+curl -s -H "Authorization: Bearer $API_KEY" \
+  https://persea.example.com/api/addressbook/folders/shared/production/entries
 
-### `DELETE /api/recordings/:name`
-
-Delete a recording file. Requires **admin** role.
-
-## Users (admin only)
-
-### `GET /api/users`
-
-List all OIDC users.
-
-### `PUT /api/users/:email/role`
-
-Set a user's role.
-
-```json
-{
-  "role": "poweruser"
-}
+# Everything at once (flat list, handy for search UI)
+curl -s -H "Authorization: Bearer $API_KEY" \
+  https://persea.example.com/api/addressbook
 ```
 
-Valid roles: `admin`, `poweruser`, `operator`, `viewer`.
+Folders can restrict access to certain groups; admins see all folders.
+Note that nested folder names are encoded with `%2F` in URLs — see
+[Reverse Proxies](reverse-proxies.md) if your reverse proxy breaks
+those paths.
 
-### `DELETE /api/users/:email`
+### Connecting from an entry
 
-Delete a user.
+`POST /api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect`
+creates a session from a stored entry. Requires **operator** role and
+folder group access. Credentials (including jump-host credentials) are
+read server-side from the stored entry; nothing sensitive is sent to
+the browser.
 
-### `POST /api/users/:email/disable`
-
-Disable a user (blocks login).
-
-### `POST /api/users/:email/enable`
-
-Re-enable a disabled user.
-
-### `DELETE /api/users/:email/sessions`
-
-Force-logout a user by deleting all their auth sessions.
-
-## Group-to-Role Mappings (admin only)
-
-### `GET /api/admin/group-mappings`
-
-List all group-to-role mappings.
-
-### `POST /api/admin/group-mappings`
-
-Create a mapping.
-
-```json
-{
-  "oidc_group": "engineering",
-  "role": "poweruser"
-}
-```
-
-Returns 409 Conflict if a mapping for the group already exists.
-
-### `PUT /api/admin/group-mappings/:id`
-
-Update a mapping.
-
-```json
-{
-  "oidc_group": "engineering",
-  "role": "admin"
-}
-```
-
-### `DELETE /api/admin/group-mappings/:id`
-
-Delete a mapping.
-
-## Connections (Vault or DB backend)
-
-### `GET /api/addressbook/folders`
-
-List visible folders. Filtered by OIDC group membership (admins see all).
-
-### `GET /api/addressbook/folders/:scope/:folder/entries`
-
-List entries in a folder. Scope is `shared` or `instance`. Requires folder group access.
-
-### `POST /api/addressbook/folders/:scope/:folder/entries/:entry/connect`
-
-Create a session from an connections entry. Reads credentials (including jump host credentials) from the stored entry (Vault or DB backend) server-side and creates a session. Requires **operator** role and folder group access.
-
-Optional body to override or supply credentials at connect time:
+The optional body overrides or supplies credentials at connect time —
+useful for entries with `prompt_credentials` enabled:
 
 ```json
 {
   "username": "jdoe@CORP.EXAMPLE.COM",
   "password": "user-password",
   "domain": "CORP.EXAMPLE.COM",
-  "banner": "Custom banner message",
   "width": 1920,
-  "height": 1080,
-  "dpi": 96
+  "height": 1080
 }
 ```
 
-Prompted credentials are used for the current session only and are never stored. Jump host credentials always come from the stored entry (Vault or DB backend) and cannot be overridden at connect time.
+Prompted credentials are used for that session only and are never
+stored. Jump-host credentials always come from the stored entry and
+cannot be overridden at connect time.
 
-### `POST /api/addressbook/folders` (admin)
+### Managing folders and entries (admin)
 
-Create a folder.
+| Endpoint | Purpose |
+|----------|---------|
+| `POST /api/addressbook/folders` | Create a folder: `{"scope":"shared","name":"production","allowed_groups":["engineering"]}` |
+| `PUT` / `DELETE /api/addressbook/folders/{scope}/{folder}` | Update / delete a folder (delete removes all its entries) |
+| `POST /api/addressbook/folders/{scope}/{folder}/entries` | Create an entry: `{"name":"prod-db","type":"ssh","hostname":"db.internal.example.com","username":"admin","password":"secret"}` |
+| `PUT` / `DELETE /api/addressbook/folders/{scope}/{folder}/entries/{entry}` | Update / delete an entry. Updates are read-modify-write: omitted credential fields are preserved from the stored entry. |
+| `POST /api/addressbook/import` | Bulk-import entries from CSV (see the import template at `GET /api/addressbook/import-template`) |
 
-```json
-{
-  "scope": "shared",
-  "name": "production",
-  "allowed_groups": ["engineering", "devops"],
-  "description": "Production servers"
-}
-```
+Entry `type` values match session types. Additional entry fields
+mirror the session fields (`jump_hosts`, `allowed_domains` for web
+sessions, `prompt_credentials`, `enable_recording`, clipboard controls,
+display geometry, and the `spice_*` / `proxmox_*` fields). The
+`proxmox_token_secret` is write-only: read endpoints never return it
+(a `has_proxmox_token_secret` boolean indicates whether one is stored),
+and it is preserved on update when omitted.
 
-### `PUT /api/addressbook/folders/:scope/:folder` (admin)
+## Quick connect (`GET /api/connect`)
 
-Update folder configuration (allowed_groups, description).
+A convenience endpoint for external integrations (e.g. NetBox Custom
+Links). Creates a session and redirects the browser to the client page;
+if the user is not authenticated and OIDC is configured, it redirects
+to SSO login and back.
 
-### `DELETE /api/addressbook/folders/:scope/:folder` (admin)
+- **Ad-hoc mode** (poweruser+): `/api/connect?hostname=10.0.1.50&protocol=ssh`
+- **Connections mode** (operator+): `/api/connect?scope=shared&folder=production&entry=web-server-01`
 
-Delete a folder and all its entries.
+Ad-hoc parameters: `protocol` (`ssh`, `rdp`, `vnc`, `web`; default
+`ssh`), `hostname`, `port`, `username`, `url` (web sessions),
+`width`/`height`/`dpi`. No credentials are passed in the URL for
+ad-hoc mode; if the target requires authentication, the user sees
+guacd's login prompt. If the entry has `prompt_credentials` or no
+stored password, the endpoint returns an inline credential form instead
+— the user's input is POSTed back and used for that session only.
 
-### `POST /api/addressbook/folders/:scope/:folder/entries` (admin)
+## Users and roles (admin)
 
-Create a connection entry. The body includes a `name` field plus all entry fields:
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/users` | List all users |
+| `POST /api/users` | Create a user (`{"name":"...","email":"...","password":"...","role":"operator"}`) — the password is checked against the password policy |
+| `PUT /api/users/{email}/role` | Set a role: `{"role":"poweruser"}` — roles: `admin`, `poweruser`, `operator`, `viewer` |
+| `POST /api/users/{email}/disable` / `enable` | Block / unblock login |
+| `DELETE /api/users/{email}` | Delete a user (their tokens are cascade-deleted) |
+| `DELETE /api/users/{email}/sessions` | Force-logout: delete all the user's auth sessions |
 
-```json
-{
-  "name": "prod-db",
-  "type": "ssh",
-  "hostname": "db.internal.example.com",
-  "port": 22,
-  "username": "admin",
-  "password": "secret",
-  "jump_hosts": [
-    {
-      "hostname": "bastion.example.com",
-      "port": 22,
-      "username": "jump-user",
-      "password": "jump-pass"
-    }
-  ]
-}
-```
+Role mapping from identity-provider groups (admin only):
 
-**Connections entry fields:**
+| Endpoint | Purpose |
+|----------|---------|
+| `GET` / `POST /api/admin/group-mappings` | List / create group-to-role mappings, e.g. `{"oidc_group":"engineering","role":"poweruser"}` (409 if the group already has a mapping) |
+| `PUT` / `DELETE /api/admin/group-mappings/{id}` | Update / delete a mapping |
+| `GET /api/auth/known-groups` | Groups seen on the identity provider |
 
-| Field | Type | Used by | Description |
-|-------|------|---------|-------------|
-| `type` | string | All | `ssh`, `rdp`, `vnc`, `spice`, `proxmox`, `web`, or `vdi` |
-| `hostname` | string | SSH, RDP, VNC | Target hostname or IP |
-| `port` | integer | SSH, RDP, VNC | Target port |
-| `username` | string | SSH, RDP | Username |
-| `password` | string | SSH, RDP, VNC | Password |
-| `private_key` | string | SSH | OpenSSH PEM private key |
-| `url` | string | Web | Target URL |
-| `domain` | string | RDP | Windows domain |
-| `security` | string | RDP | Security mode |
-| `ignore_cert` | boolean | RDP | Ignore certificate errors |
-| `auth_pkg` | string | RDP | NLA auth package |
-| `kdc_url` | string | RDP | Kerberos KDC URL |
-| `color_depth` | integer | RDP | Color depth |
-| `enable_drive` | boolean | RDP, SSH | Enable file transfer |
-| `disable_copy` | boolean | All | Disable clipboard copy (server → client) |
-| `disable_paste` | boolean | All | Disable clipboard paste (client → server) |
-| `autofill` | string | Web | JSON array of autofill credentials |
-| `allowed_domains` | array | Web | Domain allowlist for the browser session |
-| `login_script` | string | Web | Login script filename |
-| `display_name` | string | All | Friendly display name (shown as banner) |
-| `prompt_credentials` | boolean | All | Prompt user for credentials at connect time |
-| `jump_hosts` | array | All | Multi-hop SSH tunnel chain (same format as session creation) |
+## User API tokens
 
-For `spice` and `proxmox` entries, the `spice_*` and `proxmox_*` fields listed under [`POST /api/sessions`](#post-apisessions) apply here too. The `proxmox_token_secret` is write-only: it is never returned by the read endpoints (a `has_proxmox_token_secret` boolean indicates whether one is stored), and it is preserved on update when omitted.
+Personal tokens let OIDC users call the API from scripts without
+sharing their login session or an admin API key.
 
-### `PUT /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
+| Endpoint | Who | Purpose |
+|----------|-----|---------|
+| `POST /api/me/tokens` | poweruser+ | Create a personal token: `{"name":"my-ci-token","max_role":"operator","expires_at":"2026-12-31T23:59:59Z"}`. The plaintext token (`rgu_...`) is returned **once** at creation and cannot be retrieved again. |
+| `GET /api/me/tokens` | any user | List your own tokens (metadata only) |
+| `DELETE /api/me/tokens/{id}` | poweruser+ | Revoke a token (immediately invalid) |
+| `POST /api/admin/user-tokens` | admin | Create a token for any user: `{"email":"...","name":"...","max_role":"operator","expires_at":"..."}` — useful for operators who cannot create their own |
+| `GET /api/admin/user-tokens` | admin | List all tokens across all users |
+| `DELETE /api/admin/user-tokens/{id}` | admin | Revoke any token |
+| `GET /api/admin/token-audit` | admin | Token audit log (`limit`, `email` query params) |
 
-Update a connection entry. Uses read-modify-write: reads the existing entry from the storage backend (Vault or DB), merges incoming fields on top. Credentials (`password`, `private_key`) that are omitted from the request are preserved from the existing entry. Jump host credentials are merged per-hop by index.
+## Recordings and typescripts
 
-### `DELETE /api/addressbook/folders/:scope/:folder/entries/:entry` (admin)
+| Endpoint | Role | Purpose |
+|----------|------|---------|
+| `GET /api/recordings` | poweruser+ | List recording files |
+| `GET /api/recordings/{name}` | poweruser+ | Serve a recording for playback (filename validated against path traversal) |
+| `DELETE /api/recordings/{name}` | admin | Delete a recording |
+| `GET /api/typescripts` | poweruser+ | List SSH typescripts (name/size/time only — the text content is deliberately not downloadable through the API; see [Configuration](configuration.md#ssh-typescript-recording)) |
 
-Delete a connection entry.
+## Audit log
 
-## User API Tokens (self-service)
+The audit log is a tamper-evident SHA-256 hash chain: every event
+contains a hash of the previous event, so altering any record breaks
+the chain and flags every subsequent event.
 
-User API tokens allow OIDC users to authenticate via API key for automation and scripting. Tokens inherit the user's identity and are subject to role restrictions.
+| Endpoint | Role | Purpose |
+|----------|------|---------|
+| `GET /api/audit/events` | admin (Audit permission) | Query audit events |
+| `GET /api/audit/verify` | admin (Audit permission) | Verify the hash chain: `{"status":"verified"|"broken", "events_scanned":..., "errors":[...]}` |
+| `GET /api/audit/export` | admin, **Enterprise license** (audit_retention) | Filtered CSV/JSON export of the audit log for compliance. Returns a license error without a license key. |
 
-### `POST /api/me/tokens`
+See [Security Hardening](security-hardening.md#audit-log) for how to
+read the verification result.
 
-Create a personal API token. Requires **poweruser** role or higher. Only available to OIDC-authenticated users (not API key admins).
+## Reports (admin)
 
-```json
-{
-  "name": "my-ci-token",
-  "max_role": "operator",
-  "expires_at": "2026-12-31T23:59:59Z"
-}
-```
+Session analytics for the Reports page:
 
-- `name` — required, 1-100 characters, must be unique per user
-- `max_role` — optional, caps the token's effective role (cannot exceed the user's current role)
-- `expires_at` — optional, ISO 8601 timestamp
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/reports/sessions` | Session list with filters |
+| `GET /api/reports/sessions/csv` | CSV export of session data |
+| `GET /api/reports/top-connections` / `top-users` | Most-used connections / users |
+| `GET /api/reports/summary` | Aggregate summary |
+| `GET /api/reports/activity` | Activity timeline |
 
-**Response:**
+## Administration
 
-```json
-{
-  "id": 1,
-  "name": "my-ci-token",
-  "token": "rgu_a1b2c3d4e5f6...",
-  "max_role": "operator",
-  "expires_at": "2026-12-31T23:59:59Z"
-}
-```
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/system/status` | System status overview |
+| `GET` / `PUT /api/system/settings` | System settings (including `enable_api_keys`) |
+| `POST /api/admin/license` / `GET /api/admin/license` | Set / read the enterprise license key (see [Licensing](licensing.md)) |
+| `GET /api/auth/providers` + CRUD under `/api/auth/providers/{id}` | Manage configured auth providers (create, update, enable/disable, reorder, test) |
+| `GET` / `POST /api/admin/groups`, `/api/admin/groups/{id}` | Manage user groups and their role mappings (enterprise RBAC) |
+| `GET` / `POST /api/admin/rbac/groups` + permissions under `/api/admin/rbac/connections/{id}/permissions` | Connection-level permission management (enterprise RBAC) |
+| `GET` / `POST /api/admin/jump-hosts` + `/api/admin/jump-hosts/{id}` | Manage named SSH jump hosts; `POST .../test` tests reachability |
+| `GET /api/admin/tunnels/active` | List currently active tunnels |
+| `POST /api/upload-logo` | Upload a custom logo (2 MB limit) |
+| `GET /api/login-scripts` | List available login scripts |
+| `POST /api/ssh/probe-host-key` | Fetch a host's SSH host key (for entry setup) |
+| `GET /api/admin/token-audit`, `GET /api/admin/addressbook-audit` | Token / address-book audit trails |
 
-The `token` field is the plaintext token. It is only returned once at creation and cannot be retrieved again.
+## vSphere (VMware)
 
-### `GET /api/me/tokens`
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/vsphere/vms` | List VMs from the vCenter inventory |
+| `POST /api/vsphere/vms/{vm_id}/power` | Power action on a VM |
+| `GET /api/vsphere/vms/{vm_id}/connect` | Create a session to a VM (protocol auto-detected from the guest OS) |
 
-List your own tokens. Available to any OIDC-authenticated user. Returns token metadata only (never the plaintext token).
+## VDI containers
 
-### `DELETE /api/me/tokens/:id`
-
-Revoke one of your own tokens. Requires **poweruser** role or higher. The token is immediately invalidated.
-
-## User API Tokens (admin)
-
-Admins can manage tokens for any user, including creating tokens for operators who cannot create their own.
-
-### `POST /api/admin/user-tokens`
-
-Create a token for any OIDC user. Requires **admin** role.
-
-```json
-{
-  "email": "operator@example.com",
-  "name": "operator-automation",
-  "max_role": "operator",
-  "expires_at": "2026-06-30T23:59:59Z"
-}
-```
-
-Response is the same as `POST /api/me/tokens`.
-
-### `GET /api/admin/user-tokens`
-
-List all user tokens across all users. Requires **admin** role.
-
-### `DELETE /api/admin/user-tokens/:id`
-
-Revoke any user token. Requires **admin** role.
-
-### `GET /api/admin/token-audit`
-
-View the token audit log. Requires **admin** role.
-
-**Query parameters:**
-
-- `limit` — max entries to return (default: 200, max: 1000)
-- `email` — filter by user email
-
-Returns an array of audit events with fields: `created_at`, `user_email`, `token_name`, `action`, `ip_addr`, `details`.
-
-## Authentication
-
-### `GET /api/auth/status`
-
-No authentication required. Returns whether OIDC is enabled and the site title.
-
-```json
-{
-  "oidc_enabled": true,
-  "site_title": "Persea",
-  "drive_configured": false,
-  "theme": {
-    "admin_preset": "aurora",
-    "admin_colors": {},
-    "presets": ["aurora", "dark", "light", "high-contrast", "terminal", "nord", "corporate", "jaguar"]
-  }
-}
-```
-
-### `GET /api/me`
-
-Returns current user info. Requires authentication.
-
-```json
-{
-  "name": "User Name",
-  "email": "user@example.com",
-  "role": "operator",
-  "groups": ["engineering"],
-  "auth_source": "oidc",
-  "vault_enabled": true,
-  "vault_configured": true,
-  "created_at": "2025-01-01T00:00:00Z"
-}
-```
-
-### `GET /auth/login`
-
-Redirects to OIDC provider for authentication.
-
-### `GET /auth/callback`
-
-OIDC callback endpoint. Handles token exchange, user creation/update, and session creation.
-
-### `GET /auth/logout`
-
-Clears the session cookie and deletes the auth session.
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/vdi/containers` | List running VDI containers |
+| `GET /api/vdi/containers/{name}/thumbnail` | Container screen thumbnail |
