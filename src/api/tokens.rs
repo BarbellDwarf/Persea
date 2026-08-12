@@ -1,3 +1,8 @@
+//! API token management and user credential variables.
+//!
+//! Personal token CRUD, admin token management, token and address-book
+//! audit logs, and the per-user credential variables used as template
+//! variables in connections.
 use super::{CredentialDefaultScope, StorageBackend, StorageKey, VaultState};
 use crate::auth::{client_ip, role_level, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};

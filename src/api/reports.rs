@@ -1,3 +1,9 @@
+//! Session reports and recording endpoints.
+//!
+//! Covers session history queries (JSON and CSV), top-connection and
+//! top-user rankings, activity by hour, and the recording list, playback,
+//! and deletion handlers. All require at least poweruser; deleting a
+//! recording requires admin.
 use super::AppState;
 use crate::auth::AuthIdentity;
 use crate::db::{self, Db};

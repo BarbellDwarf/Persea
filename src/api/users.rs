@@ -1,3 +1,8 @@
+//! User administration and profile endpoints.
+//!
+//! List, create, and delete users, change roles, enable and disable
+//! accounts, manage provider-group mappings, and serve the current user's
+//! own profile. All handlers except the `/me` ones require admin.
 use super::{VaultConfigured, VaultState};
 use crate::audit;
 use crate::auth::AuthIdentity;

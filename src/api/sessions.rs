@@ -1,3 +1,9 @@
+//! Session lifecycle endpoints.
+//!
+//! Create, list, inspect, and terminate sessions, upload and fetch
+//! thumbnails, mint shadow tokens, and list VDI containers and login
+//! scripts. Ownership rules apply: non-admins only see and control their
+//! own sessions.
 use super::AppState;
 use crate::audit;
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};

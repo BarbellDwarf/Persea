@@ -1,3 +1,9 @@
+//! vSphere inventory and session-start endpoints.
+//!
+//! Connects to vCenter, caches the VM inventory, and routes VM sessions to
+//! RDP or SSH depending on the detected guest OS. Returns a
+//! `{"configured": false, "vms": []}` shape when vSphere is not configured
+//! so the connections page can hide the section.
 use crate::api::AppState;
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::Db;

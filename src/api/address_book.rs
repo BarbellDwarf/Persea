@@ -1,3 +1,9 @@
+//! Address book API: folder and entry management, connection start, SSH
+//! host-key probing, and quick connect.
+//!
+//! Handlers enforce role gates (operator or higher for reads and connects,
+//! admin for writes) plus folder and entry ACLs, and report failures as
+//! `AppError` (403 for denied access, 404 for missing folders or entries).
 use super::{AppState, StorageBackend, StorageKey, VaultBackends, VaultState};
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};

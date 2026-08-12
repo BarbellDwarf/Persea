@@ -1,3 +1,8 @@
+//! Health, system status, docs, metrics, and audit endpoints.
+//!
+//! `GET /api/health` is public and answers with per-backend checks
+//! (guacd, database, db pool, vault, disk). The remaining handlers require
+//! operator or higher, with the status and audit views reserved for admins.
 use super::{AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultConfigured};
 use crate::auth::{AuthIdentity, WsTicketStore};
 use crate::db::Db;
