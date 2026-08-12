@@ -752,6 +752,17 @@ impl SessionManager {
     }
 
     /// Terminate a session. Cancels all active proxy connections.
+    ///
+    /// Teardown contract: cancelling the session's `CancellationToken` is
+    /// what actively ends the guacd connection. `proxy_ws_guacd` selects on
+    /// the token, and once it fires aborts both I/O tasks so the split
+    /// guacd socket is dropped and guacd sees EOF — the remote session
+    /// (SSH shell, RDP connection, VNC, …) is actually ended, not just
+    /// forgotten. The idle/max-duration reapers funnel through here, so a
+    /// reaped session ends its remote session too. Sessions that never
+    /// reached the proxy (still `Pending` with a live guacd stream) have
+    /// the stream dropped directly below, which closes the socket the same
+    /// way.
     pub async fn delete_session(&self, id: Uuid) -> bool {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.remove(&id) {
