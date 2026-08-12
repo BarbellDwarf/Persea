@@ -3,6 +3,7 @@ use crate::audit;
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
+use crate::rbac;
 use crate::session::CreateSessionRequest;
 use axum::{
     extract::{ConnectInfo, Path, Query, State},
@@ -44,9 +45,19 @@ pub async fn create_session(
 
     if let Some(ref id) = identity {
         if !id.has_role("poweruser") {
-            return Err(AppError::Forbidden(
-                "insufficient permissions — poweruser role required for ad-hoc sessions".into(),
-            ));
+            // Custom role holders with the global `create_session` system
+            // permission may start ad-hoc sessions from any role floor.
+            let allowed = manager
+                .db()
+                .map(|db| {
+                    rbac::identity_has_system_permission(db, id, rbac::SystemPermission::CreateSession)
+                })
+                .unwrap_or(false);
+            if !allowed {
+                return Err(AppError::Forbidden(
+                    "insufficient permissions — poweruser role required for ad-hoc sessions".into(),
+                ));
+            }
         }
     }
 

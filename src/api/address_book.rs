@@ -599,7 +599,8 @@ fn apply_vault_credentials(vault_entry: &AddressBookEntry, ab_entry: &mut Addres
 }
 
 /// DB-side folder access check (metadata always lives in the DB now).
-/// Admins bypass; everyone else needs a folder the DB grants access to.
+/// Admins bypass; custom-role holders with global `read` see every folder;
+/// everyone else needs a folder the DB grants access to.
 fn check_folder_access_db(
     db: &Db,
     scope: &str,
@@ -607,6 +608,15 @@ fn check_folder_access_db(
     identity: &AuthIdentity,
 ) -> Result<(), AppError> {
     if identity.has_role("admin") {
+        return Ok(());
+    }
+    if rbac::identity_has_object_permission(
+        db,
+        identity,
+        "connection_group",
+        folder,
+        rbac::ObjectPermission::Read,
+    ) {
         return Ok(());
     }
     if folder_allowed_for_user(db, scope, folder, identity.groups()) {
@@ -618,6 +628,8 @@ fn check_folder_access_db(
 
 /// Entry-level ACL: an entry with `allowed_groups` set is only usable by
 /// members of one of those groups, even inside an accessible folder.
+/// Custom-role holders with global `read` bypass it (the bundle is global —
+/// no per-entry object id is resolvable at this layer).
 fn check_entry_access_db(
     db: &Db,
     folder_id: i64,
@@ -625,6 +637,9 @@ fn check_entry_access_db(
     identity: &AuthIdentity,
 ) -> Result<(), AppError> {
     if identity.has_role("admin") {
+        return Ok(());
+    }
+    if rbac::identity_has_custom_permission(db, identity, "read") {
         return Ok(());
     }
     let entry = db::get_ab_entry(db, folder_id, entry_name)
@@ -850,6 +865,13 @@ pub async fn ab_list_folders(
     for folder in &db_folders {
         if id.has_role("admin")
             || folder_allowed_for_user(&database, &folder.scope, &folder.name, user_groups)
+            || rbac::identity_has_object_permission(
+                &database,
+                id,
+                "connection_group",
+                &folder.name,
+                rbac::ObjectPermission::Read,
+            )
         {
             visible.push(serde_json::json!({
                 "name": folder.name,
@@ -915,6 +937,13 @@ pub async fn ab_list_subfolders(
         subfolders.retain(|sf| {
             let path = sf.path.clone().unwrap_or_else(|| sf.name.clone());
             folder_or_descendant_accessible_db(&database, &scope, &path, user_groups)
+                || rbac::identity_has_object_permission(
+                    &database,
+                    id,
+                    "connection_group",
+                    &path,
+                    rbac::ObjectPermission::Read,
+                )
         });
     }
 
@@ -944,6 +973,13 @@ pub async fn ab_list_all(
     for folder in &db_folders {
         if !id.has_role("admin")
             && !folder_allowed_for_user(&database, &folder.scope, &folder.name, user_groups)
+            && !rbac::identity_has_object_permission(
+                &database,
+                id,
+                "connection_group",
+                &folder.name,
+                rbac::ObjectPermission::Read,
+            )
         {
             continue;
         }
@@ -1014,7 +1050,16 @@ pub async fn ab_search_index(
             queue.push((scope.clone(), child.name.clone()));
         }
 
-        if !is_admin && !folder_allowed_for_user(&database, &scope, &path, user_groups) {
+        if !is_admin
+            && !folder_allowed_for_user(&database, &scope, &path, user_groups)
+            && !rbac::identity_has_object_permission(
+                &database,
+                id,
+                "connection_group",
+                &path,
+                rbac::ObjectPermission::Read,
+            )
+        {
             continue;
         }
 
@@ -1139,45 +1184,54 @@ pub async fn ab_connect_entry(
         return Err(AppError::Vault("address book unavailable".into()));
     }
 
-    check_folder_access_db(&database, &scope, &folder, &id)?;
+    // Custom role holders with global `connect` can connect everywhere —
+    // folder ACLs, the per-connection RBAC grant check and the entry ACL
+    // all resolve to yes for them (the bundle is global). Everyone else
+    // keeps the exact previous flow: folder ACL → per-connection RBAC
+    // grant → entry ACL.
+    if !rbac::identity_has_custom_permission(&database, &id, "connect") {
+        check_folder_access_db(&database, &scope, &folder, &id)?;
 
-    // RBAC connection permission check (skip for admin role)
-    if !id.has_role("admin") {
-        if let Some(db_ref) = manager.db() {
-            let db_rbac = db_ref.clone();
-            let email = id.display_name().to_string();
-            let conn_id = format!("{}/{}/{}", scope, folder, entry);
-            let has_perm = tokio::task::spawn_blocking(move || {
-                // Look up user by email to get numeric ID
-                let user = db::get_user_by_email(&db_rbac, &email).ok();
-                match user {
-                    Some(u) => rbac::check_connection_permission(
-                        &db_rbac,
-                        u.id,
-                        &conn_id,
-                        rbac::ObjectPermission::Connect,
-                    )
-                    .unwrap_or(false),
-                    // Unknown user — deny
-                    None => false,
+        // RBAC connection permission check (skip for admin role)
+        if !id.has_role("admin") {
+            if let Some(db_ref) = manager.db() {
+                let db_rbac = db_ref.clone();
+                let email = id.display_name().to_string();
+                let conn_id = format!("{}/{}/{}", scope, folder, entry);
+                let has_perm = tokio::task::spawn_blocking(move || {
+                    // Look up user by email to get numeric ID
+                    let user = db::get_user_by_email(&db_rbac, &email).ok();
+                    match user {
+                        Some(u) => rbac::check_connection_permission(
+                            &db_rbac,
+                            u.id,
+                            &conn_id,
+                            rbac::ObjectPermission::Connect,
+                        )
+                        .unwrap_or(false),
+                        // Unknown user — deny
+                        None => false,
+                    }
+                })
+                .await
+                .unwrap_or(false);
+                if !has_perm {
+                    return Err(AppError::Forbidden(
+                        "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.".into(),
+                    ));
                 }
-            })
-            .await
-            .unwrap_or(false);
-            if !has_perm {
-                return Err(AppError::Forbidden(
-                    "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.".into(),
-                ));
             }
         }
+
+        let folder_rec = db::get_ab_folder(&database, &scope, &folder)
+            .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
+        check_entry_access_db(&database, folder_rec.id, &entry, &id)?;
     }
 
     let folder_rec = db::get_ab_folder(&database, &scope, &folder)
         .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
     let entry_rec = db::get_ab_entry(&database, folder_rec.id, &entry)
         .map_err(|e| AppError::NotFound(format!("entry not found: {}", e)))?;
-
-    check_entry_access_db(&database, folder_rec.id, &entry, &id)?;
 
     // Metadata always comes from the DB.
     let mut ab_entry = ab_entry_from_db(&entry_rec);
@@ -1462,6 +1516,15 @@ pub async fn ab_create_folder(
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id))
+            if rbac::identity_has_system_permission(
+                &database,
+                id,
+                rbac::SystemPermission::CreateConnectionGroup,
+            ) =>
+        {
+            id.display_name().to_string()
+        }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
@@ -1623,6 +1686,17 @@ pub async fn ab_delete_folder(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id))
+            if rbac::identity_has_object_permission(
+                &database,
+                id,
+                "connection_group",
+                &folder,
+                rbac::ObjectPermission::Delete,
+            ) =>
+        {
+            id.display_name().to_string()
+        }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
@@ -1714,6 +1788,15 @@ pub async fn ab_create_entry(
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id))
+            if rbac::identity_has_system_permission(
+                &database,
+                id,
+                rbac::SystemPermission::CreateConnection,
+            ) =>
+        {
+            id.display_name().to_string()
+        }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
@@ -1886,6 +1969,17 @@ pub async fn ab_update_entry(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id))
+            if rbac::identity_has_object_permission(
+                &database,
+                id,
+                "connection",
+                &format!("{}/{}/{}", scope, folder, entry),
+                rbac::ObjectPermission::Update,
+            ) =>
+        {
+            id.display_name().to_string()
+        }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
@@ -2156,6 +2250,17 @@ pub async fn ab_delete_entry(
 ) -> Result<StatusCode, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        Some(Extension(id))
+            if rbac::identity_has_object_permission(
+                &database,
+                id,
+                "connection",
+                &format!("{}/{}/{}", scope, folder, entry),
+                rbac::ObjectPermission::Delete,
+            ) =>
+        {
+            id.display_name().to_string()
+        }
         _ => return Err(AppError::Forbidden("admin role required".into())),
     };
 
