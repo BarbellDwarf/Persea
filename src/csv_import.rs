@@ -52,11 +52,17 @@ pub const VALID_PROTOCOLS: [&str; 7] = ["ssh", "rdp", "vnc", "spice", "web", "vd
 pub struct Row {
     /// Friendly name; the importer slugifies it into the stored identifier.
     pub name: String,
+    /// Lowercased protocol: ssh, rdp, vnc, spice, web, vdi, or proxmox.
     pub protocol: String,
+    /// Target hostname or IP. Empty for web/vdi/proxmox rows that use a
+    /// URL or container image instead.
     pub hostname: String,
     /// `None` when the port column is empty.
     pub port: Option<u16>,
+    /// Username for the connection; may be empty.
     pub username: String,
+    /// Password for the connection; may be empty. The importer stores it
+    /// encrypted.
     pub password: String,
     /// Normalized folder path, e.g. `Production/Web` or `""` for the root.
     pub folder: String,
@@ -75,6 +81,7 @@ pub struct Row {
 pub struct CsvError {
     /// 1-based data row index; `0` for file-level errors (header/quoting).
     pub row: usize,
+    /// Human-readable description of the problem.
     pub message: String,
 }
 
@@ -83,8 +90,11 @@ pub struct CsvError {
 /// `rows` holds the remaining rows ready for import.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParseResult {
+    /// Validated rows ready for import, in file order.
     pub rows: Vec<Row>,
+    /// 1-based row indices dropped as in-file duplicates of (folder, name).
     pub skipped: Vec<usize>,
+    /// Per-row problems, each carrying its 1-based row index.
     pub errors: Vec<CsvError>,
 }
 
