@@ -12,10 +12,12 @@ use std::collections::HashSet;
 
 /// Fixed column names, in order, for the CSV header and template.
 ///
-/// Optional TRAILING columns (beyond the 9 fixed ones) are custom-field
-/// columns whose names must match the configured custom field definitions
-/// exactly — see [`parse_rows`]. The `name` column holds the friendly name;
-/// the stored identifier is `slugify(name)` (applied by the importer).
+/// Optional TRAILING columns (beyond the 9 fixed ones) are optional settings
+/// columns (see [`OPTIONAL_HEADERS`], matched case-insensitively in any
+/// order) followed by custom-field columns whose names must match the
+/// configured custom field definitions exactly, see [`parse_rows`]. The
+/// `name` column holds the friendly name; the stored identifier is
+/// `slugify(name)` (applied by the importer).
 pub const HEADERS: [&str; 9] = [
     "name",
     "protocol",
@@ -44,8 +46,69 @@ pub const LEGACY_HEADERS: [&str; 10] = [
     "description",
 ];
 
+/// Optional settings columns, in template order. Any subset of these may
+/// follow the fixed columns, in any order; names are matched
+/// case-insensitively. Blank cells are `None`; the importer maps them into
+/// `protocol_config` keys (or the entry domain / private-key credential).
+pub const OPTIONAL_HEADERS: [&str; 13] = [
+    "domain",
+    "security",
+    "ignore_cert",
+    "color_depth",
+    "remote_app",
+    "enable_gfx",
+    "enable_drive",
+    "disable_copy",
+    "disable_paste",
+    "auth_pkg",
+    "kdc_url",
+    "prompt_credentials",
+    "private_key",
+];
+
 /// Protocols accepted by the address book.
 pub const VALID_PROTOCOLS: [&str; 7] = ["ssh", "rdp", "vnc", "spice", "web", "vdi", "proxmox"];
+
+/// Parsed values of the optional settings columns (see [`OPTIONAL_HEADERS`]).
+/// `None` means the column was absent or the cell was blank; the importer
+/// decides the stored shape (`protocol_config` keys / entry domain).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RowSettings {
+    /// NTLM/Kerberos domain; stored in `protocol_config.domain`.
+    pub domain: Option<String>,
+    /// RDP security mode (`nla`, `any`, ...); `protocol_config.security`.
+    pub security: Option<String>,
+    /// Skip TLS certificate verification; `protocol_config.ignore_cert`.
+    pub ignore_cert: Option<bool>,
+    /// RDP color depth in bits; `protocol_config.color_depth`.
+    pub color_depth: Option<u8>,
+    /// RemoteApp program path; `protocol_config.remote_app`.
+    pub remote_app: Option<String>,
+    /// RDP GFX pipeline; `protocol_config.enable_gfx`.
+    pub enable_gfx: Option<bool>,
+    /// RDP drive redirection; `protocol_config.enable_drive`.
+    pub enable_drive: Option<bool>,
+    /// Disable clipboard copy; `protocol_config.disable_copy`.
+    pub disable_copy: Option<bool>,
+    /// Disable clipboard paste; `protocol_config.disable_paste`.
+    pub disable_paste: Option<bool>,
+    /// RDP auth package (`ntlm`, `kerberos`); `protocol_config.auth_pkg`.
+    pub auth_pkg: Option<String>,
+    /// Kerberos KDC URL; `protocol_config.kdc_url`.
+    pub kdc_url: Option<String>,
+    /// Prompt for credentials on connect; `protocol_config.prompt_credentials`.
+    pub prompt_credentials: Option<bool>,
+}
+
+/// Classification of a trailing (non-fixed) header column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrailingCol {
+    /// An optional settings column; the value is its index into
+    /// [`OPTIONAL_HEADERS`].
+    Optional(usize),
+    /// A configured custom-field column.
+    Custom,
+}
 
 /// A single validated connection row ready to be imported.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,9 +133,15 @@ pub struct Row {
     pub allowed_groups: Vec<String>,
     /// Free-form description/notes (may be empty).
     pub description: String,
+    /// Parsed optional settings columns (see [`OPTIONAL_HEADERS`]); every
+    /// field is `None` when its column was absent or its cell was blank.
+    pub settings: RowSettings,
+    /// Optional SSH private key from the `private_key` column; `None` when
+    /// absent or blank. The importer stores it like a password credential.
+    pub private_key: Option<String>,
     /// Custom field values: (configured column name → trimmed cell value)
-    /// for every trailing column in the file header. Empty values are kept
-    /// verbatim; the importer decides what to persist.
+    /// for every custom-field column in the file header. Empty values are
+    /// kept verbatim; the importer decides what to persist.
     pub custom_fields: Vec<(String, String)>,
 }
 
@@ -101,10 +170,13 @@ pub struct ParseResult {
 /// Parse and validate a CSV document.
 ///
 /// The first record must be a header matching [`HEADERS`] (case-insensitive,
-/// optional UTF-8 BOM, columns may be trimmed) followed by 0..N trailing
-/// columns that match the configured custom field names EXACTLY (trimmed,
-/// case-sensitive). The legacy 10-column header (with `display_name`) is
-/// rejected with a pointer to the current template. Blank lines are ignored.
+/// optional UTF-8 BOM, columns may be trimmed) followed by any subset of the
+/// optional settings columns (see [`OPTIONAL_HEADERS`]: case-insensitive
+/// names, any order, no duplicates) and then 0..N custom-field columns whose
+/// names match the configured definitions EXACTLY (trimmed, case-sensitive).
+/// Unknown trailing columns are rejected with a named error. The legacy
+/// 10-column header (with `display_name`) is rejected with a pointer to the
+/// current template. Blank lines are ignored.
 /// Returns `Err` only for file-level problems (empty input, invalid header,
 /// unterminated quoted field); per-row problems are collected in the result.
 pub fn parse_rows(input: &str, custom_fields: &[String]) -> Result<ParseResult, CsvError> {
@@ -155,32 +227,57 @@ pub fn parse_rows(input: &str, custom_fields: &[String]) -> Result<ParseResult, 
         }
     }
 
-    // Trailing columns are custom-field columns; each must match a configured
-    // definition exactly (trimmed, case-sensitive).
+    // Trailing columns: any subset of the optional settings columns
+    // (case-insensitive names, any order, no duplicates), then the
+    // custom-field columns (exact configured names, case-sensitive).
+    // Everything else is rejected by name.
+    let mut trailing: Vec<TrailingCol> = Vec::new();
     let mut custom_cols: Vec<String> = Vec::new();
+    let mut seen_optional: HashSet<String> = HashSet::new();
     for (i, col) in raw_header.iter().skip(HEADERS.len()).enumerate() {
         let name = col.trim();
-        if !custom_fields.iter().any(|d| d == name) {
-            return Err(CsvError {
-                row: 0,
-                message: format!(
-                    "invalid header: column {} '{}' is not a configured custom field{}",
-                    HEADERS.len() + i + 1,
-                    name,
-                    if custom_fields.is_empty() {
-                        " (none are configured)".to_string()
-                    } else {
-                        format!(" (configured: {})", custom_fields.join(", "))
-                    }
-                ),
-            });
+        if let Some(pos) = OPTIONAL_HEADERS
+            .iter()
+            .position(|h| h.eq_ignore_ascii_case(name))
+        {
+            if !seen_optional.insert(OPTIONAL_HEADERS[pos].to_string()) {
+                return Err(CsvError {
+                    row: 0,
+                    message: format!(
+                        "invalid header: column {} '{}' appears more than once (optional settings columns may not repeat)",
+                        HEADERS.len() + i + 1,
+                        name
+                    ),
+                });
+            }
+            trailing.push(TrailingCol::Optional(pos));
+            continue;
         }
-        custom_cols.push(name.to_string());
+        if custom_fields.iter().any(|d| d == name) {
+            custom_cols.push(name.to_string());
+            trailing.push(TrailingCol::Custom);
+            continue;
+        }
+        return Err(CsvError {
+            row: 0,
+            message: format!(
+                "invalid header: column {} '{}' is neither an optional settings column \
+                 (optional: {}) nor a configured custom field{}",
+                HEADERS.len() + i + 1,
+                name,
+                OPTIONAL_HEADERS.join(", "),
+                if custom_fields.is_empty() {
+                    " (none are configured)".to_string()
+                } else {
+                    format!(" (configured: {})", custom_fields.join(", "))
+                }
+            ),
+        });
     }
 
     let mut result = ParseResult::default();
     let mut seen: HashSet<(String, String)> = HashSet::new();
-    let header_len = HEADERS.len() + custom_cols.len();
+    let header_len = HEADERS.len() + trailing.len();
 
     for (idx, record) in records.iter().skip(1).enumerate() {
         let row_index = idx + 1;
@@ -224,6 +321,79 @@ pub fn parse_rows(input: &str, custom_fields: &[String]) -> Result<ParseResult, 
         ) {
             messages.push(msg);
         }
+
+        // Optional settings cells: parse each present column in header
+        // order; blank cells are None, bad booleans/depths are row errors.
+        let mut settings = RowSettings {
+            domain: None,
+            security: None,
+            ignore_cert: None,
+            color_depth: None,
+            remote_app: None,
+            enable_gfx: None,
+            enable_drive: None,
+            disable_copy: None,
+            disable_paste: None,
+            auth_pkg: None,
+            kdc_url: None,
+            prompt_credentials: None,
+        };
+        let mut private_key: Option<String> = None;
+        let mut custom_values: Vec<(String, String)> = Vec::new();
+        let mut custom_idx = 0usize;
+        for (j, kind) in trailing.iter().enumerate() {
+            let cell = fields.get(HEADERS.len() + j).cloned().unwrap_or_default();
+            match kind {
+                TrailingCol::Custom => {
+                    custom_values.push((
+                        custom_cols[custom_idx].clone(),
+                        cell.trim().to_string(),
+                    ));
+                    custom_idx += 1;
+                }
+                TrailingCol::Optional(pos) => {
+                    let col = OPTIONAL_HEADERS[*pos];
+                    match col {
+                        "domain" => settings.domain = parse_opt_str(&cell),
+                        "security" => settings.security = parse_opt_str(&cell),
+                        "remote_app" => settings.remote_app = parse_opt_str(&cell),
+                        "auth_pkg" => settings.auth_pkg = parse_opt_str(&cell),
+                        "kdc_url" => settings.kdc_url = parse_opt_str(&cell),
+                        "private_key" => private_key = parse_opt_str(&cell),
+                        "ignore_cert" => match parse_opt_bool(col, &cell) {
+                            Ok(v) => settings.ignore_cert = v,
+                            Err(m) => messages.push(m),
+                        },
+                        "enable_gfx" => match parse_opt_bool(col, &cell) {
+                            Ok(v) => settings.enable_gfx = v,
+                            Err(m) => messages.push(m),
+                        },
+                        "enable_drive" => match parse_opt_bool(col, &cell) {
+                            Ok(v) => settings.enable_drive = v,
+                            Err(m) => messages.push(m),
+                        },
+                        "disable_copy" => match parse_opt_bool(col, &cell) {
+                            Ok(v) => settings.disable_copy = v,
+                            Err(m) => messages.push(m),
+                        },
+                        "disable_paste" => match parse_opt_bool(col, &cell) {
+                            Ok(v) => settings.disable_paste = v,
+                            Err(m) => messages.push(m),
+                        },
+                        "prompt_credentials" => match parse_opt_bool(col, &cell) {
+                            Ok(v) => settings.prompt_credentials = v,
+                            Err(m) => messages.push(m),
+                        },
+                        "color_depth" => match parse_color_depth(&cell) {
+                            Ok(v) => settings.color_depth = v,
+                            Err(m) => messages.push(m),
+                        },
+                        _ => {}
+                    }
+                }
+            }
+        }
+
         if !messages.is_empty() {
             result.errors.push(CsvError {
                 row: row_index,
@@ -238,15 +408,6 @@ pub fn parse_rows(input: &str, custom_fields: &[String]) -> Result<ParseResult, 
             continue;
         }
 
-        let custom_values = custom_cols
-            .iter()
-            .enumerate()
-            .map(|(i, col)| {
-                let value = fields.get(HEADERS.len() + i).cloned().unwrap_or_default();
-                (col.clone(), value.trim().to_string())
-            })
-            .collect();
-
         result.rows.push(Row {
             name,
             protocol,
@@ -257,6 +418,8 @@ pub fn parse_rows(input: &str, custom_fields: &[String]) -> Result<ParseResult, 
             folder,
             allowed_groups,
             description,
+            settings,
+            private_key,
             custom_fields: custom_values,
         });
     }
@@ -324,20 +487,73 @@ fn parse_port(input: &str) -> Result<Option<u16>, String> {
         .map_err(|_| format!("invalid port '{}'", input))
 }
 
-/// Render the downloadable template: header row plus one example row.
-///
-/// When custom fields are configured their columns are appended (with an
-/// example value) so the template stays in sync with the importer.
+/// Parse an optional string cell: blank -> `None`, otherwise the trimmed
+/// value.
+fn parse_opt_str(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+/// Parse an optional boolean cell: blank -> `None`, otherwise a
+/// case-insensitive `true`/`false`.
+fn parse_opt_bool(column: &str, value: &str) -> Result<Option<bool>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    match value.to_ascii_lowercase().as_str() {
+        "true" => Ok(Some(true)),
+        "false" => Ok(Some(false)),
+        _ => Err(format!(
+            "invalid boolean '{}' for column '{}' (use true or false)",
+            value, column
+        )),
+    }
+}
+
+/// Parse the `color_depth` cell: blank -> `None`, otherwise a number.
+fn parse_color_depth(value: &str) -> Result<Option<u8>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<u8>()
+        .map(Some)
+        .map_err(|_| format!("invalid color_depth '{}' (must be a number)", value))
+}
+
+/// Render the downloadable template: header row (fixed 9 + optional settings
+/// block + custom-field columns when configured) plus two example rows: one
+/// RDP row with several settings filled in, one minimal SSH row with the
+/// rest blank. Both example rows round-trip through [`parse_rows`] with the
+/// same custom-field definitions.
 pub fn render_template(custom_fields: &[String]) -> String {
     let mut header = HEADERS.join(",");
-    let mut example = "My Server,ssh,10.0.0.1,22,root,secret,Production/Web,\"group1,group2\",Production web server"
-        .to_string();
+    for opt in OPTIONAL_HEADERS {
+        header.push(',');
+        header.push_str(opt);
+    }
+    let mut rdp = String::from(
+        "RDP example,rdp,192.168.10.20,3389,Administrator,Secret123,Production/RDP,\"group1,group2\",\
+         Example RDP entry; leave blank whatever is not needed,\
+         corp.example.com,nla,false,32,,true,false,true,false,,,false,",
+    );
+    let mut ssh = String::from(
+        "SSH example,ssh,10.0.0.1,22,root,,Production/Servers,,\
+         Example SSH entry; leave blank whatever is not needed",
+    );
     for f in custom_fields {
         header.push(',');
         header.push_str(f);
-        example.push_str(",Example value");
+        rdp.push_str(",Example value");
+        ssh.push(',');
     }
-    format!("{}\n{}\n", header, example)
+    format!("{}\n{}\n{}\n", header, rdp, ssh)
 }
 
 /// Tokenize a CSV document into records of fields (RFC-4180 style).

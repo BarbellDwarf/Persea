@@ -7,8 +7,8 @@
 //! (only existing rows; missing rows become errors). The stored identifier
 //! of each row is `slugify(name)`; the friendly `name` text becomes the
 //! entry's `display_name`. `GET /api/addressbook/import-template` serves a
-//! downloadable CSV template (custom-field columns included when any are
-//! configured).
+//! downloadable CSV template (optional settings columns plus custom-field
+//! columns when any are configured).
 
 use super::address_book::log_ab_event;
 use super::StorageKey;
@@ -137,6 +137,48 @@ pub struct ImportRow {
     /// Free-text description stored in `protocol_config`.
     #[serde(default)]
     pub description: String,
+    /// NTLM/Kerberos domain; `protocol_config.domain`. `None` = not set
+    /// (keeps the stored value on update).
+    #[serde(default)]
+    pub domain: Option<String>,
+    /// RDP security mode (`nla`, `any`, ...); `protocol_config.security`.
+    #[serde(default)]
+    pub security: Option<String>,
+    /// Skip TLS certificate verification; `protocol_config.ignore_cert`.
+    #[serde(default)]
+    pub ignore_cert: Option<bool>,
+    /// RDP color depth in bits; `protocol_config.color_depth`.
+    #[serde(default)]
+    pub color_depth: Option<u8>,
+    /// RemoteApp program path; `protocol_config.remote_app`.
+    #[serde(default)]
+    pub remote_app: Option<String>,
+    /// RDP GFX pipeline; `protocol_config.enable_gfx`.
+    #[serde(default)]
+    pub enable_gfx: Option<bool>,
+    /// RDP drive redirection; `protocol_config.enable_drive`.
+    #[serde(default)]
+    pub enable_drive: Option<bool>,
+    /// Disable clipboard copy; `protocol_config.disable_copy`.
+    #[serde(default)]
+    pub disable_copy: Option<bool>,
+    /// Disable clipboard paste; `protocol_config.disable_paste`.
+    #[serde(default)]
+    pub disable_paste: Option<bool>,
+    /// RDP auth package (`ntlm`, `kerberos`); `protocol_config.auth_pkg`.
+    #[serde(default)]
+    pub auth_pkg: Option<String>,
+    /// Kerberos KDC URL; `protocol_config.kdc_url`.
+    #[serde(default)]
+    pub kdc_url: Option<String>,
+    /// Prompt for credentials on connect; `protocol_config.prompt_credentials`.
+    #[serde(default)]
+    pub prompt_credentials: Option<bool>,
+    /// SSH private key material, stored as a credential like `password`
+    /// (encrypted when a storage key exists; dropped + counted when not).
+    /// `None`/empty = not set (keeps the stored value on update).
+    #[serde(default)]
+    pub private_key: Option<String>,
     /// Custom field values (field name → value), same shape as the
     /// connections API's per-entry `protocol_config.custom_fields`. Accepts
     /// a map or `[[name, value], ...]` pairs (the CSV-import UI shape).
@@ -205,17 +247,77 @@ fn normalized_custom_fields(custom_fields: &HashMap<String, String>) -> HashMap<
         .collect()
 }
 
-/// Build the `protocol_config` JSON for a row: non-credential metadata
-/// (description + custom field values), same shape as the connections API.
-fn row_protocol_config(description: &str, custom_fields: &HashMap<String, String>) -> String {
-    let mut meta = serde_json::Map::new();
+/// The optional-settings entries of a row: only keys with a set (non-blank)
+/// value are included, in the `protocol_config` key space.
+fn row_settings_map(row: &ImportRow) -> serde_json::Map<String, serde_json::Value> {
+    let mut settings = serde_json::Map::new();
+    for (key, value) in [
+        ("domain", opt_setting_str(row.domain.as_deref())),
+        ("security", opt_setting_str(row.security.as_deref())),
+        ("remote_app", opt_setting_str(row.remote_app.as_deref())),
+        ("auth_pkg", opt_setting_str(row.auth_pkg.as_deref())),
+        ("kdc_url", opt_setting_str(row.kdc_url.as_deref())),
+        ("ignore_cert", opt_setting_bool(row.ignore_cert)),
+        ("enable_gfx", opt_setting_bool(row.enable_gfx)),
+        ("enable_drive", opt_setting_bool(row.enable_drive)),
+        ("disable_copy", opt_setting_bool(row.disable_copy)),
+        ("disable_paste", opt_setting_bool(row.disable_paste)),
+        ("prompt_credentials", opt_setting_bool(row.prompt_credentials)),
+        ("color_depth", row.color_depth.map(|v| json!(v))),
+    ] {
+        if let Some(value) = value {
+            settings.insert(key.into(), value);
+        }
+    }
+    settings
+}
+
+/// `Some` when the optional string setting is set and non-blank.
+fn opt_setting_str(value: Option<&str>) -> Option<serde_json::Value> {
+    value
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| json!(v))
+}
+
+/// `Some` when the optional bool setting is present.
+fn opt_setting_bool(value: Option<bool>) -> Option<serde_json::Value> {
+    value.map(|v| json!(v))
+}
+
+/// Apply a row's metadata onto a `protocol_config` map: `description` and
+/// custom fields replace the stored entries (existing behavior), optional
+/// settings only overwrite keys the row sets (blank = keep stored).
+fn apply_row_metadata(
+    cfg: &mut serde_json::Map<String, serde_json::Value>,
+    description: &str,
+    custom_fields: &HashMap<String, String>,
+    row: &ImportRow,
+) {
+    cfg.remove("description");
+    cfg.remove("custom_fields");
     if !description.is_empty() {
-        meta.insert("description".into(), json!(description));
+        cfg.insert("description".into(), json!(description));
     }
     let fields = normalized_custom_fields(custom_fields);
     if !fields.is_empty() {
-        meta.insert("custom_fields".into(), json!(fields));
+        cfg.insert("custom_fields".into(), json!(fields));
     }
+    for (key, value) in row_settings_map(row) {
+        cfg.insert(key, value);
+    }
+}
+
+/// Build the `protocol_config` JSON for a new row: non-credential metadata
+/// (description + custom field values + optional settings), same shape as
+/// the connections API.
+fn row_protocol_config(
+    description: &str,
+    custom_fields: &HashMap<String, String>,
+    row: &ImportRow,
+) -> String {
+    let mut meta = serde_json::Map::new();
+    apply_row_metadata(&mut meta, description, custom_fields, row);
     serde_json::to_string(&meta).unwrap_or_else(|_| "{}".into())
 }
 
@@ -229,24 +331,26 @@ fn effective_display_name(friendly_name: &str, display_name_override: &str) -> S
     }
 }
 
-/// Encrypt + store a row's password for an entry. An empty password is a
-/// no-op (`true`) — callers keep the existing credential, never wipe it.
-/// Without an encryption key the password is dropped and counted. Returns
-/// `false` when a credential error was pushed to `errors`.
-fn store_row_password(
+/// Encrypt + store a row's credential (password or private key) for an
+/// entry. An empty value is a no-op (`true`) — callers keep the existing
+/// credential, never wipe it. Without an encryption key the value is dropped
+/// and counted. Returns `false` when a credential error was pushed to
+/// `errors`.
+fn store_row_credential(
     database: &Db,
     entry_id: i64,
-    password: &str,
+    credential_type: &str,
+    value: &str,
     encryption_key: &str,
     row_index: usize,
-    passwords_dropped: &mut usize,
+    credentials_dropped: &mut usize,
     errors: &mut Vec<serde_json::Value>,
 ) -> bool {
-    if password.is_empty() {
+    if value.is_empty() {
         return true;
     }
     if encryption_key.is_empty() {
-        *passwords_dropped += 1;
+        *credentials_dropped += 1;
         return true;
     }
     let key = match crate::crypto::EncryptionKey::from_hex(encryption_key) {
@@ -256,17 +360,21 @@ fn store_row_password(
             return false;
         }
     };
-    let encrypted = match crate::crypto::encrypt_value(&key, password) {
+    let encrypted = match crate::crypto::encrypt_value(&key, value) {
         Ok(e) => e,
         Err(e) => {
-            errors.push(
-                json!({"row": row_index, "error": format!("failed to encrypt password: {}", e)}),
-            );
+            errors.push(json!({"row": row_index, "error": format!(
+                "failed to encrypt {}: {}",
+                credential_type, e
+            )}));
             return false;
         }
     };
-    if let Err(e) = db::store_ab_credential(database, entry_id, "password", &encrypted) {
-        errors.push(json!({"row": row_index, "error": format!("failed to store password: {}", e)}));
+    if let Err(e) = db::store_ab_credential(database, entry_id, credential_type, &encrypted) {
+        errors.push(json!({"row": row_index, "error": format!(
+            "failed to store {}: {}",
+            credential_type, e
+        )}));
         return false;
     }
     true
@@ -311,7 +419,7 @@ fn insert_new_row(
         .filter(|g| !g.is_empty())
         .collect::<Vec<_>>()
         .join(",");
-    let protocol_config = row_protocol_config(&description, &row.custom_fields);
+    let protocol_config = row_protocol_config(&description, &row.custom_fields, row);
 
     let entry_id = match db::create_ab_entry(
         database,
@@ -334,15 +442,26 @@ fn insert_new_row(
             return InsertOutcome::Failed;
         }
     };
-    if !store_row_password(
+    let credentials_ok = store_row_credential(
         database,
         entry_id,
+        "password",
         &row.password,
         encryption_key,
         row_index,
         passwords_dropped,
         errors,
-    ) {
+    ) && store_row_credential(
+        database,
+        entry_id,
+        "private_key",
+        row.private_key.as_deref().unwrap_or(""),
+        encryption_key,
+        row_index,
+        passwords_dropped,
+        errors,
+    );
+    if !credentials_ok {
         let _ = db::delete_ab_entry(database, entry_id);
         return InsertOutcome::Failed;
     }
@@ -376,7 +495,20 @@ fn update_existing_row(
         .filter(|g| !g.is_empty())
         .collect::<Vec<_>>()
         .join(",");
-    let protocol_config = row_protocol_config(&description, &row.custom_fields);
+    // Merge onto the stored config: description/custom fields are replaced,
+    // optional settings only overwrite keys the row sets (blank = keep).
+    let mut cfg: serde_json::Value = serde_json::from_str(&entry.protocol_config)
+        .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+    if !cfg.is_object() {
+        cfg = serde_json::Value::Object(serde_json::Map::new());
+    }
+    apply_row_metadata(
+        cfg.as_object_mut().expect("config normalized to an object above"),
+        &description,
+        &row.custom_fields,
+        row,
+    );
+    let protocol_config = cfg.to_string();
 
     if let Err(e) = db::update_ab_entry(
         database,
@@ -392,10 +524,23 @@ fn update_existing_row(
         errors.push(json!({"row": row_index, "error": e.to_string()}));
         return false;
     }
-    store_row_password(
+    if !store_row_credential(
         database,
         entry.id,
+        "password",
         &row.password,
+        encryption_key,
+        row_index,
+        passwords_dropped,
+        errors,
+    ) {
+        return false;
+    }
+    store_row_credential(
+        database,
+        entry.id,
+        "private_key",
+        row.private_key.as_deref().unwrap_or(""),
         encryption_key,
         row_index,
         passwords_dropped,
@@ -449,22 +594,46 @@ fn row_matches_entry(
     if stored_fields != normalized_custom_fields(&row.custom_fields) {
         return false;
     }
+    // Optional settings: every key the row sets must match the stored
+    // config; keys the row leaves blank impose no constraint.
+    for (key, value) in row_settings_map(row) {
+        if cfg.get(&key) != Some(&value) {
+            return false;
+        }
+    }
 
-    if row.password.is_empty() {
-        return true;
+    if !row.password.is_empty() {
+        let Ok(cred) = db::get_ab_credential(database, entry.id, "password") else {
+            return false;
+        };
+        if encryption_key.is_empty() {
+            return false;
+        }
+        let Ok(key) = crate::crypto::EncryptionKey::from_hex(encryption_key) else {
+            return false;
+        };
+        match crate::crypto::decrypt_value(&key, &cred.credential_data) {
+            Ok(plain) if plain == row.password => {}
+            _ => return false,
+        }
     }
-    let Ok(cred) = db::get_ab_credential(database, entry.id, "password") else {
-        return false;
-    };
-    if encryption_key.is_empty() {
-        return false;
-    }
-    let Ok(key) = crate::crypto::EncryptionKey::from_hex(encryption_key) else {
-        return false;
-    };
-    match crate::crypto::decrypt_value(&key, &cred.credential_data) {
-        Ok(plain) => plain == row.password,
-        Err(_) => false,
+    match row.private_key.as_deref().filter(|k| !k.is_empty()) {
+        None => true,
+        Some(private_key) => {
+            let Ok(cred) = db::get_ab_credential(database, entry.id, "private_key") else {
+                return false;
+            };
+            if encryption_key.is_empty() {
+                return false;
+            }
+            let Ok(key) = crate::crypto::EncryptionKey::from_hex(encryption_key) else {
+                return false;
+            };
+            match crate::crypto::decrypt_value(&key, &cred.credential_data) {
+                Ok(plain) => plain == private_key,
+                Err(_) => false,
+            }
+        }
     }
 }
 
@@ -604,6 +773,19 @@ pub async fn import_csv(
                     display_name: String::new(),
                     allowed_groups: r.allowed_groups,
                     description: r.description,
+                    domain: r.settings.domain,
+                    security: r.settings.security,
+                    ignore_cert: r.settings.ignore_cert,
+                    color_depth: r.settings.color_depth,
+                    remote_app: r.settings.remote_app,
+                    enable_gfx: r.settings.enable_gfx,
+                    enable_drive: r.settings.enable_drive,
+                    disable_copy: r.settings.disable_copy,
+                    disable_paste: r.settings.disable_paste,
+                    auth_pkg: r.settings.auth_pkg,
+                    kdc_url: r.settings.kdc_url,
+                    prompt_credentials: r.settings.prompt_credentials,
+                    private_key: r.private_key,
                     custom_fields: r.custom_fields.into_iter().collect(),
                 })
                 .collect(),
@@ -825,11 +1007,11 @@ pub async fn import_csv(
     })))
 }
 
-/// Serve a CSV template (header + one example row) for download.
+/// Serve a CSV template (header + two example rows) for download.
 ///
 /// Any authenticated user with at least the operator role may download.
-/// When custom fields are configured, their columns are appended so the
-/// template stays in sync with the importer.
+/// The template carries the optional settings columns plus any configured
+/// custom-field columns so it stays in sync with the importer.
 pub async fn import_template(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
