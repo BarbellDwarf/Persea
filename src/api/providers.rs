@@ -27,17 +27,26 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::Duration;
 
+/// Body for `POST /api/auth/providers`.
 #[derive(Deserialize)]
 pub struct CreateProviderRequest {
+    /// Display name, used in SSO button URLs and cookies, so it is
+    /// restricted to letters, digits, spaces, '-', '_' and '.'.
     pub name: String,
+    /// Provider kind, one of [`crate::providers_db::PROVIDER_TYPES`].
     #[serde(rename = "type")]
     pub provider_type: String,
+    /// Provider-specific config JSON. May contain secrets
+    /// (`client_secret`, `bind_password`, RADIUS secret), which the
+    /// read-back endpoints mask.
     #[serde(default)]
     pub config: Value,
 }
 
+/// Body for `POST /api/auth/providers/{id}/move`.
 #[derive(Deserialize)]
 pub struct MoveProviderRequest {
+    /// `"up"` or `"down"`.
     pub direction: String,
 }
 

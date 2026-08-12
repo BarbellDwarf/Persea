@@ -28,21 +28,29 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+/// Body for `POST /api/admin/groups`.
 #[derive(Deserialize)]
 pub struct CreateGroupRequest {
+    /// Unique group name.
     pub name: String,
+    /// Optional free-text description.
     #[serde(default)]
     pub description: String,
 }
 
+/// Body for `PUT /api/admin/groups/{id}`.
 #[derive(Deserialize)]
 pub struct UpdateGroupRequest {
+    /// New name when renaming.
     pub name: Option<String>,
+    /// New description when changing it.
     pub description: Option<String>,
 }
 
+/// Body for `POST /api/admin/groups/{id}/mappings`.
 #[derive(Deserialize)]
 pub struct CreateMappingRequest {
+    /// Auth-provider group name to map to the local group.
     pub provider_group: String,
 }
 
