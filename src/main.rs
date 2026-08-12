@@ -1311,7 +1311,9 @@ async fn run_server(
                 _ => {}
             }
             // R110: expired persisted WS tickets (cross-instance validation
-            // rows) — no-op without a shared backend pool.
+            // rows) — no-op without a shared backend pool or the HA license.
+            if crate::license::global()
+                .is_some_and(|lm| lm.has_feature(crate::license::FEAT_HA))
             {
                 let cutoff = crate::db::registry_ts(
                     chrono::Utc::now() - chrono::Duration::minutes(5),

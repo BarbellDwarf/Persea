@@ -70,34 +70,16 @@ impl SessionManager {
 
     // ── Registry persistence (R110) ────────────────────────────────────
     //
-    // All writes no-op without a shared backend pool (single-instance mode
-    // unchanged). When a pool is active, db_route! sends the call to the
-    // worker thread; the store functions also guard on the pool themselves.
-
-    fn registry_upsert(&self, session: &Session) {
-        let Some(ref db) = self.db else { return };
-        let st = format!("{:?}", session.session_type).to_lowercase();
-        let status = format!("{:?}", session.status).to_lowercase();
-        let now = crate::db::registry_ts(Utc::now());
-        if let Err(e) = crate::db::registry_upsert_session(
-            db,
-            &session.id.to_string(),
-            &self.config.instance_id,
-            self.config.ha_base_url.as_deref().unwrap_or(""),
-            &st,
-            &status,
-            &session.hostname,
-            &session.username,
-            &session.created_by,
-            &crate::db::registry_ts(session.created_at),
-            &now,
-            &session.connection_id,
-        ) {
-            tracing::warn!(session_id = %session.id, error = %e, "Failed to upsert session registry row");
-        }
-    }
+    // All writes are gated on `ha_enabled()` (FEAT_HA license + shared
+    // backend pool); the store functions also no-op without a pool, so
+    // single-instance mode is unchanged.
 
     fn registry_set_status(&self, id: Uuid, status: &str) {
+        // FEAT_HA gate: without the license (or a shared backend) this is a
+        // no-op — single-instance behavior unchanged, byte-for-byte.
+        if !self.ha_enabled() {
+            return;
+        }
         let Some(ref db) = self.db else { return };
         let now = crate::db::registry_ts(Utc::now());
         if let Err(e) = crate::db::registry_set_status(db, &id.to_string(), status, &now) {
