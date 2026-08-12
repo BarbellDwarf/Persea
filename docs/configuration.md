@@ -24,6 +24,8 @@ See `config.example.toml` for a fully commented reference.
 | `site_title` | `Persea` | Browser tab and page header title |
 | `max_sessions` | `500` | Maximum concurrent sessions (all types). 0 = unlimited |
 | `max_sessions_per_user` | `50` | Maximum concurrent sessions per user. 0 = unlimited |
+| `instance_id` | `<hostname>-<pid>` | Unique name for this instance in a multi-instance (HA) fleet; tags shared session-registry rows with their owner. See [High Availability](high-availability.md) |
+| `ha_base_url` | — | Public base URL of this instance; the target of cross-instance join/shadow redirects in HA mode. See [High Availability](high-availability.md) |
 
 ## License key
 

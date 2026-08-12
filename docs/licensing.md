@@ -20,15 +20,13 @@ persea ships in two versions: a **free, self-hosted** edition that runs without 
 | **TOTP / MFA enforcement** | Mandatory two-factor authentication policies (AdminsOnly / All) |
 | **Audit log compliance exports** | Filtered CSV/JSON download of the audit log (basic audit viewing and tamper verification stay free) |
 | **Encrypted session recording** | Session recordings encrypted at rest |
+| **High availability (HA)** | Fleet-wide session sharing: live sessions are visible, joinable, and shadowable from any instance sharing one database (`ha` feature) |
 
-> **In progress:** high availability / clustering. The shared-data foundation
-> (multi-backend storage via `db_url`, first-run setup on Postgres/MySQL,
-> backend round-trip CI) is shipped; cross-instance session sharing,
-> DB-backed WebSocket tickets and instance coordination are in development
-> (see the `R110` enterprise-HA work). The license format reserves an `ha`
-> feature flag that gates those features. See
-> [High Availability Architecture](high-availability.md) for what is and is
-> not shareable across instances.
+The `ha` feature is gated by a dedicated flag in the license. It requires a
+shared MySQL/PostgreSQL backend (`db_url`) on every instance, plus a unique
+`instance_id` and `ha_base_url` per instance. See
+[High Availability](high-availability.md) for what is and is not shareable
+across instances.
 
 ## 30-day evaluation period
 
@@ -55,6 +53,8 @@ PERSEA_LICENSE_KEY=PSEA-XXXX-XXXX-XXXX-XXXX
 ```
 
 Or through the admin UI: **Admin → License** (`/admin/license.html`). The license status is also available via the API at `/api/admin/license` (GET for status, POST to set a key).
+
+![License page in the admin UI](assets/screenshots/admin-license.png)
 
 ## See also
 

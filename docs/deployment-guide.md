@@ -138,10 +138,11 @@ connects, runs the schema migrations, and creates the first admin **in that
 backend**, no SQLite intermediate step. The URL is written into the generated
 config (`db_url = …`), so it takes effect for every later start.
 
+![Login page](assets/screenshots/login.png)
+
 ### Database backends
 
-persea stores its data in one of two ways (since v1.1.1, `db_url` is the real
-store — not a roadmap item):
+persea stores its data in one of two ways:
 
 | Mode | Config | What is stored there |
 |------|--------|----------------------|
@@ -190,10 +191,12 @@ There is no built-in SQLite→Postgres/MySQL exporter. The supported paths are:
   ship a converter, and the audit log's hash chain cannot be recomputed after
   a manual copy.
 
-**HA note:** since v1.1.1 multiple instances can share one database backend
-(users, connections, audit are shared), but **live sessions are still
-in-memory per instance** — session affinity at the load balancer remains
-required. See [high-availability.md](high-availability.md) for the full story.
+**HA note:** since v1.1.1, multiple instances can share one database backend
+(users, connections, audit are shared). With the Enterprise HA feature, live
+sessions are shared too — visible, joinable, and shadowable from any
+instance, with no session affinity required. Without the license, live
+sessions stay per-instance and session affinity at the load balancer is
+needed. See [High Availability](high-availability.md) for the full story.
 
 ### Create admin API keys (for automation, optional)
 
@@ -367,6 +370,8 @@ auth_session_ttl_secs = 28800
 Group-to-role mappings are configured via the Admin page (http://localhost:8089/admin/groups.html)
 or the API endpoint `POST /api/admin/group-mappings`.
 
+![Admin users page](assets/screenshots/admin-users.png)
+
 Set the client secret in `/opt/persea/env`:
 
 ```bash
@@ -394,6 +399,8 @@ API keys are powerful (full admin, no MFA). For day-to-day use, OIDC with group-
 ## Step 6: Set Up the Connections (Vault or DB)
 
 Connections stores connection entries in HashiCorp Vault/OpenBao, or — with the DB storage backend — in the local database with AES-256-GCM encrypted credentials. Credentials stay server-side, they never reach the browser. See [Configuration > `[storage]`](configuration.md#storage-section) for the backend choice.
+
+![Connections page](assets/screenshots/connections.png)
 
 ### Configure Vault (optional, for Vault-backed Connections)
 
@@ -496,6 +503,8 @@ rotation_interval_secs = 300   # Check every 5 minutes
 
 Recordings can be played back in the browser via the Sessions page, or exported for compliance.
 
+![Sessions page with the live session list](assets/screenshots/sessions.png)
+
 ## Ongoing Operations
 
 ### Monitoring
@@ -504,6 +513,8 @@ Recordings can be played back in the browser via the Sessions page, or exported 
 - **Metrics:** `GET /metrics` (Prometheus format, unauthenticated — see [API Reference](api.md#get-metrics))
 - **System status:** `GET /api/system/status` (admin only) shows version, uptime, active sessions
 - **Reports:** Session history, top connections, top users available at `/reports.html` (admin page) and via the reports API (poweruser+ role)
+
+![Admin settings page](assets/screenshots/admin-settings.png)
 
 ### Upgrading
 

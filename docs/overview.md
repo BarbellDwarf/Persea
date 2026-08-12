@@ -12,6 +12,12 @@ The connections feature supports credential storage in HashiCorp Vault / OpenBao
 
 persea ships a responsive web UI with built-in light and dark themes — the header toggle cycles **auto → dark → light** (auto follows your OS preference). Screenshots below show key pages in both modes.
 
+### Login
+
+The login page hosts the sign-in form plus SSO buttons for the configured providers (OIDC, SAML, LDAP, RADIUS).
+
+![Login page](assets/screenshots/login.png)
+
 ### Connections
 
 The Connections page is the main workspace: folder tree on the left, connection details and one-click connect on the right.

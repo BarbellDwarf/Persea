@@ -86,7 +86,7 @@ This is a server-side CIDR check applied at session creation. The URL's hostname
 
 ## Native autofill
 
-> **Status: disabled in the current build.** The `autofill` field is still accepted by the entry schema and API, but persea no longer populates Chromium's password store: `populate_login_data()` in `src/browser.rs` is a no-op (H09 — "disable autofill/credential storage for ephemeral VDI sessions"), so no `Default/Login Data` database is ever written, and Chromium is launched with `--disable-autofill`. For automated login, use [login scripts](#login-scripts).
+> **Status: disabled in the current build.** The `autofill` field is still accepted by the entry schema and API, but persea no longer populates Chromium's password store: autofill was disabled as a security measure for ephemeral browser sessions, so no login data is ever written to disk and Chromium is launched with `--disable-autofill`. For automated login, use [login scripts](#login-scripts).
 
 ### Schema (accepted, no effect)
 
@@ -108,11 +108,11 @@ The `autofill` field on a connections entry is a JSON string containing an array
 | `username` | Username to autofill. Use `$USERNAME` to substitute the entry's username field. |
 | `password` | Password to autofill. Use `$PASSWORD` to substitute the entry's password field. |
 
-The `$USERNAME` and `$PASSWORD` placeholders are resolved server-side from the entry's credentials at session creation (`parse_autofill_credentials` in `src/session/create.rs`), and the result is passed to the browser spawner — which then ignores it because the population step is a no-op.
+The `$USERNAME` and `$PASSWORD` placeholders are resolved server-side from the entry's credentials at session creation, and the result is passed to the browser spawner — which then ignores it because the population step is disabled.
 
 ### Implementation note
 
-The Chromium Linux `os_crypt` obfuscation scheme (16-byte AES key via PBKDF2 with password `"peanuts"` / salt `"saltysalt"`, 1 iteration, SHA-1; AES-128-CBC with IV = 16 × `0x20`; `v10` prefix + ciphertext blob) is implemented in `src/browser.rs`, but the database population that would use it is disabled, so it is currently dead code. It is Chromium's obfuscation layer for the headless Linux case (no keyring) and was never a security boundary — the real boundary is that the profile directory is ephemeral (deleted on session end) and only accessible server-side.
+The security boundary for stored browser credentials is the profile itself, not encryption: each session's Chromium profile is a unique temporary directory that is deleted when the session ends and is only ever accessible server-side. Because autofill is disabled, no saved credentials exist to protect.
 
 There is no autofill editor in the current Connections UI — the `autofill` field is only settable via the address-book entry API.
 
@@ -515,7 +515,7 @@ When creating entries via the Vault connections (UI or API), the same fields are
 ## Troubleshooting
 
 **Autofill dropdown doesn't appear:**
-- Expected in the current build — native autofill is disabled (`populate_login_data()` is a no-op and Chromium is launched with `--disable-autofill`). Use a [login script](#login-scripts) instead.
+- Expected — native autofill is disabled for security (no login data is ever written to disk, and Chromium runs with `--disable-autofill`). Use a [login script](#login-scripts) instead.
 - The `autofill` entry field is still accepted by the schema but has no effect.
 
 **Domain blocking is too strict:**
