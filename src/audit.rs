@@ -29,45 +29,69 @@ use std::collections::BTreeMap;
 /// Filters for querying audit events.
 #[derive(Debug, Clone, Default)]
 pub struct AuditFilters {
+    /// Match events for this user ID.
     pub user_id: Option<String>,
+    /// Match events of this type, e.g. login or session_start.
     pub event_type: Option<String>,
+    /// Match events with this outcome.
     pub outcome: Option<String>,
+    /// Include events at or after this RFC3339 timestamp.
     pub from: Option<String>,
+    /// Include events at or before this RFC3339 timestamp.
     pub to: Option<String>,
 }
 
 /// A single audit event stored in the hash chain.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AuditEvent {
+    /// Database row ID; 0 for events not yet logged.
     pub id: i64,
+    /// Event type name, e.g. login or session_start.
     pub event_type: String,
+    /// When the event occurred.
     pub timestamp: DateTime<Utc>,
+    /// ID of the user the event concerns, when applicable.
     pub user_id: Option<String>,
+    /// Client IP address the event came from, when known.
     pub source_ip: Option<String>,
+    /// Success or failure outcome.
     pub outcome: String,
+    /// Free-form event payload.
     pub details: serde_json::Value,
+    /// ID of the session the event belongs to, when applicable.
     pub session_id: Option<String>,
+    /// SHA-256 hash of the preceding event; chains this event to it.
     pub prev_hash: String,
+    /// SHA-256 hash of this event's own fields.
     pub event_hash: String,
 }
 
 /// Result of chain verification.
 #[derive(Debug, Clone)]
 pub struct ChainVerification {
+    /// Overall verdict of the scan.
     pub status: ChainStatus,
+    /// How many events were scanned.
     pub events_scanned: u64,
+    /// Individual failures; empty when the chain verifies.
     pub errors: Vec<ChainError>,
 }
 
+/// Overall verdict of a chain verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainStatus {
+    /// Every scanned event chained and hashed correctly.
     Verified,
+    /// At least one event failed its hash or chain check.
     Broken,
 }
 
+/// One failed check found during chain verification.
 #[derive(Debug, Clone)]
 pub struct ChainError {
+    /// ID of the event that failed.
     pub event_id: i64,
+    /// Why the check failed.
     pub message: String,
 }
 
@@ -82,6 +106,8 @@ pub struct EventBuilder {
 }
 
 impl EventBuilder {
+    /// Start building an event with its type and outcome; every other
+    /// field is optional.
     pub fn new(event_type: impl Into<String>, outcome: impl Into<String>) -> Self {
         Self {
             event_type: event_type.into(),
@@ -93,26 +119,32 @@ impl EventBuilder {
         }
     }
 
+    /// Set the user the event concerns.
     pub fn user_id(mut self, id: impl Into<String>) -> Self {
         self.user_id = Some(id.into());
         self
     }
 
+    /// Set the client IP the event came from.
     pub fn source_ip(mut self, ip: impl Into<String>) -> Self {
         self.source_ip = Some(ip.into());
         self
     }
 
+    /// Set the event payload.
     pub fn details(mut self, details: serde_json::Value) -> Self {
         self.details = details;
         self
     }
 
+    /// Attach the event to a session.
     pub fn session_id(mut self, id: impl Into<String>) -> Self {
         self.session_id = Some(id.into());
         self
     }
 
+    /// Produce the final event, stamped with the current time and empty
+    /// hash fields (filled in by [`log_event`]).
     pub fn build(self) -> AuditEvent {
         AuditEvent {
             id: 0,
