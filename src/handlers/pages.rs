@@ -26,6 +26,14 @@ fn logo_url(theme: &ThemeData) -> String {
 }
 
 /// GET /connections.html — connections page.
+///
+/// Template contract (see `FeatureFlags` in templates.rs): the rendered
+/// context carries a `features` object with exactly these keys —
+/// rdp, ssh_tunnels, web_sessions, vdi, spice, proxmox, vmware, recordings,
+/// api_keys — so connections.html can gate its `em-type` dropdown and the
+/// proxmox field block, e.g. `{% if features.proxmox %}`. ssh/vnc have no
+/// toggles and must always render. Flags are sourced from `load_db_settings`
+/// once per request (features_context middleware).
 pub async fn connections_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,

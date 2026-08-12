@@ -131,6 +131,13 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
 });
 
 /// Helper to render a template into an axum response.
+///
+/// The per-request feature flags (see [`FeatureFlags`]) are merged into
+/// every rendered context under the key `features`, so all app pages — and
+/// the shared sidebar partial they include — can gate UI on the admin
+/// `enable_*` settings without touching individual template structs. The
+/// flags are sourced from `load_db_settings` once per request by the
+/// `features_context` middleware in main.rs.
 fn render_template(template_name: &str, context: &impl Serialize) -> Response {
     let tmpl = match TEMPLATES.get_template(template_name) {
         Ok(t) => t,
@@ -142,7 +149,23 @@ fn render_template(template_name: &str, context: &impl Serialize) -> Response {
                 .into_response()
         }
     };
-    match tmpl.render(context) {
+    let mut value = match serde_json::to_value(context) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Template context error: {}", e),
+            )
+                .into_response()
+        }
+    };
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "features".to_string(),
+            serde_json::to_value(request_features()).unwrap_or_default(),
+        );
+    }
+    match tmpl.render(&value) {
         Ok(html) => Html(html).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -156,6 +179,104 @@ fn render_template(template_name: &str, context: &impl Serialize) -> Response {
 fn render_app_page(page_template: &str, context: &impl Serialize) -> Response {
     // minijinja renders the page template, which extends layouts/app.html
     render_template(page_template, context)
+}
+
+// ── Feature flags ──────────────────────────────────────────────────────────
+
+/// Feature toggle flags for the current request, sourced from the
+/// `system_settings` table (`load_db_settings`, once per request by the
+/// `features_context` middleware in main.rs) and merged into every rendered
+/// template context under the key `features`.
+///
+/// CONTRACT for template consumers — the rendered context carries a
+/// `features` object with EXACTLY these keys (1:1 with the `enable_*`
+/// admin settings):
+///
+/// ```jinja
+/// {% if features.rdp %}          ← enable_rdp
+/// {% if features.ssh_tunnels %}  ← enable_ssh_tunnels (jump-host UI)
+/// {% if features.web_sessions %} ← enable_web_sessions
+/// {% if features.vdi %}          ← enable_vdi
+/// {% if features.spice %}        ← enable_spice
+/// {% if features.proxmox %}      ← enable_proxmox
+/// {% if features.vmware %}       ← enable_vmware
+/// {% if features.recordings %}   ← enable_recordings
+/// {% if features.api_keys %}     ← enable_api_keys
+/// ```
+///
+/// There are NO `enable_ssh` / `enable_vnc` toggles: the ssh and vnc
+/// options must always render. The `connections.html` em-type dropdown and
+/// the proxmox field block behind it gate on these flags (batch-2 work).
+#[derive(Serialize, Clone, Debug)]
+pub struct FeatureFlags {
+    pub rdp: bool,
+    pub ssh_tunnels: bool,
+    pub web_sessions: bool,
+    pub vdi: bool,
+    pub spice: bool,
+    pub proxmox: bool,
+    pub vmware: bool,
+    pub recordings: bool,
+    pub api_keys: bool,
+}
+
+impl Default for FeatureFlags {
+    /// All toggles default ON — a fresh install (or any render outside a
+    /// request, e.g. tests) behaves exactly as before the flags existed.
+    fn default() -> Self {
+        Self {
+            rdp: true,
+            ssh_tunnels: true,
+            web_sessions: true,
+            vdi: true,
+            spice: true,
+            proxmox: true,
+            vmware: true,
+            recordings: true,
+            api_keys: true,
+        }
+    }
+}
+
+impl FeatureFlags {
+    /// Build from raw `system_settings` rows; unset/unreadable toggles
+    /// default to enabled so existing deployments behave as before.
+    pub fn from_settings(settings: &[(String, String)]) -> Self {
+        Self {
+            rdp: crate::settings_merge::toggle_enabled(settings, "enable_rdp", true),
+            ssh_tunnels: crate::settings_merge::toggle_enabled(settings, "enable_ssh_tunnels", true),
+            web_sessions: crate::settings_merge::toggle_enabled(settings, "enable_web_sessions", true),
+            vdi: crate::settings_merge::toggle_enabled(settings, "enable_vdi", true),
+            spice: crate::settings_merge::toggle_enabled(settings, "enable_spice", true),
+            proxmox: crate::settings_merge::toggle_enabled(settings, "enable_proxmox", true),
+            vmware: crate::settings_merge::toggle_enabled(settings, "enable_vmware", true),
+            recordings: crate::settings_merge::toggle_enabled(settings, "enable_recordings", true),
+            api_keys: crate::settings_merge::toggle_enabled(settings, "enable_api_keys", true),
+        }
+    }
+}
+
+/// Request-scoped feature flags, carried across awaits for the duration of
+/// one HTML-page request (mirrors the ERROR_CONTEXT pattern in error.rs).
+tokio::task_local! {
+    static REQUEST_FEATURES: Arc<FeatureFlags>;
+}
+
+/// Run `future` with the given feature flags visible to template rendering.
+/// Called by the `features_context` middleware in main.rs.
+pub async fn run_with_features<F>(features: Arc<FeatureFlags>, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    REQUEST_FEATURES.scope(features, future).await
+}
+
+/// Feature flags for the current request; all-enabled defaults when no
+/// request context exists (login/error/setup pages, unit tests).
+fn request_features() -> FeatureFlags {
+    REQUEST_FEATURES
+        .try_with(|f| f.as_ref().clone())
+        .unwrap_or_default()
 }
 
 // ── Template contexts ───────────────────────────────────────────────────────

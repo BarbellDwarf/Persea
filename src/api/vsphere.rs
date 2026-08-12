@@ -1,5 +1,6 @@
 use crate::api::AppState;
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
+use crate::db::Db;
 use crate::error::AppError;
 use crate::session::{CreateSessionRequest, RdpParams, SessionType, SshParams, VncParams};
 use crate::vsphere::{self, VsphereClient, VsphereConfig};
@@ -31,9 +32,12 @@ pub async fn connect_vsphere(config: &VsphereConfig) -> VsphereState {
 /// List VMs from vCenter. Returns the cached inventory or fetches fresh data.
 /// When vSphere is not configured this returns HTTP 200 with
 /// `{"configured": false, "vms": []}` so the connections page can hide the
-/// section without triggering error-level logs on every load.
+/// section without triggering error-level logs on every load. The
+/// `enable_vmware` admin toggle (system_settings) reports the same
+/// not-configured shape even when `[vsphere]` config exists.
 pub async fn list_vms(
     identity: Option<Extension<AuthIdentity>>,
+    Extension(db): Extension<Db>,
     Extension(client): Extension<VsphereState>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = identity
@@ -42,6 +46,10 @@ pub async fn list_vms(
         .ok_or_else(|| AppError::Forbidden("login required".into()))?;
     if !id.has_role("operator") {
         return Err(AppError::Forbidden("operator role required".into()));
+    }
+
+    if !crate::settings_merge::read_toggle(&db, "enable_vmware", true) {
+        return Ok(Json(json!({"configured": false, "vms": []})));
     }
 
     let Some(client) = client else {

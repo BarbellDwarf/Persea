@@ -1519,14 +1519,14 @@ async fn check_allowed_network(
     )))
 }
 
-/// Which `enable_*` lockdown toggle gates a session type. `Vnc` has no
-/// toggle (the settings page offers none) and is never blocked here.
+/// Which `enable_*` lockdown toggle gates a session type. `Vnc` and `Ssh`
+/// have no toggles (the settings page offers none) and are never blocked
+/// here — SSH is always allowed like VNC; `enable_ssh_tunnels` only gates
+/// the jump-host management UI, not SSH sessions.
 fn protocol_toggle(session_type: &SessionType) -> Option<&'static str> {
     match session_type {
         SessionType::Rdp => Some("enable_rdp"),
-        // The settings page has no `enable_ssh` toggle; SSH sessions are
-        // gated by the SSH-related lockdown switch.
-        SessionType::Ssh => Some("enable_ssh_tunnels"),
+        SessionType::Ssh => None,
         SessionType::Spice => Some("enable_spice"),
         SessionType::Proxmox => Some("enable_proxmox"),
         SessionType::Web => Some("enable_web_sessions"),
@@ -1855,15 +1855,10 @@ mod tests {
     }
 
     #[test]
-    fn ssh_disabled_blocks_ssh_sessions() {
-        let err =
-            check_session_type_enabled(SessionType::Ssh, None, only_off(&["enable_ssh_tunnels"]))
-                .unwrap_err();
-        assert!(
-            format!("{}", err).contains("SSH sessions are disabled by an administrator"),
-            "got: {}",
-            err
-        );
+    fn ssh_has_no_toggle_and_is_never_blocked() {
+        // Semantic change (T03): enable_ssh_tunnels no longer gates SSH
+        // sessions — it only controls the jump-host management UI.
+        assert!(check_session_type_enabled(SessionType::Ssh, None, |_| false).is_ok());
     }
 
     #[test]

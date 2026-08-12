@@ -836,6 +836,20 @@ struct CspNonce(String);
 #[derive(Clone)]
 struct FeatureGate(&'static str);
 
+/// Loads the admin feature toggles once per request and makes them visible
+/// to every template rendered for it (connections/sessions/sidebar gating —
+/// see `FeatureFlags` in templates.rs). Applied to the authenticated HTML
+/// routes, inside `require_auth`.
+async fn features_context(
+    Extension(db): Extension<Db>,
+    request: Request,
+    next: middleware::Next,
+) -> Response {
+    let settings = crate::settings_merge::load_db_settings(&db).unwrap_or_default();
+    let features = Arc::new(crate::templates::FeatureFlags::from_settings(&settings));
+    crate::templates::run_with_features(features, next.run(request)).await
+}
+
 /// Request-time page gate: returns a styled 404 when the `enable_*` setting
 /// named by the `FeatureGate` extension is disabled. The route stays
 /// registered; the check runs per request so a settings change (or a DB
@@ -2153,6 +2167,7 @@ async fn run_server(
         .merge(gated_tunnels_page)
         .merge(gated_recordings_page)
         .merge(gated_tokens_pages)
+        .layer(middleware::from_fn(features_context))
         .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));
