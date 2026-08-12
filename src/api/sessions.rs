@@ -22,19 +22,28 @@ use serde_json::json;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
+/// Query parameters for `GET /api/sessions`.
 #[derive(Deserialize, Default)]
 pub struct ListSessionsQuery {
+    /// Include every user's sessions; only honored for admins.
     #[serde(default)]
     pub all: bool,
     /// Optional limit on the number of sessions returned (most recent first).
     pub limit: Option<usize>,
 }
 
+/// Query parameters for `GET /api/sessions/{id}/banner`.
 #[derive(Deserialize)]
 pub struct BannerQuery {
+    /// Share token proving access to the session.
     pub token: String,
 }
 
+/// `POST /api/sessions`: start an ad-hoc session from the request
+/// body. Requires poweruser or higher (or a custom role with the
+/// `create_session` system permission). Returns the new session info,
+/// or `AppError::Forbidden` when the role gate fails and
+/// `AppError::Session` when guacd rejects the connection.
 pub async fn create_session(
     State(manager): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -202,6 +211,9 @@ fn redact_share_url(
     info
 }
 
+/// `GET /api/sessions`: list sessions, newest first. Non-admins only
+/// see sessions they created, and share URLs are redacted for anyone
+/// who is neither the owner nor an admin.
 pub async fn list_sessions(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -231,6 +243,9 @@ pub async fn list_sessions(
     Ok(Json(json!(sessions)))
 }
 
+/// `GET /api/sessions/{id}`: one session with its share URL redacted
+/// for non-owners. Returns `AppError::Session` (404) when the session
+/// does not exist or belongs to someone else.
 pub async fn get_session(
     State(manager): State<AppState>,
     Path(id): Path<Uuid>,
@@ -266,6 +281,11 @@ pub async fn get_session(
     }
 }
 
+/// `DELETE /api/sessions/{id}`: terminate a session. Requires
+/// operator or higher; non-admins may only delete their own sessions.
+/// Sessions hosted by another instance are rejected with an explicit
+/// message. Returns 204 on success, `AppError::Session` when the
+/// session is not found.
 pub async fn delete_session(
     State(manager): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -349,6 +369,10 @@ pub(crate) fn is_jpeg_magic(body: &[u8]) -> bool {
 /// Maximum thumbnail body size in bytes (100 KiB).
 const MAX_THUMBNAIL_BODY_LEN: usize = 100_000;
 
+/// `PUT /api/sessions/{id}/thumbnail`: store the session thumbnail
+/// image. The owner or an admin may upload; the body must be a JPEG of
+/// at most 100 KiB. Returns 204, or 404/400/413/500 for the matching
+/// failure mode.
 pub async fn put_session_thumbnail(
     State(manager): State<AppState>,
     Path(id): Path<Uuid>,
@@ -392,6 +416,9 @@ pub async fn put_session_thumbnail(
     }
 }
 
+/// `GET /api/sessions/{id}/thumbnail`: serve the stored thumbnail
+/// JPEG. The owner or an admin may fetch; 404 when the session or the
+/// image is missing.
 pub async fn get_session_thumbnail(
     State(manager): State<AppState>,
     Path(id): Path<Uuid>,
@@ -427,6 +454,10 @@ pub async fn get_session_thumbnail(
     }
 }
 
+/// `POST /api/sessions/{id}/shadow`: mint a shadow (view-only) token
+/// for live session monitoring. Admin only. Returns the client URL,
+/// expiry, and TTL. `AppError::Forbidden` for non-admins,
+/// `AppError::Session` when the session is not found.
 pub async fn shadow_session(
     State(manager): State<AppState>,
     Extension(database): Extension<Db>,
@@ -508,6 +539,10 @@ pub async fn shadow_session(
     })))
 }
 
+/// `GET /api/vdi/containers`: list VDI containers owned by the
+/// current user, with thumbnails and active-session flags. Requires
+/// operator or higher. Returns an empty list when the VDI driver is
+/// not configured.
 pub async fn list_vdi_containers(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -554,6 +589,10 @@ pub async fn list_vdi_containers(
     Ok(Json(json!(containers)))
 }
 
+/// `GET /api/vdi/containers/{name}/thumbnail`: serve a container's
+/// thumbnail JPEG. Only the owning user or an admin may fetch it; 404
+/// for everyone else and when the image is missing. The container name
+/// must be alphanumeric (plus '-' and '_'), otherwise 400.
 pub async fn get_vdi_container_thumbnail(
     State(manager): State<AppState>,
     Path(name): Path<String>,
@@ -600,6 +639,9 @@ pub async fn get_vdi_container_thumbnail(
     }
 }
 
+/// `GET /api/sessions/login-scripts`: list available login scripts
+/// (`.js`, `.sh`, `.py` files in the configured scripts directory) for
+/// browser-session automation. Requires operator or higher.
 pub async fn list_login_scripts(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -638,6 +680,9 @@ pub async fn list_login_scripts(
     Ok(Json(json!({ "scripts": scripts })))
 }
 
+/// `GET /api/sessions/{id}/banner`: fetch a session's banner text.
+/// The caller must present the session's share token in the query
+/// string; an invalid token returns `AppError::Forbidden`.
 pub async fn get_session_banner(
     State(manager): State<AppState>,
     Path(id): Path<Uuid>,
