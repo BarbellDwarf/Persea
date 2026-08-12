@@ -316,6 +316,24 @@
                 </label>
                 <p class="text-xs text-[var(--text-muted)] mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
             </div>
+            <div id="em-clipboard-field" style="display:none">
+                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                    <input type="checkbox" id="em-disable-copy" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                    Disable copy from remote
+                </label>
+                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer;margin-top:8px">
+                    <input type="checkbox" id="em-disable-paste" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                    Disable paste to remote
+                </label>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Restrict clipboard transfer for this entry's sessions (SSH, RDP, VNC, SPICE). Leave both unchecked for normal clipboard use.</p>
+            </div>
+            <div id="em-enable-drive-field" style="display:none">
+                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                    <input type="checkbox" id="em-enable-drive" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                    Enable file transfer
+                </label>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Turn on file transfer for this entry — SFTP for SSH (browse and download remote files), a shared drive for RDP (upload files to the remote).</p>
+            </div>
             <div id="em-rdp-security-field" style="display:none">
                 <div>
                     <label class="form-label" for="em-rdp-domain">Domain</label>
@@ -1697,6 +1715,8 @@
         show('em-proxmox-fields', type === 'proxmox');
         show('em-ignore-cert-field', type === 'rdp' || type === 'spice');
         show('em-rdp-security-field', type === 'rdp');
+        show('em-clipboard-field', type === 'ssh' || type === 'rdp' || type === 'vnc' || type === 'spice');
+        show('em-enable-drive-field', type === 'ssh' || type === 'rdp');
         updateKdcField();
         var portEl = document.getElementById('em-port');
         if (portAutoSet || !portEl.value) {
@@ -1729,6 +1749,11 @@
         if (secEl) secEl.value = '';
         var pkgEl = document.getElementById('em-rdp-auth-pkg');
         if (pkgEl) pkgEl.value = '';
+        var entryToggleIds = ['em-ignore-cert', 'em-disable-copy', 'em-disable-paste', 'em-enable-drive'];
+        for (var t = 0; t < entryToggleIds.length; t++) {
+            var toggleEl = document.getElementById(entryToggleIds[t]);
+            if (toggleEl) toggleEl.checked = false;
+        }
         updateEntryTypeFields();
     }
     function openNewEntry() {
@@ -1799,6 +1824,9 @@
         var pveVerifyEl = document.getElementById('em-proxmox-verify-tls');
         if (pveVerifyEl) pveVerifyEl.checked = !!selectedEntry.proxmox_verify_tls;
         document.getElementById('em-ignore-cert').checked = !!selectedEntry.ignore_cert;
+        document.getElementById('em-disable-copy').checked = !!selectedEntry.disable_copy;
+        document.getElementById('em-disable-paste').checked = !!selectedEntry.disable_paste;
+        document.getElementById('em-enable-drive').checked = !!selectedEntry.enable_drive;
         document.getElementById('em-rdp-security').value = selectedEntry.security || '';
         document.getElementById('em-rdp-auth-pkg').value = selectedEntry.auth_pkg || '';
         document.getElementById('em-rdp-kdc-url').value = selectedEntry.kdc_url || '';
@@ -1902,6 +1930,17 @@
         if (privateKey) entry.private_key = privateKey;
         if (type === 'rdp' || type === 'spice') {
             entry.ignore_cert = document.getElementById('em-ignore-cert').checked;
+        }
+        // Per-entry protocol toggles, sent explicitly (true or false) so
+        // edits can flip a stored value in either direction (the server
+        // merges protocol_config per key). Visibility mirrors the
+        // updateEntryTypeFields() show/hide logic above.
+        if (type === 'ssh' || type === 'rdp' || type === 'vnc' || type === 'spice') {
+            entry.disable_copy = document.getElementById('em-disable-copy').checked;
+            entry.disable_paste = document.getElementById('em-disable-paste').checked;
+        }
+        if (type === 'ssh' || type === 'rdp') {
+            entry.enable_drive = document.getElementById('em-enable-drive').checked;
         }
         if (type === 'rdp') {
             var rdpDomain = document.getElementById('em-rdp-domain').value.trim();

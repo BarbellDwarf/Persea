@@ -100,7 +100,10 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS system_settings (
 /// Defaults when a key has not been stored yet. The first four mirror the
 /// hardcoded values in `templates/pages/admin/settings.html`; the rest
 /// mirror the documented defaults in `src/config.rs` (max_sessions: 500,
-/// session_history_retention_days: 90, all feature toggles default off).
+/// session_history_retention_days: 90). Every `enable_*` feature toggle
+/// defaults to true: the runtime treats an unset toggle as enabled
+/// (`settings_merge::toggle_enabled(..., true)`), so reporting anything
+/// else here would make the admin page lie about the actual gate.
 fn default_value(key: &str) -> Value {
     match key {
         "listen_addr" => json!("0.0.0.0:8089"),
@@ -120,7 +123,11 @@ fn default_value(key: &str) -> Value {
         "enable_proxmox" => json!(true),
         "enable_vmware" => json!(true),
         "enable_vdi" => json!(true),
-        "enable_file_transfer" => json!(false),
+        // Unset = enabled everywhere: the runtime gate at
+        // session/create.rs defaults an absent enable_file_transfer toggle
+        // to true (settings_merge::toggle_enabled), so the Settings API
+        // must report true too or the admin checkbox lies about the gate.
+        "enable_file_transfer" => json!(true),
         "enable_browser_sessions" => json!(true),
         "vault_enabled" => json!(false),
         "db_only_mode" => json!(true),
@@ -560,6 +567,31 @@ mod tests {
     #[test]
     fn custom_fields_default_is_empty_array() {
         assert_eq!(default_value("custom_fields"), json!([]));
+    }
+
+    #[test]
+    fn enable_file_transfer_default_matches_runtime_gate() {
+        // The runtime treats an unset enable_file_transfer toggle as
+        // enabled (settings_merge::toggle_enabled(..., true) at
+        // session/create.rs), so the Settings API default must agree or the
+        // admin Settings page would show "Off" for a feature that is on.
+        assert_eq!(default_value("enable_file_transfer"), json!(true));
+        assert!(crate::settings_merge::toggle_enabled(
+            &[],
+            "enable_file_transfer",
+            true
+        ));
+        // An explicitly stored "false" still wins on both sides.
+        let stored = vec![("enable_file_transfer".to_string(), "false".to_string())];
+        assert_eq!(
+            stored_to_value("enable_file_transfer", "false"),
+            json!(false)
+        );
+        assert!(!crate::settings_merge::toggle_enabled(
+            &stored,
+            "enable_file_transfer",
+            true
+        ));
     }
 
     #[test]

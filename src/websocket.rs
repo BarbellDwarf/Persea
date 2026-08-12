@@ -191,7 +191,9 @@ fn sniff_transfer_instruction(
             // code fails the transfer.
             if let Some(idx) = instr.args.first().and_then(|a| a.parse::<i64>().ok()) {
                 if let Some(p) = pending.get(&idx) {
-                    if (p.kind == TransferKind::Upload) == (direction == TransferDirection::GuacdToBrowser) {
+                    if (p.kind == TransferKind::Upload)
+                        == (direction == TransferDirection::GuacdToBrowser)
+                    {
                         if instr.args.get(2).map(|s| s.as_str()).unwrap_or("0") != "0" {
                             if let Some(p) = pending.remove(&idx) {
                                 events.push(TransferAuditEvent {
@@ -849,7 +851,8 @@ async fn proxy_ws_guacd(
     // browser → guacd) can be failed by guacd's error acks (guacd → browser)
     // and vice versa. Stream indices are connection-global, so the key space
     // never collides.
-    let pending_transfers = Arc::new(tokio::sync::Mutex::new(HashMap::<i64, PendingTransfer>::new()));
+    let pending_transfers =
+        Arc::new(tokio::sync::Mutex::new(HashMap::<i64, PendingTransfer>::new()));
 
     // guacd → browser (also tee to recording)
     let recording_clone = recording.clone();
@@ -1414,8 +1417,12 @@ mod tests {
         sniff_transfer_instruction(&file, TransferDirection::BrowserToGuacd, &mut pending);
 
         // guacd rejects the upload stream with an error ack.
-        let ack = Instruction::new("ack", vec!["7".into(), "SFTP: Open failed".into(), "516".into()]);
-        let events = sniff_transfer_instruction(&ack, TransferDirection::GuacdToBrowser, &mut pending);
+        let ack = Instruction::new(
+            "ack",
+            vec!["7".into(), "SFTP: Open failed".into(), "516".into()],
+        );
+        let events =
+            sniff_transfer_instruction(&ack, TransferDirection::GuacdToBrowser, &mut pending);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, TransferKind::Upload);
         assert!(events[0].error);
@@ -1454,7 +1461,10 @@ mod tests {
         );
         sniff_transfer_instruction(&body, TransferDirection::GuacdToBrowser, &mut pending);
         // The browser aborts the download.
-        let ack = Instruction::new("ack", vec!["9".into(), "Client aborted".into(), "776".into()]);
+        let ack = Instruction::new(
+            "ack",
+            vec!["9".into(), "Client aborted".into(), "776".into()],
+        );
         let events =
             sniff_transfer_instruction(&ack, TransferDirection::BrowserToGuacd, &mut pending);
         assert_eq!(events.len(), 1);
