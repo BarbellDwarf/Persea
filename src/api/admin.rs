@@ -12,6 +12,12 @@ use axum::response::IntoResponse;
 use axum::{extract::State, Extension, Json};
 use serde_json::json;
 
+/// `GET /api/health`: liveness and dependency checks.
+///
+/// Without authentication this is a shallow `{"status": "ok"}`. With
+/// operator or higher it probes guacd, the rusqlite DB, the SQLx pool,
+/// Vault (when configured), and disk usage, and reports an overall
+/// `healthy` or `degraded` verdict.
 pub async fn health(
     State(state): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -191,6 +197,9 @@ pub async fn health(
     })))
 }
 
+/// `POST /api/ws-ticket`: mint a short-lived WebSocket ticket for
+/// the session stream. Any authenticated identity may call it; returns
+/// `AppError::Auth` when the identity is missing.
 pub async fn create_ws_ticket(
     Extension(ticket_store): Extension<WsTicketStore>,
     identity: Option<Extension<AuthIdentity>>,
@@ -200,6 +209,9 @@ pub async fn create_ws_ticket(
     Ok(Json(json!({"ticket": ticket})))
 }
 
+/// `GET /api/system/status`: version, session counts, recording
+/// stats, Vault and feature flags, and HA instance info. Admin only;
+/// `AppError::Forbidden` for lower roles.
 pub async fn system_status(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -304,6 +316,9 @@ pub async fn system_status(
     })))
 }
 
+/// `GET /api/auth/status`: login-page configuration for anonymous
+/// callers: OIDC availability, site title, drive flag, and the
+/// resolved theme data.
 pub async fn auth_status(
     Extension(oidc_enabled): Extension<OidcEnabled>,
     Extension(site_title): Extension<SiteTitle>,
@@ -328,6 +343,8 @@ pub async fn auth_status(
 
 include!(concat!(env!("OUT_DIR"), "/docs-rendered.rs"));
 
+/// `GET /api/docs`: the rendered documentation sections (slug,
+/// title, HTML) baked in at build time.
 pub async fn get_docs() -> Result<Json<serde_json::Value>, AppError> {
     let sections: Vec<serde_json::Value> = DOCS
         .iter()
@@ -336,6 +353,8 @@ pub async fn get_docs() -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(json!(sections)))
 }
 
+/// `GET /api/metrics`: Prometheus text exposition format. Public;
+/// no authentication required.
 pub async fn metrics() -> impl IntoResponse {
     (
         StatusCode::OK,
