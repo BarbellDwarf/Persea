@@ -249,7 +249,7 @@ username = "administrator@vsphere.local"
 - **Audit logging**: SHA-256 hash chain with tamper evidence, verification via admin UI and API
 - **Session management**: Idle timeout, max duration, concurrent limits, activity tracking
 - **RBAC**: System + object permissions, recursive group inheritance
-- **TLS hot-reload**: File watcher (inotify/kqueue) + SIGHUP + admin UI upload
+- **TLS hot-reload**: SIGHUP re-reads `tls.cert_path`/`tls.key_path` and atomically swaps the served certificate for new connections; a failed reload logs the error and keeps serving the previous certificate
 - **Multi-DB**: MySQL, PostgreSQL, SQLite via SQLx enum dispatch
 - **Security hardening**: 3 full security audits remediated (see `wayfinder/security-audit-round3/` for the audit trail)
 

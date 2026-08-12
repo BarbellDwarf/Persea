@@ -392,11 +392,15 @@ Chromium runs with its normal sandbox enabled (via the SUID `chrome-sandbox` hel
 
 TLS certificates can be rotated without restarting persea:
 
-- **File watcher**: inotify/kqueue monitors the certificate and key files for changes
-- **SIGHUP**: send `SIGHUP` to the persea process to force immediate reload
-- **Admin UI**: upload new certificates via the admin settings page
+- **SIGHUP**: send `SIGHUP` to the persea process — it re-reads `tls.cert_path`
+  and `tls.key_path`, parses the pair (certificate parse, key parse, and
+  key-matches-certificate validation), and atomically swaps the served
+  certificate for **new connections**. Existing connections keep their
+  established session. If the files are invalid, persea logs the error and
+  continues serving the previous certificate.
 
-When a change is detected, persea reloads the certificate and key from disk and begins serving the new TLS configuration on subsequent connections. Existing connections are not interrupted.
+There is no file watcher and no admin-UI upload: certificate rotation is
+triggered by `SIGHUP` only.
 
 ## Multi-database encryption at rest
 

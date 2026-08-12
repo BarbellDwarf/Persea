@@ -2103,6 +2103,61 @@ async fn run_server(
             .await
             .expect("Failed to load TLS certificates");
 
+        // SIGHUP → TLS certificate hot-reload. `RustlsConfig` wraps an
+        // `ArcSwap<ServerConfig>` (axum-server 0.8), so
+        // `reload_from_pem_file` parses the cert/key pair (cert parse, key
+        // parse, key-matches-cert) and atomically swaps the config the
+        // acceptor reads for NEW connections; existing connections keep
+        // their established session. On failure the previous certificate
+        // keeps serving and the error is logged — fail closed on disk,
+        // fail open on the listener. SIGTERM/SIGINT shutdown is untouched.
+        {
+            let reload_cfg = rustls_config.clone();
+            let reload_cert = cert_path.clone();
+            let reload_key = key_path.clone();
+            tokio::spawn(async move {
+                #[cfg(unix)]
+                {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let mut sighup = match signal(SignalKind::hangup()) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to register SIGHUP handler — TLS hot-reload disabled"
+                            );
+                            return;
+                        }
+                    };
+                    loop {
+                        sighup.recv().await;
+                        tracing::info!(
+                            "SIGHUP received — reloading TLS certificate from {} / {}",
+                            reload_cert.display(),
+                            reload_key.display()
+                        );
+                        match reload_cfg
+                            .reload_from_pem_file(&reload_cert, &reload_key)
+                            .await
+                        {
+                            Ok(()) => tracing::info!(
+                                "TLS certificate reloaded — new connections will use the updated certificate"
+                            ),
+                            Err(e) => tracing::error!(
+                                error = %e,
+                                "TLS reload FAILED — continuing to serve the previous certificate"
+                            ),
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = (&reload_cfg, &reload_cert, &reload_key);
+                }
+            });
+        }
+        tracing::info!("TLS hot-reload via SIGHUP enabled");
+
         let std_listener =
             std::net::TcpListener::bind(&listen_addr).expect("Failed to bind listener");
         std_listener
