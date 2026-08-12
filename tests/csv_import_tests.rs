@@ -532,25 +532,234 @@ fn parse_custom_field_column_when_none_configured_rejected() {
 }
 
 #[test]
+fn parse_optional_settings_any_order_case_insensitive() {
+    // A shuffled, mixed-case subset of the optional settings columns.
+    let csv = format!(
+        "{},Disable_Paste,Security,COLOR_DEPTH,domain\n\
+         win,rdp,10.0.0.50,3389,admin,secret,Windows,,gateway,false,nla,24,corp.example.com",
+        HEADER
+    );
+    let result = csv_import::parse_rows(&csv, &[]).unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    let s = &result.rows[0].settings;
+    assert_eq!(s.disable_paste, Some(false));
+    assert_eq!(s.security.as_deref(), Some("nla"));
+    assert_eq!(s.color_depth, Some(24));
+    assert_eq!(s.domain.as_deref(), Some("corp.example.com"));
+    assert_eq!(s.enable_gfx, None);
+    assert_eq!(s.auth_pkg, None);
+}
+
+#[test]
+fn parse_optional_settings_blank_cells_are_none() {
+    let csv = format!(
+        "{},security,enable_gfx,color_depth,domain\n\
+         win,rdp,10.0.0.50,3389,,,Windows,,gateway,,,,",
+        HEADER
+    );
+    let result = csv_import::parse_rows(&csv, &[]).unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    let s = &result.rows[0].settings;
+    assert_eq!(s.security, None);
+    assert_eq!(s.enable_gfx, None);
+    assert_eq!(s.color_depth, None);
+    assert_eq!(s.domain, None);
+}
+
+#[test]
+fn parse_optional_settings_bool_case_insensitive() {
+    let csv = format!(
+        "{},enable_gfx,ignore_cert\n\
+         win,rdp,10.0.0.50,3389,,,Windows,,gateway,TRUE,False",
+        HEADER
+    );
+    let result = csv_import::parse_rows(&csv, &[]).unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert_eq!(result.rows[0].settings.enable_gfx, Some(true));
+    assert_eq!(result.rows[0].settings.ignore_cert, Some(false));
+}
+
+#[test]
+fn parse_optional_settings_invalid_bool_and_depth() {
+    let csv = format!(
+        "{},enable_gfx,color_depth\n\
+         win,rdp,10.0.0.50,3389,,,Windows,,gateway,maybe,999",
+        HEADER
+    );
+    let result = csv_import::parse_rows(&csv, &[]).unwrap();
+    assert!(result.rows.is_empty());
+    assert_eq!(result.errors.len(), 1);
+    assert!(
+        result.errors[0].message.contains("invalid boolean 'maybe'"),
+        "{}",
+        result.errors[0].message
+    );
+    assert!(
+        result.errors[0].message.contains("enable_gfx"),
+        "{}",
+        result.errors[0].message
+    );
+    assert!(
+        result.errors[0].message.contains("invalid color_depth '999'"),
+        "{}",
+        result.errors[0].message
+    );
+}
+
+#[test]
+fn parse_optional_settings_private_key_column() {
+    let csv = format!(
+        "{},private_key\n\
+         srv,ssh,10.0.0.1,22,,,Root,,server key,sk-ssh-ed25519-abc",
+        HEADER
+    );
+    let result = csv_import::parse_rows(&csv, &[]).unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert_eq!(
+        result.rows[0].private_key.as_deref(),
+        Some("sk-ssh-ed25519-abc")
+    );
+}
+
+#[test]
+fn parse_optional_settings_quoted_private_key_preserves_newlines() {
+    let csv = format!(
+        "{},private_key\n\
+         srv,ssh,10.0.0.1,22,,,Root,,server key,\"-----BEGIN OPENSSH PRIVATE KEY-----\nabcdef\n-----END OPENSSH PRIVATE KEY-----\"",
+        HEADER
+    );
+    let result = csv_import::parse_rows(&csv, &[]).unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    let key = result.rows[0].private_key.clone().unwrap();
+    assert!(key.starts_with("-----BEGIN OPENSSH PRIVATE KEY-----"));
+    assert!(key.contains('\n'));
+    assert!(key.ends_with("-----END OPENSSH PRIVATE KEY-----"));
+}
+
+#[test]
+fn parse_optional_settings_unknown_column_rejected() {
+    let csv = format!(
+        "{},security,audio_pkg\n\
+         win,rdp,10.0.0.50,3389,,,Windows,,gateway,nla,opus",
+        HEADER
+    );
+    let err = csv_import::parse_rows(&csv, &[]).unwrap_err();
+    assert_eq!(err.row, 0);
+    assert!(err.message.contains("column 11"), "{}", err.message);
+    assert!(err.message.contains("'audio_pkg'"), "{}", err.message);
+    assert!(
+        err.message.contains("optional settings column"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn parse_optional_settings_duplicate_column_rejected() {
+    let csv = format!(
+        "{},security,domain,security\n\
+         win,rdp,10.0.0.50,3389,,,Windows,,gateway,nla,corp,nla",
+        HEADER
+    );
+    let err = csv_import::parse_rows(&csv, &[]).unwrap_err();
+    assert_eq!(err.row, 0);
+    assert!(
+        err.message.contains("appears more than once"),
+        "{}",
+        err.message
+    );
+    assert!(err.message.contains("'security'"), "{}", err.message);
+}
+
+#[test]
+fn parse_custom_and_optional_columns_mixed() {
+    // A custom-field column may appear before optional settings columns.
+    let defs = vec!["Environment".to_string(), "Owner".to_string()];
+    let csv = format!(
+        "{},Environment,security,Owner\n\
+         web01,ssh,10.0.0.1,22,,,Prod,,desc,Production,nla,alice",
+        HEADER
+    );
+    let result = csv_import::parse_rows(&csv, &defs).unwrap();
+    assert_eq!(result.rows.len(), 1);
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert_eq!(
+        result.rows[0].custom_fields,
+        vec![
+            ("Environment".to_string(), "Production".to_string()),
+            ("Owner".to_string(), "alice".to_string()),
+        ]
+    );
+    assert_eq!(result.rows[0].settings.security.as_deref(), Some("nla"));
+}
+
+#[test]
 fn render_template_matches_contract() {
     let template = csv_import::render_template(&[]);
     let lines: Vec<&str> = template.lines().collect();
-    assert_eq!(lines.len(), 2);
+    assert_eq!(lines.len(), 3);
     assert_eq!(
         lines[0],
-        "name,protocol,hostname,port,username,password,folder,allowed_groups,description"
+        format!(
+            "{},domain,security,ignore_cert,color_depth,remote_app,enable_gfx,enable_drive,disable_copy,disable_paste,auth_pkg,kdc_url,prompt_credentials,private_key",
+            HEADER
+        )
     );
-    assert_eq!(
-        lines[1],
-        "My Server,ssh,10.0.0.1,22,root,secret,Production/Web,\"group1,group2\",Production web server"
-    );
+    // RDP example row: several settings filled in.
+    assert!(lines[1].starts_with("RDP example,rdp,192.168.10.20,3389,Administrator,"));
+    assert!(lines[1].contains("corp.example.com,nla,false,32,,"));
+    assert!(lines[1].contains(",true,false,true,false,,,false"));
+    assert!(lines[1].contains("leave blank whatever is not needed"));
+    // Minimal SSH row: nothing beyond the fixed columns.
+    assert!(lines[2].starts_with("SSH example,ssh,10.0.0.1,22,root,"));
+    assert!(lines[2].contains("leave blank whatever is not needed"));
+
     // The template must round-trip through the parser.
     let result = csv_import::parse_rows(&template, &[]).unwrap();
-    assert_eq!(result.rows.len(), 1);
-    assert_eq!(result.rows[0].name, "My Server");
-    assert_eq!(result.rows[0].folder, "Production/Web");
-    assert_eq!(result.rows[0].allowed_groups, vec!["group1", "group2"]);
-    assert_eq!(result.rows[0].description, "Production web server");
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert_eq!(result.rows.len(), 2);
+    let r0 = &result.rows[0];
+    assert_eq!(r0.name, "RDP example");
+    assert_eq!(r0.folder, "Production/RDP");
+    assert_eq!(r0.allowed_groups, vec!["group1", "group2"]);
+    assert_eq!(r0.settings.domain.as_deref(), Some("corp.example.com"));
+    assert_eq!(r0.settings.security.as_deref(), Some("nla"));
+    assert_eq!(r0.settings.ignore_cert, Some(false));
+    assert_eq!(r0.settings.color_depth, Some(32));
+    assert_eq!(r0.settings.enable_gfx, Some(true));
+    assert_eq!(r0.settings.disable_copy, Some(true));
+    assert_eq!(r0.settings.disable_paste, Some(false));
+    assert_eq!(r0.settings.remote_app, None);
+    assert_eq!(r0.settings.auth_pkg, None);
+    assert_eq!(r0.settings.kdc_url, None);
+    assert_eq!(r0.settings.prompt_credentials, Some(false));
+    assert_eq!(r0.private_key, None);
+    let r1 = &result.rows[1];
+    assert_eq!(r1.name, "SSH example");
+    assert_eq!(r1.protocol, "ssh");
+    assert_eq!(
+        r1.settings,
+        csv_import::RowSettings {
+            domain: None,
+            security: None,
+            ignore_cert: None,
+            color_depth: None,
+            remote_app: None,
+            enable_gfx: None,
+            enable_drive: None,
+            disable_copy: None,
+            disable_paste: None,
+            auth_pkg: None,
+            kdc_url: None,
+            prompt_credentials: None,
+        }
+    );
+    assert_eq!(r1.private_key, None);
 }
 
 #[test]
@@ -558,19 +767,35 @@ fn render_template_with_custom_fields_round_trips() {
     let defs = vec!["Environment".to_string(), "Owner".to_string()];
     let template = csv_import::render_template(&defs);
     let lines: Vec<&str> = template.lines().collect();
-    assert_eq!(lines[0], format!("{},Environment,Owner", HEADER));
+    assert_eq!(
+        lines[0],
+        format!(
+            "{},domain,security,ignore_cert,color_depth,remote_app,enable_gfx,enable_drive,disable_copy,disable_paste,auth_pkg,kdc_url,prompt_credentials,private_key,Environment,Owner",
+            HEADER
+        )
+    );
     assert!(lines[1].ends_with(",Example value,Example value"));
+    assert!(lines[2].ends_with(",,"));
 
     // The dynamic template must round-trip through the parser with the
     // same definitions.
     let result = csv_import::parse_rows(&template, &defs).unwrap();
-    assert_eq!(result.rows.len(), 1);
-    assert_eq!(result.rows[0].name, "My Server");
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+    assert_eq!(result.rows.len(), 2);
+    assert_eq!(result.rows[0].name, "RDP example");
     assert_eq!(
         result.rows[0].custom_fields,
         vec![
             ("Environment".to_string(), "Example value".to_string()),
             ("Owner".to_string(), "Example value".to_string()),
+        ]
+    );
+    // The minimal SSH row leaves custom fields blank.
+    assert_eq!(
+        result.rows[1].custom_fields,
+        vec![
+            ("Environment".to_string(), String::new()),
+            ("Owner".to_string(), String::new()),
         ]
     );
 }
@@ -1479,6 +1704,219 @@ async fn import_raw_csv_custom_field_columns() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
+#[tokio::test]
+async fn import_raw_csv_maps_optional_settings() {
+    let db = test_db();
+    let key = create_admin(&db, "admin");
+    let router = test_router(db.clone());
+    let csv = format!(
+        "{},security,domain,color_depth,enable_gfx,ignore_cert\n\
+         win,rdp,10.0.0.50,3389,Administrator,secret,Windows,,gateway,nla,corp.example.com,32,true,false",
+        HEADER
+    );
+    let resp = router
+        .clone()
+        .oneshot(admin_csv_post(&key, "/api/addressbook/import", &csv))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["imported"], 1);
+    assert_eq!(json["errors"].as_array().unwrap().len(), 0);
+
+    let folder = db::get_ab_folder(&db, "shared", "Windows").unwrap();
+    let entry = db::get_ab_entry(&db, folder.id, "win").unwrap();
+    let cfg: serde_json::Value = serde_json::from_str(&entry.protocol_config).unwrap();
+    assert_eq!(cfg["security"], "nla");
+    assert_eq!(cfg["domain"], "corp.example.com");
+    assert_eq!(cfg["color_depth"], 32);
+    assert_eq!(cfg["enable_gfx"], true);
+    assert_eq!(cfg["ignore_cert"], false);
+    assert!(cfg.get("remote_app").is_none());
+    assert!(cfg.get("auth_pkg").is_none());
+}
+
+#[tokio::test]
+async fn import_json_settings_into_protocol_config() {
+    let db = test_db();
+    let key = create_admin(&db, "admin");
+    let router = test_router(db.clone());
+    let resp = router
+        .oneshot(admin_post(
+            &key,
+            "/api/addressbook/import",
+            serde_json::json!({
+                "rows": [{
+                    "name": "win",
+                    "protocol": "rdp",
+                    "hostname": "10.0.0.50",
+                    "port": 3389,
+                    "folder": "Root",
+                    "security": "nla",
+                    "domain": "corp.example.com",
+                    "color_depth": 24,
+                    "enable_gfx": true,
+                    "disable_copy": true
+                }]
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["imported"], 1);
+    assert_eq!(json["errors"].as_array().unwrap().len(), 0);
+
+    let folder = db::get_ab_folder(&db, "shared", "Root").unwrap();
+    let entry = db::get_ab_entry(&db, folder.id, "win").unwrap();
+    let cfg: serde_json::Value = serde_json::from_str(&entry.protocol_config).unwrap();
+    assert_eq!(cfg["security"], "nla");
+    assert_eq!(cfg["domain"], "corp.example.com");
+    assert_eq!(cfg["color_depth"], 24);
+    assert_eq!(cfg["enable_gfx"], true);
+    assert_eq!(cfg["disable_copy"], true);
+}
+
+#[tokio::test]
+async fn import_raw_csv_settings_preserved_when_columns_absent() {
+    let db = test_db();
+    let key = create_admin(&db, "admin");
+    let router = test_router(db.clone());
+    // No storage key: a non-empty password is dropped, so it cannot
+    // participate in unchanged-detection — keep the cell empty.
+    let csv = format!(
+        "{},security,domain\n\
+         win,rdp,10.0.0.50,3389,Administrator,,Windows,,gateway,nla,corp.example.com",
+        HEADER
+    );
+    let resp = router
+        .clone()
+        .oneshot(admin_csv_post(&key, "/api/addressbook/import", &csv))
+        .await
+        .unwrap();
+    assert_eq!(body_json(resp).await["imported"], 1);
+
+    // Identical re-import: unchanged (settings match).
+    let resp = router
+        .clone()
+        .oneshot(admin_csv_post(&key, "/api/addressbook/import", &csv))
+        .await
+        .unwrap();
+    let json = body_json(resp).await;
+    assert_eq!(json["unchanged"], 1);
+    assert_eq!(json["updated"], 0);
+
+    // Same row without the settings columns, changed hostname: updated,
+    // the stored settings must survive (blank = no change).
+    let plain = format!("{}\nwin,rdp,10.0.0.60,3389,Administrator,,Windows,,gateway", HEADER);
+    let resp = router
+        .oneshot(admin_csv_post(&key, "/api/addressbook/import", &plain))
+        .await
+        .unwrap();
+    let json = body_json(resp).await;
+    assert_eq!(json["updated"], 1);
+
+    let folder = db::get_ab_folder(&db, "shared", "Windows").unwrap();
+    let entry = db::get_ab_entry(&db, folder.id, "win").unwrap();
+    assert_eq!(entry.hostname, "10.0.0.60");
+    let cfg: serde_json::Value = serde_json::from_str(&entry.protocol_config).unwrap();
+    assert_eq!(cfg["security"], "nla");
+    assert_eq!(cfg["domain"], "corp.example.com");
+}
+
+#[tokio::test]
+async fn import_raw_csv_private_key_encrypted_with_key() {
+    let key = "ab".repeat(32);
+    let db = test_db();
+    let admin_key = create_admin(&db, "admin");
+    let router = test_router_with_key(db.clone(), Some(key.clone()));
+    let csv = format!(
+        "{},private_key\n\
+         srv,ssh,10.0.0.1,22,root,secret,Root,,server key,sk-ssh-ed25519-abc",
+        HEADER
+    );
+    let resp = router
+        .oneshot(admin_csv_post(&admin_key, "/api/addressbook/import", &csv))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["imported"], 1);
+    assert_eq!(json["passwords_dropped"], 0);
+
+    let folder = db::get_ab_folder(&db, "shared", "Root").unwrap();
+    let entry = db::get_ab_entry(&db, folder.id, "srv").unwrap();
+    let creds = db::list_ab_credentials(&db, entry.id).unwrap();
+    assert_eq!(creds.len(), 2);
+    let pk = creds
+        .iter()
+        .find(|c| c.credential_type == "private_key")
+        .unwrap();
+    assert_ne!(pk.credential_data, "sk-ssh-ed25519-abc");
+    let enc_key = persea::crypto::EncryptionKey::from_hex(&key).unwrap();
+    let decrypted = persea::crypto::decrypt_value(&enc_key, &pk.credential_data).unwrap();
+    assert_eq!(decrypted, "sk-ssh-ed25519-abc");
+}
+
+#[tokio::test]
+async fn import_raw_csv_private_key_dropped_without_key() {
+    // Guard against a PERSEA_STORAGE_KEY leaking in from the environment.
+    std::env::set_var("PERSEA_STORAGE_KEY", "");
+    let db = test_db();
+    let admin_key = create_admin(&db, "admin");
+    let router = test_router(db.clone());
+    let csv = format!(
+        "{},private_key\n\
+         srv,ssh,10.0.0.1,22,root,,Root,,server key,sk-ssh-ed25519-abc",
+        HEADER
+    );
+    let resp = router
+        .oneshot(admin_csv_post(&admin_key, "/api/addressbook/import", &csv))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["imported"], 1);
+    assert_eq!(json["passwords_dropped"], 1);
+
+    let folder = db::get_ab_folder(&db, "shared", "Root").unwrap();
+    let entry = db::get_ab_entry(&db, folder.id, "srv").unwrap();
+    assert!(db::list_ab_credentials(&db, entry.id).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn import_raw_csv_private_key_failure_rolls_back_entry() {
+    let db = test_db();
+    let admin_key = create_admin(&db, "admin");
+    // An unparsable storage key forces the credential store to fail; the
+    // just-created entry must be rolled back (same as the password path).
+    let router = test_router_with_key(db.clone(), Some("not-hex".to_string()));
+    let csv = format!(
+        "{},private_key\n\
+         srv,ssh,10.0.0.1,22,root,secret,Root,,server key,sk-ssh-ed25519-abc",
+        HEADER
+    );
+    let resp = router
+        .oneshot(admin_csv_post(&admin_key, "/api/addressbook/import", &csv))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["imported"], 0);
+    let errors = json["errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1);
+    assert!(
+        errors[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("failed to parse encryption key"),
+        "{}",
+        errors[0]["error"]
+    );
+    let folder = db::get_ab_folder(&db, "shared", "Root").unwrap();
+    assert!(db::list_ab_entries(&db, folder.id).unwrap().is_empty());
+}
+
 // ── Template handler ──
 
 #[tokio::test]
@@ -1538,14 +1976,18 @@ async fn template_includes_configured_custom_fields() {
     let header_line = template.lines().next().unwrap();
     assert_eq!(
         header_line,
-        "name,protocol,hostname,port,username,password,folder,allowed_groups,description,Environment,Owner"
+        format!(
+            "{},domain,security,ignore_cert,color_depth,remote_app,enable_gfx,enable_drive,disable_copy,disable_paste,auth_pkg,kdc_url,prompt_credentials,private_key,Environment,Owner",
+            HEADER
+        )
     );
     // The served template must round-trip through the parser with the same
     // definitions.
     let defs = vec!["Environment".to_string(), "Owner".to_string()];
     let result = csv_import::parse_rows(&template, &defs).unwrap();
-    assert_eq!(result.rows.len(), 1);
+    assert_eq!(result.rows.len(), 2);
     assert_eq!(result.rows[0].custom_fields.len(), 2);
+    assert_eq!(result.rows[1].custom_fields.len(), 2);
 }
 
 #[tokio::test]
@@ -1588,4 +2030,11 @@ async fn template_requires_auth() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn connections_page_shows_leave_blank_guidance() {
+    let html =
+        std::fs::read_to_string("templates/pages/connections.html").expect("template file exists");
+    assert!(html.contains("Leave blank whatever is not needed"));
 }
