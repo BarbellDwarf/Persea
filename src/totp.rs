@@ -6,10 +6,15 @@ use totp_rs::{Algorithm, Builder, Secret};
 /// TOTP configuration parameters.
 #[derive(Debug, Clone)]
 pub struct TotpConfig {
+    /// Issuer name shown in authenticator apps.
     pub issuer: String,
+    /// Number of digits in each generated code.
     pub digits: u8,
+    /// Seconds between code rotations.
     pub period: u16,
+    /// HMAC algorithm used to derive codes.
     pub algorithm: Algorithm,
+    /// How many time windows before and after the current one are accepted.
     pub skew: u8,
     /// Enforcement policy: "Off", "AdminsOnly", or "All".
     pub enforcement: TotpEnforcement,
@@ -32,9 +37,12 @@ impl Default for TotpConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum TotpEnforcement {
+    /// TOTP is never required at login.
     #[default]
     Off,
+    /// Only admin users must pass TOTP.
     AdminsOnly,
+    /// Every user must enroll and pass TOTP.
     All,
 }
 
@@ -156,8 +164,11 @@ pub fn algorithm_from_str(s: &str) -> Algorithm {
 #[derive(Debug)]
 #[must_use]
 pub enum TotpError {
+    /// The secret or otpauth URL could not be built.
     Generation(String),
+    /// The QR code image could not be rendered.
     QrCode(String),
+    /// A database lookup failed.
     Database(rusqlite::Error),
 }
 

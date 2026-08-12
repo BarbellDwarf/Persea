@@ -2,8 +2,8 @@
 
 [![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Commercial License](https://img.shields.io/badge/License-Commercial-green.svg)](COMMERCIAL_LICENSE.md)
+[![Downloads](https://img.shields.io/github/downloads/BarbellDwarf/persea/total)](https://github.com/BarbellDwarf/persea/releases)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
 
@@ -19,9 +19,9 @@ I cycled through food names that pay homage to the original. Tortilla Chip. Sals
 
 Guacamole is great software. Apache maintains it well, and the protocol handling under the hood is solid. The frontend looks like it was designed in 2005, which kept me from recommending it at work or for clients. I ran it in my homelab and that was about it.
 
-Sol1 put out [RustGuac](https://github.com/sol1/rustguac) and it scratched the itch. A Rust frontend for Guacamole, open source, community-driven. It lacked broader SSO support beyond OIDC, had rough edges in the UI, and gaps in the docs.
+[Sol1](https://github.com/sol1/rustguac) put out RustGuac and it scratched the itch. A Rust frontend for Guacamole, open source, community-driven. It lacked broader SSO support beyond OIDC, had rough edges in the UI, and gaps in the docs.
 
-I do not write code. Ten years in IT taught me how the pieces connect. AI coding tools changed what I could build with that knowledge. I forked Sol1's repo, pointed [OpenCode](https://opencode.ai) at it, and got to work.
+I do not write code. Ten years in IT taught me how the pieces connect. AI coding tools changed what I could build with that knowledge. I forked Sol1's repo, pointed OpenCode at it, and got to work.
 
 This is a side project alongside a day job. Progress comes in bursts.
 
@@ -29,14 +29,9 @@ If you get use out of this, star Sol1's repo too. They built the base layer.
 
 Found something broken? Open an issue with logs and screenshots.
 
-## Free vs Enterprise
+## Licensing
 
-persea ships in two versions:
-
-- **Free (self-hosted)** — the open-source edition, licensed under AGPL-3.0. Runs without a license key.
-- **Enterprise** — the free edition plus enterprise features, unlocked by a commercial license key (`PSEA-<base64>`): SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, and high availability / clustering.
-
-Enterprise features are marked **Enterprise** in the feature lists below. Without a license key, they are available during a 30-day evaluation period from first start. See [Licensing](docs/licensing.md) for how to obtain and install a license key.
+persea is a hobby project: Apache-2.0, free. No license keys, no feature gates, no evaluation period. Everything in the feature lists below is available to everyone.
 
 ## Architecture
 
@@ -71,7 +66,7 @@ guacd (C, from guacamole-server)
 | **VNC** | Connect to any VNC server (KVM/IPMI consoles, remote desktops, VM displays). |
 | **SPICE** | Direct SPICE displays (libvirt/QEMU consoles) with TLS, CA verification, certificate-subject pinning, SPICE-proxy support. |
 | **Proxmox VE** | VM consoles through the Proxmox API. One-time SPICE tickets fetched at connect, node auto-detected from VM ID, SSH-tunnel aware. |
-| **VMware vSphere** | VM inventory and console brokering through the vCenter REST API. In development. |
+| **VMware vSphere** | VM inventory and console brokering through the vCenter REST API, with OS-aware RDP/SSH/VNC routing. |
 | **Web** | Headless Chromium on Xvnc with native autofill, domain allowlisting, login script automation. |
 | **VDI** | Ephemeral Docker desktop containers per user. Persist after disconnect, auto-cleanup on idle. |
 
@@ -79,13 +74,13 @@ guacd (C, from guacamole-server)
 
 - **OIDC single sign-on**: Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
 - **LDAP / Active Directory**: bind + search authentication
-- **SAML 2.0**: service provider with signature verification — **Enterprise**
+- **SAML 2.0**: service provider with signature verification
 - **RADIUS**: PAP authentication for network equipment integration
 - **Database auth**: local password accounts with Argon2id hashing
 - **TOTP two-factor**: enrollment, QR codes, recovery codes
-- **TOTP / MFA enforcement**: mandatory two-factor policies — **Enterprise**
+- **TOTP / MFA enforcement**: mandatory two-factor policies
 - **4-tier role system**: admin, poweruser, operator, viewer with OIDC group mapping
-- **Fine-grained RBAC**: connection-level permissions and group inheritance — **Enterprise**
+- **Fine-grained RBAC**: connection-level permissions and group inheritance
 - **API key auth**: SHA-256 hashed keys with IP allowlists and expiry
 - **Vault-backed connections**: credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
 - **TLS everywhere**: HTTPS for clients, TLS between persea and guacd
@@ -93,10 +88,10 @@ guacd (C, from guacamole-server)
 - **Per-entry clipboard control**: disable copy and/or paste for data loss prevention
 - **Rate limiting**: per-IP, per-endpoint via tower_governor
 - **Session recording**: Guacamole format with playback UI, disk rotation, per-entry limits
-- **Encrypted session recording**: recordings encrypted at rest — **Enterprise**
+- **Encrypted session recording**: recordings encrypted at rest
 - **Audit logging**: SHA-256 hash chain with tamper evidence
-- **Audit log retention and compliance exports** — **Enterprise**
-- **High availability / clustering**: multi-instance deployments behind a load balancer — **Enterprise**
+- **Audit log retention and compliance exports**
+- **High availability / clustering**: multi-instance deployments behind a load balancer
 
 ### Connectivity
 
@@ -134,6 +129,7 @@ guacd (C, from guacamole-server)
 |-----------|--------|-------|
 | guacd | Required | Built from `apache/guacamole-server`, ships in the .deb and Docker image. |
 | Vault or OpenBao | Optional | For the Connections UI. Stores connection credentials server-side when `[storage] backend = "vault"`. By default connections and credentials live in the app database; Vault is not required. Use [`contrib/vault-quickstart.sh`](contrib/vault-quickstart.sh) for one-command setup. |
+| PostgreSQL or MySQL | Optional | Alternative to the built-in SQLite store: set `db_url` in the config (or in the setup wizard at first run) and ALL app data (users, connections, sessions history, audit, settings) lives in that backend. Migrations run automatically at startup. SQLite (`db_path`) remains the default. |
 | OIDC provider | Optional | For SSO. API-key auth works on its own. |
 | Docker | Optional | Only needed for VDI desktop containers. |
 
@@ -207,20 +203,16 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 ### Integration and reference
 - [Integrations](docs/integrations.md): Vault, LUKS drives, SSH tunnels, Kerberos, HAProxy, Knocknoc
 - [NetBox](docs/netbox.md): connections sync via custom fields and webhooks
-- [Security](docs/security.md): TLS, rate limiting, headers, audit logging, hardening
+- [Security](docs/security-hardening.md): TLS, rate limiting, headers, audit logging, hardening
 - [API Reference](docs/api.md): REST API endpoints, the session connection flow, and headless ws-ticket integration
 - [Migration from Apache Guacamole](docs/migration.md): MySQL/MariaDB to Vault
 
-### Licensing
-- [Licensing](docs/licensing.md): free vs enterprise editions, the 30-day evaluation period, and how to install a license key
+## Acknowledgements
+
+[OpenCode](https://opencode.ai) and the OpenCode Go subscription made this project possible. An AI coding agent that just works, a subscription that is worth every cent, and isn't that many cents either. If you are a dev who needs solid pricing for AI coding agents, this is the way to go. They are not a sponsor by the way, just love the product and the ethos.
 
 ## License
 
-persea ships in two versions:
-
-- **Free (self-hosted)** — the open-source edition, licensed under AGPL-3.0. Runs without a license key. Free for self-hosted use, including commercial use, provided all modifications are also released under AGPL-3.0. See [LICENSE](LICENSE).
-- **Enterprise** — the free edition plus enterprise features (SAML SSO, fine-grained RBAC, TOTP/MFA enforcement, audit log retention and compliance exports, encrypted session recording, high availability / clustering), unlocked by a commercial license key (`PSEA-<base64>`). See [Licensing](docs/licensing.md).
-
-A separate **Commercial License** is available for organizations that need to modify persea without open-sourcing their changes. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) or email licensing@persea.dev.
+persea is free software under the [Apache License 2.0](LICENSE). Use it, modify it, sell it: it is a hobby project, everything is included, nothing is gated.
 
 By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md).

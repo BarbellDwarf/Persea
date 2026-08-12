@@ -18,9 +18,13 @@ pub fn is_valid_role(role: &str) -> bool {
 /// A system role with a fixed hierarchy: admin > poweruser > operator > viewer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
+    /// Full access: user, connection, and permission management.
     Admin,
+    /// Ad-hoc session creation plus connection access.
     PowerUser,
+    /// Connection access only; no ad-hoc sessions.
     Operator,
+    /// Read-only access.
     Viewer,
 }
 

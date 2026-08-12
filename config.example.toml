@@ -33,7 +33,53 @@ static_path = "./static"
 # Path to the SQLite database (admins, OIDC users, auth sessions).
 # Default: "./persea.db"
 # Env: PERSEA_DB_PATH
+# Used only when db_url (below) is NOT set — "legacy mode".
 db_path = "./persea.db"
+
+# Optional: use a managed database backend instead of the SQLite file above.
+# When set, the SQLx pool IS the store: ALL app data (users, connections,
+# address book, session history, audit log, system settings, auth providers)
+# lives in this backend. The schema migrations (migrations/<backend>/*.sql)
+# run automatically at startup, and `db_path` is ignored for data.
+#
+# Supported schemes:
+#   db_url = "postgres://user:password@dbhost:5432/persea"
+#   db_url = "mysql://user:password@dbhost:3306/persea"
+#   db_url = "sqlite:///opt/persea/data/persea.db?mode=rwc"
+#
+# The database user needs CREATE/DDL privileges (migrations run at startup).
+# Connection parameters (TLS, pool size) go in the URL, e.g.
+# postgres://user:password@dbhost:5432/persea?sslmode=require
+#
+# The setup wizard can enter this URL at first run — the first admin is then
+# created directly in the configured backend, no SQLite intermediate step.
+#
+# Env: PERSEA_DB_URL
+
+# ─── Enterprise HA ────────────────────────────────────────────────────────
+#
+# These two keys matter only for multi-instance deployments sharing one
+# db_url backend. Single-instance deployments can ignore them.
+
+# Stable identifier for this instance. Used by the shared session registry
+# to mark which instance owns each live session; the reaper and recording
+# rotation only ever operate on sessions/files this instance owns.
+# Must be unique across the fleet (two instances may NOT share an id).
+# Default: "<hostname>-<pid>" — unique even when several instances run on
+# the same host, but changes across restarts (set a stable value per host
+# if per-instance recording rotation must follow a restarted instance).
+# Env: PERSEA_INSTANCE_ID
+# instance_id = "persea-1"
+
+# Public base URL of this instance (scheme + host + port), as reachable from
+# the other instances/browsers, e.g. "https://persea-1.example.com" or
+# "http://127.0.0.1:8096". When a session created here is joined or shadowed
+# from another instance, the browser is redirected to this URL so THIS
+# instance can serve the guacd stream (the guacd connection lives here).
+# Unset: cross-instance joins to this instance's sessions are rejected with
+# a clear error (the sessions are still listed on other instances).
+# Env: PERSEA_HA_BASE_URL
+# ha_base_url = "https://persea-1.example.com"
 
 # Title shown in the browser tab and page header.
 # Default: "persea"
@@ -53,11 +99,39 @@ session_pending_timeout_secs = 60
 # Env: PERSEA_SESSION_MAX_DURATION_SECS
 session_max_duration_secs = 28800
 
+# Idle timeout for active sessions in seconds. Sessions whose last client
+# activity is older than this are terminated (status "idle-timeout" in the
+# session history). Client tunnel keepalive pings do NOT count as activity,
+# so a live-but-silent session is still reaped. Set to 0 to disable idle
+# reaping (max duration still applies).
+# Default: 1800 (30 minutes)
+# Env: PERSEA_SESSION_IDLE_TIMEOUT_SECS
+session_idle_timeout_secs = 1800
+
 # OIDC auth session TTL in seconds. After this period, users must
 # re-authenticate via their identity provider.
 # Default: 86400 (24 hours)
 # Env: PERSEA_AUTH_SESSION_TTL_SECS
 # auth_session_ttl_secs = 86400
+
+# ─── Password Policy ─────────────────────────────────────────────────────────
+
+# Enforced wherever a password is set: the admin users API, the CLI
+# `create-user` command, and the account password-change endpoint.
+# The setup wizard's first-admin password is not policy-checked.
+
+# [password]
+# Minimum password length in characters. Default: 15.
+# Env: PERSEA_PASSWORD__MIN_LENGTH
+# min_length = 15
+#
+# How many recent password hashes to keep per user. A new password matching
+# any of the last `history` passwords is rejected. Default: 5. Set to 0 to
+# disable reuse checking. Hashes are stored in the `password_history` table
+# (created by the per-backend migrations; legacy SQLite creates it on first
+# use).
+# Env: PERSEA_PASSWORD__HISTORY
+# history = 5
 
 # ─── Session Limits ──────────────────────────────────────────────────────────
 

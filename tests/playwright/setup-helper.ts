@@ -19,7 +19,7 @@ async function main() {
     console.log('Filling in setup form...');
     await page.fill('#admin_email', 'admin@local.test');
     await page.fill('#admin_name', 'Administrator');
-    await page.fill('#admin_password', 'AdminPass123!');
+    await page.fill('#admin_password', 'AdminPass123!Secure');
 
     const listenAddr = await page.inputValue('#listen_addr');
     const dbPath = await page.inputValue('#db_path');
@@ -46,7 +46,7 @@ async function main() {
     console.log('Already logged in via session cookie');
   } else {
     await page.fill('#username', 'admin@local.test');
-    await page.fill('#password', 'AdminPass123!');
+    await page.fill('#password', 'AdminPass123!Secure');
     await page.click('#login-submit');
     await page.waitForURL(/connections\.html|sessions\.html/, { timeout: 10000 });
     console.log('Login successful. URL:', page.url());

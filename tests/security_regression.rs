@@ -1,10 +1,10 @@
-//! Regression tests for highest-severity security findings (L04).
+//! Regression tests for highest-severity security findings.
 //!
 //! These tests verify that specific vulnerability classes cannot silently regress.
 
-// ── M01 — LDAP special-character escaping ──
-// Calls the real implementation directly (made `pub` for exactly this reason
-// — see R07) so this test can't silently diverge from the code it's meant
+// ── LDAP special-character escaping ──
+// Calls the real implementation directly (made `pub` for exactly this reason)
+// so this test can't silently diverge from the code it's meant
 // to guard.
 
 use persea::auth_providers::ldap::ldap_escape;
@@ -44,9 +44,9 @@ fn m01_ldap_escape_null() {
     assert_eq!(ldap_escape("a\0b"), "a\\00b");
 }
 
-// ── H11 — CSV injection prevention ──
-// Calls the real implementation directly (made `pub` for exactly this reason
-// — see R07). The real function writes to a `dyn Write` rather than
+// ── CSV injection prevention ──
+// Calls the real implementation directly (made `pub` for exactly this reason).
+// The real function writes to a `dyn Write` rather than
 // returning a `String`; this is a signature adapter, not a reimplementation
 // of the escaping logic itself.
 
@@ -91,7 +91,7 @@ fn h11_csv_injection_empty_unchanged() {
     assert_eq!(csv_escape_field(""), "");
 }
 
-// ── H07 — Failed-login lockout ──
+// ── Failed-login lockout ──
 // Uses real in-memory SQLite via `persea::db`.
 
 use persea::db::{self, Db};
@@ -159,7 +159,7 @@ fn h07_lockout_is_per_ip() {
     assert!(!db::is_locked_out(&db, user, "2.2.2.2").unwrap());
 }
 
-// ── H10 — Recording encryption roundtrip ──
+// ── Recording encryption roundtrip ──
 
 use persea::crypto::{self, EncryptionKey};
 
@@ -203,7 +203,7 @@ fn h10_ciphertext_not_equal_to_plaintext() {
     assert_ne!(ciphertext, plaintext);
 }
 
-// ── C01 — XSS escaping (html_escape) ──
+// ── XSS escaping (html_escape) ──
 // `html_escape` is private in `persea::main` / `pub(crate)` in
 // `persea::api::address_book`, so we replicate the algorithm to guard
 // against regressions.
@@ -260,7 +260,7 @@ fn c01_xss_mixed_special_chars() {
     );
 }
 
-// ── C03 — vSphere vm_id validation ──
+// ── vSphere vm_id validation ──
 // The validation is inline in `power_action`; replicate the exact check to
 // guard against regressions.
 
@@ -314,7 +314,7 @@ fn c03_vm_id_empty_accepted_by_regex() {
     assert!(is_valid_vm_id(""));
 }
 
-// ── M07 — Constant-time key comparison (ct_eq) ──
+// ── Constant-time key comparison (ct_eq) ──
 // `validate_stored_hash` in `persea::db` is private.  Replicate the
 // salted/unsalted hash + `ct_eq` logic to guard against regressions to
 // non-constant-time comparison.
@@ -396,7 +396,7 @@ fn m07_cteq_malformed_stored_fails() {
     assert!(!validate_stored_hash("key", "not-hex:garbage"));
 }
 
-// ── R01 — SAML Signature Wrapping (XSW) adversarial test ──
+// ── SAML Signature Wrapping (XSW) adversarial test ──
 // `parse_assertion_xml` is private in `persea::auth_providers::saml`.
 // Replicate the parser to demonstrate that without the verified-element
 // fix (line 1113 of saml.rs), an XSW attack succeeds: the injected
@@ -570,7 +570,7 @@ fn r01_xsw_groups_attribute_not_overwritten() {
     assert!(groups_full.contains(&"admin".to_string()));
 }
 
-// ── R02 — RADIUS Response Authenticator verification (ct_eq) ──
+// ── RADIUS Response Authenticator verification (ct_eq) ──
 // `verify_response_authenticator` is private in
 // `persea::auth_providers::radius`.  Replicate the RFC 2865 §4.2
 // verification to guard against regressions to non-constant-time
@@ -659,8 +659,8 @@ fn r02_radius_access_reject_code_verifies() {
     assert!(verify_radius_response(&packet, &req_auth, secret));
 }
 
-// ── C03 (extended) — vSphere vm_id validation: slash & special chars ──
-// Extends the existing C03 tests with additional adversarial inputs.
+// ── vSphere vm_id validation (extended): slash & special chars ──
+// Extends the existing vm_id validation tests with additional adversarial inputs.
 
 #[test]
 fn c03_vm_id_rejects_forward_slash() {
@@ -698,7 +698,7 @@ fn c03_vm_id_boundary_exactly_128() {
     assert!(is_valid_vm_id(&id));
 }
 
-// ── Token admin rejection (R04) ──
+// ── Token admin rejection ──
 // `admin_list_user_tokens` requires `identity: Option<Extension<AuthIdentity>>`
 // and returns 403 when None. Testing this requires constructing axum
 // Extension types and a Db — impractical in a unit test. The handler is

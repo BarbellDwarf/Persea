@@ -7,11 +7,15 @@ use crate::config::DriveConfig;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// Errors from drive directory management and LUKS volume operations.
 #[derive(Debug)]
 #[must_use]
 pub enum DriveError {
+    /// A filesystem operation failed (create, chmod, canonicalize, delete).
     Io(String),
+    /// `cryptsetup` or `mount` failed, or the LUKS config is incomplete.
     Luks(String),
+    /// Reading the LUKS key from Vault failed.
     Vault(String),
 }
 

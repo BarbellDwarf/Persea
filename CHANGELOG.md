@@ -5,278 +5,162 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+<!--
+Release checklist (delete this comment before tagging v1.1.1):
+- [ ] Enterprise HA lands — amend "High availability" entries below
+- [ ] `cargo test` + `cargo fmt --check` green on the final commit
+- [ ] CI green for the final push (`gh run list`)
+- [ ] Tag `v1.1.1` (annotated) and push it
+- [ ] Regenerate Playwright visual snapshots (connections page changed)
+- [ ] Re-run Playwright E2E suite (`tests/playwright`)
+- [ ] Update `screenshots/screenshots.md` if the new connections UI is captured there
+- [ ] Bump the asset cache-bust version in `templates/base.html` if more static files change
+- [ ] Push the beta image (`gh workflow run beta.yml --ref v1.1.1`) after the tag
+-->
+
+## [1.1.1] - 2026-08-12
+
+This release is the "make every claim real" round: the marketing said things
+that were not implemented, so we implemented them — the multi-backend
+database, protocol lockdown switches, password policy, idle timeout, TLS
+hot-reload, branding, CLA enforcement — and removed or rewrote everything we
+chose not to ship (HIBP screening, the RDP relay, progressive lockout, CLI
+audit verification).
+
+### Added
+
+- **Real multi-backend storage** — `db_url` is no longer a health-ping
+  only: with `postgres://`, `mysql://`, or `sqlite://` set, ALL core stores
+  (users, auth sessions, API keys, address book, audit, system settings,
+  session history, RBAC, TOTP secrets, jump hosts) route through the SQLx
+  pool. Migrations run automatically at startup (per-backend schema, all
+  three kept in sync). No code path silently falls back to SQLite when
+  `db_url` is set; without it, the legacy SQLite file behaves exactly as
+  before. Verified by CI on every push against live Postgres and MySQL,
+  including restart persistence and direct-DB row assertions.
+- **First-run setup on the configured backend** — the setup wizard
+  connects, migrates, and installs the pool, then creates the first admin in
+  the configured backend (`db_url` field in the wizard). CLI `create-user`
+  / `add-admin` are backend-aware too.
+- **Protocol lockdown switches enforced** — the Settings `enable_*`
+  toggles (`enable_rdp`, `enable_ssh_tunnels`, `enable_api_keys`,
+  `enable_recordings`, `enable_web_sessions`, `enable_spice`,
+  `enable_proxmox`, `enable_vmware`, `enable_vdi`, `enable_file_transfer`)
+  now actually lock down: disabled protocols are rejected at session
+  creation with a clear error, API-key auth is refused at the middleware,
+  drive/SFTP and the recording tee are gated per session. Defaults are
+  enabled, so existing deployments are unaffected.
+- **Password policy** — enforced 15-character minimum
+  (`password.min_length`) and per-user reuse history (`password.history`,
+  default 5 hashes, Argon2id-verified, DB-backed) at every password set
+  point: admin users API, CLI `create-user`, setup wizard, and a new
+  `POST /api/me/password` change endpoint. The breach-screening (HIBP)
+  claims are gone — no external service calls.
+- **Session idle timeout** — sessions silent past
+  `session_idle_timeout_secs` (default 1800, `0` disables) are reaped with a
+  distinguishable `"idle-timeout"` history status. Only real client input
+  counts as activity — the server's own keepalive pings do not.
+- **TLS hot-reload** — SIGHUP re-reads `tls.cert_path` /
+  `tls.key_path` and atomically swaps the served certificate for new
+  connections; a failed reload logs the error and keeps serving the previous
+  certificate. The docs now describe only this mechanism (the file-watcher
+  and admin-upload claims were removed).
+- **Branding reaches the UI** — `site_title`, `logo_url`, and
+  `primary_color` from settings now drive the sidebar, login/setup pages,
+  and the accent color across the app (logo upload writes to
+  `static/uploads/logo/`). Live preview in the branding admin page; theme
+  presets still win when a user explicitly chose one.
+- **Recordings: encrypted-at-rest files are watchable** — the
+  recordings listing, playback, and delete now handle `.guac.enc` files
+  (listing showed only plain `.guac` before).
+- **Connection details** — the details panel shows grouped
+  fields (Connection / Access / Advanced) plus created/updated timestamps;
+  every connection can carry a human description end-to-end (modal → API →
+  panel → CSV import/export); folder rows show name + count with scope in
+  the tooltip only.
+- **CLA enforcement** — contributions are now verified CLA-covered:
+  a signature registry (`cla/signed/`), a CI check that fails unsigned
+  PRs, and a PR template acknowledgment. The fictional "CLA Assistant bot"
+  claim is gone.
+- **Maintained guacd fork** — guacd builds from
+  `BarbellDwarf/persea-guacamole-server` (branch `persea-1.6.1-freerdp3`)
+  instead of re-applying a 10-patch quilt: Dockerfile, install.sh, the
+  release workflow, and the deb/rpm build scripts consume the fork. The
+  fork carries the FreeRDP 3.x compile fixes, Kerberos NLA, H.264
+  passthrough, RDP resize fixes, SPICE, and multi-monitor as one commit per
+  patch.
+- **RDP entry UX** — explicit Domain field, security /
+  auth-package selector with guacd error surfacing, and protocol switches
+  in the entry modal now reset to the correct default port without
+  clobbering manually entered values.
+- **Kerberos NLA in the Docker image** — krb5.conf generation and
+  krb5 tooling so Kerberos-authenticated RDP works from the container.
 
 ### Changed
 
-- **License: Apache 2.0 → AGPL-3.0** — persea is now dual-licensed under AGPL-3.0 (open source) with a commercial license exception for organizations that need proprietary modifications. This protects the project from proprietary forks while allowing free self-hosted use. See [LICENSE](LICENSE), [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md), and [CLA.md](CLA.md).
-- All contributors must sign the Contributor License Agreement (CLA) — see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **License: AGPL-3.0 → Apache-2.0** — persea is now Apache-2.0,
+  free for everyone: no license keys, no enterprise feature gates, no
+  evaluation period. See [LICENSE](LICENSE) and [CLA.md](CLA.md). All
+  contributors must sign the CLA.
+- **Connections page layout** — the folder pane gets real width
+  (clamp 260–360px), a rebalanced three-pane layout, and proper ellipsis;
+  mobile stacking unchanged.
+- **Settings page handlers are CSP-safe** — inline `onchange` /
+  `onclick` handlers moved into the nonced script block; toggles now
+  actually sync and the save confirmation works.
+- **Account lockout wording** — documented as "lockout after 5 failed
+  attempts" (the progressive-delay ladder was fiction).
+- **Audit verification wording** — documented as admin UI + API (the
+  CLI-verification claim was fiction).
+- **Docs scrub** — personal/environment references removed from README,
+  docs, and CHANGELOG; claims now match code.
+- **HA documentation honest** — spike runbook records what is real
+  (standalone guacd plain + TLS, multi-backend persistence, shared data
+  across instances) and what is not yet (cross-instance session sharing —
+  the enterprise HA work).
+
+### Fixed
+
+- **Docker first-run crashed on filesystems without chmod support** —
+  the entrypoint's `chmod 600` on `admin-key.txt` failed with EPERM on
+  Windows/WSL bind mounts (`/mnt/g/...`, 9p, virtiofs), and `set -e` killed
+  the script before the admin key was created — so the DB never initialized
+  and every container restart looped on "First run detected". The chmod is
+  now best-effort with a clear warning; POSIX filesystems still get
+  `chmod 600`.
+- **Connect failure no longer redirects to login** — failed /
+  cancelled sessions keep you on the Connections page instead of bouncing
+  to the login form.
+- **Entry modal port default** — switching protocols no longer
+  carries SSH's port 22 into RDP (or vice versa).
+- **Recordings `.guac.enc` invisible to the UI** — encrypted
+  recordings are listed, playable, and deletable.
+- **CodeQL/security findings** — global-setup logging fixed;
+  client-side XSS sink hardened.
+- **Settings page saved wrong toggle values** — CSP was blocking
+  every inline handler; toggles now save what the admin actually set.
+
+### Removed
+
+- **RDP relay feature** — the loopback relay with
+  proxy/fallback/direct modes and its socat dependency are gone; sessions
+  connect directly to the target. The admin "connection mode" setting was
+  removed.
+- **HIBP / breach-screening claims** — no external service, no
+  claim.
+- **`patches/` quilt from the repo** — replaced by the maintained
+  fork; a pointer README remains.
+
+### Security
+
+- **API key disable** — `enable_api_keys = false` now rejects
+  API-key authentication at the middleware (admin keys and user tokens).
+- **CSRF-safe settings handlers** — no inline handlers remain on the
+  settings/branding admin pages.
+- **CLA gate** — unsigned contributions fail CI.
 
 ## [1.1.0] - 2026-08-09
 
 ### Added
 
-- **Release hardening (R70–R79)**
-  - Admin branding page (`/admin/branding.html`) — white-label title/logo/colors (R78)
-  - Sidebar now highlights the active admin page on all 9 admin sections (was broken on 7)
-  - Docs: light/dark UI screenshots in `docs/overview.md`; persistent TLS cert volume (`persea-tls`) in all Docker examples (R77)
-  - `PERSEA_TLS__SECURE_COOKIES` documented in the env-var reference
-  - HSTS (`Strict-Transport-Security`) sent when a real/trusted certificate is in use (gated on `SecureCookies`)
-
-- **Session Management**
-  - Disconnect vs Logout split: disconnect keeps session for reconnection, logout terminates
-  - Recent connections section on Connections page
-  - Sessions open in new browser tabs instead of navigating away
-  - File transfer for RDP and SSH sessions (admin-toggleable)
-  - Connection reason field (dropdown + free text, admin-toggleable)
-  - Session toolbar fixes: protocol badge reads actual session type, disconnect confirmation
-
-- **Security Hardening**
-  - Three comprehensive security audits with 30+ findings remediated
-  - SAML XML-DSig: real Exclusive C14N, digest verification, InResponseTo + Audience checks
-  - SSH Trust-On-First-Use: auto-pin first use, verify subsequent, persistent known_hosts
-  - CSRF double-submit protection on all requests
-  - WebSocket Origin validation and connection rate limiting
-  - Per-session concurrent viewer limits
-  - Login rate limiting (always-on, independent of global rate_limit)
-  - Failed login attempt tracking with progressive lockout
-  - MFA lockout bypass fixed — TOTP verification now checks lockout state
-  - Cookie format: all 15 Set-Cookie sites emit correct `HttpOnly; Secure; SameSite=Lax` (was double-semicolon on 10 sites)
-
-- **Admin Features**
-  - Admin settings page with feature toggles for every protocol (RDP, SSH, Web, VDI, Proxmox, VMware)
-  - Auth provider management API (OIDC/LDAP/SAML/RADIUS/database)
-  - Group management with folder permission counts
-  - CSV connection import with downloadable template
-
-- **UI/UX**
-  - Dark/Light/Auto theme toggle with OS preference detection
-  - Theme presets (aurora, nord, jaguar, etc.) selectable from Profile → Appearance
-  - Connections page redesigned with sidebar folders and detail panel
-  - Recordings fullscreen playback with larger player
-  - Admin pages: Auth Providers, Groups, Reports buttons wired and functional
-  - Styled error pages (404/401/403/500) with professional design
-  - Login/setup error messages: human-readable with warning icon and polished alert styling
-
-- **Configuration**
-  - Migrated to `config` crate with layered loading: defaults → TOML file → `PERSEA_` env vars
-  - Every config option settable via environment variable (`PERSEA_` prefix, nested via `__`)
-  - Full reference in `docs/deployment-guide.md` and `config.example.toml`
-
-- **Infrastructure**
-  - High availability architecture documented
-  - CSP nonce wired into all inline scripts
-  - Docker: TLS cert generated at runtime, admin key saved to file (chmod 600)
-  - 50+ regression tests for security findings
-  - Password-login Playwright E2E test (HTTP + HTTPS with self-signed certs)
-  - CI: `playwright-auth` job runs auth E2E over both HTTP and HTTPS
-  - `AGENTS.md` replaces `CLAUDE.md` as the canonical agent instruction file
-  - Subagent work contract: edits-first, single-verifier model for parallel implementation
-
-### Fixed
-
-- **Release hardening (R70–R79)**
-  - **HTTP/2 cookie splitting**: `extract_cookie` only read the first `Cookie` header — Chromium splits cookies across multiple headers for HPACK compression (RFC 7540 §8.1.2.5), so `persea_session` was silently dropped and logins looped back to the login page. Now combines all headers (`get_all` + `"; "` join) in both `auth.rs` and `csrf.rs`
-  - **`SecureCookies::init()` was written as a comment, never as code** (R70) — `secure_cookies = false` was silently ignored on self-signed-cert deployments, breaking login over HTTPS. Now called at startup
-  - **Login returned 500**: `Extension<LicenseManager>` was added to `login_submit`/`saml_acs` but never provided by the router (axum resolves extractors at runtime — compiles clean, 500s at runtime). `LicenseManager` is now constructed and layered (R75); CI `playwright-auth` was red until this landed
-  - **CSRF token rotation race** — the CSRF middleware regenerated the token cookie on every response, so concurrent AJAX could end up with a mismatched token. Token is now reused from the incoming request; `/auth/login` CSRF failures redirect to `/?error=csrf_failed` instead of returning raw JSON
-  - **Admin branding page rendered "template does not exist"** — template was on disk and wired but never registered in `templates.rs` (R78)
-  - **SAML SSO button shown on unlicensed instances** — routes are dropped without a license, so the button pointed at a 404; now gated on the license
-  - **DOM XSS in branding preview** — logo URL accepted `javascript:` URIs (CodeQL high); restricted to http(s)
-  - **Sidebar admin active state** — `active_page: "users"` etc. never matched the sidebar's `admin-*` conditions; all 9 admin pages now highlight correctly
-  - **Playwright suite was unrunnable** — 62/115 specs failed because no authentication setup existed (only `login.spec.ts` was CI-wired since R21). Added `global-setup.ts` (logs in via the real form, saves `storageState`), wired `test.use({ storageState })` into 16 spec files, regenerated visual snapshots, masked dynamic regions — full suite now **110 passed / 1 skipped / 0 failed** (R79)
-  - **Quick-connect integration tests 502'd spuriously** — seeded SSH entries point at `127.0.0.1:22`; tests now skip cleanly unless both guacd and the SSH target are reachable
-
-- **Critical Security**
-  - Stored XSS in admin Users page — all user data now escaped
-  - vSphere power_action had no role check + unsanitized vm_id — now requires operator role + charset validation
-  - Token admin endpoints (list/audit) were fail-open — now fail-closed
-  - MFA brute-force — lockout check added before TOTP verification
-  - RADIUS response authenticator comparison now uses constant-time equality
-  - LDAP filter injection — escape applied at all 3 interpolation sites
-
-- **High Security**
-  - CSP `style-src` now allows inline styles (enterprise-standard, `unsafe-inline` for styles only)
-  - 6 static pages migrated to templates (sessions, recordings, admin, tokens, reports, docs)
-  - Connections page served from template instead of broken static file
-  - Proxmox TLS verification defaults to true
-  - Browser network allowlist defaults to loopback-only
-  - Failed login lockout wired into auth handlers
-  - Chromium Login Data store no longer populated in VDI sessions
-  - Error responses sanitized to prevent information leakage
-  - Admin API key no longer printed to stdout in Docker
-
-- **Login Flow**
-  - Login JS reverted to `redirect: 'follow'` + `resp.redirected` + `resp.url` — full error specificity from final URL (was broken by R17's `redirect: 'manual'` which produces opaque responses with status 0)
-  - Setup page login flow fixed (same pattern)
-
-- **Theme Toggle**
-  - Toggle persists across page refresh (localStorage + CSS class restoration)
-  - Toggle shows Persea green (#10b981), not aurora cyan (#22d3ee)
-  - Toggle uses user's selected preset, not admin default
-  - Color presets moved from emoji button in header to Profile → Appearance section
-  - "default" preset option clears stale state and restores CSS green defaults
-  - Login page has "Reset theme" link for stuck users
-
-- **Error Display**
-  - Login page shows human-readable messages ("Invalid email or password") instead of raw codes ("invalid_credentials")
-  - MFA page handles `account_locked` with specific message (was falling through to generic)
-  - Alert styling polished: left accent border, warning icon, 14px font, flex layout
-
-- **htmx Crash**
-  - base.html htmx config script moved from `<head>` to end of `<body>` — fixes `document.body` TypeError on every page load
-
-- **UI Fixes**
-  - Dark mode toggle now properly applies theme colors for each mode
-  - Sidebar minimize button functional
-  - Connections page gap between sidebar and content eliminated
-  - Session toolbar protocol badge reads actual session type
-  - Modal drag-to-select no longer closes the modal and loses form progress
-  - Auth Providers, Groups, Reports admin pages buttons wired correctly
-
-- **Tests**
-  - `config_defaults` LDAP test restored (was corrupted by M01)
-  - `session_summary` test assertions updated to match current function
-  - `boundary_partial` protocol test fixed (fast-path false positive removed)
-  - `settings_api_tests` updated for current `enable_vdi` default
-
-### Changed
-
-- **Release hardening (R70–R79)**
-  - Cookie format normalized to `HttpOnly; Secure; SameSite=Lax` (space before SameSite) across all Set-Cookie sites — Chromium mis-parses the no-space variant
-  - `extract_cookie` in both `auth.rs` and `csrf.rs` combines all Cookie headers before parsing
-  - Docker/install: `secure_cookies = false` auto-appended when a self-signed cert is generated, without breaking existing `[tls]` sections
-  - Code scanning: 25 stale alerts dismissed (17 false positives — Argon2 params/test fixtures; 8 resolved by R51/R52 deletions and permissions)
-
-- Connection credentials encryption now enforced (warns loudly if no key set)
-- Recording retention defaults to 1000 (was unlimited)
-- Error responses return generic messages, full details logged server-side
-- Browser sessions block `file://` and metadata IP ranges by default
-- Admin settings feature toggles default: VDI enabled, file transfer disabled
-
-### Security
-
-See `docs/high-availability.md` for architecture details and
-`wayfinder/security-audit-round3/` for the full audit trail.
-
-
-## [1.0.3] - 2026-08-06
-
-### Added
-
-- CSRF double-submit protection with `X-CSRF-Token` header on all requests.
-- WebSocket Origin validation and connection rate limiting.
-- DB-backed address book with AES-256-GCM encryption of stored credentials
-  (`[storage] backend = "db"`, default), making Vault optional for connections.
-- VMware vSphere integration: REST API for VM inventory and power operations,
-  connections page UI with guest-OS-based RDP/SSH routing, setup wizard detection.
-- Deep health check with latency, Vault/disk checks, and uptime metrics.
-- Prometheus metrics endpoint (`/metrics`).
-- Graceful shutdown with session drain.
-- Startup config validation.
-- JSON logging via `RUST_LOG_FORMAT=json`.
-- Optional `[vault_shared]` and `[vault_local]` backends for dedicated
-  fleet-wide and per-host Vaults (`VAULT_SHARED_SECRET_ID` / `VAULT_LOCAL_SECRET_ID`).
-- Admin settings API (`GET`/`PUT /api/system/settings`) with persistence and
-  form feedback.
-- Auth provider management API with OIDC/LDAP/SAML/RADIUS/database types,
-  addable through the admin auth page; DB-configured providers join the auth
-  chain at startup.
-- Local group management (`/admin/groups.html`) with auth-provider group
-  mapping and folder permission counts.
-- CSV connection import (`POST /api/addressbook/import`) with downloadable
-  template (`GET /api/addressbook/import-template`).
-- Connections page: create/edit/delete folders and entries, folder
-  permissions, scope-aware search, and import modal.
-- `storage.encryption_key` config value honored (env `PERSEA_STORAGE_KEY`
-  remains the fallback).
-
-### Changed
-
-- Split god-modules into `src/api/` and `src/session/`.
-- Unified error handling with `AppError` and standardized error responses
-  across handlers.
-- Split `CreateSessionRequest` into protocol sub-structs
-  (`SshParams`, `RdpParams`, `VncParams`, `WebParams`, `VdiParams`, `SpiceParams`,
-  `ProxmoxParams`) while preserving the flat JSON wire format.
-- Updated dependencies.
-- Version bumped to 1.0.2.
-- Dev lints (missing_docs, clippy::unwrap_used) silenced in release builds.
-
-### Fixed
-
-- CSRF cookie wiring: dropped `HttpOnly` so JavaScript can read and resend the
-  `X-CSRF-Token` (double-submit pattern).
-- Docker image build and container health check (guacd pin, embedded templates,
-  `guacd.conf`, TLS-aware healthcheck).
-- Deprecation warning firing on the default `recording_path`; empty
-  `recording_path` treated as unset.
-- CI lint jobs and deb packaging paths (stale `rustguac` paths).
-- 500 on session summary with an empty session history table
-  (`COALESCE` on the `active_now` aggregate).
-- 502 error-log spam on every page load when vSphere is unconfigured
-  (`/api/vsphere/vms` now returns 200 with `configured: false`).
-
-## [1.0.1] - 2026-08-04
-
-### Added
-
-- CSRF double-submit cookie and VDI `chpasswd` injection fix.
-- DB-backed address book: `[storage]` config with `db` backend, address book
-  CRUD operations, and DB migration (`ticket 022`).
-- VMware vSphere integration: config section, REST handlers, router wiring,
-  setup guide (`ticket 021`).
-- Unit tests for tunnel, drive, and recording modules.
-- Clippy `unwrap_used` and `missing_docs` lint enforcement.
-
-### Changed
-
-- Final wayfinder ticket gap closure (`#2`).
-- Frontend refactors: deduplicated `escapeHtml`/`escapeAttr` across templates.
-- Docs overhaul: anti-AI writing rules applied across all guides, README
-  rewritten with comprehensive feature list, name-origin story added.
-- GHCR-only Docker images with `.zip` packages for release artifacts.
-
-### Fixed
-
-- Vault mTLS tests: SAN extensions on generated certs, extfile for v3 certs,
-  correct CI integration test port.
-- Theme toggle class replacement and profile page `DOMContentLoaded` guard.
-- `/api/me` now returns `auth_source` from the database, not the identity type.
-- Removed rustup cache mount from Dockerfile that overwrote the toolchain.
-- CI: all clippy warnings, fmt, and test failures resolved.
-
-## [1.0.0] - 2026-08-03
-
-### Added
-
-- Initial release of Persea, a lightweight Rust replacement for Apache
-  Guacamole: browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web
-  browsing, and VDI desktop containers through guacd. Single binary plus
-  guacd; no Java, no Tomcat.
-- All 20 wayfinder tickets completed:
-  - Security hardening: API key salting, OIDC fingerprint, CSP, WebSocket rate limiting.
-  - Architecture: API handler split, session split, unified error handling.
-  - Testing: mock traits, proptest, 25 API handler tests.
-  - UI/UX: sidebar layout, responsive design, accessibility.
-  - WebSocket auto-reconnect.
-  - Performance: DB indexes, async DNS, streaming CSV export, `BytesMut`.
-  - DevOps: systemd hardening, Docker healthcheck, RPM build.
-  - Config validation, `Role` enum and code-quality cleanup, graceful shutdown
-    with session drain, deep health check plus Prometheus metrics, standardized
-    error responses, CI/CD pipeline, clippy lint pass.
-
-### Changed
-
-- Renamed the project from RustGuac to Persea across the codebase, docs,
-  packaging, and CI.
-- New Persea logo and favicon.
-- Frontend converted to shared `app.css` classes with ARIA attributes.
-
-### Fixed
-
-- Full-width content layout and centered on ultrawide displays.
-- CSP allowing CDN scripts/styles, htmx auth headers, users table loading via
-  fetch, profile data loading.
-- Resolved merge conflict markers in templates and a reports.html merge conflict.
-- All compilation errors and guacd test expectations fixed (25 tests passing).
+- **Release hardening**

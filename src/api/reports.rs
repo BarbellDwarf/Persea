@@ -1,10 +1,16 @@
+//! Session reports and recording endpoints.
+//!
+//! Covers session history queries (JSON and CSV), top-connection and
+//! top-user rankings, activity by hour, and the recording list, playback,
+//! and deletion handlers. All require at least poweruser; deleting a
+//! recording requires admin.
 use super::AppState;
 use crate::auth::AuthIdentity;
 use crate::db::{self, Db};
 use crate::error::AppError;
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension, Json,
@@ -17,20 +23,39 @@ use tokio_util::io::ReaderStream;
 #[allow(dead_code)]
 const MAX_CSV_EXPORT_ROWS: u32 = 100_000;
 
+/// Query parameters for the session-report endpoints.
 #[derive(Deserialize)]
 pub struct ReportQuery {
+    /// Filter by the user who created the session.
     pub user: Option<String>,
+    /// Filter by the address book entry slug.
     pub entry: Option<String>,
+    /// Filter by session type (ssh, rdp, vnc, ...).
     #[serde(rename = "type")]
     pub session_type: Option<String>,
+    /// Start of the time window (RFC 3339).
     pub from: Option<String>,
+    /// End of the time window (RFC 3339).
     pub to: Option<String>,
+    /// Row limit; clamped per endpoint.
     pub limit: Option<u32>,
+    /// Pagination offset.
     pub offset: Option<u32>,
 }
 
+/// Query parameters for `GET /api/recordings`.
+#[derive(Deserialize)]
+pub struct RecordingQuery {
+    /// Case-insensitive substring filter across entry display name, user, and folder.
+    pub q: Option<String>,
+}
+
+/// `GET /api/recordings`: list recording files with metadata from
+/// their sidecar files, newest first. Requires poweruser or admin.
+/// Returns `AppError::Forbidden` for lower roles.
 pub async fn list_recordings(
     State(manager): State<AppState>,
+    Query(query): Query<RecordingQuery>,
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     match &identity {
@@ -42,6 +67,12 @@ pub async fn list_recordings(
         }
     }
     let recording_path = manager.recording_path().to_path_buf();
+    let q = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase);
 
     let recordings = tokio::task::spawn_blocking(move || {
         let mut recordings = Vec::new();
@@ -51,7 +82,16 @@ pub async fn list_recordings(
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("guac") {
+            // Accept both plain `.guac` recordings and encrypted-at-rest
+            // `.guac.enc` recordings (extension `enc`, stem ending `.guac`).
+            let ext = path.extension().and_then(|e| e.to_str());
+            let is_guac = ext == Some("guac");
+            let is_enc = ext == Some("enc")
+                && path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .is_some_and(|s| s.ends_with(".guac"));
+            if !is_guac && !is_enc {
                 continue;
             }
             let name = match path.file_name().and_then(|n| n.to_str()) {
@@ -93,6 +133,10 @@ pub async fn list_recordings(
                     rec["session_type"] = json!(t);
                 }
                 if let Ok(created) = chrono::DateTime::parse_from_rfc3339(&sidecar.created_at) {
+                    rec["display_date"] = json!(created
+                        .with_timezone(&chrono::Local)
+                        .format("%Y-%m-%d %H:%M")
+                        .to_string());
                     if let Ok(modified) = meta.modified() {
                         let mod_dt: chrono::DateTime<chrono::Utc> = modified.into();
                         let dur = (mod_dt - created.with_timezone(&chrono::Utc)).num_seconds();
@@ -100,6 +144,18 @@ pub async fn list_recordings(
                             rec["duration_secs"] = json!(dur);
                         }
                     }
+                }
+            }
+            if let Some(ref ql) = q {
+                let haystack = [
+                    rec["entry_display_name"].as_str().unwrap_or(""),
+                    rec["user"].as_str().unwrap_or(""),
+                    rec["folder"].as_str().unwrap_or(""),
+                ]
+                .join(" ")
+                .to_lowercase();
+                if !haystack.contains(ql.as_str()) {
+                    continue;
                 }
             }
             recordings.push(rec);
@@ -117,6 +173,9 @@ pub async fn list_recordings(
     Ok(Json(json!(recordings)))
 }
 
+/// `GET /api/recordings/typescripts`: list typescript files when
+/// `recording.typescript_path` is configured. Requires poweruser or
+/// admin. Returns `AppError::Forbidden` for lower roles.
 pub async fn list_typescripts(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -190,6 +249,9 @@ pub async fn list_typescripts(
     Ok(Json(json!({"path": ts_path_str, "items": items})))
 }
 
+/// `GET /api/reports/sessions`: session history with filters and
+/// pagination. Requires poweruser or admin. `AppError::Forbidden` for
+/// lower roles; `AppError::Internal` on database errors.
 pub async fn report_sessions(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -219,6 +281,8 @@ pub async fn report_sessions(
     ))
 }
 
+/// `GET /api/reports/sessions.csv`: the same session history as a
+/// downloadable CSV attachment. Requires poweruser or admin.
 pub async fn report_sessions_csv(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -260,6 +324,8 @@ pub async fn report_sessions_csv(
         .into_response())
 }
 
+/// `GET /api/reports/top-connections`: most-used address book entries
+/// in the window. Requires poweruser or admin.
 pub async fn report_top_connections(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -277,6 +343,8 @@ pub async fn report_top_connections(
     Ok(Json(json!(rows)))
 }
 
+/// `GET /api/reports/top-users`: most active users in the window.
+/// Requires poweruser or admin.
 pub async fn report_top_users(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -294,6 +362,8 @@ pub async fn report_top_users(
     Ok(Json(json!(rows)))
 }
 
+/// `GET /api/reports/summary`: aggregate counts for the reports page.
+/// Requires poweruser or admin.
 pub async fn report_summary(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -309,11 +379,15 @@ pub async fn report_summary(
     Ok(Json(summary))
 }
 
+/// Query parameters for `GET /api/reports/activity`.
 #[derive(Deserialize)]
 pub struct ActivityQuery {
+    /// Window size in hours; clamped to 1..=168.
     pub hours: Option<i32>,
 }
 
+/// `GET /api/reports/activity`: session starts per hour over the
+/// window. Requires poweruser or admin.
 pub async fn report_activity(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -326,7 +400,7 @@ pub async fn report_activity(
     {
         return Err(AppError::Forbidden("poweruser role required".into()));
     }
-    let hours = q.hours.unwrap_or(24).max(1).min(168);
+    let hours = q.hours.unwrap_or(24).clamp(1, 168);
     let rows = db::session_activity_by_hour(&database, hours)?;
     Ok(Json(json!(rows)))
 }
@@ -334,7 +408,8 @@ pub async fn report_activity(
 pub(crate) fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path) -> bool {
     if name.is_empty()
         || name == ".guac"
-        || !name.ends_with(".guac")
+        || name == ".guac.enc"
+        || (!name.ends_with(".guac") && !name.ends_with(".guac.enc"))
         || name.contains('/')
         || name.contains('\\')
         || name.contains("..")
@@ -342,13 +417,31 @@ pub(crate) fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path
     {
         return false;
     }
-    let full = recording_dir.join(name);
-    match (full.canonicalize(), recording_dir.canonicalize()) {
-        (Ok(resolved), Ok(base)) => resolved.starts_with(&base),
-        _ => false,
+    // The named file may be the plaintext or the encrypted variant; accept
+    // the sibling when the literal name is the other variant.
+    let resolve = |n: &str| {
+        let full = recording_dir.join(n);
+        match (full.canonicalize(), recording_dir.canonicalize()) {
+            (Ok(resolved), Ok(base)) => resolved.starts_with(&base),
+            _ => false,
+        }
+    };
+    if resolve(name) {
+        return true;
+    }
+    if name.ends_with(".guac") {
+        resolve(&format!("{name}.enc"))
+    } else if let Some(plain) = name.strip_suffix(".enc") {
+        resolve(plain)
+    } else {
+        false
     }
 }
 
+/// `GET /api/recordings/{name}`: stream a recording for playback.
+/// Requires poweruser or admin. Encrypted recordings are decrypted
+/// on the fly with the storage key. Returns `AppError::Internal` for
+/// unsafe names, and `AppError::Session` when the recording is missing.
 pub async fn serve_recording(
     State(manager): State<AppState>,
     Path(name): Path<String>,
@@ -366,8 +459,18 @@ pub async fn serve_recording(
         return Err(AppError::Internal("invalid recording name".into()));
     }
 
-    let path = manager.recording_path().join(&name);
-    let enc_path = path.with_extension("guac.enc");
+    // `.guac.enc` requests decrypt the named file directly; `.guac` requests
+    // transparently fall back to the encrypted sibling when present.
+    let is_enc = name.ends_with(".guac.enc");
+    let plain_name = if is_enc {
+        // Strip only the `.enc` suffix so `foo.guac.enc` maps to `foo.guac`
+        // (Path::with_extension would produce `foo.guac.guac`).
+        name.strip_suffix(".enc").unwrap_or(&name).to_string()
+    } else {
+        name.clone()
+    };
+    let plain_path = manager.recording_path().join(&plain_name);
+    let enc_path = plain_path.with_extension("guac.enc");
 
     // Prefer the encrypted file when it exists.
     if enc_path.exists() {
@@ -375,7 +478,7 @@ pub async fn serve_recording(
             AppError::Internal("recording is encrypted but no encryption key is configured".into())
         })?;
         let plaintext = tokio::task::spawn_blocking(move || {
-            crate::recording::decrypt_recording(&path, &enc_key)
+            crate::recording::decrypt_recording(&plain_path, &enc_key)
         })
         .await
         .map_err(|e| AppError::Internal(format!("join error: {e}")))?
@@ -396,7 +499,7 @@ pub async fn serve_recording(
     }
 
     // Legacy unencrypted recording.
-    let file = tokio::fs::File::open(&path).await.map_err(|e| {
+    let file = tokio::fs::File::open(&plain_path).await.map_err(|e| {
         tracing::warn!(name = %name, error = %e, "Recording not found");
         AppError::Session("recording not found".into())
     })?;
@@ -415,6 +518,10 @@ pub async fn serve_recording(
         .into_response())
 }
 
+/// `DELETE /api/recordings/{name}`: remove a recording and its
+/// sidecar, both the plaintext and encrypted variants. Admin only;
+/// `AppError::Forbidden` for lower roles, `AppError::Session` when the
+/// recording does not exist.
 pub async fn delete_recording(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -432,11 +539,30 @@ pub async fn delete_recording(
         return Err(AppError::Internal("invalid recording name".into()));
     }
 
-    let path = manager.recording_path().join(&name);
+    let is_enc = name.ends_with(".guac.enc");
+    let plain_name = if is_enc {
+        name.strip_suffix(".enc").unwrap_or(&name).to_string()
+    } else {
+        name.clone()
+    };
+    let plain_path = manager.recording_path().join(&plain_name);
+    let enc_path = plain_path.with_extension("guac.enc");
 
-    tokio::fs::remove_file(&path).await.map_err(|e| {
-        tracing::warn!(name = %name, error = %e, "Recording not found");
-        AppError::Session("recording not found".into())
-    })?;
+    // Remove whichever of the plaintext/encrypted variants exist.
+    let mut removed = false;
+    for p in [&plain_path, &enc_path] {
+        match tokio::fs::remove_file(p).await {
+            Ok(_) => removed = true,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(name = %name, error = %e, "Failed to delete recording");
+            }
+        }
+    }
+    if !removed {
+        return Err(AppError::Session("recording not found".into()));
+    }
+    // Also remove the sidecar `.meta` file (best effort).
+    let _ = tokio::fs::remove_file(plain_path.with_extension("meta")).await;
     Ok(StatusCode::NO_CONTENT)
 }

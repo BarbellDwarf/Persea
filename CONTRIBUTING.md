@@ -2,7 +2,7 @@
 
 ## License
 
-By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md). This allows your contributions to be licensed under both the AGPL-3.0 open-source license and the commercial license.
+By contributing to persea, you agree to the [Contributor License Agreement (CLA.md)](CLA.md). This allows your contributions to be licensed under the Apache License 2.0. Signatures are recorded in the `cla/signed/` registry and verified automatically by the CLA check in CI — see [PR Process](#pr-process) step 5.
 
 ## Development Setup
 
@@ -48,9 +48,20 @@ and asserts non-black pixels. Requires Xvnc and Chromium installed on the system
 2. Make changes following the code style above.
 3. Run `cargo fmt`, `cargo clippy`, and `cargo test`.
 4. Ensure the browser session test passes if you touched session or browser code.
-5. **Sign the CLA**: add `I have read and agree to the persea Contributor License Agreement (CLA.md)` to your PR description. The CLA Assistant bot will verify your signature on first contribution.
+5. **Sign the CLA** if you haven't before: add your signature to the registry at `cla/signed/<your-github-username>.md` (lowercase username), containing:
+
+   ```markdown
+   # CLA Signature — <Your Name>
+
+   - **Name:** <Your Name>
+   - **GitHub username:** <your-github-username>
+   - **Date:** <YYYY-MM-DD>
+   - **Statement:** I have read and agree to the persea Contributor License Agreement (CLA.md).
+   ```
+
+   See [cla/signed/spirusnox.md](cla/signed/spirusnox.md) for an example. The **CLA** check in `.github/workflows/cla.yml` runs on every pull request and verifies that a signed file exists for the PR author with the required statement — no bot involved. First-time signers include their signed file in the same PR; it takes effect once merged. If you contribute on behalf of an employer or client, the entity's authorized signatory must sign (see [CLA.md §11](CLA.md#11-how-to-sign) for individual vs. corporate coverage).
 6. Update `AGENTS.md` if you changed architecture, config keys, or session types.
-7. Open a PR against `main` with a clear title and description.
+7. Open a PR against `main` with a clear title and description. Confirm the CLA acknowledgment in the PR template.
 
 ## Adding guacamole-server Patches
 

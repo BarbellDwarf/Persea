@@ -40,6 +40,7 @@ pub struct TotpProvider {
 }
 
 impl TotpProvider {
+    /// Create a provider bound to the given config and database.
     pub fn new(config: TotpProviderConfig, db: Db) -> Self {
         Self { config, db }
     }

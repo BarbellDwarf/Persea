@@ -37,24 +37,31 @@ pub const PROVIDER_TYPES: &[&str] = &["ldap", "saml", "radius", "database", "tot
 /// A row from the `auth_providers` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbProvider {
+    /// Row id.
     pub id: i64,
+    /// Provider display name.
     pub name: String,
     /// Provider type, one of [`PROVIDER_TYPES`].
     #[serde(rename = "type")]
     pub provider_type: String,
+    /// Whether the provider is active in the chain.
     pub enabled: bool,
     /// Chain order; lower runs first.
     pub position: i64,
     /// Free-form JSON config object (may contain secrets).
     pub config: Value,
+    /// Row creation timestamp.
     pub created_at: String,
+    /// Row last-update timestamp.
     pub updated_at: String,
 }
 
 /// Direction for [`move_provider`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveDirection {
+    /// Move the provider earlier in the chain.
     Up,
+    /// Move the provider later in the chain.
     Down,
 }
 
@@ -66,6 +73,11 @@ pub enum MoveDirection {
 /// startup) so the table exists before the chain merge; tests call it
 /// directly.
 pub fn migrate(db: &Db) -> rusqlite::Result<()> {
+    if crate::db::pool_active() {
+        // The SQLx migrations create auth_providers (migrations/*/004); the
+        // pool schema is already in place — nothing to do here.
+        return Ok(());
+    }
     let conn = db.lock().unwrap();
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS auth_providers (
@@ -87,6 +99,11 @@ pub fn migrate(db: &Db) -> rusqlite::Result<()> {
 
 /// Load all DB-configured providers in chain order (`position`, then `id`).
 pub fn load_providers(db: &Db) -> rusqlite::Result<Vec<DbProvider>> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::providers_load_pool(pool)
+        });
+    }
     let conn = db.lock().unwrap();
     load_providers_on(&conn)
 }
@@ -105,6 +122,11 @@ fn load_providers_on(conn: &Connection) -> rusqlite::Result<Vec<DbProvider>> {
 
 /// Fetch a single provider by id, or `None` if it does not exist.
 pub fn get_provider(db: &Db, id: i64) -> rusqlite::Result<Option<DbProvider>> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::providers_get_pool(pool, id)
+        });
+    }
     let conn = db.lock().unwrap();
     query_provider(&conn, id)
 }
@@ -116,6 +138,19 @@ pub fn insert_provider(
     provider_type: &str,
     config: &Value,
 ) -> rusqlite::Result<DbProvider> {
+    if crate::db::pool_active() {
+        let __db_route_arg_0 = name.to_string();
+        let __db_route_arg_1 = provider_type.to_string();
+        let __db_route_arg_2 = config.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::providers_insert_pool(
+                pool,
+                __db_route_arg_0,
+                __db_route_arg_1,
+                __db_route_arg_2,
+            )
+        });
+    }
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
     let next_position: i64 = tx.query_row(
@@ -136,6 +171,12 @@ pub fn insert_provider(
 
 /// Replace a provider's config JSON. Returns `false` if the id is unknown.
 pub fn update_config(db: &Db, id: i64, config: &Value) -> rusqlite::Result<bool> {
+    if crate::db::pool_active() {
+        let __db_route_arg_0 = config.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::providers_update_config_pool(pool, id, __db_route_arg_0)
+        });
+    }
     let conn = db.lock().unwrap();
     let changed = conn.execute(
         "UPDATE auth_providers SET config = ?1, updated_at = datetime('now') WHERE id = ?2",
@@ -146,6 +187,11 @@ pub fn update_config(db: &Db, id: i64, config: &Value) -> rusqlite::Result<bool>
 
 /// Flip a provider's `enabled` flag. Returns `false` if the id is unknown.
 pub fn set_enabled(db: &Db, id: i64, enabled: bool) -> rusqlite::Result<bool> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::providers_set_enabled_pool(pool, id, enabled)
+        });
+    }
     let conn = db.lock().unwrap();
     let changed = conn.execute(
         "UPDATE auth_providers SET enabled = ?1, updated_at = datetime('now') WHERE id = ?2",
@@ -156,6 +202,11 @@ pub fn set_enabled(db: &Db, id: i64, enabled: bool) -> rusqlite::Result<bool> {
 
 /// Delete a provider. Returns `false` if the id is unknown.
 pub fn delete_provider(db: &Db, id: i64) -> rusqlite::Result<bool> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::providers_delete_pool(pool, id)
+        });
+    }
     let conn = db.lock().unwrap();
     let changed = conn.execute("DELETE FROM auth_providers WHERE id = ?1", params![id])?;
     Ok(changed > 0)
@@ -170,6 +221,11 @@ pub fn move_provider(
     id: i64,
     direction: MoveDirection,
 ) -> rusqlite::Result<Option<DbProvider>> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::providers_move_pool(pool, id, direction)
+        });
+    }
     let mut conn = db.lock().unwrap();
     let tx = conn.transaction()?;
     // Read the ordered list inside the transaction so a concurrent move

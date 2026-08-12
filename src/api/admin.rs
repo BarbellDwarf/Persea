@@ -1,3 +1,8 @@
+//! Health, system status, docs, metrics, and audit endpoints.
+//!
+//! `GET /api/health` is public and answers with per-backend checks
+//! (guacd, database, db pool, vault, disk). The remaining handlers require
+//! operator or higher, with the status and audit views reserved for admins.
 use super::{AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultConfigured};
 use crate::auth::{AuthIdentity, WsTicketStore};
 use crate::db::Db;
@@ -5,9 +10,14 @@ use crate::error::AppError;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{extract::State, Extension, Json};
-use serde::Deserialize;
 use serde_json::json;
 
+/// `GET /api/health`: liveness and dependency checks.
+///
+/// Without authentication this is a shallow `{"status": "ok"}`. With
+/// operator or higher it probes guacd, the rusqlite DB, the SQLx pool,
+/// Vault (when configured), and disk usage, and reports an overall
+/// `healthy` or `degraded` verdict.
 pub async fn health(
     State(state): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -80,7 +90,7 @@ pub async fn health(
     let db_pool_start = std::time::Instant::now();
     let db_pool_status = match db_pool.0.kind() {
         None => "unavailable",
-        Some(kind) => match db_pool.0.ping().await {
+        Some(kind) => match crate::db::ping_active_pool() {
             Ok(()) => "up",
             Err(e) => {
                 tracing::warn!(error = %e, backend = %kind, "health: db_pool error");
@@ -187,6 +197,9 @@ pub async fn health(
     })))
 }
 
+/// `POST /api/ws-ticket`: mint a short-lived WebSocket ticket for
+/// the session stream. Any authenticated identity may call it; returns
+/// `AppError::Auth` when the identity is missing.
 pub async fn create_ws_ticket(
     Extension(ticket_store): Extension<WsTicketStore>,
     identity: Option<Extension<AuthIdentity>>,
@@ -196,6 +209,9 @@ pub async fn create_ws_ticket(
     Ok(Json(json!({"ticket": ticket})))
 }
 
+/// `GET /api/system/status`: version, session counts, recording
+/// stats, Vault and feature flags, and HA instance info. Admin only;
+/// `AppError::Forbidden` for lower roles.
 pub async fn system_status(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -247,17 +263,19 @@ pub async fn system_status(
     };
 
     let user_count = {
-        let conn = database.lock().unwrap();
-        conn.query_row("SELECT COUNT(*) FROM users", [], |row| row.get::<_, i64>(0))
+        let db_clone = database.clone();
+        tokio::task::spawn_blocking(move || crate::db::count_users(&db_clone))
+            .await
+            .unwrap_or(Ok(0))
             .unwrap_or(0)
     };
 
     let history_total = {
-        let conn = database.lock().unwrap();
-        conn.query_row("SELECT COUNT(*) FROM session_history", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .unwrap_or(0)
+        let db_clone = database.clone();
+        tokio::task::spawn_blocking(move || crate::db::count_session_history(&db_clone))
+            .await
+            .unwrap_or(Ok(0))
+            .unwrap_or(0)
     };
 
     let oidc_configured = manager.config().oidc.is_some();
@@ -291,9 +309,16 @@ pub async fn system_status(
             "drive": drive_configured,
             "tls": tls_configured,
         },
+        "instance": {
+            "instance_id": manager.instance_id(),
+            "ha_enabled": manager.ha_enabled(),
+        },
     })))
 }
 
+/// `GET /api/auth/status`: login-page configuration for anonymous
+/// callers: OIDC availability, site title, drive flag, and the
+/// resolved theme data.
 pub async fn auth_status(
     Extension(oidc_enabled): Extension<OidcEnabled>,
     Extension(site_title): Extension<SiteTitle>,
@@ -318,6 +343,8 @@ pub async fn auth_status(
 
 include!(concat!(env!("OUT_DIR"), "/docs-rendered.rs"));
 
+/// `GET /api/docs`: the rendered documentation sections (slug,
+/// title, HTML) baked in at build time.
 pub async fn get_docs() -> Result<Json<serde_json::Value>, AppError> {
     let sections: Vec<serde_json::Value> = DOCS
         .iter()
@@ -326,6 +353,8 @@ pub async fn get_docs() -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(json!(sections)))
 }
 
+/// `GET /api/metrics`: Prometheus text exposition format. Public;
+/// no authentication required.
 pub async fn metrics() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -375,6 +404,7 @@ pub async fn audit_events(
         } else {
             &event.event_hash
         };
+        let short_hash_display = format!("{short_hash}…");
         let details = if event.details.is_null() {
             "-".to_string()
         } else if let Some(obj) = event.details.as_object() {
@@ -410,12 +440,12 @@ pub async fn audit_events(
             escaped_details,
             escaped_details,
             escaped_hash,
-            format!("{}…", short_hash),
+            short_hash_display,
         ));
     }
 
     // Append pagination info as hx-headers so the client can update pagination controls
-    let total_pages = (total + limit - 1) / limit;
+    let total_pages = total.div_ceil(limit);
     let current_page = offset / limit + 1;
     html.push_str(&format!(
         r#"<tr id="audit-pagination-data" data-total="{}" data-pages="{}" data-current="{}" data-limit="{}" style="display:none"></tr>"#,
@@ -472,7 +502,6 @@ pub async fn audit_verify(
 pub async fn audit_export(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
-    Extension(license_manager): Extension<std::sync::Arc<crate::license::LicenseManager>>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     if !identity
@@ -481,13 +510,6 @@ pub async fn audit_export(
         .unwrap_or(false)
     {
         return Err(AppError::Forbidden("admin role required".into()));
-    }
-    // Basic audit logging/viewing/verification stays free; compliance
-    // export (CSV/JSON download) is the enterprise-gated part — R43.
-    if !license_manager.has_feature(crate::license::FEAT_AUDIT_RETENTION) {
-        return Err(AppError::Forbidden(
-            "audit log export requires an enterprise license".into(),
-        ));
     }
 
     let filters = crate::audit::AuditFilters {
@@ -547,77 +569,4 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-}
-
-// ── License API ──
-
-/// `GET /api/admin/license` — return current license status as JSON.
-pub async fn get_license_status(
-    identity: Option<Extension<AuthIdentity>>,
-    Extension(license_mgr): Extension<std::sync::Arc<crate::license::LicenseManager>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
-
-    let status = license_mgr.status();
-    let license = license_mgr.license();
-
-    let status_str = match &status {
-        crate::license::LicenseStatus::Valid => "valid",
-        crate::license::LicenseStatus::Expired => "expired",
-        crate::license::LicenseStatus::Evaluating { .. } => "evaluating",
-        crate::license::LicenseStatus::NoLicense => "no_license",
-    };
-
-    let mut resp = json!({
-        "status": status_str,
-        "customer_name": license.as_ref().map(|l| l.customer_name.as_str()).unwrap_or(""),
-        "expiry": license.as_ref().map(|l| l.expiry.to_rfc3339()),
-        "features": license.as_ref().map(|l| &l.features).cloned().unwrap_or_default(),
-        "raw_key": license_mgr.raw_key(),
-    });
-
-    if let crate::license::LicenseStatus::Evaluating { days_remaining } = &status {
-        resp["eval_days_remaining"] = json!(days_remaining);
-    }
-
-    Ok(Json(resp))
-}
-
-/// Request body for license key submission.
-#[derive(Deserialize)]
-pub struct SetLicenseRequest {
-    /// The license key string (PSEA-...).
-    license_key: String,
-}
-
-/// `POST /api/admin/license` — validate and save a new license key.
-pub async fn set_license_key(
-    identity: Option<Extension<AuthIdentity>>,
-    Extension(license_mgr): Extension<std::sync::Arc<crate::license::LicenseManager>>,
-    Json(req): Json<SetLicenseRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
-
-    match license_mgr.set_key(&req.license_key) {
-        Ok(()) => Ok(Json(json!({
-            "ok": true,
-            "message": "License key validated and activated for this session",
-        }))),
-        Err(e) => Ok(Json(json!({
-            "ok": false,
-            "error": e.to_string(),
-        }))),
-    }
 }

@@ -5,6 +5,7 @@
 //! (added automatically on first use).
 
 use async_trait::async_trait;
+#[cfg(test)]
 use rusqlite::params;
 
 use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};
@@ -33,6 +34,10 @@ impl DatabaseProvider {
             conn.execute_batch("ALTER TABLE users ADD COLUMN password_hash TEXT")
                 .expect("failed to add password_hash column");
         }
+        // Password reuse history. The SQLx backends get the table
+        // from migrations/008_password-history.sql; the legacy rusqlite
+        // path creates it lazily here (and in password.rs for the CLI).
+        let _ = crate::password::ensure_history_table(&conn);
     }
 }
 
@@ -60,29 +65,22 @@ impl AuthProvider for DatabaseProvider {
             _ => return AuthResult::Failure("missing password".into()),
         };
 
-        // Query user by email (= username for local auth)
-        let result = {
-            let conn = self.db.lock().unwrap();
-            conn.query_row(
-                "SELECT id, email, name, role, disabled, password_hash
-                 FROM users WHERE email = ?1",
-                params![username],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, i32>(4)? != 0,
-                        row.get::<_, Option<String>>(5)?,
-                    ))
-                },
-            )
+        // Query user by email (= username for local auth). Runs through the
+        // store so it works on the SQLx backends too (db_url set).
+        let db = self.db.clone();
+        let username_for_db = username.clone();
+        let result = match tokio::task::spawn_blocking(move || {
+            crate::db::get_user_login_info(&db, &username_for_db)
+        })
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => return AuthResult::Unavailable(format!("database error: {e}")),
         };
 
         let (id, email, name, role, disabled, password_hash) = match result {
-            Ok(r) => r,
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
+            Ok(Some(r)) => r,
+            Ok(None) => {
                 // Constant-time dummy hash to prevent user enumeration
                 let _ = verify_password(
                     "dummy",
@@ -105,13 +103,10 @@ impl AuthProvider for DatabaseProvider {
         match verify_password(&password, &hash) {
             Ok(true) => {
                 // Update last_login_at
-                let _ = {
-                    let conn = self.db.lock().unwrap();
-                    conn.execute(
-                        "UPDATE users SET last_login_at = datetime('now') WHERE id = ?1",
-                        params![id],
-                    )
-                };
+                let db = self.db.clone();
+                let _ =
+                    tokio::task::spawn_blocking(move || crate::db::touch_user_last_login(&db, id))
+                        .await;
 
                 AuthResult::Success {
                     subject: email.clone(),
@@ -126,31 +121,27 @@ impl AuthProvider for DatabaseProvider {
     }
 
     async fn lookup_user(&self, subject: &str) -> Option<crate::auth_provider::UserInfo> {
-        let conn = self.db.lock().unwrap();
-        conn.query_row(
-            "SELECT id, email, name, role, disabled, oidc_groups
-             FROM users WHERE email = ?1",
-            params![subject],
-            |row| {
-                let disabled: bool = row.get::<_, i32>(4)? != 0;
-                if disabled {
-                    return Err(rusqlite::Error::QueryReturnedNoRows);
-                }
-                let groups_raw: String = row.get(5)?;
-                let groups = if groups_raw.is_empty() {
-                    vec![]
-                } else {
-                    groups_raw.split(',').map(|s| s.to_string()).collect()
-                };
-                Ok(crate::auth_provider::UserInfo {
-                    subject: row.get(1)?,
-                    display_name: row.get(2)?,
-                    email: None,
-                    groups,
-                })
-            },
-        )
-        .ok()
+        let db = self.db.clone();
+        let subject_owned = subject.to_string();
+        let user =
+            tokio::task::spawn_blocking(move || crate::db::get_user_by_email(&db, &subject_owned))
+                .await
+                .ok()?
+                .ok()?;
+        if user.disabled {
+            return None;
+        }
+        let groups = if user.oidc_groups.is_empty() {
+            vec![]
+        } else {
+            user.oidc_groups.split(',').map(|s| s.to_string()).collect()
+        };
+        Some(crate::auth_provider::UserInfo {
+            subject: user.email,
+            display_name: user.name,
+            email: None,
+            groups,
+        })
     }
 }
 

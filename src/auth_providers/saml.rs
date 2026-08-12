@@ -220,7 +220,7 @@ fn exclusive_canonicalize(xml: &str) -> String {
 
                 // In-scope ns = parent's minus overridden, plus own declarations.
                 let mut all_ns = parent_ns;
-                for &(ref k, _) in &own_ns {
+                for (k, _) in &own_ns {
                     all_ns.retain(|(pk, _)| pk != k);
                 }
                 all_ns.extend(own_ns);
@@ -267,7 +267,7 @@ fn exclusive_canonicalize(xml: &str) -> String {
                 }
 
                 let mut all_ns = parent_ns.clone();
-                for &(ref k, _) in &own_ns {
+                for (k, _) in &own_ns {
                     all_ns.retain(|(pk, _)| pk != k);
                 }
                 all_ns.extend(own_ns);
@@ -1116,7 +1116,7 @@ pub fn parse_saml_response(
     // 5. Validate audience restriction against verified element
     if config.strict_mode && !idp_cert_pem.is_empty() {
         let audiences = extract_audiences(assertion_xml);
-        if !audiences.is_empty() && !audiences.iter().any(|a| *a == config.entity_id) {
+        if !audiences.is_empty() && !audiences.contains(&config.entity_id) {
             return Err(format!(
                 "SP entity ID '{}' not found in Audience restriction",
                 config.entity_id
@@ -1620,6 +1620,7 @@ pub struct SamlProvider {
 }
 
 impl SamlProvider {
+    /// Create a provider from the given config. IdP metadata loads lazily on first use.
     pub fn new(config: SamlConfig) -> Self {
         Self {
             config,

@@ -41,11 +41,7 @@ async fn check_totp_enforcement(
     user_id: i64,
     role: &str,
     enforcement: &TotpEnforcement,
-    license_manager: &crate::license::LicenseManager,
 ) -> bool {
-    if !license_manager.has_feature(crate::license::FEAT_TOTP) {
-        return false;
-    }
     match enforcement {
         TotpEnforcement::Off => false,
         TotpEnforcement::AdminsOnly => {
@@ -119,15 +115,22 @@ async fn redirect_to_mfa(
         .into_response()
 }
 
-/// GET / — login page (or redirect to connections if already authenticated).
+/// Query parameters for the login page.
 #[derive(serde::Deserialize)]
 pub struct LoginQueryParams {
+    /// Error code from a failed login redirect (`/?error=...`), rendered
+    /// as a message on the login card.
     #[serde(default)]
     pub error: Option<String>,
+    /// Reserved for post-login redirects; parsed but not consumed today.
     #[serde(default)]
     pub next: Option<String>,
 }
 
+/// GET / — login page, or a redirect to the connections page when a valid
+/// session cookie is already present. First run redirects to the setup
+/// wizard (no users exist yet).
+#[allow(clippy::too_many_arguments)]
 pub async fn login_page(
     State(state): State<crate::api::AppState>,
     _addr: ConnectInfo<SocketAddr>,
@@ -170,15 +173,14 @@ pub async fn login_page(
         .as_ref()
         .and_then(|t| t.logo_url.clone())
         .unwrap_or_default();
-    // SAML is only offered when it's BOTH configured and licensed — the
-    // routes are dropped entirely for unlicensed instances (main.rs), so
-    // showing the button here would point at a 404.
+    // SAML is offered whenever it's configured — the routes are
+    // registered for both config-file and DB-configured providers
+    // (main.rs), so the button matches what's actually reachable.
     let saml_enabled = state
         .config()
         .auth
         .as_ref()
-        .is_some_and(|a| a.saml.is_some())
-        && crate::license::global().is_some_and(|m| m.has_feature(crate::license::FEAT_SAML));
+        .is_some_and(|a| a.saml.is_some());
 
     let providers = oidc_provider_names
         .map(|Extension(p)| p.0.clone())
@@ -198,6 +200,7 @@ pub async fn login_page(
     tmpl.into_response()
 }
 
+#[allow(clippy::too_many_arguments)]
 /// POST /auth/login — password-based auth (tries DB/LDAP/RADIUS in chain order).
 pub async fn login_submit(
     State(state): State<crate::api::AppState>,
@@ -206,7 +209,6 @@ pub async fn login_submit(
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(tls_enabled): Extension<TlsEnabled>,
     Extension(auth_chain): Extension<Arc<AuthChain>>,
-    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<LoginFormData>,
 ) -> Response {
@@ -285,14 +287,7 @@ pub async fn login_submit(
                 .map(|t| t.enforcement)
                 .unwrap_or(TotpEnforcement::Off);
 
-            if check_totp_enforcement(
-                &database,
-                user.id,
-                &effective_role,
-                &totp_enforcement,
-                &license_manager,
-            )
-            .await
+            if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
             {
                 let ttl_secs = 300; // 5 minutes for MFA pending
                 return redirect_to_mfa(
@@ -463,6 +458,9 @@ pub async fn login_submit(
 /// Query parameters for the MFA page.
 #[derive(serde::Deserialize)]
 pub struct MfaQueryParams {
+    /// Error code from the previous verification attempt, rendered as a
+    /// hint on the page (`expired`, `no_session`, `invalid_code`,
+    /// `account_locked`).
     pub error: Option<String>,
 }
 
@@ -565,6 +563,7 @@ pub async fn mfa_page(Query(params): Query<MfaQueryParams>) -> Response {
 /// MFA form data.
 #[derive(serde::Deserialize)]
 pub struct MfaFormData {
+    /// Six-digit TOTP code the user entered.
     pub code: String,
 }
 
@@ -716,9 +715,13 @@ pub async fn mfa_submit(
 
 // ── Form data ──────────────────────────────────────────────────────────────
 
+/// Form body of the password login form (POST /auth/login).
 #[derive(serde::Deserialize)]
 pub struct LoginFormData {
+    /// Account identifier, matched against the auth chain providers.
     pub username: String,
+    /// Plaintext password handed to the configured providers for
+    /// verification.
     pub password: String,
 }
 
@@ -726,6 +729,7 @@ pub struct LoginFormData {
 
 /// POST /auth/saml/acs — SAML Assertion Consumer Service callback.
 ///
+#[allow(clippy::too_many_arguments)]
 /// Receives the SAMLResponse from the IdP, validates it, creates an auth
 /// session, and redirects to connections.
 pub async fn saml_acs(
@@ -737,7 +741,6 @@ pub async fn saml_acs(
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(totp_enforcement): Extension<TotpEnforcement>,
     Extension(tls_enabled): Extension<TlsEnabled>,
-    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<SamlAcsForm>,
 ) -> Response {
@@ -745,11 +748,6 @@ pub async fn saml_acs(
     use std::collections::HashMap;
 
     let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
-
-    if !license_manager.has_feature(crate::license::FEAT_SAML) {
-        tracing::warn!(client_ip = %client_ip, "SAML login attempted without an enterprise license");
-        return Redirect::to("/?error=saml_not_licensed").into_response();
-    }
 
     if form.SAMLResponse.is_empty() {
         return Redirect::to("/?error=saml_missing_response").into_response();
@@ -815,14 +813,7 @@ pub async fn saml_acs(
 
             // Check TOTP enforcement before creating session
             let effective_role = role.clone().unwrap_or_else(|| user.role.clone());
-            if check_totp_enforcement(
-                &database,
-                user.id,
-                &effective_role,
-                &totp_enforcement,
-                &license_manager,
-            )
-            .await
+            if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
             {
                 let ttl_secs = 300; // 5 minutes for MFA pending
                 return redirect_to_mfa(
@@ -915,10 +906,16 @@ pub async fn saml_acs(
     }
 }
 
+/// Form body of the SAML Assertion Consumer Service callback.
+///
+/// The IdP posts this to `/auth/saml/acs` after the assertion exchange.
 #[derive(serde::Deserialize)]
 #[allow(non_snake_case)]
 pub struct SamlAcsForm {
+    /// Base64-encoded SAMLResponse XML from the IdP.
     pub SAMLResponse: String,
+    /// RelayState echo, used as the post-login redirect target when it is
+    /// a safe relative path.
     #[serde(default)]
     pub RelayState: Option<String>,
 }

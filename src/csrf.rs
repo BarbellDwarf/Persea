@@ -19,6 +19,7 @@ use tower::{Layer, Service};
 
 use crate::auth::TrustedProxies;
 
+/// Name of the CSRF double-submit token cookie.
 pub const CSRF_COOKIE: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 32;
 
@@ -160,6 +161,7 @@ fn is_state_changing(method: &Method) -> bool {
     )
 }
 
+/// Tower layer that wraps a service with the CSRF double-submit check.
 #[derive(Clone)]
 pub struct CsrfLayer;
 
@@ -171,6 +173,8 @@ impl<S> Layer<S> for CsrfLayer {
     }
 }
 
+/// Tower service enforcing the CSRF double-submit check on
+/// state-changing requests.
 #[derive(Clone)]
 pub struct CsrfService<S> {
     inner: S,
@@ -213,7 +217,7 @@ where
             // the inner service.  Used both for the double-submit check
             // (state-changing methods) and to re-set the cookie on the
             // response without generating a fresh token each time.
-            let incoming_cookie = extract_cookie(&req.headers(), CSRF_COOKIE);
+            let incoming_cookie = extract_cookie(req.headers(), CSRF_COOKIE);
 
             if is_state_changing(&method) {
                 let header_token = req
@@ -272,8 +276,8 @@ where
                             path = %path,
                             "CSRF token mismatch"
                         );
-                        // The login form is a plain (non-fetch) POST — see
-                        // R70 — so a raw JSON body here would navigate the
+                        // The login form is a plain (non-fetch) POST — a raw
+                        // JSON body here would navigate the
                         // browser straight to it instead of showing on the
                         // login page. Redirect back with a friendly error
                         // instead, matching how every other login failure
@@ -307,7 +311,7 @@ where
             // token, and whichever Set-Cookie arrived last "won", leaving
             // earlier callers with a stale cookie value.
             {
-                let token = incoming_cookie.unwrap_or_else(|| generate_token());
+                let token = incoming_cookie.unwrap_or_else(generate_token);
                 let secure = if is_https { " Secure" } else { "" };
                 let cookie = format!("{}={}; Path=/; SameSite=Lax;{}", CSRF_COOKIE, token, secure);
                 resp.headers_mut()

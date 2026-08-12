@@ -1,0 +1,82 @@
+name: CLA
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  cla-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify CLA signature for PR author
+        env:
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -euo pipefail
+
+          # Automated bot accounts cannot sign a CLA. Dependabot opens
+          # dependency-bump PRs weekly; exempt the standard bot logins.
+          # (Quoted literals — unquoted, the '[bot]' would be a glob class.)
+          case "$AUTHOR" in
+            'dependabot[bot]'|'renovate[bot]'|'github-actions[bot]'|'imgbot[bot]'|'pre-commit-ci[bot]')
+              echo "::notice::Skipping CLA check for automated bot account '$AUTHOR'"
+              exit 0
+              ;;
+          esac
+
+          # Case-insensitive lookup: GitHub usernames are unique ignoring
+          # case, and the registry uses lowercase filenames.
+          SIGNED_FILE=""
+          LOW_AUTHOR=$(echo "$AUTHOR.md" | tr '[:upper:]' '[:lower:]')
+          for f in cla/signed/*.md; do
+            [ -e "$f" ] || continue
+            if [ "$(basename "$f" | tr '[:upper:]' '[:lower:]')" = "$LOW_AUTHOR" ]; then
+              SIGNED_FILE="$f"
+              break
+            fi
+          done
+
+          if [ -z "$SIGNED_FILE" ]; then
+            cat <<MSG
+          ❌ CLA check failed — no signed Contributor License Agreement on file.
+
+          persea requires every contributor to sign CLA.md (see CONTRIBUTING.md,
+          "PR Process") before their contributions can be merged.
+
+          To sign:
+            1. On your branch, add a file  cla/signed/$AUTHOR.md  (lowercase
+               username; see cla/signed/spirusnox.md for the format) containing:
+
+                 # CLA Signature — <Your Name>
+                 - **Name:** <Your Name>
+                 - **GitHub username:** $AUTHOR
+                 - **Date:** <YYYY-MM-DD>
+                 - **Statement:** I have read and agree to the persea Contributor License Agreement (CLA.md).
+
+            2. Push the file to this PR. The check passes as soon as the signed
+               file is present in the PR; the signature takes effect once merged.
+
+          If you contribute on behalf of an employer or client, the signing
+          entity's authorized signatory must sign instead (see CLA.md, sections
+          1 and 11, for individual vs. corporate coverage). Questions? Ask the
+          maintainers on the PR.
+          MSG
+            exit 1
+          fi
+
+          # Validate the signature file content against the author.
+          grep -Fiq "$AUTHOR" "$SIGNED_FILE" || {
+            echo "::error::$SIGNED_FILE does not reference GitHub username '$AUTHOR'."
+            exit 1
+          }
+          grep -Fq "I have read and agree to the persea Contributor License Agreement (CLA.md)" "$SIGNED_FILE" || {
+            echo "::error::$SIGNED_FILE is missing the required CLA statement."
+            exit 1
+          }
+
+          echo "::notice::CLA signature on file for '$AUTHOR' ($SIGNED_FILE)."

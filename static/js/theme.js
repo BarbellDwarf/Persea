@@ -23,24 +23,149 @@ function applyThemeColors(colors) {
     var s = document.getElementById('bg-pattern-style');
     if (!s) { s = document.createElement('style'); s.id = 'bg-pattern-style'; document.head.appendChild(s); }
     s.textContent = colors.bg_pattern && colors.bg_pattern !== 'none' ? 'body{background-image:' + colors.bg_pattern + ';background-attachment:fixed}' : '';
+    _lastAppliedColors = colors;
     localStorage.setItem('persea_theme_colors', JSON.stringify(colors));
 }
-var _themePresets = {}, _adminPreset = 'aurora';
-var _themeDescriptions = { dark: 'Navy & cyan \u2014 the default', light: 'Clean white & blue', 'high-contrast': 'Maximum readability', terminal: 'Retro green-on-black', nord: 'Arctic, muted blues', corporate: 'Slate & steel blue', aurora: 'Midnight blue with ambient glow', jaguar: 'Racing green & gold' };
+var _themePresets = {}, _adminPreset = 'aurora', _adminColors = null, _lastAppliedColors = null;
+var _themeDescriptions = { dark: 'Red & teal on navy', light: 'Blue & teal on white', 'high-contrast': 'High-contrast red & green on black', terminal: 'Amber & green on near-black', nord: 'Arctic ice blue & sage', corporate: 'Blue & orange on slate', aurora: 'Blue & cyan on midnight', jaguar: 'Gold & emerald on dark green' };
+
+// Deep-compare two color maps (both produced by serde_json, so key sets are
+// identical for palettes of the same theme set).
+function _sameColors(a, b) {
+    if (!a || !b) return false;
+    var ka = Object.keys(a);
+    if (ka.length !== Object.keys(b).length) return false;
+    for (var i = 0; i < ka.length; i++) {
+        var k = ka[i];
+        if (a[k] !== b[k]) return false;
+    }
+    return true;
+}
+
+// The settings UI exposes a single "primary color". When the admin customized
+// the primary (and didn't separately configure the accent), drive the accent
+// from it too, so buttons, the active nav state and focus rings pick up the
+// brand color — those render with --accent/--border-focus in app.css.
+function _applyAdminAccent(colors, presetName, presets) {
+    var c = {};
+    for (var k in colors) c[k] = colors[k];
+    var base = presets[presetName];
+    if (base && c.primary && c.primary !== base.primary &&
+        (!c.accent || c.accent === base.accent)) {
+        c.accent = c.primary;
+        if (c.primary_hover) c.accent_hover = c.primary_hover;
+    }
+    return c;
+}
+
+// Resolve the effective mode the user is in (stored choice, or the OS
+// preference when set to auto). Shared by initTheme and toggleTheme so both
+// adapt palettes identically.
+function _resolvedMode() {
+    var stored = localStorage.getItem('theme') || 'auto';
+    if (stored === 'auto') {
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+    return stored;
+}
+
+// Adapt a palette to the user's current mode. Light mode swaps the background
+// family to whites while keeping the theme's accent colors; dark/auto keep the
+// palette as authored. Same math as toggleTheme's per-mode branches.
+function _adaptToMode(colors) {
+    if (!colors || _resolvedMode() !== 'light') return colors;
+    var light = {};
+    for (var k in colors) light[k] = colors[k];
+    light.bg = '#f8fafc'; light.bg_pattern = 'none';
+    light.surface = '#fff'; light.input = '#f1f5f9';
+    light.text = '#1e293b'; light.text_muted = '#64748b';
+    light.text_dim = '#94a3b8'; light.border = '#e2e8f0';
+    light.text_on_primary = '#fff'; light.btn_disabled = '#cbd5e1';
+    return light;
+}
+
+// Re-apply the persisted color palette — but only when nothing fresh has been
+// applied yet. initTheme calls this after its own applyThemeColors, so a
+// just-computed (mode-adapted, current-branding) palette always wins over the
+// persisted one; the persisted palette only fills in for pages where
+// initTheme had nothing to apply (login, or no preset and no admin branding).
+function _restorePersistedColors() {
+    var saved = localStorage.getItem('persea_theme_colors');
+    if (!saved || _lastAppliedColors) return;
+    try { applyThemeColors(JSON.parse(saved)); } catch (e) {}
+}
+
 function initTheme(t) {
     if (!t) return;
     _themePresets = t.presets || {};
     _adminPreset = t.admin_preset || 'aurora';
     var userTheme = localStorage.getItem('persea_theme');
     var active = userTheme && _themePresets[userTheme] ? userTheme : null;
-    if (active) applyThemeColors(_themePresets[active]);
+    // 'brand' is a stored choice for the admin branding theme entry.
+    var brandChosen = userTheme === 'brand';
+    if (active) {
+        // Explicit user choice always wins over admin branding. Adapt it to
+        // the current mode so a refresh doesn't re-apply the raw (dark)
+        // palette on top of a persisted light-mode adaptation.
+        applyThemeColors(_adaptToMode(_themePresets[active]));
+        _adminColors = null;
+    } else if (t.admin_colors && (brandChosen || !userTheme)) {
+        // Admin branding is its own theme entry and the default for users
+        // who have not chosen anything. Only when the admin actually
+        // configured something, though — the resolved default (aurora) must
+        // not override the app.css green look.
+        var base = _themePresets[_adminPreset];
+        var customized = _adminPreset !== 'aurora' || !base || !_sameColors(t.admin_colors, base);
+        if (customized) {
+            _adminColors = _applyAdminAccent(t.admin_colors, _adminPreset, _themePresets);
+            applyThemeColors(_adaptToMode(_adminColors));
+        } else {
+            _adminColors = null;
+        }
+    } else {
+        _adminColors = null;
+    }
     if (t.logo_url) { var l = document.getElementById('site-logo'); if (l) { if (l.src !== t.logo_url && !l.src.endsWith(t.logo_url)) l.src = t.logo_url; l.style.display = ''; } }
     var menu = document.getElementById('um-theme-list');
     if (menu) {
         menu.innerHTML = '';
-        // "Default" option — clears preset, restores CSS green defaults
+        var hasBrand = !!_adminColors;
+        // Brand is the default selection for users who have not chosen
+        // anything; 'default' is always the persea green look.
+        var brandActive = hasBrand && (brandChosen || !userTheme);
+        var defaultActive = !brandActive && !active && !brandChosen;
+        if (hasBrand) {
+            // Admin branding as its own theme entry.
+            var brandItem = document.createElement('div');
+            brandItem.className = 'um-item' + (brandActive ? ' active' : '');
+            var bSw = document.createElement('span');
+            bSw.className = 'um-swatch';
+            bSw.style.background = 'linear-gradient(135deg,' + (_adminColors.primary || '#059669') + ' 50%,' + (_adminColors.accent || '#10b981') + ' 50%)';
+            brandItem.appendChild(bSw);
+            var bInfo = document.createElement('div');
+            bInfo.className = 'um-theme-info';
+            var bNm = document.createElement('span');
+            bNm.className = 'um-theme-name';
+            bNm.textContent = 'brand';
+            bInfo.appendChild(bNm);
+            var bDesc = document.createElement('span');
+            bDesc.className = 'um-theme-desc';
+            bDesc.textContent = 'Admin branding — colors from settings';
+            bInfo.appendChild(bDesc);
+            brandItem.appendChild(bInfo);
+            brandItem.addEventListener('click', function() {
+                localStorage.setItem('persea_theme', 'brand');
+                localStorage.removeItem('persea_theme_colors');
+                applyThemeColors(_adaptToMode(_adminColors));
+                menu.querySelectorAll('.um-item').forEach(function(el) { el.classList.remove('active'); });
+                brandItem.classList.add('active');
+                document.getElementById('user-menu').style.display = 'none';
+            });
+            menu.appendChild(brandItem);
+        }
+        // "Default" option — always restores the CSS green defaults
         var defItem = document.createElement('div');
-        defItem.className = 'um-item' + (!active ? ' active' : '');
+        defItem.className = 'um-item' + (defaultActive ? ' active' : '');
         var defSw = document.createElement('span');
         defSw.className = 'um-swatch';
         defSw.style.background = 'linear-gradient(135deg, #059669 50%, #10b981 50%)';
@@ -86,7 +211,8 @@ function initTheme(t) {
             item.appendChild(info);
             item.addEventListener('click', function() {
                 localStorage.setItem('persea_theme', name);
-                applyThemeColors(_themePresets[name]);
+                applyThemeColors(_adaptToMode(_themePresets[name]));
+                _adminColors = null;
                 menu.querySelectorAll('.um-item').forEach(function(el) { el.classList.remove('active'); });
                 item.classList.add('active');
                 document.getElementById('user-menu').style.display = 'none';
@@ -94,6 +220,10 @@ function initTheme(t) {
             menu.appendChild(item);
         });
     }
+    // Runs after every applyThemeColors above: a fresh mode-adapted palette is
+    // already in place (and wins), the persisted one only fills in when
+    // initTheme had nothing to apply.
+    _restorePersistedColors();
 }
 var _ub = document.getElementById('user-menu-btn');
 if (_ub) _ub.addEventListener('click', function(e) { e.stopPropagation(); var m = document.getElementById('user-menu'); m.style.display = m.style.display === 'block' ? 'none' : 'block'; });
@@ -140,16 +270,11 @@ document.addEventListener('click', function() { var m = document.getElementById(
 
     applyClass(theme);
 
-    // Restore color overrides only if the user has an active preset
-    var userPreset = localStorage.getItem('persea_theme');
-    if (userPreset) {
-        var savedColors = localStorage.getItem('persea_theme_colors');
-        if (savedColors) {
-            try {
-                applyThemeColors(JSON.parse(savedColors));
-            } catch(e) {}
-        }
-    }
+    // Restore the persisted palette (mode-adapted from the user's last
+    // interaction). initTheme, when it runs, re-applies a fresh mode-adapted
+    // palette right after this — and calls _restorePersistedColors again — so
+    // stale or wrong-mode colors never survive a page that has theme data.
+    _restorePersistedColors();
 
     if (stored === 'auto' || !stored) {
         mq.addEventListener('change', function() {
@@ -167,20 +292,14 @@ document.addEventListener('click', function() { var m = document.getElementById(
         var userPreset = localStorage.getItem('persea_theme');
         var preset = (userPreset && _themePresets[userPreset]) ? _themePresets[userPreset] : null;
         if (preset && preset.bg) {
-            if (next === 'dark' || next === 'auto') {
-                applyThemeColors(preset);
-            } else if (next === 'light') {
-                var light = {};
-                for (var k in preset) light[k] = preset[k];
-                light.bg = '#f8fafc'; light.bg_pattern = 'none';
-                light.surface = '#fff'; light.input = '#f1f5f9';
-                light.text = '#1e293b'; light.text_muted = '#64748b';
-                light.text_dim = '#94a3b8'; light.border = '#e2e8f0';
-                light.text_on_primary = '#fff'; light.btn_disabled = '#cbd5e1';
-                applyThemeColors(light);
-            }
+            // Preset wins over admin branding; adapt it to the chosen mode.
+            applyThemeColors(_adaptToMode(preset));
+        } else if (_adminColors) {
+            // No preset — admin branding still applies; adapt it to the
+            // chosen mode like the preset branch above does.
+            applyThemeColors(_adaptToMode(_adminColors));
         } else {
-            // No preset — clear stale color overrides so CSS rules handle it
+            // Clear stale color overrides so CSS rules handle it
             localStorage.removeItem('persea_theme_colors');
             document.documentElement.style.cssText = '';
             // No user preset — apply built-in dark/light palette so toggle has visual effect
@@ -199,12 +318,7 @@ document.addEventListener('click', function() { var m = document.getElementById(
                     primary: '#10b981', primary_hover: '#059669',
                     bg_pattern: 'none'
                 };
-                var resolved = next === 'auto' ? (mq.matches ? 'dark' : 'light') : next;
-                if (resolved === 'dark') {
-                    applyThemeColors(darkPalette);
-                } else if (resolved === 'light') {
-                    applyThemeColors(lightPalette);
-                }
+                applyThemeColors(_resolvedMode() === 'dark' ? darkPalette : lightPalette);
             }
         }
     };

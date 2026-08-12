@@ -65,10 +65,11 @@
 </div>
 
 <style>
-    .player-fullscreen { position: fixed; inset: 0; z-index: 9999; background: #000; }
+    .player-fullscreen { position: fixed; inset: 0; z-index: 9999; background: #000; padding: 0; }
     .player-fullscreen #player-header { display: none; }
-    .player-fullscreen #player-display { margin: 0; border-radius: 0; min-height: 0; height: 100%; }
-    .player-fullscreen .player-controls { position: absolute; bottom: 0; left: 0; right: 0; }
+    .player-fullscreen > div { width: 100%; height: 100%; max-width: none; max-height: none; border: none; border-radius: 0; }
+    .player-fullscreen #player-display { margin: 0; border-radius: 0; min-height: 0; flex: 1; }
+    .player-fullscreen #player-controls { position: absolute; bottom: 0; left: 0; right: 0; }
 </style>
 
 <!-- Guacamole JS modules (playback) -->
@@ -111,6 +112,30 @@
     var searchInput = document.getElementById('recordings-search');
     var searchTimer = null;
 
+    // Human-readable recording name: `YYYY-MM-DD HH:MM — <entry> — <user>`
+    // (server local time from created_at, pre-formatted by the API as
+    // `display_date`; entry falls back to hostname then session_id; user
+    // falls back to 'unknown').
+    function recordingDisplayName(rec) {
+        function pad(n) { return String(n).padStart(2, '0'); }
+        var dateStr = '';
+        if (rec.display_date) {
+            dateStr = rec.display_date;
+        } else {
+            var dateIso = rec.created_at || rec.modified;
+            if (dateIso) {
+                var d = new Date(dateIso);
+                if (!isNaN(d.getTime())) {
+                    dateStr = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+                }
+            }
+        }
+        var file = rec.name || rec.filename || '';
+        var entry = rec.entry_display_name || rec.hostname || file.replace(/\.guac(\.enc)?$/, '') || 'unknown';
+        var user = rec.user || rec.created_by || 'unknown';
+        return (dateStr ? dateStr + ' — ' : '') + entry + ' — ' + user;
+    }
+
     function loadRecordings(query) {
         var url = '/api/recordings';
         if (query) url += '?q=' + encodeURIComponent(query);
@@ -136,7 +161,7 @@
                     return sec + 's';
                 }
                 list.innerHTML = items.map(function(rec) {
-                    var name = rec.name || rec.filename || 'Unknown';
+                    var displayName = recordingDisplayName(rec);
                     var protocol = (rec.session_type || rec.protocol || '').toUpperCase();
                     var user = rec.user || rec.created_by || '—';
                     var duration = rec.duration_secs != null ? formatDuration(rec.duration_secs) : '—';
@@ -150,14 +175,14 @@
                     };
                     var colorClass = protoColors[protocol] || 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]';
                     return '<tr class="hover:bg-[var(--bg-hover)]/50 transition-colors">' +
-                        '<td class="px-4 py-3 text-sm text-[var(--text-primary)]">' + escapeHtml(name) + '</td>' +
+                        '<td class="px-4 py-3 text-sm text-[var(--text-primary)]">' + escapeHtml(displayName) + '</td>' +
                         '<td class="px-4 py-3"><span class="px-2 py-0.5 text-xs font-medium rounded border ' + colorClass + '">' + escapeHtml(protocol) + '</span></td>' +
                         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + escapeHtml(user) + '</td>' +
                         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + escapeHtml(String(duration)) + '</td>' +
                         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + escapeHtml(String(date)) + '</td>' +
                         '<td class="px-4 py-3 text-right">' +
-                            '<button class="rec-play text-emerald-400 hover:text-emerald-300 text-sm mr-3" data-name="' + escapeAttr(name) + '">Play</button>' +
-                            '<button class="rec-delete text-red-400 hover:text-red-300 text-sm" data-name="' + escapeAttr(name) + '">Delete</button>' +
+                            '<button class="rec-play text-emerald-400 hover:text-emerald-300 text-sm mr-3" data-file="' + escapeAttr(rec.name || rec.filename || '') + '" data-title="' + escapeAttr(displayName) + '">Play</button>' +
+                            '<button class="rec-delete text-red-400 hover:text-red-300 text-sm" data-file="' + escapeAttr(rec.name || rec.filename || '') + '" data-title="' + escapeAttr(displayName) + '">Delete</button>' +
                         '</td>' +
                         '</tr>';
                 }).join('');
@@ -166,9 +191,10 @@
                 list.addEventListener('click', function(ev) {
                     var btn = ev.target.closest('.rec-play, .rec-delete');
                     if (!btn) return;
-                    var name = btn.getAttribute('data-name');
-                    if (btn.classList.contains('rec-play')) playRecording(name);
-                    else if (btn.classList.contains('rec-delete')) deleteRecording(name);
+                    var file = btn.getAttribute('data-file');
+                    var title = btn.getAttribute('data-title');
+                    if (btn.classList.contains('rec-play')) playRecording(file, title);
+                    else if (btn.classList.contains('rec-delete')) deleteRecording(file, title);
                 });
             })
             .catch(function() {});
@@ -180,6 +206,27 @@
     var playBtn = document.getElementById('play-btn');
     var seekSlider = document.getElementById('seek-slider');
     var timeEl = document.getElementById('player-time');
+
+    // Scale the recording to fill the available area. Fullscreen uses the
+    // whole viewport (no 1.0 cap, mirroring client.html); the modal keeps
+    // the video at modal size (never upscaled past natural resolution).
+    function scaleRecordingDisplay() {
+        if (!currentRecording) return;
+        var display = currentRecording.getDisplay();
+        var w = display.getWidth();
+        var h = display.getHeight();
+        if (w <= 0 || h <= 0) return;
+        var inFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+        var scale;
+        if (inFs) {
+            scale = Math.min(window.innerWidth / w, window.innerHeight / h);
+        } else {
+            var containerWidth = playerDisplayEl.clientWidth || 1080;
+            var containerHeight = playerDisplayEl.clientHeight || 600;
+            scale = Math.min(containerWidth / w, containerHeight / h, 1);
+        }
+        display.scale(scale);
+    }
 
     function formatTime(millis) {
         var s = Math.max(0, Math.floor((millis || 0) / 1000));
@@ -212,7 +259,6 @@
     var fsEnterIcon = document.getElementById('fs-icon-enter');
     var fsExitIcon = document.getElementById('fs-icon-exit');
     var playerSection = document.getElementById('player-section');
-    var playerDisplayContainer = document.getElementById('player-display');
 
     function updateFullscreenUI() {
         var fsEl = document.fullscreenElement || document.webkitFullscreenElement;
@@ -220,6 +266,9 @@
         fsEnterIcon.classList.toggle('hidden', inFs);
         fsExitIcon.classList.toggle('hidden', !inFs);
         playerSection.classList.toggle('player-fullscreen', inFs);
+        // Inline style wins over the stylesheet, so adjust it explicitly.
+        playerDisplayEl.style.minHeight = inFs ? '0' : '400px';
+        scaleRecordingDisplay();
     }
 
     document.getElementById('fullscreen-btn').addEventListener('click', function() {
@@ -227,18 +276,21 @@
             var exit = document.exitFullscreen || document.webkitExitFullscreen;
             if (exit) exit.call(document);
         } else {
-            var req = playerDisplayContainer.requestFullscreen || playerDisplayContainer.webkitRequestFullscreen;
-            if (req) req.call(playerDisplayContainer);
+            // Fullscreen the whole player section so the controls overlay
+            // the bottom of the viewport and the CSS below applies.
+            var req = playerSection.requestFullscreen || playerSection.webkitRequestFullscreen;
+            if (req) req.call(playerSection);
         }
     });
 
     document.addEventListener('fullscreenchange', updateFullscreenUI);
     document.addEventListener('webkitfullscreenchange', updateFullscreenUI);
+    window.addEventListener('resize', scaleRecordingDisplay);
 
-    window.playRecording = function(name) {
+    window.playRecording = function(name, title) {
         closePlayer();
 
-        document.getElementById('player-title').textContent = 'Playback: ' + name;
+        document.getElementById('player-title').textContent = 'Playback: ' + (title || name);
         var section = document.getElementById('player-section');
         section.classList.remove('hidden');
 
@@ -252,17 +304,7 @@
 
         var display = recording.getDisplay();
         playerDisplayEl.appendChild(display.getElement());
-
-        function scaleRecordingDisplay() {
-            var w = display.getWidth();
-            var h = display.getHeight();
-            if (w > 0 && h > 0) {
-                var containerWidth = playerDisplayEl.clientWidth || 1080;
-                var scale = Math.min(containerWidth / w, 1);
-                display.scale(scale);
-            }
-        }
-        display.onresize = function() { scaleRecordingDisplay(); };
+        display.onresize = scaleRecordingDisplay;
 
         var duration = 0;
         var currentPos = 0;
@@ -295,9 +337,9 @@
         recording.connect();
     };
 
-    window.deleteRecording = function(name) {
-        if (!confirm('Delete recording "' + name + '"?')) return;
-        fetch('/api/recordings/' + encodeURIComponent(name), {
+    window.deleteRecording = function(file, title) {
+        if (!confirm('Delete recording "' + (title || file) + '"?')) return;
+        fetch('/api/recordings/' + encodeURIComponent(file), {
             method: 'DELETE',
             credentials: 'same-origin'
         }).then(function() { loadRecordings(); });

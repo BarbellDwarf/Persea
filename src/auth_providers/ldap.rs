@@ -100,6 +100,7 @@ pub struct LdapProvider {
 }
 
 impl LdapProvider {
+    /// Create a provider from the given config.
     pub fn new(config: LdapConfig) -> Self {
         Self { config }
     }

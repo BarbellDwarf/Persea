@@ -57,7 +57,7 @@ document.getElementById('theme-toggle')?.addEventListener('click', function() {
             sidebar.classList.toggle('collapsed');
             var icon = btn.querySelector('svg');
             if (icon) icon.style.transform = sidebar.classList.contains('collapsed') ? 'rotate(180deg)' : '';
-            // R12: clicking collapse while the mouse is still over the sidebar
+            // Clicking collapse while the mouse is still over the sidebar
             // would otherwise trigger :hover expansion in the same instant,
             // making the click look like it did nothing. Briefly suppress
             // hover-expand so the collapse is visible before hover can kick

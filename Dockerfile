@@ -37,26 +37,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-# Pin to main HEAD (de97609, 2026-07-28) — the base the patch set is built
-# against. The 1.6.0 tag predates the display-layer refactor the H.264 patch
-# needs; staging/1.6.1 lacks the clipboard-recording API the SPICE patch uses.
-# Fetch the exact commit rather than cloning main: a shallow clone of main
-# cannot check out a pin once upstream moves past it.
-RUN git init guacamole-server \
-    && cd guacamole-server \
-    && git remote add origin https://github.com/apache/guacamole-server.git \
-    && git fetch --depth 1 origin de97609007c088b5e6afd827eff5e9076013a247 \
-    && git checkout FETCH_HEAD
+# guacd source comes from the maintained fork
+# BarbellDwarf/persea-guacamole-server, branch persea-1.6.1-freerdp3: a fork
+# of apache/guacamole-server at the pinned base commit de97609 with the
+# former patch quilt (FreeRDP 3.x / Debian 13 fixes, Kerberos NLA, H.264,
+# SPICE, multimonitor) applied as one commit per patch. Shallow-clone the
+# branch so the image stays small.
+RUN git clone --depth 1 --branch persea-1.6.1-freerdp3 \
+    https://github.com/BarbellDwarf/persea-guacamole-server.git guacamole-server
 
-# Apply patches for FreeRDP 3.x / Debian 13 compatibility
-COPY patches/ /build/patches/
 WORKDIR /build/guacamole-server
-RUN for patch in /build/patches/*.patch; do \
-        [ -f "$patch" ] || continue; \
-        echo "Applying patch: $(basename "$patch")"; \
-        git apply "$patch"; \
-    done
-
 RUN autoreconf -fi
 
 WORKDIR /build/guacd-build
@@ -96,11 +86,10 @@ ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
-COPY keys/ keys/
 
 # Create dummy sources so cargo can resolve all [[bin]] targets during the
 # dependency-cache build.  These are overwritten by the real COPYs below.
-RUN mkdir -p src license-gen && echo 'fn main() {}' > src/main.rs && echo 'fn main() {}' > license-gen/main.rs
+RUN mkdir -p src && echo 'fn main() {}' > src/main.rs
 
 # Compile all dependencies once with a dummy main so the dependency layer is
 # only rebuilt when Cargo.toml/Cargo.lock change, not on every source edit.
@@ -145,13 +134,20 @@ ARG PERSEA_BETA="0"
 ENV PERSEA_BETA=${PERSEA_BETA}
 
 # Runtime libraries for guacd
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# krb5-user provides the Kerberos client (kinit/kvno) and libraries used by
+# FreeRDP's Kerberos NLA wrapper. Its install prompts for a default realm via
+# debconf — pre-seed an empty answer and force noninteractive so the build
+# cannot hang; the real realm is written to /etc/krb5.conf at container start
+# from the PERSEA_KRB5_* env vars.
+RUN printf 'krb5-config krb5-config/default_realm string \n' | debconf-set-selections \
+    && DEBIAN_FRONTEND=noninteractive apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 libjpeg62-turbo libpng16-16t64 libwebp7 \
     libssh2-1 libssl3t64 libvncclient1 \
     libpango-1.0-0 libpulse0 \
     libavcodec61 libavformat61 libavutil59 libswscale8 \
     libtelnet2 libwebsockets19t64 \
     libfreerdp3-3 libfreerdp-client3-3 libwinpr3-3 \
+    krb5-user \
     # Xvnc + Chromium for web browser sessions
     tigervnc-standalone-server \
     chromium chromium-sandbox \
@@ -159,6 +155,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Minimal runtime utilities
     ca-certificates \
     curl \
+    # socat: the RDP relay's outbound leg (system binaries are typically
+    # allowed by endpoint filters that block the gateway's own processes)
+    socat \
     && rm -rf /var/lib/apt/lists/*
 
 # Install guacd
@@ -217,6 +216,13 @@ RUN mkdir -p /etc/chromium/policies/managed && \
 
 # Create non-root user with a real home directory (Chromium crashpad needs it)
 RUN groupadd -r persea && useradd -r -g persea -m -d /home/persea -s /bin/sh persea
+
+# The entrypoint runs as persea and writes /etc/krb5.conf at container start
+# (generated from PERSEA_KRB5_* env vars, or an operator-mounted
+# /opt/persea/krb5.conf copied into place) — make the file writable by the
+# non-root user. touch also ensures the file exists even if the krb5-config
+# postinst skipped writing it.
+RUN touch /etc/krb5.conf && chown persea:persea /etc/krb5.conf
 
 # Default config template (copied to config.toml on first run if not mounted)
 RUN cat > /opt/persea/config.toml.default <<'EOF'
@@ -296,7 +302,12 @@ if [ ! -f "$DB_PATH" ]; then
     echo "First run detected — creating admin API key..."
     ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
     touch "$ADMIN_KEY_FILE"
-    chmod 600 "$ADMIN_KEY_FILE"
+    # Best-effort: some bind mounts (Windows/WSL, 9p, virtiofs) don't support
+    # chmod and would otherwise kill the script under set -e, leaving the DB
+    # uncreated and the container looping on first run forever.
+    if ! chmod 600 "$ADMIN_KEY_FILE" 2>/dev/null; then
+        echo "warning: could not set owner-only permissions on $ADMIN_KEY_FILE (filesystem does not support chmod) — the admin API key may be readable by other users on the host"
+    fi
     /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin > "$ADMIN_KEY_FILE" 2>&1
     echo "Admin API key written to $ADMIN_KEY_FILE (owner-read only)"
 fi
@@ -305,6 +316,58 @@ fi
 # by the beta workflow); production images skip this.
 if [ "$PERSEA_BETA" = "1" ]; then
     echo "persea version: $(/opt/persea/bin/persea --version 2>&1)"
+fi
+
+# Generate /etc/krb5.conf for Kerberos NLA (RDP) when configured. An
+# operator-mounted /opt/persea/krb5.conf takes precedence over generation.
+if [ -f /opt/persea/krb5.conf ]; then
+    echo "Using operator-mounted krb5.conf (/opt/persea/krb5.conf)"
+    cp /opt/persea/krb5.conf /etc/krb5.conf
+elif [ -n "${PERSEA_KRB5_REALM:-}" ]; then
+    if [ -z "${PERSEA_KRB5_KDC:-}" ]; then
+        echo "warning: PERSEA_KRB5_REALM is set but PERSEA_KRB5_KDC is not — skipping krb5.conf generation (Kerberos NLA will fail)" >&2
+    else
+        KRB5_KDC="${PERSEA_KRB5_KDC}"
+        KRB5_ADMIN_SERVER="${PERSEA_KRB5_ADMIN_SERVER:-$KRB5_KDC}"
+        KRB5_DOMAIN="${PERSEA_KRB5_DOMAIN:-}"
+        {
+            echo "[libdefaults]"
+            echo "    default_realm = ${PERSEA_KRB5_REALM}"
+            echo "    dns_lookup_kdc = true"
+            echo "    dns_lookup_realm = false"
+            echo "    forwardable = true"
+            echo "    rdns = false"
+            echo ""
+            echo "[realms]"
+            echo "    ${PERSEA_KRB5_REALM} = {"
+            echo "        kdc = ${KRB5_KDC}"
+            echo "        admin_server = ${KRB5_ADMIN_SERVER}"
+            if [ -n "$KRB5_DOMAIN" ]; then
+                echo "        default_domain = ${KRB5_DOMAIN}"
+            fi
+            echo "    }"
+            if [ -n "$KRB5_DOMAIN" ]; then
+                echo ""
+                echo "[domain_realm]"
+                echo "    .${KRB5_DOMAIN} = ${PERSEA_KRB5_REALM}"
+                echo "    ${KRB5_DOMAIN} = ${PERSEA_KRB5_REALM}"
+            fi
+        } > /etc/krb5.conf
+        echo "Generated /etc/krb5.conf (realm ${PERSEA_KRB5_REALM}, KDC ${KRB5_KDC})"
+
+        # Lightweight, non-blocking KDC reachability check (TCP/88) so
+        # operators see Kerberos problems at container start rather than in
+        # RDP session errors. Uses nc or bash /dev/tcp — no extra deps.
+        if command -v nc >/dev/null 2>&1; then
+            if ! timeout 3 nc -z "$KRB5_KDC" 88 >/dev/null 2>&1; then
+                echo "warning: KDC ${KRB5_KDC} not reachable on TCP/88 — Kerberos NLA will fail (check DNS, firewall, KDC service)" >&2
+            fi
+        elif command -v bash >/dev/null 2>&1; then
+            if ! timeout 3 bash -c "exec 3<>/dev/tcp/${KRB5_KDC}/88" >/dev/null 2>&1; then
+                echo "warning: KDC ${KRB5_KDC} not reachable on TCP/88 — Kerberos NLA will fail (check DNS, firewall, KDC service)" >&2
+            fi
+        fi
+    fi
 fi
 
 # Start guacd in background

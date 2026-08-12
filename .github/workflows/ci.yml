@@ -3,6 +3,30 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  secrets-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Fail if the license private key is tracked
+        run: |
+          TRACKED=$(git ls-files | grep -E "license_ed25519$" || true)
+          if [ -n "$TRACKED" ]; then
+            echo "license private key file is tracked: $TRACKED"
+            exit 1
+          fi
+      - name: Fail if private key material is committed
+        run: |
+          # A real key file starts with the PEM header at line 1. Docs,
+          # templates, and workflows legitimately mention the header as a
+          # placeholder or example, so they are excluded.
+          HITS=$(grep -rIlE "^-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----" \
+            --exclude-dir=.git --exclude="*.html" --exclude="*.md" \
+            --exclude="*.yml" . || true)
+          if [ -n "$HITS" ]; then
+            echo "private key material found in: $HITS"
+            exit 1
+          fi
+
   check:
     runs-on: ubuntu-latest
     steps:
@@ -93,8 +117,10 @@ jobs:
         include:
           - backend: postgres
             db_url: "postgres://test:test@localhost:5432/persea_test"
+            test_db_url_postgres: "postgres://test:test@localhost:5432/persea_test"
           - backend: mysql
             db_url: "mysql://root:test@localhost:3306/persea_test"
+            test_db_url_mysql: "mysql://root:test@localhost:3306/persea_test"
           - backend: sqlite
             db_url: "sqlite:///tmp/persea-ci-test.db?mode=rwc"
     services:
@@ -177,6 +203,21 @@ jobs:
             exit 1
           fi
           echo "db_pool confirmed up and reachable for ${{ matrix.backend }} (reported: $ACTUAL_BACKEND)"
+
+      # R104 — the multi-backend claim must be proven continuously: run the
+      # backend integration suite (tests/backend_tests.rs) against the real
+      # Postgres and MySQL containers on every push. The suite spawns the
+      # real binary with db_url set, drives write+read round trips through
+      # the HTTP API, asserts the rows physically live in the backend's
+      # tables via a direct SQLx connection, and re-verifies persistence
+      # across a restart. The sqlite matrix entry keeps only the smoke test
+      # above; its step is skipped here.
+      - name: Run backend integration tests against ${{ matrix.backend }}
+        if: matrix.backend != 'sqlite'
+        env:
+          TEST_DATABASE_URL_POSTGRES: ${{ matrix.test_db_url_postgres }}
+          TEST_DATABASE_URL_MYSQL: ${{ matrix.test_db_url_mysql }}
+        run: cargo test --test backend_tests -- --nocapture
 
   # Playwright auth E2E — tests password login over HTTP and HTTPS
   playwright-auth:

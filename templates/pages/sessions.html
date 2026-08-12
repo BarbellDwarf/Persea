@@ -34,7 +34,7 @@
         </div>
         <div id="new-session-fields" class="hidden space-y-4">
             <div class="form-group"><label class="form-label">Type</label>
-                <select id="session-type" class="form-input"><option value="ssh" selected>SSH</option><option value="rdp">RDP</option><option value="vnc">VNC</option><option value="web">Web</option><option value="vdi">VDI (Docker)</option></select></div>
+                <select id="session-type" class="form-input"><option value="ssh" selected>SSH</option><option value="rdp">RDP</option><option value="vnc">VNC</option>{% if features.web_sessions %}<option value="web">Web</option>{% endif %}{% if features.vdi %}<option value="vdi">VDI (Docker)</option>{% endif %}</select></div>
             <div id="ssh-fields" class="grid grid-cols-2 gap-4">
                 <div class="form-group"><label class="form-label">Host</label><input type="text" id="hostname" placeholder="192.168.1.1" class="form-input"></div>
                 <div class="form-group"><label class="form-label">Port</label><input type="number" id="port" value="22" class="form-input"></div>
@@ -65,6 +65,21 @@
 <style>.proto-ssh{background:rgba(34,197,94,.15);color:#4ade80;border-color:rgba(34,197,94,.3)}.proto-rdp{background:rgba(59,130,246,.15);color:#60a5fa;border-color:rgba(59,130,246,.3)}.proto-vnc{background:rgba(249,115,22,.15);color:#fb923c;border-color:rgba(249,115,22,.3)}.proto-spice{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}.proto-web,.proto-vmware{background:rgba(20,184,166,.15);color:#2dd4bf;border-color:rgba(20,184,166,.3)}.proto-proxmox{background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.3)}.proto-vdi{background:rgba(236,72,153,.15);color:#f472b6;border-color:rgba(236,72,153,.3)}.status-pill{padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid}.status-active{background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3)}.status-pending{background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3)}.status-disconnected{background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3)}.status-completed,.status-expired,.status-error{background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3)}</style>
 <script nonce="{{ csp_nonce }}">
 (function() {
+    // ── Session open preference ──────────────────────────────────────
+    // Per-user preference (account profile page), stored in localStorage:
+    // `tab` (default) | `window` | `same`. Applied to the ad-hoc connect
+    // flow and the session-list Open links (join/share).
+    function getOpenMode() {
+        var m = localStorage.getItem('persea_session_open');
+        return (m === 'window' || m === 'same') ? m : 'tab';
+    }
+    function openSessionUrl(url) {
+        var mode = getOpenMode();
+        if (mode === 'same') { window.location.href = url; return true; }
+        var features = (mode === 'window') ? 'width=1280,height=800' : undefined;
+        return !!window.open(url, '_blank', features);
+    }
+
     var toggle = document.getElementById('new-session-toggle');
     var btnNew = document.getElementById('btn-new-session');
     var fields = document.getElementById('new-session-fields');
@@ -150,7 +165,10 @@
             connectBtn.textContent = 'Connect';
             if (!res.ok && res.data.code === 401) { window.location.href = '/'; return; }
             if (res.ok && res.data.session_id) {
-                window.open('/client/' + encodeURIComponent(res.data.session_id), '_blank');
+                var url = '/client/' + encodeURIComponent(res.data.session_id);
+                if (!openSessionUrl(url)) {
+                    showError('Popup blocked \u2014 allow popups for this site and try again.');
+                }
                 return;
             }
             showError(res.data.error || 'Failed to start session.');
@@ -166,6 +184,17 @@
     var listEl = document.getElementById('session-list');
     var emptyEl = document.getElementById('session-empty');
     var countsEl = document.getElementById('session-counts');
+    // Open links honour the session open preference (tab/window/same).
+    // CSP-safe: the anchor only carries a data-open-session attribute;
+    // plain left-clicks are intercepted here, modifier-clicks (middle,
+    // ctrl) keep their native behaviour. Delegated on the persistent
+    // container so re-renders never stack duplicate listeners.
+    listEl.addEventListener('click', function(ev) {
+        var a = ev.target.closest('a[data-open-session]');
+        if (!a) return;
+        ev.preventDefault();
+        openSessionUrl(a.href);
+    });
     function durationStr(createdAt) {
         var secs = Math.max(0, Math.floor((Date.now() - new Date(createdAt).getTime()) / 1000));
         if (secs < 60) return secs + 's';
@@ -201,7 +230,7 @@
             var target = s.url || s.hostname || '\u2014';
             var actions = '';
             if (s.status === 'active' || s.status === 'pending' || s.status === 'disconnected') {
-                actions = '<a href="' + escapeAttr(s.client_url || '/client/' + encodeURIComponent(s.session_id)) + '" class="btn btn-primary btn-sm" style="width:auto">Open</a>'
+                actions = '<a href="' + escapeAttr(s.client_url || '/client/' + encodeURIComponent(s.session_id)) + '" data-open-session class="btn btn-primary btn-sm" style="width:auto">Open</a>'
                     + ' <button type="button" class="btn btn-danger btn-sm session-terminate" data-id="' + escapeAttr(s.session_id) + '" style="width:auto">Terminate</button>';
             }
             return '<tr>'

@@ -31,30 +31,37 @@ fn metrics() -> &'static Metrics {
     })
 }
 
+/// Record one active session.
 pub fn session_active_inc() {
     metrics().sessions_active.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Record one fewer active session.
 pub fn session_active_dec() {
     metrics().sessions_active.fetch_sub(1, Ordering::Relaxed);
 }
 
+/// Count a session creation.
 pub fn session_total_inc() {
     metrics().sessions_total.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Count an HTTP request handled by the metrics layer.
 pub fn request_inc() {
     metrics().requests_total.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Count a 5xx response.
 pub fn error_inc() {
     metrics().request_errors.fetch_add(1, Ordering::Relaxed);
 }
 
+/// Seconds since the process started.
 pub fn uptime_seconds() -> u64 {
     metrics().start_time.elapsed().as_secs()
 }
 
+/// Render all counters in Prometheus text exposition format.
 pub fn render_prometheus() -> String {
     let m = metrics();
     let uptime_secs = m.start_time.elapsed().as_secs();
@@ -84,6 +91,8 @@ pub fn render_prometheus() -> String {
 
 // ── Tower layer for request counting ──
 
+/// Tower layer that increments the request and error counters around
+/// each request it wraps.
 #[derive(Clone)]
 pub struct MetricsLayer;
 
@@ -95,6 +104,8 @@ impl<S> Layer<S> for MetricsLayer {
     }
 }
 
+/// Tower service wrapping the inner service. Each call increments the
+/// request counter, and a 5xx response increments the error counter.
 #[derive(Clone)]
 pub struct MetricsService<S> {
     inner: S,

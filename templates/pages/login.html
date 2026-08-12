@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Sign In — Persea{% endblock %}
+{% block title %}Sign In — {{ site_title }}{% endblock %}
 
 {% block body %}
 <div class="login-wrapper">
@@ -8,13 +8,13 @@
         <!-- Logo -->
         <div class="login-logo">
             {% if logo_url %}
-            <img src="{{ logo_url }}" alt="Persea" style="height:40px">
+            <img src="{{ logo_url }}" alt="{{ site_title }}" style="height:40px">
             {% else %}
             <div class="login-logo-icon">ps</div>
             {% endif %}
         </div>
 
-        <h1 class="login-title">Persea</h1>
+        <h1 class="login-title">{{ site_title }}</h1>
         <p class="login-subtitle">Sign in to your account</p>
 
         <!-- Error -->
@@ -32,7 +32,6 @@
             {% elif error == 'mfa_setup_failed' %}MFA setup failed. Please try again.
             {% elif error == 'auth_unavailable' %}Authentication service is unavailable. Please try again later.
             {% elif error == 'saml_not_configured' %}SAML authentication is not configured.
-            {% elif error == 'saml_not_licensed' %}SAML single sign-on requires an enterprise license.
             {% elif error == 'login_failed' %}Login failed. Please try again.
             {% elif error == 'csrf_failed' %}Your session expired. Please try signing in again.
             {% elif error == 'login_required' %}Please sign in to continue.

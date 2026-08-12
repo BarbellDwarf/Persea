@@ -65,6 +65,28 @@ impl SessionManager {
             ));
         }
 
+        // Admin lockdown toggles from the Settings page — a disabled
+        // protocol must not spawn sessions. The DB overlay is read once per
+        // creation attempt (live: flipping a toggle takes effect without a
+        // restart); unset or unreadable toggles default to enabled so
+        // existing deployments behave exactly as before.
+        let settings: Vec<(String, String)> = match &self.db {
+            Some(db) => {
+                let db = db.clone();
+                match tokio::task::spawn_blocking(move || {
+                    crate::settings_merge::load_db_settings(&db)
+                })
+                .await
+                {
+                    Ok(rows) => rows.unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                }
+            }
+            None => Vec::new(),
+        };
+        let toggle = |key: &str| crate::settings_merge::toggle_enabled(&settings, key, true);
+        check_session_type_enabled(&req.session_type, req.address_book_entry.as_deref(), toggle)?;
+
         let session_id = Uuid::new_v4();
         // Protocol-specific params land in flattened sub-structs (see
         // CreateSessionRequest); bind them up-front for ergonomic access.
@@ -198,7 +220,8 @@ impl SessionManager {
                     (ssh.and_then(|s| s.private_key.clone()), None)
                 };
 
-                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
+                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive)
+                    && toggle("enable_file_transfer");
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
 
                 // SSH typescript recording (#159): per-connection opt-in
@@ -209,7 +232,7 @@ impl SessionManager {
                 let typescript = self
                     .config
                     .ssh_typescript()
-                    .filter(|_| ssh.map_or(false, |s| s.record_typescript == Some(true)))
+                    .filter(|_| ssh.is_some_and(|s| s.record_typescript == Some(true)))
                     .map(|(path, name, create)| {
                         let template = name.as_deref().unwrap_or(DEFAULT_TYPESCRIPT_NAME);
                         let connection = req
@@ -278,7 +301,8 @@ impl SessionManager {
                     "Creating new RDP session"
                 );
 
-                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
+                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive)
+                    && toggle("enable_file_transfer");
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
                 tracing::info!(
                     %session_id,
@@ -676,10 +700,10 @@ impl SessionManager {
                     .await?;
 
                 if url_host == "169.254.169.254"
-                    || url_host.parse::<std::net::IpAddr>().map_or(false, |ip| {
+                    || url_host.parse::<std::net::IpAddr>().is_ok_and(|ip| {
                         "169.254.0.0/16"
                             .parse::<ipnetwork::IpNetwork>()
-                            .map_or(false, |net| net.contains(ip))
+                            .is_ok_and(|net| net.contains(ip))
                     })
                 {
                     return Err(SessionError::ValidationError(
@@ -690,7 +714,7 @@ impl SessionManager {
                 tracing::info!(
                     session_id = %session_id,
                     url = %url,
-                    has_login_script = web.map_or(false, |s| s.login_script.is_some()),
+                    has_login_script = web.is_some_and(|s| s.login_script.is_some()),
                     "Creating new web session"
                 );
 
@@ -990,7 +1014,7 @@ impl SessionManager {
                 url.as_ref().unwrap().clone()
             };
 
-            let need_cdp = web.map_or(false, |s| s.login_script.is_some());
+            let need_cdp = web.is_some_and(|s| s.login_script.is_some());
 
             // Parse autofill credentials JSON and substitute placeholders
             let autofill_creds = parse_autofill_credentials(
@@ -1076,7 +1100,7 @@ impl SessionManager {
                         .map_err(|e| e.to_string())
                 }
             )
-            .map_err(|e| SessionError::GuacdConnection(e))?;
+            .map_err(SessionError::GuacdConnection)?;
 
             tracing::info!(
                 session_id = %session_id,
@@ -1086,9 +1110,13 @@ impl SessionManager {
             (Some(stream), connection_id, None)
         };
 
+        // `enable_recordings` lockdown — when the admin switched
+        // recordings off, no session may record regardless of request or
+        // config (the toggle defaults to enabled when unset).
         let recording_enabled = req
             .enable_recording
-            .unwrap_or(self.config.recording_enabled());
+            .unwrap_or(self.config.recording_enabled())
+            && toggle("enable_recordings");
 
         // Spawn login script if configured (web sessions with CDP port)
         let login_script_handle = if let (Some(script), Some(bs)) = (
@@ -1185,6 +1213,41 @@ impl SessionManager {
 
         crate::metrics::session_total_inc();
 
+        // Enterprise HA: mirror the live session in the shared
+        // registry so other instances can see/join it. No-op without a
+        // shared backend (single-instance mode unchanged).
+        if self.ha_enabled() {
+            if let Some(ref db) = self.db {
+                let db = db.clone();
+                let session_id_str = session_id.to_string();
+                let owner = self.config.instance_id.clone();
+                let base_url = self.config.ha_base_url.clone().unwrap_or_default();
+                let st = format!("{:?}", info.session_type).to_lowercase();
+                let hostname = info.hostname.clone();
+                let username = info.username.clone();
+                let created_by = info.created_by.clone();
+                let created_at = crate::db::registry_ts(info.created_at);
+                let now = crate::db::registry_ts(chrono::Utc::now());
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::db::registry_upsert_session(
+                        &db,
+                        &session_id_str,
+                        &owner,
+                        &base_url,
+                        &st,
+                        "pending",
+                        &hostname,
+                        &username,
+                        &created_by,
+                        &created_at,
+                        &now,
+                        "",
+                    )
+                })
+                .await;
+            }
+        }
+
         // Record in session history (non-blocking)
         if let Some(ref db) = self.db {
             let db = db.clone();
@@ -1219,21 +1282,43 @@ impl SessionManager {
         let browser_mgr = std::sync::Arc::clone(&self.browser_manager);
         let timeout_secs = self.config.session_pending_timeout_secs;
         let (cleanup_on_close, retention_secs) = super::drive_cleanup_settings(&self.config.drive);
+        // Mark the registry row expired when the pending window lapses
+        // (the store functions no-op without a shared backend pool).
+        let registry_db = self.db.clone();
+        let registry_ha = self.ha_enabled();
         tokio::spawn(async move {
             time::sleep(time::Duration::from_secs(timeout_secs)).await;
-            let sessions_read = sessions_ref.read().await;
-            if let Some(session) = sessions_read.get(&session_id) {
-                let mut session = session.lock().await;
-                if session.status == SessionStatus::Pending {
-                    tracing::warn!(session_id = %session_id, "Session expired (no browser connected)");
-                    session.status = SessionStatus::Expired;
-                    session.guacd_stream = None;
-                    super::cleanup_browser(
-                        &browser_mgr,
-                        &mut session,
-                        cleanup_on_close,
-                        retention_secs,
-                    )
+            let mut was_pending = false;
+            {
+                let sessions_read = sessions_ref.read().await;
+                if let Some(session) = sessions_read.get(&session_id) {
+                    let mut session = session.lock().await;
+                    if session.status == SessionStatus::Pending {
+                        tracing::warn!(session_id = %session_id, "Session expired (no browser connected)");
+                        session.status = SessionStatus::Expired;
+                        was_pending = true;
+                        session.guacd_stream = None;
+                        super::cleanup_browser(
+                            &browser_mgr,
+                            &mut session,
+                            cleanup_on_close,
+                            retention_secs,
+                        )
+                        .await;
+                    }
+                }
+            }
+            // Mark the registry row expired only when the session was
+            // still pending — a session that already connected must keep its
+            // live status.
+            if was_pending && registry_ha {
+                if let Some(ref db) = registry_db {
+                    let db = db.clone();
+                    let sid = session_id.to_string();
+                    let now = crate::db::registry_ts(chrono::Utc::now());
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::db::registry_set_status(&db, &sid, "expired", &now)
+                    })
                     .await;
                 }
             }
@@ -1428,6 +1513,61 @@ async fn check_allowed_network(
         "host '{}' resolves to addresses not in the allowed network list",
         host
     )))
+}
+
+/// Which `enable_*` lockdown toggle gates a session type. `Vnc` and `Ssh`
+/// have no toggles (the settings page offers none) and are never blocked
+/// here — SSH is always allowed like VNC; `enable_ssh_tunnels` only gates
+/// the jump-host management UI, not SSH sessions.
+fn protocol_toggle(session_type: &SessionType) -> Option<&'static str> {
+    match session_type {
+        SessionType::Rdp => Some("enable_rdp"),
+        SessionType::Ssh => None,
+        SessionType::Spice => Some("enable_spice"),
+        SessionType::Proxmox => Some("enable_proxmox"),
+        SessionType::Web => Some("enable_web_sessions"),
+        SessionType::Vdi => Some("enable_vdi"),
+        SessionType::Vnc => None,
+    }
+}
+
+/// Human label for the disabled-protocol error message.
+fn protocol_label(session_type: &SessionType) -> &'static str {
+    match session_type {
+        SessionType::Rdp => "RDP",
+        SessionType::Ssh => "SSH",
+        SessionType::Spice => "SPICE",
+        SessionType::Proxmox => "Proxmox VE",
+        SessionType::Web => "Web browser",
+        SessionType::Vdi => "VDI",
+        SessionType::Vnc => "VNC",
+    }
+}
+
+/// Enforce the admin lockdown toggles at session creation. Rejects
+/// with a clear error when the effective setting forbids the session type.
+/// VMware sessions are plain RDP/SSH/VNC sessions routed from the vSphere
+/// API with an `address_book_entry` of the form `vsphere/<vm name>`; they
+/// additionally require `enable_vmware`.
+fn check_session_type_enabled(
+    session_type: &SessionType,
+    address_book_entry: Option<&str>,
+    toggle: impl Fn(&str) -> bool,
+) -> Result<(), SessionError> {
+    if let Some(key) = protocol_toggle(session_type) {
+        if !toggle(key) {
+            return Err(SessionError::ValidationError(format!(
+                "{} sessions are disabled by an administrator",
+                protocol_label(session_type)
+            )));
+        }
+    }
+    if address_book_entry.is_some_and(|e| e.starts_with("vsphere/")) && !toggle("enable_vmware") {
+        return Err(SessionError::ValidationError(
+            "VMware sessions are disabled by an administrator".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1669,5 +1809,123 @@ mod tests {
         let creds = parse_autofill_credentials(Some(json), None, None).unwrap();
         assert_eq!(creds.len(), 1);
         assert_eq!(creds[0].0, "https://ok.com");
+    }
+
+    // ── Protocol lockdown toggles ──
+
+    const ALL_TYPES: [SessionType; 7] = [
+        SessionType::Ssh,
+        SessionType::Web,
+        SessionType::Rdp,
+        SessionType::Vnc,
+        SessionType::Vdi,
+        SessionType::Spice,
+        SessionType::Proxmox,
+    ];
+
+    fn only_off<'a>(disabled: &'a [&'a str]) -> impl Fn(&str) -> bool + 'a {
+        let disabled = disabled.to_vec();
+        move |k: &str| !disabled.contains(&k)
+    }
+
+    #[test]
+    fn all_protocols_allowed_when_toggles_unset() {
+        for st in ALL_TYPES {
+            assert!(
+                check_session_type_enabled(&st, None, |_| true).is_ok(),
+                "{:?} should be allowed when everything is enabled",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn rdp_disabled_blocks_rdp_sessions() {
+        let err = check_session_type_enabled(&SessionType::Rdp, None, only_off(&["enable_rdp"]))
+            .unwrap_err();
+        assert!(
+            format!("{}", err).contains("RDP sessions are disabled by an administrator"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn ssh_has_no_toggle_and_is_never_blocked() {
+        // Semantic change (T03): enable_ssh_tunnels no longer gates SSH
+        // sessions — it only controls the jump-host management UI.
+        assert!(check_session_type_enabled(&SessionType::Ssh, None, |_| false).is_ok());
+    }
+
+    #[test]
+    fn spice_proxmox_web_vdi_each_gated_by_own_toggle() {
+        for (st, key, label) in [
+            (SessionType::Spice, "enable_spice", "SPICE"),
+            (SessionType::Proxmox, "enable_proxmox", "Proxmox VE"),
+            (SessionType::Web, "enable_web_sessions", "Web browser"),
+            (SessionType::Vdi, "enable_vdi", "VDI"),
+        ] {
+            let err = check_session_type_enabled(&st, None, only_off(&[key])).unwrap_err();
+            assert!(
+                format!("{}", err).contains(&format!(
+                    "{} sessions are disabled by an administrator",
+                    label
+                )),
+                "got: {}",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn a_disabled_toggle_only_blocks_its_own_protocol() {
+        for st in ALL_TYPES {
+            if st == SessionType::Spice {
+                assert!(
+                    check_session_type_enabled(&st, None, only_off(&["enable_spice"])).is_err()
+                );
+            } else {
+                assert!(
+                    check_session_type_enabled(&st, None, only_off(&["enable_spice"])).is_ok(),
+                    "{:?} must not be affected by enable_spice",
+                    st
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vnc_has_no_toggle_and_is_never_blocked() {
+        assert!(check_session_type_enabled(&SessionType::Vnc, None, |_| false).is_ok());
+    }
+
+    #[test]
+    fn vmware_entries_gated_by_enable_vmware() {
+        let err = check_session_type_enabled(
+            &SessionType::Rdp,
+            Some("vsphere/webserver-01"),
+            only_off(&["enable_vmware"]),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{}", err).contains("VMware sessions are disabled by an administrator"),
+            "got: {}",
+            err
+        );
+        assert!(check_session_type_enabled(
+            &SessionType::Rdp,
+            Some("vsphere/webserver-01"),
+            |_| true
+        )
+        .is_ok());
+        assert!(
+            check_session_type_enabled(
+                &SessionType::Rdp,
+                Some("shared/folder/entry"),
+                only_off(&["enable_vmware"]),
+            )
+            .is_ok(),
+            "non-vSphere entries must not be gated by enable_vmware"
+        );
     }
 }

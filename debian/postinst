@@ -92,6 +92,25 @@ if [ ! -f /opt/persea/tls/cert.pem ] || [ ! -f /opt/persea/tls/key.pem ]; then
         --out-dir /opt/persea/tls
     chmod 600 /opt/persea/tls/key.pem
     chmod 644 /opt/persea/tls/cert.pem
+
+    # Self-signed certs cause browsers to block Secure cookies even after
+    # clicking through the cert warning — disable the Secure attribute so
+    # login actually works. Mirrors install.sh and the Docker entrypoint.
+    CONFIG_TLS="/opt/persea/config.toml"
+    if ! grep -q 'secure_cookies' "$CONFIG_TLS" 2>/dev/null; then
+        if grep -q '^\[tls\]' "$CONFIG_TLS" 2>/dev/null; then
+            # Insert into the existing [tls] section — a second [tls] header
+            # is invalid TOML ("duplicate key") and breaks config loading.
+            sed -i '/^\[tls\]/a secure_cookies = false  # self-signed cert — browsers block Secure cookies' "$CONFIG_TLS"
+        else
+            {
+                echo ""
+                echo "[tls]"
+                echo "secure_cookies = false  # self-signed cert — browsers block Secure cookies"
+            } >> "$CONFIG_TLS"
+        fi
+        echo "Added secure_cookies = false to $CONFIG_TLS for the self-signed cert."
+    fi
 fi
 chown -R persea:persea /opt/persea/tls
 

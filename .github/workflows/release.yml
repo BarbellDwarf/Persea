@@ -11,8 +11,8 @@ permissions:
   actions: write
 
 env:
-  GUACD_REPO: https://github.com/apache/guacamole-server.git
-  GUACD_COMMIT: de97609007c088b5e6afd827eff5e9076013a247
+  GUACD_REPO: https://github.com/BarbellDwarf/persea-guacamole-server.git
+  GUACD_COMMIT: d9218fe1
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -47,15 +47,12 @@ jobs:
           path: |
             /tmp/guacamole-server
             /tmp/guacd-build
-          key: guacd-${{ runner.arch }}-${{ env.GUACD_COMMIT }}-${{ hashFiles('patches/*.patch') }}
+          key: guacd-${{ runner.arch }}-${{ env.GUACD_COMMIT }}
       - name: Clone and build guacd
         run: |
           if [ ! -f /tmp/guacd-build/Makefile ]; then
-            git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
-            for patch in patches/*.patch; do
-              [ -f "$patch" ] || continue
-              git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch"
-            done
+            git clone --depth 1 --branch persea-1.6.1-freerdp3 $GUACD_REPO /tmp/guacamole-server
+            git -C /tmp/guacamole-server checkout $GUACD_COMMIT 2>/dev/null || true
             cd /tmp/guacamole-server && autoreconf -fi
             mkdir /tmp/guacd-build && cd /tmp/guacd-build
             /tmp/guacamole-server/configure \
@@ -120,15 +117,12 @@ jobs:
           path: |
             /tmp/guacamole-server
             /tmp/guacd-build
-          key: guacd-${{ runner.arch }}-${{ env.GUACD_COMMIT }}-${{ hashFiles('patches/*.patch') }}
+          key: guacd-${{ runner.arch }}-${{ env.GUACD_COMMIT }}
       - name: Clone and build guacd
         run: |
           if [ ! -f /tmp/guacd-build/Makefile ]; then
-            git clone $GUACD_REPO /tmp/guacamole-server && git -C /tmp/guacamole-server checkout $GUACD_COMMIT
-            for patch in patches/*.patch; do
-              [ -f "$patch" ] || continue
-              git -C /tmp/guacamole-server apply "$GITHUB_WORKSPACE/$patch"
-            done
+            git clone --depth 1 --branch persea-1.6.1-freerdp3 $GUACD_REPO /tmp/guacamole-server
+            git -C /tmp/guacamole-server checkout $GUACD_COMMIT 2>/dev/null || true
             cd /tmp/guacamole-server && autoreconf -fi
             mkdir /tmp/guacd-build && cd /tmp/guacd-build
             /tmp/guacamole-server/configure \

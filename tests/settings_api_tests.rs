@@ -1,4 +1,4 @@
-//! Integration tests for the admin system settings API (ticket #024).
+//! Integration tests for the admin system settings API.
 //!
 //! The handlers live in `src/api/settings.rs`. That module is declared in
 //! `src/api/mod.rs` by the route-wiring orchestrator step, so this test file
@@ -12,11 +12,17 @@ mod auth {
 mod db {
     pub use persea::db::*;
 }
+mod db_pool {
+    pub use persea::db_pool::*;
+}
 mod error {
     pub use persea::error::*;
 }
 mod api {
-    pub use persea::api::SettingsBaseline;
+    pub use persea::api::{AppState, SettingsBaseline};
+}
+mod settings_merge {
+    pub use persea::settings_merge::*;
 }
 
 #[path = "../src/api/settings.rs"]
@@ -196,6 +202,29 @@ async fn put_persists_and_get_returns_saved_values() {
     assert_eq!(json["enable_vdi"].as_bool(), Some(false));
     assert_eq!(json["vault_enabled"].as_bool(), Some(true));
     assert_eq!(json["db_only_mode"].as_bool(), Some(false));
+}
+
+#[tokio::test]
+async fn put_accepts_array_values_from_duplicate_form_names() {
+    // The settings form's checkbox+hidden pairs historically shared a name;
+    // htmx's json-enc serializes duplicate names as arrays. The last entry
+    // must win so the UI can save booleans and enum settings.
+    let db = test_db();
+    let key = create_admin(&db, "admin");
+    let router = test_router(db.clone());
+
+    let body = serde_json::json!({
+        "db_only_mode": ["false", "false"],
+        "enable_rdp": ["true", "true"],
+    });
+    let resp = router
+        .oneshot(admin_put(&key, "/api/system/settings", body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let saved = body_json(resp).await;
+    assert_eq!(saved["db_only_mode"].as_bool(), Some(false));
+    assert_eq!(saved["enable_rdp"].as_bool(), Some(true));
 }
 
 #[tokio::test]

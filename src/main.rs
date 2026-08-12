@@ -27,7 +27,6 @@ mod error;
 mod guacd;
 mod handlers;
 mod import;
-mod license;
 mod metrics;
 mod migrate;
 mod oidc;
@@ -40,6 +39,7 @@ mod recording;
 mod role;
 mod session;
 mod settings_merge;
+mod slugify;
 mod templates;
 #[cfg(test)]
 mod testing;
@@ -181,7 +181,7 @@ enum Command {
         /// User email
         #[arg(long)]
         email: String,
-        /// Role: admin, poweruser, operator, or viewer
+        /// Role: admin, poweruser, operator, viewer, or a custom role name
         #[arg(long)]
         role: String,
     },
@@ -295,9 +295,40 @@ async fn main() {
         }
     }
 
+    // When `db_url` is set, the SQLx pool IS the store: connect it and run
+    // the per-backend migrations BEFORE anything else touches the database,
+    // then install it as the active store so every store function routes to
+    // it. Fail fast — continuing on the legacy SQLite file would silently
+    // split writes between two databases.
+    if let Some(ref url) = config.db_url {
+        match DbPool::connect(url).await {
+            Ok(pool) => {
+                if let Err(e) = pool.run_migrations().await {
+                    eprintln!("FATAL: SQLx migrations failed for {}: {}", url, e);
+                    std::process::exit(1);
+                }
+                if crate::db::set_active_pool(pool).is_err() {
+                    eprintln!("FATAL: failed to start the database worker thread");
+                    std::process::exit(1);
+                }
+                tracing::info!(
+                    backend = ?crate::db::active_pool().and_then(|p| p.kind()),
+                    "SQLx pool installed as the active store"
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "FATAL: failed to connect to database backend {}: {}",
+                    url, e
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
     // Open database
     let database = db::init_db(&config.db_path).expect("Failed to open database");
-    // DB-configured auth providers (wayfinder ticket 025) — schema + rows
+    // DB-configured auth providers — schema + rows
     // live in the app database; config-file providers still work alongside.
     crate::providers_db::migrate(&database).expect("Failed to migrate auth_providers table");
 
@@ -326,6 +357,9 @@ async fn main() {
         "max_concurrent_sessions": config.max_sessions,
         "session_history_retention_days": config.session_history_retention_days,
         "enable_vdi": config.vdi.as_ref().map(|v| v.enabled).unwrap_or(false),
+        "site_title": config.site_title,
+        "logo_url": config.theme.as_ref().and_then(|t| t.logo_url.clone()).unwrap_or_default(),
+        "primary_color": config.theme.as_ref().and_then(|t| t.primary_color.clone()).unwrap_or_default(),
         "vault_enabled": config.vault.is_some(),
         "db_only_mode": config.storage.as_ref().map(|st| st.backend != "vault").unwrap_or(true),
     }));
@@ -334,10 +368,21 @@ async fn main() {
         None | Some(Command::Serve) => {
             // Overlay DB-persisted settings (admin settings page) onto the
             // config-file values before the server starts. The settings API
-            // (wayfinder ticket 024) stores these in `system_settings`; the
+            // stores these in `system_settings`; the
             // merge maps the fields that have config equivalents.
             if let Ok(overrides) = crate::settings_merge::load_db_settings(&database) {
                 crate::settings_merge::apply_db_settings(&mut config, &overrides);
+                // session_idle_timeout_secs has no settings_merge arm yet
+                // (that module is frozen); overlay it here so the admin
+                // settings API value is honoured at startup.
+                if let Some((_, v)) = overrides
+                    .iter()
+                    .find(|(k, _)| k == "session_idle_timeout_secs")
+                {
+                    if let Ok(secs) = v.parse::<u64>() {
+                        config.session_idle_timeout_secs = secs;
+                    }
+                }
                 // DB values bypass the earlier validate() pass — re-run it so
                 // an invalid saved value fails fast with a clear message.
                 match config.validate() {
@@ -352,7 +397,7 @@ async fn main() {
                     }
                 }
             }
-            // DB-first storage (ticket 026): credentials are encrypted at
+            // DB-first storage: credentials are encrypted at
             // rest in the DB — without a key they are stored/returned in
             // plaintext. Refuse to start so operators cannot accidentally
             // run with plaintext credentials.
@@ -393,7 +438,14 @@ async fn main() {
             password,
             role,
         }) => {
-            cmd_create_user(&database, &email, &name, &password, &role);
+            cmd_create_user(
+                &database,
+                &email,
+                &name,
+                &password,
+                &role,
+                crate::password::PasswordPolicy::from_config(&config),
+            );
         }
         Some(Command::AddAdmin {
             name,
@@ -465,7 +517,18 @@ async fn main() {
     }
 }
 
-fn cmd_create_user(database: &Db, email: &str, name: &str, password: &str, role: &str) {
+fn cmd_create_user(
+    database: &Db,
+    email: &str,
+    name: &str,
+    password: &str,
+    role: &str,
+    policy: crate::password::PasswordPolicy,
+) {
+    if let Err(msg) = policy.check_length(password) {
+        eprintln!("Error: {}", msg);
+        std::process::exit(1);
+    }
     let hash = match crate::password::hash_password(password) {
         Ok(h) => h,
         Err(e) => {
@@ -473,26 +536,18 @@ fn cmd_create_user(database: &Db, email: &str, name: &str, password: &str, role:
             std::process::exit(1);
         }
     };
-    let now = chrono::Utc::now().to_rfc3339();
-    let conn = database.lock().unwrap();
-
-    // Ensure password_hash and auth_source columns exist (migrate old schema)
-    let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
-    let _ = conn.execute(
-        "ALTER TABLE users ADD COLUMN auth_source TEXT DEFAULT 'database'",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE users ADD COLUMN oidc_groups TEXT DEFAULT ''",
-        [],
-    );
-
-    match conn.execute(
-        "INSERT INTO users (email, name, auth_source, password_hash, role, disabled, created_at)
-         VALUES (?1, ?2, 'database', ?3, ?4, 0, ?5)",
-        rusqlite::params![email, name, hash, role, now],
-    ) {
-        Ok(_) => {
+    match crate::db::create_user_with_password(database, email, name, &hash, role, "database") {
+        Ok(()) => {
+            // Record the initial hash in the reuse history. The user
+            // row was just inserted, so the lookup cannot fail in practice.
+            if let Ok(user) = crate::db::get_user_by_email(database, email) {
+                let _ = crate::password::record_password_history(
+                    database,
+                    user.id,
+                    &hash,
+                    policy.history,
+                );
+            }
             println!("User '{}' created (email: {}, role: {})", name, email, role);
             println!("Password: {}", password);
         }
@@ -672,19 +727,48 @@ fn cmd_list_users(database: &Db) {
 }
 
 fn cmd_set_role(database: &Db, email: &str, role: &str) {
-    if !auth::is_valid_role(role) {
-        eprintln!("Role must be admin, poweruser, operator, or viewer.");
-        std::process::exit(1);
-    }
-    match db::set_user_role(database, email, role) {
-        Ok(true) => println!("User '{}' role set to '{}'.", email, role),
-        Ok(false) => {
-            eprintln!("User '{}' not found.", email);
-            std::process::exit(1);
+    if auth::is_valid_role(role) {
+        // Premade role: set the base role and clear any custom role
+        // (selecting a premade role in the UI clears the custom one).
+        let _ = rbac::set_user_custom_role(database, email, None);
+        match db::set_user_role(database, email, role) {
+            Ok(true) => println!("User '{}' role set to '{}'.", email, role),
+            Ok(false) => {
+                eprintln!("User '{}' not found.", email);
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+    } else {
+        // Custom role name: validate it exists, assign by id, keep the
+        // base role untouched (custom roles are additive).
+        match rbac::get_custom_role_by_name(database, role) {
+            Ok(Some(role_rec)) => {
+                match rbac::set_user_custom_role(database, email, Some(&role_rec.id)) {
+                    Ok(true) => println!("User '{}' custom role set to '{}'.", email, role),
+                    Ok(false) => {
+                        eprintln!("User '{}' not found.", email);
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Ok(None) => {
+                eprintln!(
+                    "Role must be admin, poweruser, operator, viewer, or a custom role name."
+                );
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 }
@@ -722,7 +806,7 @@ use crate::csrf::SecureCookies;
 use crate::csrf::TlsEnabled;
 
 async fn security_headers(
-    tls: Extension<TlsEnabled>,
+    _tls: Extension<TlsEnabled>,
     request: Request,
     next: middleware::Next,
 ) -> Response {
@@ -774,6 +858,50 @@ async fn security_headers(
 /// CSP nonce stored as a response extension for handlers/templates to access.
 #[derive(Clone)]
 struct CspNonce(String);
+
+/// Which `enable_*` admin setting gates a page route. Carried as a request
+/// extension so one middleware serves every gated route.
+#[derive(Clone)]
+struct FeatureGate(&'static str);
+
+/// Loads the admin feature toggles once per request and makes them visible
+/// to every template rendered for it (connections/sessions/sidebar gating —
+/// see `FeatureFlags` in templates.rs). Applied to the authenticated HTML
+/// routes, inside `require_auth`.
+async fn features_context(
+    Extension(db): Extension<Db>,
+    request: Request,
+    next: middleware::Next,
+) -> Response {
+    let settings = crate::settings_merge::load_db_settings(&db).unwrap_or_default();
+    let features = Arc::new(crate::templates::FeatureFlags::from_settings(&settings));
+    crate::templates::run_with_features(features, next.run(request)).await
+}
+
+/// Request-time page gate: returns a styled 404 when the `enable_*` setting
+/// named by the `FeatureGate` extension is disabled. The route stays
+/// registered; the check runs per request so a settings change (or a DB
+/// overlay) applies without a restart.
+async fn feature_gate(
+    Extension(db): Extension<Db>,
+    Extension(gate): Extension<FeatureGate>,
+    request: Request,
+    next: middleware::Next,
+) -> Response {
+    if crate::settings_merge::read_toggle(&db, gate.0, true) {
+        return next.run(request).await;
+    }
+    let nonce = request
+        .extensions()
+        .get::<CspNonce>()
+        .map(|n| n.0.clone())
+        .unwrap_or_default();
+    crate::templates::render_error_page(
+        axum::http::StatusCode::NOT_FOUND,
+        "The page you requested could not be found",
+        &nonce,
+    )
+}
 
 /// Connect a single Vault backend into `cell`. On a failed initial connect,
 /// spawns a background 30s retry loop; the cell stays `None` (and that scope's
@@ -874,7 +1002,7 @@ async fn run_server(
     let tls_config = config.tls.clone();
 
     // Initialize OIDC providers. Every enabled DB-configured OIDC provider
-    // (admin auth page, wayfinder ticket 025) becomes an SSO button, plus the
+    // (admin auth page) becomes an SSO button, plus the
     // `[oidc]` config section as a fallback ("sso") when no DB provider is set.
     let mut oidc_registry: crate::oidc::OidcRegistry = crate::oidc::OidcRegistry {
         providers: Vec::new(),
@@ -1034,8 +1162,8 @@ async fn run_server(
         None
     };
 
-    // Build the auth chain from [auth] config plus DB-configured providers
-    // (wayfinder ticket 025). DB entries added through the admin auth page
+    // Build the auth chain from [auth] config plus DB-configured providers.
+    // DB entries added through the admin auth page
     // extend the chain, appended after config methods in position order;
     // they work with or without an [auth] section. OIDC keeps its own
     // separate flow; TOTP remains [auth.totp]-only.
@@ -1218,7 +1346,8 @@ async fn run_server(
         let title = &config.site_title;
         let mut pages = std::collections::HashMap::new();
         // Disk-served HTML pages (only index.html — all others use templates)
-        for name in &["index.html"] {
+        {
+            let name = &"index.html";
             let path = std::path::Path::new(&static_path).join(name);
             if let Ok(html) = std::fs::read_to_string(&path) {
                 pages.insert(name.to_string(), rewrite_branding(&html, title, logo));
@@ -1255,6 +1384,17 @@ async fn run_server(
                 Err(e) => tracing::warn!("Failed to clean up session history: {}", e),
                 _ => {}
             }
+            // Expired persisted WS tickets (cross-instance validation
+            // rows) — no-op without a shared backend pool.
+            {
+                let cutoff =
+                    crate::db::registry_ts(chrono::Utc::now() - chrono::Duration::minutes(5));
+                match db::ws_ticket_cleanup_expired(&cleanup_db, &cutoff) {
+                    Ok(n) if n > 0 => tracing::info!("Cleaned up {} expired WS tickets", n),
+                    Err(e) => tracing::warn!("Failed to clean up WS tickets: {}", e),
+                    _ => {}
+                }
+            }
         }
     });
 
@@ -1276,114 +1416,45 @@ async fn run_server(
     let guacd_tls = build_guacd_tls(&config);
     let rate_limit_enabled = config.rate_limit;
 
-    // Initialise SQLx pool if db_url is configured
-    let db_pool = if let Some(ref url) = config.db_url {
-        match DbPool::connect(url).await {
-            Ok(pool) => {
-                tracing::info!(
-                    "SQLx pool connected: {}",
-                    pool.kind()
-                        .map(|k| k.to_string())
-                        .unwrap_or_else(|| "unknown".into())
-                );
-                if let Err(e) = pool.run_migrations().await {
-                    tracing::error!("SQLx migrations failed: {}", e);
-                }
-                pool
-            }
-            Err(e) => {
-                tracing::error!("Failed to connect SQLx pool: {}", e);
-                DbPool::None
-            }
-        }
-    } else {
-        DbPool::None
-    };
+    // The SQLx pool was connected and installed as the active store in
+    // main() (when db_url is set); this extension backs the deep health
+    // check's db_pool probe and reports the ACTIVE backend truthfully.
+    let db_pool = crate::db::active_pool().cloned().unwrap_or(DbPool::None);
 
-    // Enterprise license: construct before `config` is moved into
-    // SessionManager, and before the SAML/TOTP blocks below since both
-    // gate on it. Previously this was never constructed at all — the
-    // license admin API/page extracted `Extension<Arc<LicenseManager>>`
-    // with no provider layered in anywhere, so those routes were broken.
-    crate::license::init_eval_period();
-    let license_manager = std::sync::Arc::new(crate::license::LicenseManager::new(
-        config.license_key.as_deref(),
-    ));
-    crate::license::set_global(license_manager.clone());
-    match license_manager.status() {
-        crate::license::LicenseStatus::Valid => {
-            tracing::info!("enterprise license: valid")
-        }
-        crate::license::LicenseStatus::Expired => {
-            tracing::warn!("enterprise license: expired — enterprise features disabled")
-        }
-        crate::license::LicenseStatus::Evaluating { days_remaining } => {
-            tracing::info!(days_remaining, "enterprise license: evaluation period")
-        }
-        crate::license::LicenseStatus::NoLicense => {
-            tracing::info!(
-                "enterprise license: none — enterprise features disabled (evaluation period ended)"
-            )
-        }
-    }
-
-    // Extract SAML provider and TOTP enforcement before config is moved into SessionManager
-    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> = if !license_manager
-        .has_feature(crate::license::FEAT_SAML)
-    {
-        if config.auth.as_ref().is_some_and(|a| a.saml.is_some()) {
-            tracing::warn!(
-                "auth.saml is configured but SAML SSO requires an enterprise license — SAML login is disabled"
-            );
-        }
-        None
-    } else {
-        config
-            .auth
-            .as_ref()
-            .and_then(|a| {
-                a.saml.as_ref().map(|cfg| {
-                    Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone()))
+    // Extract SAML provider and TOTP enforcement before config is moved into SessionManager.
+    // A SAML provider is built from config when `[auth.saml]` is set, or from
+    // a DB-configured provider (admin auth page); the ACS/metadata routes are
+    // registered whenever one exists.
+    let saml_provider: Option<Arc<crate::auth_providers::saml::SamlProvider>> = config
+        .auth
+        .as_ref()
+        .and_then(|a| {
+            a.saml
+                .as_ref()
+                .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg.clone())))
+        })
+        .or_else(|| {
+            crate::providers_db::load_providers(&database)
+                .ok()
+                .and_then(|providers| {
+                    providers
+                        .iter()
+                        .find(|p| p.enabled && p.provider_type == "saml")
+                        .and_then(|p| {
+                            serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
+                                p.config.clone(),
+                            )
+                            .ok()
+                        })
+                        .map(|cfg| Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg)))
                 })
-            })
-            .or_else(|| {
-                // A DB-configured SAML provider (admin auth page) also needs the
-                // ACS/metadata routes; build the provider from its stored config.
-                crate::providers_db::load_providers(&database)
-                    .ok()
-                    .and_then(|providers| {
-                        providers
-                            .iter()
-                            .find(|p| p.enabled && p.provider_type == "saml")
-                            .and_then(|p| {
-                                serde_json::from_value::<crate::auth_providers::saml::SamlConfig>(
-                                    p.config.clone(),
-                                )
-                                .ok()
-                            })
-                            .map(|cfg| {
-                                Arc::new(crate::auth_providers::saml::SamlProvider::new(cfg))
-                            })
-                    })
-            })
-    };
-    let totp_enforcement_configured = config
+        });
+    let totp_enforcement = config
         .auth
         .as_ref()
         .and_then(|a| a.totp.as_ref())
         .map(|t| t.enforcement)
         .unwrap_or(crate::totp::TotpEnforcement::Off);
-    let totp_enforcement = if totp_enforcement_configured != crate::totp::TotpEnforcement::Off
-        && !license_manager.has_feature(crate::license::FEAT_TOTP)
-    {
-        tracing::warn!(
-            configured = ?totp_enforcement_configured,
-            "TOTP enforcement requires an enterprise license — falling back to Off (users may still opt in to TOTP themselves)"
-        );
-        crate::totp::TotpEnforcement::Off
-    } else {
-        totp_enforcement_configured
-    };
 
     // Save secure_cookies before config is moved into SessionManager
     let secure_cookies_flag = config
@@ -1398,17 +1469,46 @@ async fn run_server(
         );
     }
 
+    // Password policy — extracted before config is moved into
+    // SessionManager so the admin users API and the account password-change
+    // endpoint can enforce minimum length + reuse history.
+    let password_policy = crate::password::PasswordPolicy::from_config(&config);
+    tracing::info!(
+        min_length = password_policy.min_length,
+        history = password_policy.history,
+        "Password policy loaded"
+    );
+
     // Create session manager
+    // Clone the config first — the setup wizard (routed below) needs the
+    // configured db_url/db_path to prefill its backend fields.
+    let setup_config = config.clone();
     let manager: AppState = Arc::new(SessionManager::new_with_db(
         config,
         guacd_tls,
         database.clone(),
     ));
 
-    // Spawn background task to reap sessions that exceed max duration
+    // Spawn background task to reap sessions that exceed max duration or
+    // have been idle past the configured idle timeout. The check interval
+    // tracks the SMALLER of the two timeouts so idle reaping is prompt
+    // (max duration /4 and idle /4, floored at 60s).
     {
         let reaper_manager = manager.clone();
-        let check_interval = std::cmp::max(manager.session_max_duration_secs() / 4, 60);
+        let idle_effective = {
+            let idle = manager.config().session_idle_timeout_secs;
+            if idle == 0 {
+                manager.session_max_duration_secs()
+            } else {
+                idle.min(manager.session_max_duration_secs())
+            }
+        };
+        let check_interval = std::cmp::max(idle_effective / 4, 60);
+        tracing::info!(
+            session_idle_timeout_secs = manager.config().session_idle_timeout_secs,
+            check_interval_secs = check_interval,
+            "Session reaper started (max duration + idle timeout)"
+        );
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(std::time::Duration::from_secs(check_interval));
@@ -1419,6 +1519,14 @@ async fn run_server(
                 if reaped > 0 {
                     tracing::info!("Reaped {} expired sessions", reaped);
                 }
+                let idle_reaped = reaper_manager.reap_idle_sessions().await;
+                if idle_reaped > 0 {
+                    tracing::info!("Reaped {} idle sessions", idle_reaped);
+                }
+                // Sweep shared-registry rows that can no longer be
+                // live (dead owners, expired pendings, old terminal rows).
+                // No-op without a shared backend.
+                reaper_manager.registry_sweep_stale();
             }
         });
     }
@@ -1521,14 +1629,29 @@ async fn run_server(
                 rec_config.max_recordings,
                 interval_secs
             );
+            let rotate_manager = manager.clone();
             tokio::spawn(async move {
                 let mut interval =
                     tokio::time::interval(std::time::Duration::from_secs(interval_secs));
                 interval.tick().await; // skip immediate first tick
                 loop {
                     interval.tick().await;
-                    let cfg = rec_config.clone();
-                    let _ = tokio::task::spawn_blocking(move || recording::rotate(&cfg)).await;
+                    if rotate_manager.ha_enabled() {
+                        // With a shared backend, rotate ONLY files
+                        // owned by this instance (registry owner filter) —
+                        // another instance's live recordings are never
+                        // touched (see rotate_owned below).
+                        let cfg = rec_config.clone();
+                        let db = rotate_manager.db().cloned();
+                        let owner = rotate_manager.instance_id().to_string();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            rotate_owned(&cfg, db.as_ref(), &owner)
+                        })
+                        .await;
+                    } else {
+                        let cfg = rec_config.clone();
+                        let _ = tokio::task::spawn_blocking(move || recording::rotate(&cfg)).await;
+                    }
                 }
             });
         }
@@ -1539,8 +1662,10 @@ async fn run_server(
         tracing::info!("API rate limiting enabled");
     }
 
-    // WebSocket ticket store (single-use tokens to keep API keys out of WS URLs)
-    let ws_ticket_store = auth::WsTicketStore::new();
+    // WebSocket ticket store (single-use tokens to keep API keys out of WS URLs).
+    // With the DB handle, tickets are also persisted to the shared
+    // backend, so any instance can validate tickets issued by another.
+    let ws_ticket_store = auth::WsTicketStore::new_with_db(Some(database.clone()));
 
     // Session creation route (rate-limited only when enabled)
     let mut session_create_route = Router::new()
@@ -1565,6 +1690,11 @@ async fn run_server(
         .route(
             "/api/sessions/{id}/thumbnail",
             put(api::put_session_thumbnail).get(api::get_session_thumbnail),
+        )
+        .route("/api/sessions/{id}/drive-files", get(api::drive_list_files))
+        .route(
+            "/api/sessions/{id}/drive-files/{name}",
+            get(api::drive_download_file).delete(api::drive_delete_file),
         )
         .route("/api/sessions/{id}/shadow", post(api::shadow_session))
         .route("/api/sessions/{id}/terminate", post(api::delete_session))
@@ -1667,6 +1797,8 @@ async fn run_server(
             delete(api::delete_group_mapping),
         )
         .route("/api/me", get(api::me).put(api::update_me))
+        // Password change (self-service) — enforced against the password policy
+        .route("/api/me/password", post(handlers::account::change_password))
         // User API token self-service
         .route("/api/me/tokens", get(api::list_my_tokens))
         .route("/api/me/tokens", post(api::create_my_token))
@@ -1702,9 +1834,6 @@ async fn run_server(
         .route("/api/audit/events", get(api::admin::audit_events))
         .route("/api/audit/verify", get(api::admin::audit_verify))
         .route("/api/audit/export", get(api::admin::audit_export))
-        // License management
-        .route("/api/admin/license", get(api::admin::get_license_status))
-        .route("/api/admin/license", post(api::admin::set_license_key))
         .route(
             "/api/admin/upload-logo",
             post(api::settings::upload_logo)
@@ -1763,6 +1892,10 @@ async fn run_server(
         .route(
             "/api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect",
             post(api::ab_connect_entry),
+        )
+        .route(
+            "/api/addressbook/custom-fields",
+            get(api::ab_get_custom_fields),
         )
         .route("/api/ssh/probe-host-key", post(api::ssh_probe_host_key))
         // Jump host / tunnel management
@@ -1823,6 +1956,21 @@ async fn run_server(
             "/api/admin/rbac/connections/{id}/permissions",
             delete(handlers::rbac::revoke_connection_permission),
         )
+        // Custom roles management endpoints (T05)
+        .route("/api/admin/roles", get(handlers::rbac::list_custom_roles))
+        .route("/api/admin/roles", post(handlers::rbac::create_custom_role))
+        .route(
+            "/api/admin/roles/{id}",
+            get(handlers::rbac::get_custom_role),
+        )
+        .route(
+            "/api/admin/roles/{id}",
+            put(handlers::rbac::update_custom_role),
+        )
+        .route(
+            "/api/admin/roles/{id}",
+            delete(handlers::rbac::delete_custom_role),
+        )
         .merge(session_create_route)
         .with_state(manager.clone());
     if rate_limit_enabled {
@@ -1837,6 +1985,7 @@ async fn run_server(
     let api_routes = api_routes
         .layer(csrf::CsrfLayer)
         .layer(middleware::from_fn(auth::require_auth))
+        .layer(Extension(password_policy))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
@@ -1896,6 +2045,7 @@ async fn run_server(
         .route("/setup", get(handlers::setup::setup_page))
         .route("/setup", post(handlers::setup::setup_submit))
         .layer(csrf::CsrfLayer)
+        .layer(Extension(setup_config))
         .layer(Extension(database.clone()))
         .layer(Extension(site_title.clone()));
 
@@ -1942,6 +2092,31 @@ async fn run_server(
             .layer(Extension(totp_enforcement));
     }
 
+    // Feature-gated admin page: /admin/tunnels.html 404s when the
+    // `enable_ssh_tunnels` toggle is off (request-time check).
+    let gated_tunnels_page = Router::new()
+        .route(
+            "/admin/tunnels.html",
+            get(handlers::pages::admin_tunnels_page),
+        )
+        .layer(middleware::from_fn(feature_gate))
+        .layer(Extension(FeatureGate("enable_ssh_tunnels")))
+        .layer(Extension(database.clone()));
+
+    // Feature-gated pages: recordings and API-key account pages 404 when
+    // their `enable_*` toggle is off (request-time check).
+    let gated_recordings_page = Router::new()
+        .route("/recordings.html", get(handlers::pages::recordings_page))
+        .layer(middleware::from_fn(feature_gate))
+        .layer(Extension(FeatureGate("enable_recordings")))
+        .layer(Extension(database.clone()));
+    let gated_tokens_pages = Router::new()
+        .route("/tokens.html", get(handlers::account::tokens_page))
+        .route("/account/tokens.html", get(handlers::account::tokens_page))
+        .layer(middleware::from_fn(feature_gate))
+        .layer(Extension(FeatureGate("enable_api_keys")))
+        .layer(Extension(database.clone()));
+
     // Branded HTML page routes (served from memory with site_title/logo baked in)
     let protected_html_routes = Router::new()
         .route("/index.html", get(serve_branded_page))
@@ -1953,16 +2128,13 @@ async fn run_server(
             get(|| async { axum::response::Redirect::permanent("/connections.html") }),
         )
         .route("/sessions.html", get(handlers::pages::sessions_page))
-        .route("/recordings.html", get(handlers::pages::recordings_page))
         .route("/reports.html", get(handlers::pages::admin_reports_page))
         .route("/admin.html", get(handlers::pages::admin_users_page))
-        .route("/tokens.html", get(handlers::account::tokens_page))
         // Account pages (templates)
         .route(
             "/account/profile.html",
             get(handlers::account::profile_page),
         )
-        .route("/account/tokens.html", get(handlers::account::tokens_page))
         .route("/account/totp.html", get(handlers::account::totp_page))
         // Admin sub-pages (templates)
         .route("/admin/users.html", get(handlers::pages::admin_users_page))
@@ -1980,20 +2152,17 @@ async fn run_server(
             "/admin/reports.html",
             get(handlers::pages::admin_reports_page),
         )
-        .route(
-            "/admin/tunnels.html",
-            get(handlers::pages::admin_tunnels_page),
-        )
-        .route(
-            "/admin/license.html",
-            get(handlers::pages::admin_license_page),
-        )
+        .route("/admin/roles.html", get(handlers::rbac::admin_roles_page))
         .route(
             "/admin/branding.html",
             get(handlers::pages::admin_branding_page),
         )
         .route("/docs.html", get(handlers::account::docs_page))
         .route("/docs", get(handlers::account::docs_page))
+        .merge(gated_tunnels_page)
+        .merge(gated_recordings_page)
+        .merge(gated_tokens_pages)
+        .layer(middleware::from_fn(features_context))
         .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));
@@ -2020,7 +2189,7 @@ async fn run_server(
         .layer(Extension(database.clone()));
 
     // Add OIDC routes if configured (always rate-limited to prevent brute-force)
-    if let Some(ref oidc_st) = oidc_state {
+    if let Some(ref _oidc_st) = oidc_state {
         let auth_rate_conf = GovernorConfigBuilder::default()
             .per_second(1)
             .burst_size(5)
@@ -2077,8 +2246,7 @@ async fn run_server(
         .layer(Extension(theme_data))
         .layer(Extension(trusted_proxies))
         .layer(Extension(branded_pages))
-        .layer(Extension(db_pool))
-        .layer(Extension(license_manager));
+        .layer(Extension(db_pool));
 
     let scheme = if server_tls.is_some() {
         "https"
@@ -2104,6 +2272,61 @@ async fn run_server(
         let rustls_config = RustlsConfig::from_pem_file(&cert_path, &key_path)
             .await
             .expect("Failed to load TLS certificates");
+
+        // SIGHUP → TLS certificate hot-reload. `RustlsConfig` wraps an
+        // `ArcSwap<ServerConfig>` (axum-server 0.8), so
+        // `reload_from_pem_file` parses the cert/key pair (cert parse, key
+        // parse, key-matches-cert) and atomically swaps the config the
+        // acceptor reads for NEW connections; existing connections keep
+        // their established session. On failure the previous certificate
+        // keeps serving and the error is logged — fail closed on disk,
+        // fail open on the listener. SIGTERM/SIGINT shutdown is untouched.
+        {
+            let reload_cfg = rustls_config.clone();
+            let reload_cert = cert_path.clone();
+            let reload_key = key_path.clone();
+            tokio::spawn(async move {
+                #[cfg(unix)]
+                {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let mut sighup = match signal(SignalKind::hangup()) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to register SIGHUP handler — TLS hot-reload disabled"
+                            );
+                            return;
+                        }
+                    };
+                    loop {
+                        sighup.recv().await;
+                        tracing::info!(
+                            "SIGHUP received — reloading TLS certificate from {} / {}",
+                            reload_cert.display(),
+                            reload_key.display()
+                        );
+                        match reload_cfg
+                            .reload_from_pem_file(&reload_cert, &reload_key)
+                            .await
+                        {
+                            Ok(()) => tracing::info!(
+                                "TLS certificate reloaded — new connections will use the updated certificate"
+                            ),
+                            Err(e) => tracing::error!(
+                                error = %e,
+                                "TLS reload FAILED — continuing to serve the previous certificate"
+                            ),
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = (&reload_cfg, &reload_cert, &reload_key);
+                }
+            });
+        }
+        tracing::info!("TLS hot-reload via SIGHUP enabled");
 
         let std_listener =
             std::net::TcpListener::bind(&listen_addr).expect("Failed to bind listener");
@@ -2222,6 +2445,113 @@ async fn run_server(
                 tracing::warn!("Failed to unmount LUKS volume on shutdown: {}", e);
             }
         }
+    }
+}
+
+/// Recording rotation scoped to THIS instance's files. With a shared
+/// backend, `recording::rotate` cannot be used as-is — it would delete the
+/// oldest files in the shared directory regardless of which instance wrote
+/// them, so one instance could rotate another's live recording. This variant
+/// filters the file set down to session ids the registry attributes to
+/// `owner_instance` (terminal rows are kept in the registry for up to 24h
+/// precisely so their files stay attributable), then enforces the same
+/// count/disk limits on that subset. Orphaned files (sessions whose registry
+/// rows were swept, or whose owner never wrote one) are never touched — a
+/// documented limitation (see docs/high-availability.md).
+fn rotate_owned(
+    config: &crate::config::RecordingConfig,
+    db: Option<&Db>,
+    owner_instance: &str,
+) -> usize {
+    let Some(db) = db else { return 0 };
+    let owned: std::collections::HashSet<String> =
+        crate::db::registry_list_owned(db, owner_instance)
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+    if owned.is_empty() {
+        return 0;
+    }
+    let dir = &config.path;
+    let mut deleted = 0;
+
+    // A recording is owned when its filename stem (minus the ".guac" that
+    // ".guac.enc" stems carry) is a session id this instance owns.
+    let owned_recs = |recordings: &[(std::path::PathBuf, std::time::SystemTime, u64)]| -> Vec<std::path::PathBuf> {
+        recordings
+            .iter()
+            .filter(|(p, _, _)| {
+                let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let base = stem.strip_suffix(".guac").unwrap_or(stem);
+                owned.contains(base)
+            })
+            .map(|(p, _, _)| p.clone())
+            .collect()
+    };
+
+    if config.max_recordings > 0 {
+        let all = recording::list_recordings_by_age(dir);
+        let mine = owned_recs(&all);
+        let over = mine.len().saturating_sub(config.max_recordings as usize);
+        for path in mine.iter().take(over) {
+            delete_recording_file(path);
+            deleted += 1;
+        }
+    }
+
+    if config.max_disk_percent > 0 {
+        let threshold = config.max_disk_percent as f64;
+        loop {
+            let usage = match recording::disk_usage_percent(dir) {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::warn!("Failed to check disk usage: {}", e);
+                    break;
+                }
+            };
+            if usage <= threshold {
+                break;
+            }
+            let mine = owned_recs(&recording::list_recordings_by_age(dir));
+            if let Some(path) = mine.first() {
+                delete_recording_file(path);
+                deleted += 1;
+            } else {
+                break; // no more of our recordings to delete
+            }
+        }
+    }
+
+    if deleted > 0 {
+        tracing::info!(
+            "Recording rotation (instance-owned): deleted {} files",
+            deleted
+        );
+    }
+    deleted
+}
+
+/// Delete a recording file and its sidecars (.meta, and the counterpart
+/// .guac / .guac.enc). Mirrors `recording::delete_recording` semantics
+/// (which is private); deletes are idempotent across instances.
+fn delete_recording_file(path: &std::path::Path) {
+    if let Err(e) = std::fs::remove_file(path) {
+        tracing::warn!("Failed to delete recording {}: {}", path.display(), e);
+    } else {
+        tracing::info!("Rotated recording: {}", path.display());
+    }
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let meta_path = if stem.ends_with(".guac") {
+        path.with_file_name(format!("{}.meta", stem))
+    } else {
+        path.with_extension("meta")
+    };
+    let _ = std::fs::remove_file(&meta_path);
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if ext == "enc" {
+        let _ = std::fs::remove_file(path.with_extension("guac"));
+    } else if ext == "guac" {
+        let _ = std::fs::remove_file(path.with_extension("guac.enc"));
     }
 }
 
@@ -2440,7 +2770,7 @@ mod tests {
         );
     }
 
-    // ── Error-page negotiation (R18) ───────────────────────────────────
+    // ── Error-page negotiation ─────────────────────────────────────────
 
     #[tokio::test]
     async fn error_page_renders_html_for_browsers_and_json_for_api() {

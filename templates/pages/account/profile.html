@@ -92,6 +92,23 @@
         </div>
     </div>
 
+    <!-- Sessions -->
+    <div class="card mb-6">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-1">Sessions</h2>
+        <p class="text-xs text-[var(--text-muted)] mb-4">
+            How session tabs open when you connect or rejoin a session.
+        </p>
+        <div>
+            <label for="session-open-mode" class="form-label">Open sessions in</label>
+            <select id="session-open-mode" class="form-input">
+                <option value="tab">New tab</option>
+                <option value="window">New window</option>
+                <option value="same">Same tab</option>
+            </select>
+            <p class="text-xs text-[var(--text-muted)] mt-1">New tab (default) opens each session in its own tab; New window uses a dedicated window; Same tab replaces the current page. Stored in your browser, applied to every connect path.</p>
+        </div>
+    </div>
+
     <!-- My Credentials (preset fallback for entries without credentials) -->
     <div class="card mb-6">
         <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-1">My Credentials</h2>
@@ -169,6 +186,18 @@
                     root.classList.add(mode);
                 }
             });
+        });
+    })();
+
+    // ── Session open preference ──
+    (function() {
+        var sel = document.getElementById('session-open-mode');
+        if (!sel) return;
+        var current = localStorage.getItem('persea_session_open') || 'tab';
+        if (current !== 'window' && current !== 'same') current = 'tab';
+        sel.value = current;
+        sel.addEventListener('change', function() {
+            localStorage.setItem('persea_session_open', this.value);
         });
     })();
 

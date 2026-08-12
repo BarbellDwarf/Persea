@@ -18,11 +18,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
-# Pinned guacamole-server commit. The patches in patches/ are rebased onto this
-# EXACT commit, so it MUST stay in sync with release.yml (GUACD_COMMIT) and
-# install.sh (GUACD_COMMIT). Do not bump it without re-rebasing the patch set.
-GUACD_COMMIT="de97609007c088b5e6afd827eff5e9076013a247"
+GUACD_SRC_URL="https://github.com/BarbellDwarf/persea-guacamole-server.git"
+# guacd source is the maintained fork branch persea-1.6.1-freerdp3 — the
+# former patch quilt (FreeRDP 3.x / Debian 13 fixes, Kerberos NLA, H.264,
+# SPICE, multimonitor) is applied there as commits. Keep in sync with
+# install.sh (GUACD_BRANCH) and build-rpm.sh (GUACD_BRANCH). Do not bump the
+# branch without updating all three.
+GUACD_BRANCH="persea-1.6.1-freerdp3"
 STAGING="${SCRIPT_DIR}/debian/staging"
 PREFIX="/opt/persea"
 
@@ -59,31 +61,11 @@ EOF
 # ---------------------------------------------------------------------------
 # Step 3: Build guacd into staging
 # ---------------------------------------------------------------------------
-apply_guacd_patches() {
-    local src="$1"
-    local patch_dir="${SCRIPT_DIR}/patches"
-
-    if [[ ! -d "$patch_dir" ]]; then
-        return 0
-    fi
-
-    for patch in "$patch_dir"/*.patch; do
-        [[ -f "$patch" ]] || continue
-        info "Applying patch: $(basename "$patch")"
-        if ! git -C "$src" apply "$patch"; then
-            error "Patch FAILED to apply: $(basename "$patch")"
-            error "guacamole-server pin ($GUACD_COMMIT) and patches/ are out of sync."
-            error "Re-rebase the patches onto $GUACD_COMMIT (or fix the pin). Aborting."
-            exit 1
-        fi
-    done
-}
-
 build_guacd() {
-    # Reproducible by default: build guacd from a FRESH clone pinned to
-    # $GUACD_COMMIT, so the package never drifts with upstream master and the
-    # patch set always applies to the exact source it was rebased onto. For
-    # local patch iteration set GUACD_SRC_OVERRIDE=/path/to/guacamole-server to
+    # Reproducible by default: build guacd from a FRESH clone of the fork
+    # branch $GUACD_BRANCH, so the package never drifts with upstream master
+    # and the patched feature set is exactly what the fork branch pins. For
+    # local fork iteration set GUACD_SRC_OVERRIDE=/path/to/guacamole-server to
     # build from an existing (unpinned) working tree instead.
     local GUACD_SRC guacd_src_tmp=""
     if [[ -n "${GUACD_SRC_OVERRIDE:-}" ]]; then
@@ -92,12 +74,9 @@ build_guacd() {
     else
         GUACD_SRC=$(mktemp -d)
         guacd_src_tmp="$GUACD_SRC"
-        info "Cloning guacamole-server, pinned to $GUACD_COMMIT..."
-        git clone -q "$GUACD_SRC_URL" "$GUACD_SRC"
-        git -C "$GUACD_SRC" -c advice.detachedHead=false checkout -q "$GUACD_COMMIT"
+        info "Cloning guacamole-server fork, branch $GUACD_BRANCH..."
+        git clone -q --branch "$GUACD_BRANCH" "$GUACD_SRC_URL" "$GUACD_SRC"
     fi
-
-    apply_guacd_patches "$GUACD_SRC"
 
     info "Building guacd from $GUACD_SRC..."
 

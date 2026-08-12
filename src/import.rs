@@ -85,6 +85,8 @@ pub async fn cmd_import_guacamole(
                 .get("ignore-cert")
                 .map(|s| s.eq_ignore_ascii_case("true")),
             display_name: Some(conn.name.clone()),
+            description: None,
+            custom_fields: None,
             enable_drive: param_map
                 .get("enable-drive")
                 .map(|s| s.eq_ignore_ascii_case("true")),
@@ -194,7 +196,7 @@ pub async fn cmd_import_guacamole(
         return;
     }
 
-    // DB-first storage (wayfinder ticket 026): folder/entry metadata always
+    // DB-first storage: folder/entry metadata always
     // lives in the app database. Credentials are stored encrypted in the DB
     // unless [storage].backend = "vault", in which case they go to Vault.
     let vault_mode = config
@@ -863,6 +865,8 @@ mod tests {
             security: None,
             ignore_cert: None,
             display_name: None,
+            description: None,
+            custom_fields: None,
             enable_drive: None,
             auth_pkg: None,
             kdc_url: None,

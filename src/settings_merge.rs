@@ -4,8 +4,10 @@
 //! `system_settings` table. This module reads them at startup and overlays
 //! them onto the config-file values. Keys without a config equivalent (for
 //! example `session_idle_timeout_secs`, which has no `Config` field) are
-//! stored and returned by the API but have no runtime effect; keep this list
-//! in sync with `src/api/settings.rs`.
+//! stored and returned by the API but have no startup-config effect; the
+//! `enable_*` lockdown toggles are enforced at the point of use (session
+//! creation, auth middleware) via `toggle_enabled`/`read_toggle`. Keep this
+//! list in sync with `src/api/settings.rs`.
 
 use crate::db::Db;
 
@@ -21,10 +23,18 @@ pub const SETTINGS_KEYS: &[&str] = &[
     "enable_vdi",
     "vault_enabled",
     "db_only_mode",
+    "site_title",
+    "logo_url",
+    "primary_color",
 ];
 
 /// Read the `system_settings` table as a map of key → string value.
 pub fn load_db_settings(db: &Db) -> rusqlite::Result<Vec<(String, String)>> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::settings_load_all_pool(pool)
+        });
+    }
     let conn = db.lock().unwrap();
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS system_settings (
@@ -43,6 +53,32 @@ pub fn load_db_settings(db: &Db) -> rusqlite::Result<Vec<(String, String)>> {
     Ok(rows)
 }
 
+/// Effective `enable_*` lockdown toggle: the DB-persisted value when present,
+/// otherwise `default`. Only the literal strings "true"/"false" are honoured;
+/// anything else (or absent) falls back to `default`. The settings API only
+/// writes these two forms, so the fallback is purely defensive.
+pub fn toggle_enabled(settings: &[(String, String)], key: &str, default: bool) -> bool {
+    match settings
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+    {
+        Some("true") => true,
+        Some("false") => false,
+        _ => default,
+    }
+}
+
+/// Read a single `enable_*` toggle straight from the DB. Unset, unreadable,
+/// or a missing table → `default`. All toggles default to enabled so existing
+/// deployments behave exactly as before an admin flips a switch.
+pub fn read_toggle(db: &Db, key: &str, default: bool) -> bool {
+    match load_db_settings(db) {
+        Ok(settings) => toggle_enabled(&settings, key, default),
+        Err(_) => default,
+    }
+}
+
 /// Overlay DB settings onto a config in place. Unknown keys and values that
 /// fail to parse are skipped (the API validates on write, so this is a
 /// defensive second gate).
@@ -52,7 +88,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
             "listen_addr" if !value.is_empty() => config.listen_addr = value.clone(),
             "guacd_addr" if !value.is_empty() => config.guacd_addr = value.clone(),
             "tls_cert_path" if !value.is_empty() => {
-                let tls = config.tls.get_or_insert_with(|| crate::config::TlsConfig {
+                let tls = config.tls.get_or_insert(crate::config::TlsConfig {
                     cert_path: None,
                     key_path: None,
                     guacd_cert_path: None,
@@ -61,7 +97,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                 tls.cert_path = Some(std::path::PathBuf::from(value));
             }
             "tls_key_path" if !value.is_empty() => {
-                let tls = config.tls.get_or_insert_with(|| crate::config::TlsConfig {
+                let tls = config.tls.get_or_insert(crate::config::TlsConfig {
                     cert_path: None,
                     key_path: None,
                     guacd_cert_path: None,
@@ -102,7 +138,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                 }
             },
             "vault_enabled" => {
-                // DB-first storage (ticket 026): flipping Vault on routes
+                // DB-first storage: flipping Vault on routes
                 // credential storage to Vault. Requires a [vault] section —
                 // without one there is nowhere to store them.
                 if value == "true" {
@@ -133,6 +169,25 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                             });
                     storage.backend = "db".into();
                 }
+            }
+            // Branding: overlaid onto the runtime config at
+            // startup so the SiteTitle extension, ThemeData (logo + resolved
+            // colors served via /api/auth/status) and the login page all pick
+            // the saved values up. Takes effect on the next server start.
+            "site_title" if !value.is_empty() => config.site_title = value.clone(),
+            // logo_url has no is_empty guard: saving "" is how an admin clears
+            // a previously-uploaded logo (Some("") renders the placeholder).
+            "logo_url" => {
+                let theme = config
+                    .theme
+                    .get_or_insert_with(crate::config::ThemeConfig::default);
+                theme.logo_url = Some(value.clone());
+            }
+            "primary_color" if !value.is_empty() => {
+                let theme = config
+                    .theme
+                    .get_or_insert_with(crate::config::ThemeConfig::default);
+                theme.primary_color = Some(value.clone());
             }
             // No Config equivalent: session_idle_timeout_secs,
             // enable_browser_sessions, enable_proxmox, vault_enabled.
@@ -189,5 +244,76 @@ mod tests {
         apply_db_settings(&mut config, &settings);
         assert_eq!(config.listen_addr, original);
         assert_eq!(config.session_max_duration_secs, 28800);
+    }
+
+    #[test]
+    fn toggle_enabled_defaults_when_unset() {
+        assert!(toggle_enabled(&[], "enable_rdp", true));
+        assert!(!toggle_enabled(&[], "enable_rdp", false));
+    }
+
+    #[test]
+    fn applies_branding_overrides() {
+        let mut config = Config::default();
+        assert_eq!(config.site_title, "Persea");
+        assert!(config.theme.is_none());
+        let settings = vec![
+            ("site_title".to_string(), "My Gateway".to_string()),
+            ("logo_url".to_string(), "/uploads/logo/logo.png".to_string()),
+            ("primary_color".to_string(), "#ff0000".to_string()),
+        ];
+        apply_db_settings(&mut config, &settings);
+        assert_eq!(config.site_title, "My Gateway");
+        let theme = config.theme.unwrap();
+        assert_eq!(theme.logo_url.as_deref(), Some("/uploads/logo/logo.png"));
+        assert_eq!(theme.primary_color.as_deref(), Some("#ff0000"));
+    }
+
+    #[test]
+    fn branding_empty_values_fall_back_to_config() {
+        let mut config = Config::default();
+        config.theme = Some(crate::config::ThemeConfig {
+            logo_url: Some("/keep.png".into()),
+            primary_color: Some("#00ff00".into()),
+            ..Default::default()
+        });
+        let settings = vec![
+            ("site_title".to_string(), String::new()),
+            ("primary_color".to_string(), String::new()),
+        ];
+        apply_db_settings(&mut config, &settings);
+        assert_eq!(config.site_title, "Persea");
+        let theme = config.theme.unwrap();
+        assert_eq!(theme.primary_color.as_deref(), Some("#00ff00"));
+    }
+
+    #[test]
+    fn logo_url_empty_clears_the_logo() {
+        let mut config = Config::default();
+        config.theme = Some(crate::config::ThemeConfig {
+            logo_url: Some("/keep.png".into()),
+            ..Default::default()
+        });
+        let settings = vec![("logo_url".to_string(), String::new())];
+        apply_db_settings(&mut config, &settings);
+        assert_eq!(config.theme.unwrap().logo_url, Some(String::new()));
+    }
+
+    #[test]
+    fn toggle_enabled_honours_stored_true_false() {
+        let settings = vec![
+            ("enable_rdp".to_string(), "true".to_string()),
+            ("enable_spice".to_string(), "false".to_string()),
+        ];
+        assert!(toggle_enabled(&settings, "enable_rdp", true));
+        assert!(!toggle_enabled(&settings, "enable_spice", true));
+        assert!(toggle_enabled(&settings, "enable_rdp", false));
+    }
+
+    #[test]
+    fn toggle_enabled_falls_back_on_unexpected_value() {
+        let settings = vec![("enable_rdp".to_string(), "yes".to_string())];
+        assert!(toggle_enabled(&settings, "enable_rdp", true));
+        assert!(!toggle_enabled(&settings, "enable_rdp", false));
     }
 }

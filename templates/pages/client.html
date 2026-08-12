@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ site_title }} - Session</title>
+    <!-- Favicon: plain leaf; swapped to the live variant (/favicon-live.svg)
+         while the session is active, back to plain on end. -->
+    <link rel="icon" type="image/svg+xml" id="persea-favicon" href="/favicon.svg">
     <style>
         :root {
             --primary: #e94560; --primary-hover: #c73652;
@@ -60,6 +63,11 @@
 
         .tb-info { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .tb-duration { color: var(--text-dim); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+        .tb-name { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+        .tb-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #6b7280; }
+        .tb-dot.dot-live { background: #34d399; box-shadow: 0 0 6px rgba(52, 211, 153, 0.7); }
+        .tb-dot.dot-warn { background: #fbbf24; box-shadow: 0 0 6px rgba(251, 191, 36, 0.6); }
+        .tb-dot.dot-ended { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.6); }
 
         /* Toolbar buttons */
         .tb-btn {
@@ -120,6 +128,47 @@
         /* ── Display ─────────────────────────────────────────── */
         #display { width: 100%; height: 100%; }
 
+        /* ── File browser panel (SSH SFTP) ───────────────────── */
+        #file-browser-panel {
+            display: none; position: fixed;
+            top: var(--toolbar-height); right: 0; bottom: 0;
+            width: min(340px, 85vw);
+            background: var(--surface); border-left: 1px solid var(--border);
+            z-index: 1500; font-family: system-ui, sans-serif; font-size: 13px;
+            flex-direction: column; color: var(--text);
+        }
+        #file-browser-panel.open { display: flex; }
+        .fb-header {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 10px; border-bottom: 1px solid var(--border);
+        }
+        .fb-title {
+            flex: 1; font-weight: 600; font-size: 11px;
+            text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--text-muted); overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+        }
+        #fb-path {
+            padding: 6px 12px; border-bottom: 1px solid var(--border);
+            color: var(--accent); font-family: monospace; font-size: 12px;
+            word-break: break-all; user-select: text;
+        }
+        #fb-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+        .fb-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 12px; cursor: pointer; color: var(--text);
+        }
+        .fb-item:hover { background: var(--input); }
+        .fb-item .fb-ico { width: 16px; height: 16px; fill: var(--text-dim); flex-shrink: 0; }
+        .fb-item.fb-dir .fb-ico { fill: var(--accent); }
+        .fb-item .fb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fb-item .fb-meta { margin-left: auto; flex-shrink: 0; color: var(--text-dim); font-size: 11px; }
+        .fb-empty { padding: 14px 12px; color: var(--text-dim); text-align: center; }
+        #fb-status {
+            padding: 6px 12px; border-top: 1px solid var(--border);
+            color: var(--text-dim); font-size: 12px; min-height: 28px;
+        }
+
         /* ── Status bar ──────────────────────────────────────── */
         #status {
             position: fixed; top: var(--toolbar-height); left: 0; right: 0;
@@ -129,6 +178,18 @@
             z-index: 1400; transition: opacity 0.5s;
         }
         #status.connected { opacity: 0; pointer-events: none; }
+
+        /* ── Toast (idle warning / first-visit hint) ─────────────── */
+        #toast {
+            position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 10px 18px; font-size: 13px;
+            font-family: system-ui, sans-serif; color: var(--text);
+            z-index: 2600; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            max-width: min(480px, 90vw); text-align: center;
+            opacity: 0; pointer-events: none; transition: opacity 0.25s;
+        }
+        #toast.show { opacity: 1; }
 
         /* ── Overlays ────────────────────────────────────────── */
         #disconnected-overlay, #banner-overlay {
@@ -162,6 +223,7 @@
             .tb-btn span:not(.tb-badge) { display: none; }
             .tb-badge { font-size: 10px; padding: 1px 6px; }
             .tb-info { font-size: 11px; max-width: 120px; }
+            .tb-name { font-size: 11px; max-width: 110px; }
             .tb-duration { font-size: 11px; }
             #paste-modal { width: min(340px, 95vw); }
             #paste-textarea { font-size: 16px; } /* prevent iOS zoom */
@@ -177,7 +239,6 @@
     <script>(function(){var c=localStorage.getItem('persea_theme_colors');if(c){try{var o=JSON.parse(c),r=document.documentElement.style;for(var k in o)r.setProperty('--'+k.replace(/_/g,'-'),o[k]);}catch(e){}}})();</script>
 
     <!-- Guacamole JS modules -->
-    <script src="/js/utils.js?v=1.1.1"></script>
     <script src="/guac/Namespace.js"></script>
     <script src="/guac/Client.js"></script>
     <script src="/guac/Display.js"></script>
@@ -217,14 +278,28 @@
     <!-- ── Toolbar ──────────────────────────────────────── -->
     <div id="toolbar" role="navigation" aria-label="Session toolbar">
         <div class="tb-left">
+            <span id="tb-dot" class="tb-dot" title="Session status"></span>
             <span id="tb-badge" class="tb-badge badge-ssh">SSH</span>
+            <span id="tb-name" class="tb-name"></span>
             <span id="tb-host" class="tb-info"></span>
             <span id="tb-duration" class="tb-duration">00:00:00</span>
         </div>
         <div class="tb-right">
-            <button class="tb-btn" id="btn-clipboard" title="Paste text to remote (Ctrl+Alt+Shift)">
+            <button class="tb-btn" id="btn-clipboard" title="Paste text to remote (Ctrl+V)">
                 <svg viewBox="0 0 24 24"><path d="M19 2h-4.18C14.4.84 13.3 0 12 0S9.6.84 9.18 2H5a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/></svg>
                 Paste
+            </button>
+            <button class="tb-btn" id="btn-copy" title="Copy the remote selection to your clipboard (sends Ctrl+C)" aria-label="Copy remote selection">
+                <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/></svg>
+                Copy
+            </button>
+            <button class="tb-btn" id="btn-win" title="Send the Windows/Meta key — click, then type the rest of the shortcut (e.g. Win+R)" aria-label="Send Windows key">
+                <svg viewBox="0 0 24 24"><path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z"/></svg>
+                Win
+            </button>
+            <button class="tb-btn" id="btn-cad" title="Send Ctrl+Alt+Del to the remote session" aria-label="Send Ctrl+Alt+Del">
+                <svg viewBox="0 0 24 24"><path d="M14.5 0a7.5 7.5 0 0 0-7.29 9.3L0 16.6V21h4v-3h3v-3h3l1.79-1.79A7.5 7.5 0 1 0 14.5 0zm0 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>
+                Ctrl+Alt+Del
             </button>
             <button class="tb-btn" id="btn-fullscreen" title="Toggle fullscreen (F11)" aria-label="Toggle fullscreen">
                 <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
@@ -235,6 +310,10 @@
             <button class="tb-btn" id="btn-file-transfer" title="Upload file to remote" aria-label="Upload file" style="display:none">
                 <svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h12v2H5v-2z"/></svg>
                 <span>Upload</span>
+            </button>
+            <button class="tb-btn" id="btn-files" title="Browse remote files (SSH SFTP)" aria-label="Browse remote files" style="display:none">
+                <svg viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
+                <span>Files</span>
             </button>
             <input type="file" id="file-transfer-input" multiple style="display:none">
             <div id="file-transfer-status" style="display:none;position:fixed;bottom:60px;right:16px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:12px;color:var(--text);z-index:1600;box-shadow:0 4px 12px rgba(0,0,0,0.4);max-width:280px;"></div>
@@ -259,7 +338,7 @@
                 <svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
                 <span>Log Out</span>
             </button>
-            <button class="tb-btn" id="btn-disconnect" title="Disconnect — keep session for reconnection" aria-label="Disconnect session">
+            <button class="tb-btn" id="btn-disconnect" title="Disconnect — end the remote session" aria-label="Disconnect session">
                 <svg viewBox="0 0 24 24"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.13.94-4.05 2.42-5.36L6 5.17A8.94 8.94 0 0 0 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9a8.94 8.94 0 0 0-3.17-6.83z"/></svg>
             </button>
         </div>
@@ -277,8 +356,23 @@
         </div>
     </div>
 
+    <!-- ── File browser panel (SSH SFTP) ───────────────────── -->
+    <div id="file-browser-panel" role="dialog" aria-modal="true" aria-label="Remote files">
+        <div class="fb-header">
+            <span class="fb-title">Remote files</span>
+            <button type="button" class="tb-btn" id="fb-up" title="Go up one directory" aria-label="Go up one directory">Up</button>
+            <button type="button" class="tb-btn" id="fb-close" title="Close file browser" aria-label="Close file browser">Close</button>
+        </div>
+        <div id="fb-path">/</div>
+        <div id="fb-list" role="list"></div>
+        <div id="fb-status"></div>
+    </div>
+
     <!-- ── Status ────────────────────────────────────────── -->
     <div id="status" aria-live="polite">Loading...</div>
+
+    <!-- ── Toast (idle warning / first-visit hint) ───────── -->
+    <div id="toast" role="status" aria-live="polite"></div>
 
     <!-- ── Overlays ──────────────────────────────────────── -->
     <div id="disconnected-overlay" role="dialog" aria-modal="true" aria-label="Session disconnected">
@@ -287,7 +381,8 @@
             <p id="disconnected-message">The remote session has been disconnected.</p>
             <div>
                 <button id="btn-reconnect" class="btn-secondary">Reconnect</button>
-                <button id="btn-close-session" class="btn-primary">Close</button>
+                <button id="btn-close-session" class="btn-primary">Close tab</button>
+                <button id="btn-back-connections" class="btn-secondary" style="display:none">Back to connections</button>
             </div>
         </div>
     </div>
@@ -318,11 +413,21 @@
         var entryName = urlParams.get('name');
         var relaunchInfo = null;
         var entryDisplayName = '';
+        var sessionIdleTimeoutSecs = 0;
+        var sessionReconnectable = false;
+        var sessionLive = false;
+        var baseTitle = null;
+        var exitInProgress = false;
         var wantFullscreen = false;
         var wantAutohideTabs = false;
         var protocol = '';
         var targetHost = '';
         var driveEnabled = false;
+        // Which file browser backend to use: 'ssh' (guacd SFTP filesystem
+        // object) or 'rdp' (persea's drive REST API). Set from the session
+        // info; defaults to 'ssh' so share links without metadata behave
+        // like before.
+        var fbMode = 'ssh';
 
         // ── CSRF: this page is standalone (no base.html), so patch fetch()
         // here to carry the X-CSRF-Token header on state-changing requests.
@@ -359,6 +464,96 @@
             };
         })();
         var connectStartTime = Date.now();
+
+        // ── Session open preference + close-or-navigate ──
+        // Per-user preference (account profile page), stored in localStorage
+        // like the theme/clipboard prefs: `tab` (default) | `window` | `same`.
+        function getOpenMode() {
+            var m = localStorage.getItem('persea_session_open');
+            return (m === 'window' || m === 'same') ? m : 'tab';
+        }
+        function openSessionUrl(url) {
+            var mode = getOpenMode();
+            if (mode === 'same') { window.location.href = url; return true; }
+            var features = (mode === 'window') ? 'width=1280,height=800' : undefined;
+            return !!window.open(url, '_blank', features);
+        }
+        // EVERY exit path funnels through here. Session tabs are script-opened
+        // from the Connections page, so window.close() works; if the browser
+        // blocks it (tab opened directly, or via a share link), fall back to
+        // navigating after ~100ms so no dead tab parks on /connections.html.
+        // When closing, focus the opener tab. In `same` mode the session page
+        // IS the user's main tab — navigate back instead of closing.
+        // Share viewers have no Connections page — their landing spot is the
+        // site home.
+        var exitTarget = shareToken ? '/' : '/connections.html';
+        function closeOrNavigate() {
+            if (exitInProgress) return;
+            exitInProgress = true;
+            if (getOpenMode() === 'same') { window.location.href = exitTarget; return; }
+            try { window.close(); } catch (e) {}
+            try { if (window.opener) window.opener.focus(); } catch (e) {}
+            setTimeout(function() { window.location.href = exitTarget; }, 100);
+        }
+
+        // ── Toast ──
+        var toastEl = document.getElementById('toast');
+        var toastVisible = false;
+        var toastTimer = null;
+        function showToast(text) {
+            toastEl.textContent = text;
+            toastEl.classList.add('show');
+            toastVisible = true;
+            if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+        }
+        function hideToast() {
+            if (!toastVisible) return;
+            toastEl.classList.remove('show');
+            toastVisible = false;
+        }
+
+        // ── Idle warning ──
+        // The server reaps sessions idle past `session_idle_timeout_secs`
+        // (last activity = any input forwarded to the remote). Mirror that
+        // client-side: reset on every forwarded input, warn ~60s before the
+        // reaper would fire. No warning when the timeout is disabled (0).
+        var idleWarnTimer = null;
+        var idleWarnShown = false;
+        function scheduleIdleWarning() {
+            if (!sessionLive || sessionIdleTimeoutSecs <= 0) return;
+            if (idleWarnTimer) { clearTimeout(idleWarnTimer); idleWarnTimer = null; }
+            if (idleWarnShown) return;
+            var warnAtMs = (sessionIdleTimeoutSecs - 60) * 1000;
+            if (warnAtMs < 2000) return; // timeout too short to warn usefully
+            idleWarnTimer = setTimeout(function() {
+                idleWarnTimer = null;
+                idleWarnShown = true;
+                showToast('Session idle \u2014 will end in ~1 minute. Move your mouse to keep it alive.');
+            }, warnAtMs);
+        }
+        // Called ONLY when input actually reaches the remote (keyboard, mouse,
+        // hotkey synthesis, clipboard sends) — the same events that keep the
+        // server-side last_activity fresh.
+        function noteUserActivity() {
+            if (!sessionLive) return;
+            if (idleWarnShown) { idleWarnShown = false; hideToast(); }
+            scheduleIdleWarning();
+        }
+        function clearIdleTimers() {
+            if (idleWarnTimer) { clearTimeout(idleWarnTimer); idleWarnTimer = null; }
+            idleWarnShown = false;
+            hideToast();
+        }
+
+        // ── First-visit toolbar hint ──
+        // Shown once: the toolbar auto-hides and Ctrl+Alt+Shift toggles it.
+        var TOOLBAR_HINT_KEY = 'persea_toolbar_hint_shown';
+        if (!localStorage.getItem(TOOLBAR_HINT_KEY)) {
+            setTimeout(function() {
+                showToast('The toolbar auto-hides. Press Ctrl+Alt+Shift to toggle it.');
+                localStorage.setItem(TOOLBAR_HINT_KEY, '1');
+            }, 3000);
+        }
 
         // ── Settings state ──
         var cfgQuality = parseInt(localStorage.getItem('rg_quality') || '80', 10);
@@ -397,10 +592,18 @@
         // ── Auto-reconnect ──
         var userDisconnected = false;
         var reconnectAttempts = 0;
-        var maxReconnectAttempts = 5;
-        var reconnectDelays = [1000, 2000, 4000, 8000, 16000];
+        // Reconnect is capped and backed off: every auto-rejoin of a live
+        // session makes the server spawn a fresh guacd connection, so the
+        // loop must be bounded (a manual Reconnect button is always shown).
+        var maxReconnectAttempts = 3;
+        var reconnectDelays = [1000, 2000, 4000];
         var reconnectTimer = null;
         var lastSessionError = null;
+        // True once the Guacamole client reached CONNECTED. Auto-reconnect is
+        // only allowed after that — a join that never succeeded means the
+        // connection attempt was aborted while the session was still
+        // starting, and retrying would only hammer a dead session.
+        var everConnected = false;
 
         // ── Toolbar auto-hide ──
         var toolbarEl = document.getElementById('toolbar');
@@ -425,16 +628,42 @@
             if (toolbarHideTimer) { clearTimeout(toolbarHideTimer); toolbarHideTimer = null; }
         });
 
-        // ── Duration timer ──
+        // ── Duration timer + live tab title ──
+        // While live, the tab title reads `entry — HH:MM:SS — ●` and is
+        // refreshed every tick; on end the plain entry title is restored.
         var durationEl = document.getElementById('tb-duration');
         function updateDuration() {
             var elapsed = Math.floor((Date.now() - connectStartTime) / 1000);
             var h = Math.floor(elapsed / 3600);
             var m = Math.floor((elapsed % 3600) / 60);
             var s = elapsed % 60;
-            durationEl.textContent = (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+            var t = (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+            if (sessionLive) {
+                durationEl.textContent = t;
+                if (baseTitle) document.title = baseTitle + ' \u2014 ' + t + ' \u2014 \u25CF';
+            }
         }
         setInterval(updateDuration, 1000);
+
+        // ── Favicon + toolbar status dot ──
+        // Favicon: plain leaf by default, live variant (pulsing green dot)
+        // while the session is active. Dot: green live / amber disconnected
+        // or reconnecting / red ended.
+        var faviconEl = document.getElementById('persea-favicon');
+        function setFaviconLive(live) {
+            if (faviconEl) faviconEl.setAttribute('href', live ? '/favicon-live.svg' : '/favicon.svg');
+        }
+        var statusDotEl = document.getElementById('tb-dot');
+        function setStatusDot(state) {
+            statusDotEl.className = 'tb-dot dot-' + state;
+        }
+        function setLiveState(state) {
+            sessionLive = (state === 'live');
+            setStatusDot(state);
+            setFaviconLive(sessionLive);
+            if (sessionLive) { scheduleIdleWarning(); }
+            else { clearIdleTimers(); if (baseTitle) document.title = baseTitle; }
+        }
 
         // ── Toolbar badge helpers ──
         function setProtocolBadge(proto, host) {
@@ -486,18 +715,20 @@
             }
         });
 
-        // ── Disconnect (keep session for reconnection) ──
+        // ── Disconnect (ends the remote session) ──
         document.getElementById('btn-disconnect').addEventListener('click', function() {
-            if (!confirm('Disconnect from this session? The session will remain active and you can reconnect later.')) return;
+            if (!confirm('Disconnect from this session? This will end the remote session.')) return;
             userDisconnected = true;
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
-            window.location.href = '/connections.html';
+            closeOrNavigate();
         });
 
         // ── Log Out (destroy session entirely) ──
         document.getElementById('btn-logout').addEventListener('click', function() {
             if (!confirm('Log out and destroy this session? You will not be able to reconnect.')) return;
             userDisconnected = true;
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             var headers = {};
             if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
             var csrfToken = readCookie('csrf_token');
@@ -508,10 +739,10 @@
                 credentials: 'same-origin'
             }).then(function() {
                 try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
-                window.location.href = '/connections.html';
+                closeOrNavigate();
             }).catch(function() {
                 try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
-                window.location.href = '/connections.html';
+                closeOrNavigate();
             });
         });
 
@@ -557,7 +788,8 @@
         // ── Theme / site title ──
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             var siteTitle = d.site_title || 'persea';
-            document.title = entryName ? (entryName + ' \u2014 ' + siteTitle) : (siteTitle + ' - Session');
+            baseTitle = entryDisplayName || entryName || (siteTitle + ' - Session');
+            document.title = baseTitle;
             if (typeof initTheme === 'function') initTheme(d.theme);
         });
 
@@ -579,7 +811,11 @@
         else if (shareToken) {
             fetch('/api/sessions/' + sessionId + '/banner?token=' + encodeURIComponent(shareToken))
             .then(function(r) { return r.ok ? r.json() : null; })
-            .then(function(d) { return showBanner(d && d.banner); })
+            .then(function(d) {
+                sessionReconnectable = !!(d && d.banner);
+                updateReconnectVisibility();
+                return showBanner(d && d.banner);
+            })
             .then(function() { startGuacamole(); })
             .catch(function() { startGuacamole(); });
         } else {
@@ -587,6 +823,13 @@
             if (apiKey) fetchHeaders['Authorization'] = 'Bearer ' + apiKey;
             fetch('/api/sessions/' + sessionId, { headers: fetchHeaders, credentials: 'same-origin' })
             .then(function(res) {
+                if (res.status === 401 || res.status === 404) {
+                    // Session gone (cancelled while starting, reaped, or
+                    // deleted) or the auth session expired — leave instead of
+                    // stranding the user on a dead tab with no way out.
+                    closeOrNavigate();
+                    throw new Error('redirect');
+                }
                 if (!res.ok) { statusEl.textContent = 'Error: Session not found'; throw new Error('Session not found'); }
                 return res.json();
             })
@@ -594,27 +837,49 @@
                 if (session && session.address_book_entry) {
                     relaunchInfo = { entry_key: session.address_book_entry, folder: session.address_book_folder || '', display_name: session.entry_display_name || '' };
                 }
-                if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
+                if (session && session.entry_display_name) {
+                    entryDisplayName = session.entry_display_name;
+                    document.getElementById('tb-name').textContent = entryDisplayName;
+                    baseTitle = entryDisplayName;
+                    if (!sessionLive) document.title = baseTitle;
+                }
+                sessionIdleTimeoutSecs = parseInt((session && session.session_idle_timeout_secs) || 0, 10) || 0;
+                // Deferred/ephemeral-key sessions are the only reconnectable
+                // ones — and the ONLY sessions that carry a banner (the
+                // ephemeral-key prompt). Banner presence is the client-side
+                // marker used to gate the Reconnect buttons.
+                sessionReconnectable = !!(session && session.banner);
+                updateReconnectVisibility();
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 if (session && session.drive_enabled) { driveEnabled = true; document.getElementById('btn-file-transfer').style.display = ''; }
+                // The file browser is offered for SSH sessions (guacd SFTP
+                // filesystem object) and RDP sessions with drive redirection
+                // (listed via persea's drive API).
+                if (session && session.drive_enabled) {
+                    var fbType = (session.session_type || '').toLowerCase();
+                    if (fbType === 'ssh' || fbType === 'rdp') {
+                        fbMode = fbType;
+                        document.getElementById('btn-files').style.display = '';
+                    }
+                }
                 // Set protocol badge from session metadata
                 if (session && (session.session_type || session.protocol)) setProtocolBadge(session.session_type || session.protocol, session.address || session.address_book_folder || '');
                 else if (entryName) setProtocolBadge('SSH', entryName);
+                if (!entryDisplayName && entryName) document.getElementById('tb-name').textContent = entryName;
                 return showBanner(session.banner);
             })
             .then(function() { startGuacamole(); })
-            .catch(function(err) { statusEl.textContent = 'Error: ' + err.message; });
+            .catch(function(err) { if (err && err.message === 'redirect') return; statusEl.textContent = 'Error: ' + err.message; });
         }
 
         function attemptReconnect() {
             // The tunnel close fires through both the tunnel and client state
             // handlers — only ever schedule one reconnect at a time.
             if (reconnectTimer) return;
+            if (userDisconnected) return;
             if (reconnectAttempts >= maxReconnectAttempts) {
-                document.getElementById('disconnected-title').textContent = 'Session Ended';
-                document.getElementById('disconnected-message').textContent = 'Connection lost after ' + maxReconnectAttempts + ' attempts.';
-                document.getElementById('disconnected-overlay').className = 'visible';
+                showSessionEnded('Session Ended', 'Connection lost after ' + maxReconnectAttempts + ' attempts.');
                 return;
             }
             var delay = reconnectDelays[reconnectAttempts];
@@ -628,34 +893,86 @@
             }, delay);
         }
 
+        // ── Reconnect button gating ──
+        // Reconnect is only offered for sessions that genuinely support
+        // reconnection — the deferred/ephemeral-key sessions, which are
+        // exactly the sessions that carry a banner (the ephemeral-key
+        // prompt). Everything else hides the button: re-joining would only
+        // fail or spawn a pointless fresh guacd connection.
+        function updateReconnectVisibility() {
+            var canReconnect = sessionReconnectable && (shareToken || relaunchInfo);
+            document.getElementById('btn-reconnect').style.display = canReconnect ? '' : 'none';
+        }
+
+        // ── Ended-overlay auto-close ──
+        // No auto-navigation while the user reads the overlay; but a dead
+        // session tab should not park forever either, so a generous 60s
+        // timeout funnels into the same close-or-navigate helper.
+        var autoCloseTimer = null;
+        function startAutoClose() {
+            if (autoCloseTimer) { clearTimeout(autoCloseTimer); autoCloseTimer = null; }
+            autoCloseTimer = setTimeout(function() { autoCloseTimer = null; closeOrNavigate(); }, 60000);
+        }
+        function cancelAutoClose() {
+            if (autoCloseTimer) { clearTimeout(autoCloseTimer); autoCloseTimer = null; }
+        }
+
+        // Show the ended overlay and stop the auto-reconnect loop for good.
+        function showSessionEnded(title, message) {
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+            reconnectAttempts = maxReconnectAttempts;
+            statusEl.textContent = 'Disconnected';
+            statusEl.className = '';
+            setLiveState('ended');
+            document.getElementById('disconnected-title').textContent = title;
+            document.getElementById('disconnected-message').textContent = message;
+            updateReconnectVisibility();
+            // In `same` mode the Close-tab button already reads "Back to
+            // connections" and does exactly that — a second identical button
+            // would be redundant.
+            document.getElementById('btn-back-connections').style.display =
+                (getOpenMode() === 'same') ? 'none' : '';
+            document.getElementById('disconnected-overlay').className = 'visible';
+            startAutoClose();
+        }
+
         // Distinguish "the session actually ended" (user typed exit, remote
         // closed, auth failed) from "the connection dropped". Reconnecting
-        // into a dead session is pointless and confusing, so check the
-        // server-side session status before scheduling a reconnect.
+        // into a dead session is pointless and confusing — and each rejoin of
+        // a live one makes the server spawn a fresh guacd connection — so
+        // check the server-side session status before scheduling a reconnect.
         function checkSessionEnded() {
+            if (userDisconnected) return;
             var headers = {};
             if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
             fetch('/api/sessions/' + sessionId, { headers: headers, credentials: 'same-origin' })
                 .then(function(r) { return r.ok ? r.json() : null; })
                 .then(function(s) {
-                    if (!s) { attemptReconnect(); return; }
+                    if (!s) {
+                        // Session gone entirely (cancelled while starting,
+                        // reaped, or deleted) — re-joining can only 404, so
+                        // stop instead of hammering the server with joins.
+                        showSessionEnded('Session Ended', 'The session is no longer available.');
+                        return;
+                    }
                     if (s.status === 'completed' || s.status === 'error' || s.status === 'expired') {
-                        statusEl.textContent = 'Session ended';
-                        document.getElementById('disconnected-title').textContent = 'Session Ended';
+                        var msg;
                         if (lastSessionError) {
                             // Surface the specific reason from guacd (e.g.
                             // "Authentication failure (invalid credentials?)")
                             // no matter how the server classified the end.
-                            document.getElementById('disconnected-message').textContent =
-                                'The session ended: ' + lastSessionError;
+                            msg = 'The session ended: ' + lastSessionError;
                         } else if (s.status === 'error') {
-                            document.getElementById('disconnected-message').textContent =
-                                'The session ended with an error. Check the connection details and try again.';
+                            msg = 'The session ended with an error. Check the connection details and try again.';
                         } else {
-                            document.getElementById('disconnected-message').textContent =
-                                'The remote session has ended.';
+                            msg = 'The remote session has ended.';
                         }
-                        document.getElementById('disconnected-overlay').className = 'visible';
+                        showSessionEnded('Session Ended', msg);
+                    } else if (!everConnected) {
+                        // The join never succeeded — the connection attempt
+                        // was aborted while the session was still starting.
+                        // Don't loop re-joining; show the overlay instead.
+                        showSessionEnded('Session Ended', 'The session could not be reached. Close and try again.');
                     } else {
                         attemptReconnect();
                     }
@@ -689,6 +1006,9 @@
 
         function setupClient(client, tunnel) {
             var displayEl = document.getElementById('display');
+            // A reconnect attempt mounts a brand-new display — drop the
+            // previous one instead of stacking canvases.
+            displayEl.textContent = '';
             displayEl.appendChild(client.getDisplay().getElement());
 
             // Resume AudioContext
@@ -703,6 +1023,7 @@
             // ── Clipboard ──
             var remoteClipboard = '';
             function sendClipboardToRemote(text) {
+                noteUserActivity();
                 var stream = client.createClipboardStream('text/plain');
                 var writer = new Guacamole.StringWriter(stream);
                 for (var i = 0; i < text.length; i += 4096) writer.sendText(text.substring(i, i + 4096));
@@ -721,9 +1042,243 @@
                 };
             };
 
-            // ── File system ──
+            // ── Copy button: pull the remote clipboard on demand ──
+            // Sends Ctrl+C to the remote; the remote copies the current
+            // selection into ITS clipboard, and guacd pushes that back over
+            // the clipboard stream handled above (which honours the
+            // cfgClipboardSync setting — with sync off the button sends the
+            // keys but nothing is written to the browser clipboard). SSH
+            // terminals have no clipboard concept, so the button is a no-op
+            // there (Ctrl+C would interrupt a foreground process instead).
+            document.getElementById('btn-copy').addEventListener('click', function() {
+                if (!client || !window.__guac_client) return;
+                if (protocol === 'SSH') {
+                    showTransferStatus('error', 'SSH has no clipboard');
+                    setTimeout(hideTransferStatus, 2500);
+                    return;
+                }
+                client.sendKeyEvent(1, 0xFFE3);
+                client.sendKeyEvent(1, 0x63);
+                client.sendKeyEvent(0, 0x63);
+                client.sendKeyEvent(0, 0xFFE3);
+                noteUserActivity();
+                showTransferStatus('sent', 'Ctrl+C sent — remote selection will sync');
+                setTimeout(hideTransferStatus, 2000);
+            });
+
+            // ── File system (SSH SFTP browser) ──
+            // guacd exposes the SFTP session as a `filesystem` object (only
+            // when SFTP is enabled). Directories are listed by requesting the
+            // path as an input stream: the response body is JSON mapping each
+            // entry's absolute-in-filesystem path to its mimetype (directories
+            // are 'application/vnd.glyptodon.guacamole.stream-index+json').
+            // Files are downloaded by requesting the path too — the body is
+            // the file content itself. All DOM is built with createElement/
+            // textContent (no innerHTML — filenames must never be markup).
             var filesystem = null;
+            var fbCurrentPath = '/';
+            var fbOpen = false;
             client.onfilesystem = function(object, name) { filesystem = object; };
+            var fbPanel = document.getElementById('file-browser-panel');
+            var fbListEl = document.getElementById('fb-list');
+            var fbPathEl = document.getElementById('fb-path');
+            var fbStatusEl = document.getElementById('fb-status');
+            var FB_STREAM_INDEX = 'application/vnd.glyptodon.guacamole.stream-index+json';
+            function fbBasename(path) {
+                var idx = path.lastIndexOf('/');
+                return idx >= 0 ? path.substring(idx + 1) : path;
+            }
+            function fbParent(path) {
+                if (path === '/' || path === '') return '/';
+                var idx = path.lastIndexOf('/');
+                return idx <= 0 ? '/' : path.substring(0, idx);
+            }
+            function fbSetStatus(text) { fbStatusEl.textContent = text || ''; }
+            function fbListDir(path) {
+                if (fbMode === 'rdp') { fbListDrive(); return; }
+                if (!filesystem) { fbSetStatus('No remote filesystem available.'); return; }
+                fbCurrentPath = path;
+                fbPathEl.textContent = path;
+                fbListEl.textContent = '';
+                document.getElementById('fb-up').disabled = (path === '/');
+                var pending = true;
+                var timeout = setTimeout(function() { if (pending) fbSetStatus('Listing timed out — no response from server.'); }, 15000);
+                fbSetStatus('Loading ' + path + '...');
+                filesystem.requestInputStream(path, function(inputStream, mimetype) {
+                    pending = false;
+                    clearTimeout(timeout);
+                    var reader = new Guacamole.JSONReader(inputStream);
+                    reader.onend = function() {
+                        fbSetStatus('');
+                        fbRenderEntries(reader.getJSON());
+                    };
+                });
+            }
+            function fbRenderEntries(entries) {
+                fbListEl.textContent = '';
+                if (!entries) {
+                    var err = document.createElement('div');
+                    err.className = 'fb-empty';
+                    err.textContent = 'Could not read this directory.';
+                    fbListEl.appendChild(err);
+                    return;
+                }
+                var names = [];
+                for (var name in entries) names.push(name);
+                names.sort(function(a, b) {
+                    var da = entries[a] === FB_STREAM_INDEX ? 0 : 1;
+                    var db = entries[b] === FB_STREAM_INDEX ? 0 : 1;
+                    if (da !== db) return da - db;
+                    return a < b ? -1 : (a > b ? 1 : 0);
+                });
+                if (names.length === 0) {
+                    var empty = document.createElement('div');
+                    empty.className = 'fb-empty';
+                    empty.textContent = 'This directory is empty.';
+                    fbListEl.appendChild(empty);
+                    return;
+                }
+                for (var i = 0; i < names.length; i++) {
+                    var path = names[i];
+                    var isDir = entries[path] === FB_STREAM_INDEX;
+                    var row = document.createElement('div');
+                    row.className = 'fb-item' + (isDir ? ' fb-dir' : '');
+                    row.setAttribute('role', 'listitem');
+                    var ico = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    ico.setAttribute('viewBox', '0 0 24 24');
+                    ico.setAttribute('class', 'fb-ico');
+                    var p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    p.setAttribute('d', isDir ? 'M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z' : 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z');
+                    ico.appendChild(p);
+                    row.appendChild(ico);
+                    var label = document.createElement('span');
+                    label.className = 'fb-name';
+                    label.textContent = fbBasename(path);
+                    row.appendChild(label);
+                    row.addEventListener('click', (function(p, isDir) {
+                        return function() { if (isDir) fbListDir(p); else fbDownload(p); };
+                    })(path, isDir));
+                    fbListEl.appendChild(row);
+                }
+            }
+            function fbDownload(path) {
+                if (fbMode === 'rdp') { fbDownloadDrive(fbBasename(path)); return; }
+                if (!filesystem) return;
+                fbSetStatus('Downloading ' + fbBasename(path) + '...');
+                var pending = true;
+                var timeout = setTimeout(function() { if (pending) fbSetStatus('Download timed out — no response from server.'); }, 30000);
+                filesystem.requestInputStream(path, function(inputStream, mimetype) {
+                    pending = false;
+                    clearTimeout(timeout);
+                    var reader = new Guacamole.BlobReader(inputStream, mimetype);
+                    reader.onend = function() {
+                        var blob = reader.getBlob();
+                        fbSetStatus('Downloaded ' + fbBasename(path) + ' (' + formatBytes(blob.size) + ')');
+                        setTimeout(function() { if (fbOpen) fbSetStatus(''); }, 3000);
+                        var a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = fbBasename(path);
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                        setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
+                    };
+                });
+            }
+            // ── RDP drive browser (persea drive API) ──
+            // For RDP sessions the drive is a plain directory owned by
+            // persea; listing and downloads go through the REST API instead
+            // of the guacd filesystem object. Flat: the drive has no
+            // subdirectory navigation. All DOM is built with
+            // createElement/textContent (no innerHTML, same rule as the SSH
+            // browser).
+            function fbListDrive() {
+                fbCurrentPath = '/';
+                fbPathEl.textContent = 'Drive';
+                fbListEl.textContent = '';
+                document.getElementById('fb-up').disabled = true;
+                var pending = true;
+                var timeout = setTimeout(function() { if (pending) fbSetStatus('Listing timed out — no response from server.'); }, 15000);
+                fbSetStatus('Loading drive...');
+                var headers = {};
+                if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+                fetch('/api/sessions/' + sessionId + '/drive-files', { headers: headers, credentials: 'same-origin' })
+                    .then(function(res) {
+                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                        return res.json();
+                    })
+                    .then(function(entries) { pending = false; clearTimeout(timeout); fbRenderDrive(entries); })
+                    .catch(function() { pending = false; clearTimeout(timeout); fbSetStatus('Failed to load drive.'); });
+            }
+            function fbRenderDrive(entries) {
+                fbListEl.textContent = '';
+                if (!entries || !entries.length) {
+                    var empty = document.createElement('div');
+                    empty.className = 'fb-empty';
+                    empty.textContent = 'The drive is empty.';
+                    fbListEl.appendChild(empty);
+                    return;
+                }
+                var sorted = entries.slice().sort(function(a, b) {
+                    var an = a.name || '', bn = b.name || '';
+                    return an < bn ? -1 : (an > bn ? 1 : 0);
+                });
+                for (var i = 0; i < sorted.length; i++) {
+                    (function(entry) {
+                        var row = document.createElement('div');
+                        row.className = 'fb-item';
+                        row.setAttribute('role', 'listitem');
+                        var ico = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                        ico.setAttribute('viewBox', '0 0 24 24');
+                        ico.setAttribute('class', 'fb-ico');
+                        var p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        p.setAttribute('d', 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z');
+                        ico.appendChild(p);
+                        row.appendChild(ico);
+                        var label = document.createElement('span');
+                        label.className = 'fb-name';
+                        label.textContent = entry.name;
+                        row.appendChild(label);
+                        var meta = document.createElement('span');
+                        meta.className = 'fb-meta';
+                        meta.textContent = formatBytes(entry.size || 0);
+                        row.appendChild(meta);
+                        row.addEventListener('click', function() { fbDownload(entry.name); });
+                        fbListEl.appendChild(row);
+                    })(sorted[i]);
+                }
+            }
+            function fbDownloadDrive(name) {
+                fbSetStatus('Downloading ' + name + '...');
+                var headers = {};
+                if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+                fetch('/api/sessions/' + sessionId + '/drive-files/' + encodeURIComponent(name), { headers: headers, credentials: 'same-origin' })
+                    .then(function(res) {
+                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                        return res.blob();
+                    })
+                    .then(function(blob) {
+                        var a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = name;
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                        setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
+                        fbSetStatus('Downloaded ' + name + ' (' + formatBytes(blob.size) + ')');
+                        setTimeout(function() { if (fbOpen) fbSetStatus(''); }, 3000);
+                    })
+                    .catch(function() { fbSetStatus('Download failed: ' + name); });
+            }
+            document.getElementById('btn-files').addEventListener('click', function() {
+                if (!client || !window.__guac_client) return;
+                fbOpen = !fbOpen;
+                fbPanel.className = fbOpen ? 'open' : '';
+                if (fbOpen) fbListDir(fbCurrentPath);
+            });
+            document.getElementById('fb-close').addEventListener('click', function() {
+                fbOpen = false;
+                fbPanel.className = '';
+            });
+            document.getElementById('fb-up').addEventListener('click', function() {
+                if (fbCurrentPath !== '/') fbListDir(fbParent(fbCurrentPath));
+            });
             client.onfile = function(stream, mimetype, filename) {
                 var reader = new Guacamole.BlobReader(stream, mimetype);
                 reader.onend = function() {
@@ -740,8 +1295,28 @@
             var fileTransferStatus = document.getElementById('file-transfer-status');
             var fileTransferInput = document.getElementById('file-transfer-input');
             var fileTransferBtn = document.getElementById('btn-file-transfer');
-            function showTransferStatus(html) { fileTransferStatus.innerHTML = html; fileTransferStatus.style.display = ''; }
-            function hideTransferStatus() { fileTransferStatus.style.display = 'none'; fileTransferStatus.innerHTML = ''; }
+            // Status line is built with textContent/appendChild only — no
+            // innerHTML, so filenames can never be interpreted as markup
+            // (CodeQL js/xss-through-dom).
+            function showTransferStatus(kind, name, detail) {
+                var labels = { uploading: 'Uploading:', sent: 'Sent:', failed: 'Failed:', error: 'Error:' };
+                var label = document.createElement('span');
+                label.style.color = (kind === 'uploading' || kind === 'sent') ? 'var(--accent)' : 'var(--primary)';
+                label.textContent = labels[kind] || kind;
+                var text = document.createElement('span');
+                text.textContent = ' ' + (name || '');
+                fileTransferStatus.textContent = '';
+                fileTransferStatus.appendChild(label);
+                fileTransferStatus.appendChild(text);
+                if (detail) {
+                    var d = document.createElement('span');
+                    d.style.color = 'var(--text-dim)';
+                    d.textContent = ' ' + detail;
+                    fileTransferStatus.appendChild(d);
+                }
+                fileTransferStatus.style.display = '';
+            }
+            function hideTransferStatus() { fileTransferStatus.style.display = 'none'; fileTransferStatus.textContent = ''; }
 
             fileTransferBtn.addEventListener('click', function() { fileTransferInput.value = ''; fileTransferInput.click(); });
             fileTransferInput.addEventListener('change', function() {
@@ -750,7 +1325,7 @@
                 for (var i = 0; i < files.length; i++) { uploadFile(files[i]); }
             });
             function uploadFile(file) {
-                showTransferStatus('<span style="color:var(--accent);">Uploading:</span> ' + escapeHtml(file.name) + ' <span style="color:var(--text-dim);">(' + formatBytes(file.size) + ')</span>');
+                showTransferStatus('uploading', file.name, '(' + formatBytes(file.size) + ')');
                 var reader = new FileReader();
                 reader.onload = function(e) {
                     try {
@@ -758,16 +1333,16 @@
                         var writer = new Guacamole.ArrayBufferWriter(stream);
                         writer.onack = function(status) {
                             if (status.code && status.code !== 0x0000) {
-                                showTransferStatus('<span style="color:var(--primary);">Error:</span> ' + escapeHtml(file.name));
+                                showTransferStatus('error', file.name);
                                 setTimeout(hideTransferStatus, 3000);
                             }
                         };
                         writer.sendData(e.target.result);
                         writer.sendEnd();
-                        showTransferStatus('<span style="color:var(--accent);">Sent:</span> ' + escapeHtml(file.name));
+                        showTransferStatus('sent', file.name);
                         setTimeout(hideTransferStatus, 2000);
                     } catch (err) {
-                        showTransferStatus('<span style="color:var(--primary);">Failed:</span> ' + escapeHtml(file.name));
+                        showTransferStatus('failed', file.name);
                         setTimeout(hideTransferStatus, 3000);
                     }
                 };
@@ -800,12 +1375,14 @@
 
             client.onstatechange = function(state) {
                 switch (state) {
-                    case Guacamole.Client.State.CONNECTING: statusEl.textContent = 'Connecting...'; statusEl.className = ''; break;
-                    case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; break;
+                    case Guacamole.Client.State.CONNECTING: statusEl.textContent = 'Connecting...'; statusEl.className = ''; setLiveState('down'); break;
+                    case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; setLiveState('down'); break;
                     case Guacamole.Client.State.CONNECTED:
+                        everConnected = true;
                         statusEl.textContent = 'Connected'; statusEl.className = 'connected';
                         reconnectAttempts = 0;
                         connectStartTime = Date.now();
+                        setLiveState('live');
                         updateDuration();
                         (function() {
                             var fitToWindow = function() { scaleDisplay(); client.sendSize(window.innerWidth, window.innerHeight); };
@@ -829,10 +1406,12 @@
                         break;
                     case Guacamole.Client.State.DISCONNECTING:
                         statusEl.textContent = 'Disconnecting...'; statusEl.className = '';
+                        setLiveState('down');
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; captureThumbnail(); }
                         break;
                     case Guacamole.Client.State.DISCONNECTED:
                         statusEl.textContent = 'Disconnected'; statusEl.className = '';
+                        setLiveState('down');
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                         if (userDisconnected) {
                             document.getElementById('disconnected-title').textContent = 'Session Ended';
@@ -848,6 +1427,7 @@
                 lastSessionError = (status && status.message) ? status.message : null;
                 statusEl.textContent = 'Error: ' + (status.message || 'Unknown error');
                 statusEl.className = '';
+                setLiveState('ended');
                 if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                 document.getElementById('disconnected-title').textContent = 'Connection Error';
                 document.getElementById('disconnected-message').textContent = status.message || 'An error occurred.';
@@ -867,19 +1447,37 @@
             };
 
             // Disconnected overlay buttons
-            document.getElementById('btn-close-session').addEventListener('click', function() {
+            // In `same` mode the session page IS the user's main tab, so the
+            // close helper navigates back — label the button accordingly.
+            var btnCloseSession = document.getElementById('btn-close-session');
+            if (getOpenMode() === 'same') btnCloseSession.textContent = 'Back to connections';
+            btnCloseSession.addEventListener('click', function() {
                 userDisconnected = true;
-                window.location.href = '/';
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                cancelAutoClose();
+                closeOrNavigate();
+            });
+            document.getElementById('btn-back-connections').addEventListener('click', function() {
+                userDisconnected = true;
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                cancelAutoClose();
+                // Explicit user choice to keep this tab and browse — a plain
+                // navigation, not the close helper. Share viewers land on the
+                // site home (they have no Connections page).
+                window.location.href = shareToken ? '/' : '/connections.html';
             });
             document.getElementById('btn-reconnect').addEventListener('click', function() {
+                userDisconnected = true;
+                if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+                cancelAutoClose();
                 var btn = this;
                 btn.disabled = true; btn.textContent = 'Reconnecting...';
                 if (shareToken) { window.location.reload(); return; }
-                if (!relaunchInfo) { window.location.href = '/connections.html'; return; }
+                if (!relaunchInfo) { closeOrNavigate(); return; }
                 var key = relaunchInfo.entry_key;
                 var firstSlash = key.indexOf('/');
                 var lastSlash = key.lastIndexOf('/');
-                if (firstSlash < 0 || lastSlash <= firstSlash) { window.location.href = '/connections.html'; return; }
+                if (firstSlash < 0 || lastSlash <= firstSlash) { closeOrNavigate(); return; }
                 var scope = key.substring(0, firstSlash);
                 var folder = relaunchInfo.folder;
                 var entry = key.substring(lastSlash + 1);
@@ -889,8 +1487,23 @@
                     method: 'POST', headers: headers, credentials: 'same-origin',
                     body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, dpi: Math.round((window.devicePixelRatio || 1) * 96) })
                 })
-                .then(function(res) { if (!res.ok) { window.location.href = '/connections.html'; return; } return res.json().then(function(d) { window.location.href = d && d.client_url ? d.client_url : '/connections.html'; }); })
-                .catch(function() { window.location.href = '/connections.html'; });
+                .then(function(res) {
+                    if (!res.ok) { btn.disabled = false; btn.textContent = 'Reconnect'; closeOrNavigate(); return; }
+                    return res.json().then(function(d) {
+                        if (!d.client_url) { btn.disabled = false; btn.textContent = 'Reconnect'; closeOrNavigate(); return; }
+                        if (getOpenMode() === 'same') { window.location.href = d.client_url; return; }
+                        if (openSessionUrl(d.client_url)) {
+                            // The relaunched session lives in its own tab —
+                            // this tab is a dead session tab now: close it.
+                            setTimeout(closeOrNavigate, 500);
+                        } else {
+                            // Popup blocked — take over this tab instead of
+                            // stranding the user on the overlay.
+                            window.location.href = d.client_url;
+                        }
+                    });
+                })
+                .catch(function() { btn.disabled = false; btn.textContent = 'Reconnect'; closeOrNavigate(); });
             });
 
             // ── Keyboard ──
@@ -901,15 +1514,27 @@
 
             // Ctrl+V clipboard sync
             var _pasteIntercepted = false;
+            // After pushing the browser clipboard to the remote, replay the
+            // Ctrl+V as a proper key sequence (Control_L 0xFFE3 + 'v' 0x76)
+            // so the remote app actually pastes. The browser's real Ctrl+V
+            // keydown was swallowed by the capture handler below, so without
+            // this replay nothing would reach the remote. SSH has no
+            // clipboard, so only the stream is sent there — never a bare
+            // 'v' or a stray Ctrl+V into the terminal.
+            function replayCtrlV() {
+                if (protocol === 'SSH') return;
+                client.sendKeyEvent(1, 0xFFE3);
+                client.sendKeyEvent(1, 0x76);
+                client.sendKeyEvent(0, 0x76);
+                client.sendKeyEvent(0, 0xFFE3);
+            }
             document.addEventListener('keydown', function(e) {
                 if ((e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V') && !e.altKey && !e.repeat && cfgClipboardSync) {
                     if (navigator.clipboard && navigator.clipboard.readText) {
                         e.stopPropagation(); e.preventDefault(); _pasteIntercepted = true;
                         navigator.clipboard.readText().then(function(text) {
                             if (text && text !== remoteClipboard) { sendClipboardToRemote(text); remoteClipboard = text; }
-                        }).catch(function() {}).finally(function() {
-                            client.sendKeyEvent(1, 0x76); client.sendKeyEvent(0, 0x76);
-                        });
+                        }).catch(function() {}).finally(replayCtrlV);
                     }
                 }
             }, true);
@@ -917,14 +1542,60 @@
                 if (_pasteIntercepted && (e.key === 'v' || e.key === 'V')) { e.stopPropagation(); e.preventDefault(); _pasteIntercepted = false; }
             }, true);
 
-            keyboard.onkeydown = function(keysym) { client.sendKeyEvent(1, keysym); };
+            keyboard.onkeydown = function(keysym) { noteUserActivity(); client.sendKeyEvent(1, keysym); };
             keyboard.onkeyup = function(keysym) { client.sendKeyEvent(0, keysym); };
             window.addEventListener('blur', function() { keyboard.reset(); });
             document.addEventListener('visibilitychange', function() { if (document.hidden) keyboard.reset(); });
 
+            // ── Hotkey buttons (Win key, Ctrl+Alt+Del) ──
+            // OS-reserved keys (Win, Ctrl+Alt+Del) are swallowed by the OS
+            // before the browser ever sees them, so they are synthesized as
+            // keysyms through the existing sendKeyEvent plumbing. guacd
+            // translates keysyms for every protocol (SSH/RDP/VNC/SPICE).
+            var _winKeyHeld = false;
+            var _winReleaseTimer = null;
+            function winKeyRelease() {
+                if (!_winKeyHeld) return;
+                _winKeyHeld = false;
+                if (_winReleaseTimer) { clearTimeout(_winReleaseTimer); _winReleaseTimer = null; }
+                client.sendKeyEvent(0, 0xFFE7);
+            }
+            document.getElementById('btn-win').addEventListener('click', function() {
+                if (!client || !window.__guac_client) return;
+                // Clicking again (or the safety timer) releases a held Win.
+                if (_winKeyHeld) { winKeyRelease(); return; }
+                _winKeyHeld = true;
+                // Meta_L (0xFFE7) goes down now and stays held until the
+                // next typed key's keyup, so Win+R / Win+D etc. compose by
+                // clicking the button then typing the letter. A 3s safety
+                // timer guarantees the key can never stay stuck.
+                client.sendKeyEvent(1, 0xFFE7);
+                noteUserActivity();
+                _winReleaseTimer = setTimeout(winKeyRelease, 3000);
+            });
+            // Release the held Win key once the user types the letter that
+            // completes the combo (keyup fires right after the letter is
+            // sent to the remote).
+            var _baseKeyup = keyboard.onkeyup;
+            keyboard.onkeyup = function(keysym) {
+                if (_winKeyHeld && keysym !== 0xFFE7) winKeyRelease();
+                _baseKeyup(keysym);
+            };
+            document.getElementById('btn-cad').addEventListener('click', function() {
+                if (!client || !window.__guac_client) return;
+                // Control_L + Alt_L + Delete, released in reverse order.
+                client.sendKeyEvent(1, 0xFFE3);
+                client.sendKeyEvent(1, 0xFFE9);
+                client.sendKeyEvent(1, 0xFFFF);
+                client.sendKeyEvent(0, 0xFFFF);
+                client.sendKeyEvent(0, 0xFFE9);
+                client.sendKeyEvent(0, 0xFFE3);
+                noteUserActivity();
+            });
+
             // Mouse
             var mouse = new Guacamole.Mouse(client.getDisplay().getElement());
-            mouse.onEach(['mousedown', 'mousemove', 'mouseup'], function(e) { client.sendMouseState(e.state, true); });
+            mouse.onEach(['mousedown', 'mousemove', 'mouseup'], function(e) { noteUserActivity(); client.sendMouseState(e.state, true); });
 
             // ── Scale display ──
             var _scaleDisplay = null;
@@ -959,6 +1630,24 @@
             var connectData = shareToken ? 'token=' + encodeURIComponent(shareToken) : '';
             client.connect(connectData);
         }
+
+        // ── Best-effort teardown on tab close ──
+        // pagehide fires on tab close, navigation and refresh — send the
+        // same `disconnect` instruction the Disconnect button sends so the
+        // remote session ends instead of lingering. This alone is NOT a
+        // guarantee: the browser may tear down before the WebSocket flush
+        // completes. The real guarantee is server-side — persea's proxy
+        // actively ends the guacd connection whenever the WebSocket closes,
+        // for any reason. Mark userDisconnected so no reconnect is
+        // scheduled while the page is dying.
+        var pagehideFired = false;
+        window.addEventListener('pagehide', function() {
+            if (pagehideFired) return;
+            pagehideFired = true;
+            userDisconnected = true;
+            if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+            try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
+        });
     })();
     </script>
 </body>

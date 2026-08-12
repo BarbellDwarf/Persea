@@ -12,9 +12,8 @@
 set -euo pipefail
 
 PREFIX="/opt/persea"
-GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
-GUACD_BRANCH="main"
-GUACD_COMMIT="de97609007c088b5e6afd827eff5e9076013a247"  # main HEAD, matches patch base
+GUACD_SRC_URL="https://github.com/BarbellDwarf/persea-guacamole-server.git"
+GUACD_BRANCH="persea-1.6.1-freerdp3"  # fork branch — former patch quilt applied as commits
 BUILD_DIR="/tmp/persea-build-$$"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -127,40 +126,19 @@ fi
 # ---------------------------------------------------------------------------
 # Step 3: Build guacd from source
 # ---------------------------------------------------------------------------
-apply_guacd_patches() {
-    local src="$1"
-    local patch_dir="${SCRIPT_DIR}/patches"
-
-    if [[ ! -d "$patch_dir" ]]; then
-        return 0
-    fi
-
-    for patch in "$patch_dir"/*.patch; do
-        [[ -f "$patch" ]] || continue
-        if git -C "$src" apply --check "$patch" 2>/dev/null; then
-            info "Applying patch: $(basename "$patch")"
-            git -C "$src" apply "$patch"
-        else
-            info "Patch already applied or N/A: $(basename "$patch")"
-        fi
-    done
-}
-
 build_guacd() {
     info "Building guacd from source..."
     mkdir -p "$BUILD_DIR"
 
     if [[ -d "$SCRIPT_DIR/../guacamole-server/.git" ]]; then
         info "Using existing guacamole-server source at $SCRIPT_DIR/../guacamole-server"
+        info "  (expected: fork branch $GUACD_BRANCH checked out)"
         GUACD_SRC="$SCRIPT_DIR/../guacamole-server"
     else
-        info "Cloning guacamole-server..."
-        git clone "$GUACD_SRC_URL" "$BUILD_DIR/guacamole-server"
-        git -C "$BUILD_DIR/guacamole-server" checkout "$GUACD_COMMIT"
+        info "Cloning guacamole-server ($GUACD_BRANCH)..."
+        git clone --branch "$GUACD_BRANCH" "$GUACD_SRC_URL" "$BUILD_DIR/guacamole-server"
         GUACD_SRC="$BUILD_DIR/guacamole-server"
     fi
-
-    apply_guacd_patches "$GUACD_SRC"
 
     cd "$GUACD_SRC"
     if [[ ! -f configure ]]; then

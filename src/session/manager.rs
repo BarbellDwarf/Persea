@@ -15,7 +15,10 @@ use uuid::Uuid;
 
 /// Manages all active sessions.
 pub struct SessionManager {
-    pub(super) sessions: Arc<RwLock<HashMap<Uuid, Arc<Mutex<Session>>>>>,
+    /// Live sessions keyed by id. `pub(crate)` so API-layer tests can seed
+    /// sessions directly; production code only touches it via the session
+    /// module's methods.
+    pub(crate) sessions: Arc<RwLock<HashMap<Uuid, Arc<Mutex<Session>>>>>,
     pub(super) config: Config,
     pub(super) browser_manager: Arc<BrowserManager>,
     pub(super) guacd_tls: Option<TlsConnector>,
@@ -35,21 +38,54 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    /// Build a manager with an attached database handle (session history,
+    /// registry, audit trail).
     pub fn new_with_db(config: Config, guacd_tls: Option<TlsConnector>, db: crate::db::Db) -> Self {
         let mut mgr = Self::new(config, guacd_tls);
         mgr.db = Some(db);
         mgr
     }
 
-    /// Whether the given enterprise feature is licensed. Delegates to the
-    /// process-global license handle (`crate::license::set_global`, set
-    /// once at startup) since callers of this method (e.g. the WebSocket
-    /// recording-encryption check) aren't axum handlers and can't take an
-    /// `Extension<LicenseManager>` directly.
-    pub fn has_feature(&self, feature: &str) -> bool {
-        crate::license::global().is_some_and(|lm| lm.has_feature(feature))
+    /// Enterprise HA is active when a shared backend pool is installed.
+    /// Without one, every HA code path stays inert and behavior is
+    /// byte-for-byte single-instance.
+    pub fn ha_enabled(&self) -> bool {
+        crate::db::active_pool().is_some()
     }
 
+    /// This instance's stable identifier (registry owner tag).
+    pub fn instance_id(&self) -> &str {
+        &self.config.instance_id
+    }
+
+    /// This instance's public base URL, if configured (cross-instance
+    /// join/shadow redirect target).
+    pub fn owner_base_url(&self) -> Option<&str> {
+        self.config.ha_base_url.as_deref()
+    }
+
+    // ── Registry persistence (enterprise HA) ────────────────────────────────────
+    //
+    // All writes are gated on `ha_enabled()` (shared backend pool); the
+    // store functions also no-op without a pool, so single-instance mode
+    // is unchanged.
+
+    fn registry_set_status(&self, id: Uuid, status: &str) {
+        // Without a shared backend this is a no-op — single-instance
+        // behavior unchanged, byte-for-byte.
+        if !self.ha_enabled() {
+            return;
+        }
+        let Some(ref db) = self.db else { return };
+        let now = crate::db::registry_ts(Utc::now());
+        if let Err(e) = crate::db::registry_set_status(db, &id.to_string(), status, &now) {
+            tracing::warn!(session_id = %id, error = %e, "Failed to update session registry status");
+        }
+    }
+
+    /// Build a manager: creates the recording directory with restrictive
+    /// permissions, initializes the browser manager, and wires up the VDI
+    /// driver when enabled in config.
     pub fn new(config: Config, guacd_tls: Option<TlsConnector>) -> Self {
         // Ensure recording directory exists with restrictive permissions
         let recording_dir = config.effective_recording_path().into_owned();
@@ -155,7 +191,17 @@ impl SessionManager {
         self.db.as_ref()
     }
 
-    /// List all sessions.
+    /// Terminal statuses: sessions that can no longer be joined. Remote
+    /// (registry-only) sessions in these states are hidden from list/get —
+    /// the row lives on only so the owning instance can rotate the
+    /// recording file; the stale sweep removes it within 24h.
+    fn row_is_live(row: &crate::db::SessionRegistryRow) -> bool {
+        !matches!(row.status.as_str(), "completed" | "error" | "expired")
+    }
+
+    /// List all sessions: the local map plus (when enterprise HA is active)
+    /// registry rows for live sessions owned by other instances. Registry-only
+    /// sessions are marked `remote` with their owner instance.
     pub async fn list_sessions(&self) -> Vec<SessionInfo> {
         let sessions = self.sessions.read().await;
         let mut result = Vec::new();
@@ -163,15 +209,57 @@ impl SessionManager {
             let session = session.lock().await;
             result.push(session.info());
         }
+        drop(sessions);
+
+        if self.ha_enabled() {
+            if let Some(ref db) = self.db {
+                let local_ids: std::collections::HashSet<String> =
+                    result.iter().map(|s| s.session_id.to_string()).collect();
+                match crate::db::registry_list_sessions(db) {
+                    Ok(rows) => {
+                        for row in rows {
+                            if local_ids.contains(&row.session_id) {
+                                continue;
+                            }
+                            if !Self::row_is_live(&row) {
+                                continue;
+                            }
+                            if let Some(info) = SessionInfo::from_registry(&row) {
+                                result.push(info);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to list session registry rows");
+                    }
+                }
+            }
+        }
         result
     }
 
-    /// Get a specific session's info.
+    /// Get a specific session's info: local map first, then the shared
+    /// registry (remote sessions, enterprise HA only). Terminal remote
+    /// sessions are reported as absent (nothing joinable remains).
     pub async fn get_session(&self, id: Uuid) -> Option<SessionInfo> {
-        let sessions = self.sessions.read().await;
-        let session = sessions.get(&id)?;
-        let session = session.lock().await;
-        Some(session.info())
+        {
+            let sessions = self.sessions.read().await;
+            if let Some(session) = sessions.get(&id) {
+                let session = session.lock().await;
+                return Some(session.info());
+            }
+        }
+        if self.ha_enabled() {
+            if let Some(ref db) = self.db {
+                if let Ok(Some(row)) = crate::db::registry_get_session(db, &id.to_string()) {
+                    if !Self::row_is_live(&row) {
+                        return None;
+                    }
+                    return SessionInfo::from_registry(&row);
+                }
+            }
+        }
+        None
     }
 
     /// Take the guacd stream from a session (for the owner/first WebSocket connection).
@@ -218,6 +306,9 @@ impl SessionManager {
         session.active_connections += 1;
         crate::metrics::session_active_inc();
         tracing::info!(session_id = %id, "Session now active (owner connected)");
+        drop(session);
+        drop(sessions);
+        self.registry_set_status(id, "active");
         Some((stream, cancel))
     }
 
@@ -271,18 +362,156 @@ impl SessionManager {
     /// comparison). Returns which kind of token matched so callers can
     /// audit shadow uses; returns `Invalid` if neither matches or the
     /// session is unknown.
+    ///
+    /// Enterprise HA: when the session is not local (registry-only),
+    /// the in-memory check cannot match — the registry row carries the
+    /// admin-minted shadow token instead (see `mint_remote_shadow_token`),
+    /// so shadowing works from any instance.
     pub async fn validate_share_token(&self, id: Uuid, token: &str) -> ShareTokenValidation {
-        let sessions = self.sessions.read().await;
-        let Some(session) = sessions.get(&id) else {
-            return ShareTokenValidation::Invalid;
+        {
+            let sessions = self.sessions.read().await;
+            if let Some(session) = sessions.get(&id) {
+                let session = session.lock().await;
+                let v = super::check_share_token_match(
+                    &session.share_token,
+                    &session.shadow_tokens,
+                    token,
+                    Utc::now(),
+                );
+                if v != ShareTokenValidation::Invalid {
+                    return v;
+                }
+            }
+        }
+        if self.ha_enabled() {
+            if let Some(ref db) = self.db {
+                if let Ok(Some(row)) = crate::db::registry_get_session(db, &id.to_string()) {
+                    let (Some(hash), Some(issued_by), Some(expires_at)) = (
+                        row.shadow_token_hash,
+                        row.shadow_issued_by,
+                        row.shadow_expires_at,
+                    ) else {
+                        return ShareTokenValidation::Invalid;
+                    };
+                    // Expiry check first (fail closed on unparseable values).
+                    let expires =
+                        chrono::NaiveDateTime::parse_from_str(&expires_at, "%Y-%m-%d %H:%M:%S")
+                            .map(|ndt| ndt.and_utc());
+                    match expires {
+                        Ok(exp) if exp <= Utc::now() => return ShareTokenValidation::Invalid,
+                        Err(_) => return ShareTokenValidation::Invalid,
+                        _ => {}
+                    }
+                    use sha2::{Digest, Sha256};
+                    use subtle::ConstantTimeEq;
+                    let provided_hex = hex::encode(Sha256::digest(token.as_bytes()));
+                    if hash.len() == provided_hex.len()
+                        && hash.as_bytes().ct_eq(provided_hex.as_bytes()).into()
+                    {
+                        return ShareTokenValidation::Shadow { issued_by };
+                    }
+                }
+            }
+        }
+        ShareTokenValidation::Invalid
+    }
+
+    /// Mint a shadow token for a session hosted by ANOTHER instance: the
+    /// hash + issuer + expiry are written to the shared registry row
+    /// instead of a local in-memory session, so the owning instance (and
+    /// any other) can validate it. Returns the raw token and its expiry.
+    pub async fn mint_remote_shadow_token(
+        &self,
+        id: Uuid,
+        issued_by: &str,
+    ) -> Option<(String, DateTime<Utc>)> {
+        use sha2::{Digest, Sha256};
+        let db = self.db.as_ref()?;
+
+        let mut rng = rand::rng();
+        let bytes: [u8; 16] = rng.random();
+        let raw = hex::encode(bytes);
+        let hash = hex::encode(Sha256::digest(raw.as_bytes()));
+        let expires_at = Utc::now() + chrono::Duration::minutes(10);
+        let expires_str = crate::db::registry_ts(expires_at);
+        if let Err(e) = crate::db::registry_set_shadow_token(
+            db,
+            &id.to_string(),
+            &hash,
+            issued_by,
+            &expires_str,
+        ) {
+            tracing::warn!(session_id = %id, error = %e, "Failed to persist remote shadow token");
+            return None;
+        }
+        Some((raw, expires_at))
+    }
+
+    /// Delete registry rows that can no longer be live:
+    /// - rows still `pending` past `max(pending_timeout × 2, 60s)` — the
+    ///   owner's pending-timeout task would have marked them `expired`;
+    /// - rows in a terminal status past 24h — kept so the owning instance's
+    ///   recording rotation can still attribute the recording file;
+    /// - live rows owned by OTHER instances past `max_duration + 2h` (their
+    ///   owner must be dead — a live owner would have reaped the session at
+    ///   max duration). Disabled when max_duration is 0 (unlimited): no age
+    ///   proves death.
+    pub fn registry_sweep_stale(&self) -> usize {
+        if !self.ha_enabled() {
+            return 0;
+        }
+        let Some(ref db) = self.db else { return 0 };
+        let now = Utc::now();
+        let pending_cutoff_secs = (self.config.session_pending_timeout_secs * 2).max(60);
+        let pending_cutoff =
+            crate::db::registry_ts(now - chrono::Duration::seconds(pending_cutoff_secs as i64));
+        let terminal_cutoff = crate::db::registry_ts(now - chrono::Duration::hours(24));
+        let live_cutoff = if self.config.session_max_duration_secs > 0 {
+            Some(crate::db::registry_ts(
+                now - chrono::Duration::seconds(
+                    self.config.session_max_duration_secs as i64 + 7200,
+                ),
+            ))
+        } else {
+            None
         };
-        let session = session.lock().await;
-        super::check_share_token_match(
-            &session.share_token,
-            &session.shadow_tokens,
-            token,
-            Utc::now(),
-        )
+        match crate::db::registry_delete_stale(
+            db,
+            &self.config.instance_id,
+            &pending_cutoff,
+            &terminal_cutoff,
+            live_cutoff.as_deref(),
+        ) {
+            Ok(n) => {
+                if n > 0 {
+                    tracing::info!(deleted = n, "Reaped stale session registry rows");
+                }
+                n
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to sweep stale session registry rows");
+                0
+            }
+        }
+    }
+
+    /// Remove every registry row owned by this instance. Kept as an
+    /// operational tool (e.g. a deliberately retired instance clearing its
+    /// rows); NOT called on graceful shutdown — rows are left in terminal
+    /// state so recording rotation can still attribute the files, and the
+    /// stale sweep bounds their lifetime.
+    pub fn registry_delete_all_owned(&self) -> usize {
+        if !self.ha_enabled() {
+            return 0;
+        }
+        let Some(ref db) = self.db else { return 0 };
+        match crate::db::registry_delete_all_owned(db, &self.config.instance_id) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to clear own session registry rows");
+                0
+            }
+        }
     }
 
     /// Mint a new short-lived (10 min) shadow token for a session.
@@ -325,6 +554,7 @@ impl SessionManager {
 
     /// Mark a session as completed (terminal — cannot be reconnected).
     pub async fn complete_session(&self, id: Uuid) {
+        let mut did_transition = false;
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(&id) {
             let mut session = session.lock().await;
@@ -332,28 +562,39 @@ impl SessionManager {
                 || session.status == SessionStatus::Disconnected
             {
                 session.status = SessionStatus::Completed;
+                did_transition = true;
                 crate::metrics::session_active_dec();
                 let (c, r) = super::drive_cleanup_settings(&self.config.drive);
                 super::cleanup_browser(&self.browser_manager, &mut session, c, r).await;
                 tracing::info!(session_id = %id, "Session completed");
             }
         }
+        drop(sessions);
+        if did_transition {
+            self.registry_set_status(id, "completed");
+        }
     }
 
     /// Mark a session as disconnected — the browser closed the WebSocket but the
     /// session remains in the manager and can be reconnected.
     pub async fn disconnect_session(&self, id: Uuid) {
+        let mut did_transition = false;
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(&id) {
             let mut session = session.lock().await;
             if session.status == SessionStatus::Active {
                 session.status = SessionStatus::Disconnected;
+                did_transition = true;
                 session.guacd_stream = None;
                 crate::metrics::session_active_dec();
                 let (c, r) = super::drive_cleanup_settings(&self.config.drive);
                 super::cleanup_browser(&self.browser_manager, &mut session, c, r).await;
                 tracing::info!(session_id = %id, "Session disconnected (reconnectable)");
             }
+        }
+        drop(sessions);
+        if did_transition {
+            self.registry_set_status(id, "disconnected");
         }
     }
 
@@ -394,11 +635,15 @@ impl SessionManager {
         session.active_connections += 1;
         crate::metrics::session_active_inc();
         tracing::info!(session_id = %id, "Session reconnected (owner)");
+        drop(session);
+        drop(sessions);
+        self.registry_set_status(id, "active");
         Some((stream, cancel))
     }
 
     /// Mark a session as errored.
     pub async fn error_session(&self, id: Uuid) {
+        let mut did_transition = false;
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(&id) {
             let mut session = session.lock().await;
@@ -406,9 +651,14 @@ impl SessionManager {
                 crate::metrics::session_active_dec();
             }
             session.status = SessionStatus::Error;
+            did_transition = true;
             session.guacd_stream = None;
             let (c, r) = super::drive_cleanup_settings(&self.config.drive);
             super::cleanup_browser(&self.browser_manager, &mut session, c, r).await;
+        }
+        drop(sessions);
+        if did_transition {
+            self.registry_set_status(id, "error");
         }
     }
 
@@ -501,6 +751,17 @@ impl SessionManager {
     }
 
     /// Terminate a session. Cancels all active proxy connections.
+    ///
+    /// Teardown contract: cancelling the session's `CancellationToken` is
+    /// what actively ends the guacd connection. `proxy_ws_guacd` selects on
+    /// the token, and once it fires aborts both I/O tasks so the split
+    /// guacd socket is dropped and guacd sees EOF — the remote session
+    /// (SSH shell, RDP connection, VNC, …) is actually ended, not just
+    /// forgotten. The idle/max-duration reapers funnel through here, so a
+    /// reaped session ends its remote session too. Sessions that never
+    /// reached the proxy (still `Pending` with a live guacd stream) have
+    /// the stream dropped directly below, which closes the socket the same
+    /// way.
     pub async fn delete_session(&self, id: Uuid) -> bool {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.remove(&id) {
@@ -514,6 +775,12 @@ impl SessionManager {
             let (c, r) = super::drive_cleanup_settings(&self.config.drive);
             super::cleanup_browser(&self.browser_manager, &mut session, c, r).await;
             tracing::info!(session_id = %id, "Session terminated by API");
+            drop(session);
+            drop(sessions);
+            // Keep the registry row in a terminal state so the owning
+            // instance's recording rotation can still attribute the file;
+            // the stale sweep removes the row within 24h.
+            self.registry_set_status(id, "completed");
             true
         } else {
             false
@@ -550,6 +817,40 @@ impl SessionManager {
         count
     }
 
+    /// Reap sessions idle past the configured idle timeout.
+    /// Returns the number of sessions reaped.
+    ///
+    /// Semantics: `last_activity` is refreshed by client-initiated session
+    /// traffic (WebSocket input) only — the client's own tunnel keepalive
+    /// pings do NOT count as activity, so a live-but-silent session is
+    /// still reaped. `session_idle_timeout_secs = 0` disables idle reaping
+    /// (max duration still applies).
+    ///
+    /// Terminated sessions are recorded in the session history with status
+    /// "idle-timeout" (distinguishable from max-duration reaping), cancelled,
+    /// and their in-memory status moves to the terminal state used by
+    /// `delete_session`. A `SessionStatus::IdleTimeout` variant does not
+    /// exist yet (src/session/types.rs) — when one lands, flip the status
+    /// here and in `delete_session` for a live-API-distinguishable label.
+    pub async fn reap_idle_sessions(&self) -> usize {
+        let idle_timeout = self.config.session_idle_timeout_secs;
+        if idle_timeout == 0 {
+            return 0;
+        }
+        let to_delete = self.get_idle_sessions(idle_timeout as i64).await;
+        for id in &to_delete {
+            let recording = self.is_recording_enabled(*id).await;
+            self.end_session_history(*id, "idle-timeout", 0, recording);
+            tracing::warn!(
+                session_id = %id,
+                idle_timeout_secs = idle_timeout,
+                "Reaping session (idle timeout)"
+            );
+            self.delete_session(*id).await;
+        }
+        to_delete.len()
+    }
+
     /// Remove sessions in terminal states (Completed, Error, Expired) that have
     /// been in that state longer than the configured cleanup delay. The session
     /// history in SQLite is not affected — this only frees in-memory state.
@@ -581,12 +882,17 @@ impl SessionManager {
             let mut sessions = self.sessions.write().await;
             for id in &to_remove {
                 sessions.remove(id);
+                // The registry row intentionally stays (terminal
+                // state) so recording rotation can still attribute the
+                // file — the stale sweep removes it within 24h.
             }
         }
 
         to_remove.len()
     }
 
+    /// Directory where .guac recordings and thumbnails are stored,
+    /// resolved once at construction.
     pub fn recording_path(&self) -> &std::path::Path {
         &self.recording_dir
     }
@@ -641,10 +947,12 @@ impl SessionManager {
         false
     }
 
+    /// Configured maximum session lifetime in seconds (0 = unlimited).
     pub fn session_max_duration_secs(&self) -> u64 {
         self.config.session_max_duration_secs
     }
 
+    /// The resolved `[recording]` settings (rotation, max recordings).
     pub fn recording_config(&self) -> crate::config::RecordingConfig {
         self.config.recording_config()
     }

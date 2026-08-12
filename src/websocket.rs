@@ -18,6 +18,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
@@ -35,6 +36,220 @@ enum ProxyResult {
     Cancelled,
 }
 
+/// Direction of a transfer instruction, used by the audit sniffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransferDirection {
+    BrowserToGuacd,
+    GuacdToBrowser,
+}
+
+/// Whether a tracked transfer is an upload (browser → remote) or a
+/// download (remote → browser).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransferKind {
+    Upload,
+    Download,
+}
+
+/// A file transfer in progress, tracked by its Guacamole stream index.
+#[derive(Debug, Clone)]
+struct PendingTransfer {
+    kind: TransferKind,
+    filename: String,
+    mimetype: String,
+    size: u64,
+}
+
+/// A transfer that completed or failed, ready to be written to the audit
+/// hash chain.
+#[derive(Debug, PartialEq)]
+struct TransferAuditEvent {
+    kind: TransferKind,
+    filename: String,
+    mimetype: String,
+    size: u64,
+    error: bool,
+}
+
+/// Byte length of a base64-encoded blob argument (exact for standard padded
+/// base64, which is what guacd and the JS client emit).
+fn base64_blob_len(data: &str) -> u64 {
+    let data = data.trim_end();
+    let mut len = data.len() as u64;
+    if data.ends_with("==") {
+        len -= 2;
+    } else if len > 0 && data.ends_with('=') {
+        len -= 1;
+    }
+    len * 3 / 4
+}
+
+/// Sniff one parsed instruction for file-transfer activity, updating the
+/// shared pending-transfer map and returning audit events to emit.
+///
+/// Mirrors the clipboard sniff: pure, unit-testable, and does not alter the
+/// forwarded stream in any way.
+///
+/// Browser → guacd: `file,<idx>,<mimetype>,<name>` opens an upload;
+/// `blob,<idx>,<b64>` carries its data; `end,<idx>` completes it. A failed
+/// upload is surfaced by guacd's `ack,<idx>,<msg>,<code>` (code != 0).
+///
+/// guacd → browser: `body,<obj>,<stream>,<mimetype>,<name>` delivers a
+/// requested stream — directory listings (stream-index mimetype) are not
+/// transfers, everything else is a download of `name`. `file,<idx>,<mimetype>,<name>`
+/// (RDP drive pushes, SSH terminal-triggered downloads) is a download too.
+/// Blobs accumulate the size; `end,<idx>` finalizes. A failed download is
+/// surfaced by the browser's `ack,<idx>,<msg>,<code>` (code != 0).
+fn sniff_transfer_instruction(
+    instr: &Instruction,
+    direction: TransferDirection,
+    pending: &mut HashMap<i64, PendingTransfer>,
+) -> Vec<TransferAuditEvent> {
+    let mut events = Vec::new();
+    let kind_matches = |p: &PendingTransfer| {
+        (p.kind == TransferKind::Upload) == (direction == TransferDirection::BrowserToGuacd)
+    };
+    match instr.opcode.as_str() {
+        "file" => {
+            // Uploads (browser → guacd) and pushed downloads (guacd →
+            // browser) both carry <idx>,<mimetype>,<filename>.
+            if instr.args.len() >= 3 {
+                if let Ok(idx) = instr.args[0].parse::<i64>() {
+                    if idx >= 0 {
+                        pending.insert(
+                            idx,
+                            PendingTransfer {
+                                kind: match direction {
+                                    TransferDirection::BrowserToGuacd => TransferKind::Upload,
+                                    TransferDirection::GuacdToBrowser => TransferKind::Download,
+                                },
+                                filename: instr.args[2].clone(),
+                                mimetype: instr.args[1].clone(),
+                                size: 0,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        "body" => {
+            // guacd responds to get requests with body instructions. The
+            // stream-index mimetype denotes a directory listing, not a
+            // transfer; anything else is a file download (name = path).
+            if direction == TransferDirection::GuacdToBrowser
+                && instr.args.len() >= 4
+                && instr.args[2] != "application/vnd.glyptodon.guacamole.stream-index+json"
+            {
+                if let Ok(idx) = instr.args[1].parse::<i64>() {
+                    if idx >= 0 {
+                        let path = instr.args[3].clone();
+                        let filename = path.rsplit('/').next().unwrap_or(&path).to_string();
+                        pending.insert(
+                            idx,
+                            PendingTransfer {
+                                kind: TransferKind::Download,
+                                filename,
+                                mimetype: instr.args[2].clone(),
+                                size: 0,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        "blob" => {
+            if let Some(idx) = instr.args.first().and_then(|a| a.parse::<i64>().ok()) {
+                if let Some(p) = pending.get_mut(&idx) {
+                    if kind_matches(p) {
+                        if let Some(data) = instr.args.get(1) {
+                            p.size += base64_blob_len(data);
+                        }
+                    }
+                }
+            }
+        }
+        "end" => {
+            if let Some(idx) = instr.args.first().and_then(|a| a.parse::<i64>().ok()) {
+                if let Some(p) = pending.get(&idx) {
+                    if kind_matches(p) {
+                        if let Some(p) = pending.remove(&idx) {
+                            events.push(TransferAuditEvent {
+                                kind: p.kind,
+                                filename: p.filename,
+                                mimetype: p.mimetype,
+                                size: p.size,
+                                error: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        "ack" => {
+            // Acks for uploads come from guacd (guacd → browser); acks for
+            // downloads come from the browser (browser → guacd). A non-zero
+            // code fails the transfer.
+            if let Some(idx) = instr.args.first().and_then(|a| a.parse::<i64>().ok()) {
+                if let Some(p) = pending.get(&idx) {
+                    if (p.kind == TransferKind::Upload)
+                        == (direction == TransferDirection::GuacdToBrowser)
+                        && instr.args.get(2).map(|s| s.as_str()).unwrap_or("0") != "0"
+                    {
+                        if let Some(p) = pending.remove(&idx) {
+                            events.push(TransferAuditEvent {
+                                kind: p.kind,
+                                filename: p.filename,
+                                mimetype: p.mimetype,
+                                size: p.size,
+                                error: true,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    events
+}
+
+/// Write a transfer audit event into the hash-chain audit log. Runs the DB
+/// write on a blocking thread (rusqlite is synchronous). Silent on failure —
+/// audit logging must never take down the proxy.
+fn emit_transfer_audit(
+    database: Option<&Db>,
+    session_id: Uuid,
+    user: Option<&str>,
+    event: TransferAuditEvent,
+) {
+    let Some(db) = database else {
+        return;
+    };
+    let db = db.clone();
+    let sid = session_id.to_string();
+    let user = user.unwrap_or("unknown").to_string();
+    let event_type = match event.kind {
+        TransferKind::Upload => "session.file.upload",
+        TransferKind::Download => "session.file.download",
+    };
+    let outcome = if event.error { "error" } else { "success" };
+    let details = json!({
+        "filename": event.filename,
+        "mimetype": event.mimetype,
+        "size": event.size,
+    });
+    tokio::task::spawn_blocking(move || {
+        let _ = crate::audit::log_event(
+            &db,
+            &mut crate::audit::EventBuilder::new(event_type, outcome)
+                .user_id(&user)
+                .session_id(&sid)
+                .details(details)
+                .build(),
+        );
+    });
+}
+
 /// Outcome of the proxy session, including whether guacd sent a disconnect instruction.
 struct ProxyOutcome {
     result: ProxyResult,
@@ -42,11 +257,44 @@ struct ProxyOutcome {
     /// remote server ended the session (user logout, crash), as opposed to the
     /// browser/network dropping the WebSocket.
     server_disconnected: bool,
+    /// The message from guacd's `error` instruction, if one was seen (e.g.
+    /// "Server refused connection (wrong security type?)"). Forwarded to the
+    /// browser verbatim; captured here for logging and the disconnect reason.
+    guacd_error: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct WsQuery {
     pub token: Option<String>,
+}
+
+/// Parts of the WS upgrade request the handler needs beyond the typed
+/// extracts: the raw query string (for preserving ?token= etc. on the
+/// cross-instance redirect) and whether the identity came from a
+/// consumed ticket (which lets the origin check be skipped — the ticket is
+/// the anti-CSWSh credential). Implemented as a parts extractor so it can
+/// coexist with `WebSocketUpgrade` (both cannot consume the body).
+#[derive(Clone)]
+pub struct WsRequestParts {
+    pub query_string: Option<String>,
+    pub ticket_authenticated: bool,
+}
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for WsRequestParts {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self {
+            query_string: parts.uri.query().map(|q| q.to_string()),
+            ticket_authenticated: parts
+                .extensions
+                .get::<crate::auth::TicketAuthenticated>()
+                .is_some(),
+        })
+    }
 }
 
 /// GET /ws/:session_id — Upgrade to WebSocket and proxy to guacd.
@@ -60,49 +308,61 @@ pub async fn ws_handler(
     identity: Option<Extension<AuthIdentity>>,
     trusted: Option<Extension<TrustedProxies>>,
     database: Option<Extension<Db>>,
+    ticket_store: Extension<crate::auth::WsTicketStore>,
+    ws_parts: WsRequestParts,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let ip = client_ip(&headers, addr.ip(), &proxies);
     let identity = identity.map(|Extension(id)| id);
 
+    // When the identity came from a consumed WebSocket ticket, the
+    // ticket itself is the anti-CSWSh credential (minted only by
+    // authenticated callers, single-use, 30s TTL) — the Origin/Host match is
+    // skipped so cross-instance join/shadow redirects (which necessarily
+    // carry another instance's Origin) can land here. Without a ticket the
+    // strict Origin check below still applies.
+    let ticket_authenticated = ws_parts.ticket_authenticated;
+
     // Validate Origin header to prevent cross-site WebSocket hijacking (CSWSH).
     // Compare Origin's hostname against the request's Host header hostname.
     // Only the hostname is compared (ports stripped) to avoid false rejections
     // behind reverse proxies that may add/remove default ports.
     // Reject WebSocket upgrades when Origin is missing to prevent CSWSH.
-    match headers.get("origin").and_then(|v| v.to_str().ok()) {
-        Some(origin) => {
-            let host = headers
-                .get("host")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            if !origin_host_matches(origin, host) {
+    if !ticket_authenticated {
+        match headers.get("origin").and_then(|v| v.to_str().ok()) {
+            Some(origin) => {
+                let host = headers
+                    .get("host")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                if !origin_host_matches(origin, host) {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        client_ip = %ip,
+                        origin = %origin,
+                        host = %host,
+                        "WebSocket upgrade rejected: Origin does not match Host (possible CSWSH)"
+                    );
+                    return (
+                        StatusCode::FORBIDDEN,
+                        axum::Json(json!({"error": "cross-origin WebSocket request rejected"})),
+                    )
+                        .into_response();
+                }
+            }
+            None => {
                 tracing::warn!(
                     session_id = %session_id,
                     client_ip = %ip,
-                    origin = %origin,
-                    host = %host,
-                    "WebSocket upgrade rejected: Origin does not match Host (possible CSWSH)"
+                    "WebSocket upgrade rejected: missing Origin header (possible CSWSH)"
                 );
                 return (
                     StatusCode::FORBIDDEN,
-                    axum::Json(json!({"error": "cross-origin WebSocket request rejected"})),
+                    axum::Json(json!({"error": "WebSocket upgrade requires Origin header"})),
                 )
                     .into_response();
             }
-        }
-        None => {
-            tracing::warn!(
-                session_id = %session_id,
-                client_ip = %ip,
-                "WebSocket upgrade rejected: missing Origin header (possible CSWSH)"
-            );
-            return (
-                StatusCode::FORBIDDEN,
-                axum::Json(json!({"error": "WebSocket upgrade requires Origin header"})),
-            )
-                .into_response();
         }
     }
 
@@ -114,6 +374,87 @@ pub async fn ws_handler(
             axum::Json(json!({"error": "server is shutting down"})),
         )
             .into_response();
+    }
+
+    // Cross-instance join/shadow/owner-reconnect: the guacd stream
+    // lives on the owning instance, so a WebSocket that lands here for a
+    // remote session is redirected to the owner's WS endpoint. The ticket is
+    // DB-backed, so the owner instance validates it; a fresh ticket is
+    // minted with the (already authenticated) identity so the forwarded
+    // connection carries credentials the owner trusts. The share token
+    // (?token=) is preserved verbatim — the owner validates it in-memory.
+    if let Some(info) = manager.get_session(session_id).await {
+        if info.remote {
+            let Some(owner_base) = info.owner_base_url.as_deref() else {
+                tracing::warn!(
+                    session_id = %session_id,
+                    client_ip = %ip,
+                    owner = %info.owner_instance.as_deref().unwrap_or("?"),
+                    "Remote session join rejected: owning instance advertises no ha_base_url"
+                );
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    axum::Json(json!({
+                        "error": "session is hosted by another instance that advertises no ha_base_url — configure ha_base_url on the owning instance"
+                    })),
+                )
+                    .into_response();
+            };
+            let Some(id) = identity else {
+                tracing::warn!(
+                    session_id = %session_id,
+                    client_ip = %ip,
+                    "Remote session join rejected: no authenticated identity to forward"
+                );
+                return (
+                    StatusCode::FORBIDDEN,
+                    axum::Json(json!({
+                        "error": "authentication required to join a session on another instance"
+                    })),
+                )
+                    .into_response();
+            };
+
+            // Preserve every query param except `ticket` (the old ticket was
+            // already consumed by the auth middleware; the fresh one below
+            // replaces it).
+            let mut kept: Vec<String> = Vec::new();
+            if let Some(qs) = ws_parts.query_string.as_deref() {
+                for pair in qs.split('&') {
+                    if pair.is_empty() {
+                        continue;
+                    }
+                    let key = pair.split('=').next().unwrap_or("");
+                    if key == "ticket" {
+                        continue;
+                    }
+                    kept.push(pair.to_string());
+                }
+            }
+            let fresh_ticket = ticket_store.forward(id).await;
+            let mut location = format!(
+                "{}/ws/{}?ticket={}",
+                owner_base.trim_end_matches('/'),
+                session_id,
+                fresh_ticket
+            );
+            if !kept.is_empty() {
+                location.push('&');
+                location.push_str(&kept.join("&"));
+            }
+            tracing::info!(
+                session_id = %session_id,
+                client_ip = %ip,
+                owner = %info.owner_instance.as_deref().unwrap_or("?"),
+                location = %location,
+                "Redirecting cross-instance WebSocket to the owning instance"
+            );
+            return axum::response::Response::builder()
+                .status(StatusCode::TEMPORARY_REDIRECT)
+                .header(axum::http::header::LOCATION, location)
+                .body(axum::body::Body::empty())
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
     }
 
     // Check if this is an owner connection (session is Pending or Disconnected)
@@ -228,7 +569,7 @@ async fn handle_ws(
             }
         }
 
-        // Per-session concurrent viewer limit (H02).
+        // Per-session concurrent viewer limit.
         // The owner connection is not counted (active_connections starts at 0
         // for a Pending session).  max_viewers == 0 means unlimited.
         {
@@ -321,10 +662,25 @@ async fn handle_ws(
 
     // Run the bidirectional proxy
     let start = Instant::now();
-    let proxy_outcome = proxy_ws_guacd(ws, guacd_stream, recording_file, cancel).await;
+    let session_user = manager
+        .get_session(session_id)
+        .await
+        .map(|info| info.created_by);
+    let proxy_outcome = proxy_ws_guacd(
+        session_id,
+        ws,
+        guacd_stream,
+        recording_file,
+        cancel,
+        manager.clone(),
+        database,
+        session_user,
+    )
+    .await;
     let elapsed = start.elapsed();
     let server_disconnected = proxy_outcome.server_disconnected;
     let proxy_result = proxy_outcome.result;
+    let guacd_error = proxy_outcome.guacd_error;
 
     manager.disconnect_viewer(session_id).await;
 
@@ -336,6 +692,7 @@ async fn handle_ws(
                     session_id = %session_id, client_ip = %client_addr,
                     elapsed_ms = elapsed.as_millis() as u64,
                     error = ?err,
+                    guacd_error = ?guacd_error,
                     "guacd closed connection quickly (possible connection failure)"
                 );
                 true // mark as error
@@ -414,21 +771,11 @@ async fn handle_ws(
     }
 
     // Encrypt recording at rest (file is closed after proxy_ws_guacd returns).
-    // Enterprise-gated (R43) — checked via the process-global handle since
-    // this isn't an axum handler and can't take an `Extension<T>`.
     if is_recording_enabled && recording_path.exists() {
         let rec_config = manager.recording_config();
         let enc_key = manager.config().storage_encryption_key();
         if crate::recording::should_encrypt_at_rest(&rec_config, enc_key.as_deref()) {
-            let licensed = crate::license::global()
-                .map(|lm| lm.has_feature(crate::license::FEAT_ENCRYPTED_RECORDING))
-                .unwrap_or(false);
-            if !licensed {
-                tracing::warn!(
-                    session_id = %session_id,
-                    "Recording encryption at rest is configured but requires an enterprise license — this recording was saved unencrypted"
-                );
-            } else if let Some(ref key_hex) = enc_key {
+            if let Some(ref key_hex) = enc_key {
                 if let Err(e) = crate::recording::encrypt_recording_file(&recording_path, key_hex) {
                     tracing::error!(
                         session_id = %session_id, error = %e,
@@ -465,11 +812,16 @@ async fn handle_ws(
 }
 
 /// Bidirectional proxy between WebSocket and guacd stream (TCP or TLS).
+#[allow(clippy::too_many_arguments)]
 async fn proxy_ws_guacd(
+    session_id: Uuid,
     ws: WebSocket,
     guacd: GuacdStream,
     recording_file: Option<tokio::fs::File>,
     cancel: CancellationToken,
+    manager: Arc<crate::session::SessionManager>,
+    database: Option<Db>,
+    session_user: Option<String>,
 ) -> ProxyOutcome {
     let (guacd_read, guacd_write) = tokio::io::split(guacd);
     let (ws_write, ws_read) = ws.split();
@@ -479,28 +831,69 @@ async fn proxy_ws_guacd(
     // Shared flag: set by guacd_to_ws when it sees `10.disconnect;` in the stream
     let server_disconnected = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+    // Captured message from guacd's `error` instruction, if any.
+    let guacd_error = Arc::new(tokio::sync::Mutex::new(None::<String>));
+
     // The WebSocket sink is shared so both halves can write to it. The browser →
     // guacd side needs to echo `0.,4.ping,...` instructions back to the client
     // (Apache webapp parity), without ever forwarding them to guacd.
     let ws_sink = Arc::new(tokio::sync::Mutex::new(ws_write));
 
+    // In-flight file transfers shared by both directions so uploads (tracked
+    // browser → guacd) can be failed by guacd's error acks (guacd → browser)
+    // and vice versa. Stream indices are connection-global, so the key space
+    // never collides.
+    let pending_transfers = Arc::new(tokio::sync::Mutex::new(
+        HashMap::<i64, PendingTransfer>::new(),
+    ));
+
     // guacd → browser (also tee to recording)
     let recording_clone = recording.clone();
     let sd_flag = server_disconnected.clone();
     let ws_sink_g = ws_sink.clone();
-    let guacd_to_browser =
-        tokio::spawn(
-            async move { guacd_to_ws(guacd_read, ws_sink_g, recording_clone, sd_flag).await },
-        );
+    let err_flag = guacd_error.clone();
+    let pending_g = pending_transfers.clone();
+    let db_g = database.clone();
+    let user_g = session_user.clone();
+    // The handles are kept (`mut`) so the teardown below can abort whichever
+    // task is still running after the proxy ends.
+    let mut guacd_to_browser = tokio::spawn(async move {
+        guacd_to_ws(
+            session_id,
+            guacd_read,
+            ws_sink_g,
+            recording_clone,
+            sd_flag,
+            err_flag,
+            pending_g,
+            db_g,
+            user_g,
+        )
+        .await
+    });
 
     // browser → guacd
     let ws_sink_b = ws_sink.clone();
-    let browser_to_guacd =
-        tokio::spawn(async move { ws_to_guacd(ws_read, guacd_write, ws_sink_b).await });
+    let pending_b = pending_transfers.clone();
+    let db_b = database.clone();
+    let user_b = session_user.clone();
+    let mut browser_to_guacd = tokio::spawn(async move {
+        ws_to_guacd(
+            ws_read,
+            guacd_write,
+            ws_sink_b,
+            session_id,
+            manager,
+            pending_b,
+            db_b,
+            user_b,
+        )
+        .await
+    });
 
     // Wait for either direction to finish, or cancellation
     let result = tokio::select! {
-        result = guacd_to_browser => {
+        result = &mut guacd_to_browser => {
             let err = match result {
                 Ok(Err(e)) => Some(e.to_string()),
                 Err(e) => Some(e.to_string()),
@@ -508,7 +901,7 @@ async fn proxy_ws_guacd(
             };
             ProxyResult::GuacdEnded(err)
         }
-        result = browser_to_guacd => {
+        result = &mut browser_to_guacd => {
             let err = match result {
                 Ok(Err(e)) => Some(e.to_string()),
                 Err(e) => Some(e.to_string()),
@@ -521,9 +914,43 @@ async fn proxy_ws_guacd(
         }
     };
 
+    // ── Active teardown ──────────────────────────────────────────────
+    // The proxy is done, but the two I/O tasks must not be left running
+    // detached: whichever one is still running holds half of the split
+    // guacd socket, so a zombie task keeps the socket (and with it the
+    // guacd session) alive forever — this is exactly how a tab close used
+    // to orphan the remote session. Abort the loser(s), then wait for them
+    // to actually stop (bounded, in case a task is stuck in a syscall) so
+    // the socket halves are dropped and guacd sees EOF before we return. On
+    // the browser-closed path `ws_to_guacd` has already written a
+    // `disconnect` instruction and shut its write half; the abort covers
+    // every other path: network drop, cancellation, reap, API terminate,
+    // and guacd ending the connection. NOTE: the handle that won the select
+    // above is already complete — awaiting it would panic ("JoinHandle
+    // polled after completion") — so only the losing handle is awaited.
+    guacd_to_browser.abort();
+    browser_to_guacd.abort();
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        match &result {
+            ProxyResult::BrowserEnded(_) => {
+                let _ = guacd_to_browser.await;
+            }
+            ProxyResult::GuacdEnded(_) => {
+                let _ = browser_to_guacd.await;
+            }
+            ProxyResult::Cancelled => {
+                let _ = tokio::join!(guacd_to_browser, browser_to_guacd);
+            }
+        }
+    })
+    .await;
+
+    let guacd_err = guacd_error.lock().await.take();
+
     ProxyOutcome {
         result,
         server_disconnected: server_disconnected.load(std::sync::atomic::Ordering::Relaxed),
+        guacd_error: guacd_err,
     }
 }
 
@@ -545,11 +972,17 @@ const MAX_GUACD_CARRY: usize = 16 * 1024 * 1024;
 /// of instruction was not ';' nor ','". To prevent that, every Message::Text
 /// we emit ends at a true Guacamole instruction boundary; partial tail data
 /// is held in `carry` until the next read completes it.
+#[allow(clippy::too_many_arguments)]
 async fn guacd_to_ws(
+    session_id: Uuid,
     mut guacd: tokio::io::ReadHalf<GuacdStream>,
     ws: WsSink,
     recording: Option<Arc<tokio::sync::Mutex<tokio::fs::File>>>,
     server_disconnected: Arc<std::sync::atomic::AtomicBool>,
+    last_error: Arc<tokio::sync::Mutex<Option<String>>>,
+    pending_transfers: Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
+    database: Option<Db>,
+    session_user: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
     let mut carry = bytes::BytesMut::new();
@@ -594,6 +1027,59 @@ async fn guacd_to_ws(
             },
         )?;
 
+        // Capture guacd's `error` instructions (e.g. RDP negotiation failures
+        // like "Server refused connection (wrong security type?)"). The
+        // instruction is forwarded to the browser verbatim, but logging it
+        // here gives the operator the reason in persea's own logs, and the
+        // message is used as the disconnect reason when the proxy ends.
+        let mut parser = crate::protocol::InstructionParser::new();
+        for instr in parser.receive(&text).into_iter().flatten() {
+            if instr.opcode == "error" {
+                // guacd encodes the error instruction as
+                // `error,<message>,<code>` (guac_protocol_send_error).
+                let message = instr
+                    .args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "unknown error".to_string());
+                let code = instr.args.get(1).cloned().unwrap_or_default();
+                tracing::warn!(
+                    session_id = %session_id,
+                    code = %code,
+                    "guacd reported upstream error: {}", message
+                );
+                *last_error.lock().await = Some(message);
+            } else if instr.opcode == "filesystem" {
+                // guacd exposed an SFTP session (SSH) or drive (RDP).
+                // Availability alone is not a transfer, so this is logged
+                // but not audited.
+                tracing::info!(
+                    session_id = %session_id,
+                    name = instr.args.get(1).map(String::as_str).unwrap_or("?"),
+                    "guacd exposed a filesystem (SFTP or drive)"
+                );
+            } else if matches!(
+                instr.opcode.as_str(),
+                "file" | "blob" | "ack" | "end" | "body"
+            ) {
+                // Audit file-transfer activity (downloads delivered by
+                // guacd, uploads failed by guacd's error acks).
+                let mut pending = pending_transfers.lock().await;
+                for event in sniff_transfer_instruction(
+                    &instr,
+                    TransferDirection::GuacdToBrowser,
+                    &mut pending,
+                ) {
+                    emit_transfer_audit(
+                        database.as_ref(),
+                        session_id,
+                        session_user.as_deref(),
+                        event,
+                    );
+                }
+            }
+        }
+
         // Detect guacd-initiated disconnect (server-side logout/crash).
         // guacd sends "10.disconnect;" as the final instruction when the
         // remote server ends the session. Buffering at instruction boundary
@@ -610,6 +1096,27 @@ async fn guacd_to_ws(
     Ok(())
 }
 
+/// Best-effort clean teardown of the guacd side of a proxy connection.
+///
+/// Writes the Guacamole `disconnect` instruction — the same one
+/// `Guacamole.Client.disconnect()` sends (`tunnel.sendMessage("disconnect")`,
+/// i.e. `11.disconnect;`) — then shuts the write half down so guacd sees EOF
+/// immediately, even before the aborted read task drops its half of the
+/// socket. guacd treats `disconnect` as ending only this user
+/// (`__guac_handle_disconnect` → `guac_user_stop`), so a viewer's tab close
+/// can never kill the owner's session; the guacd session ends when the last
+/// user's connection closes. Best-effort: if guacd already closed the
+/// connection, the write fails silently and the proxy's task abort still
+/// closes the socket.
+async fn send_disconnect_to_guacd<W>(guacd_write: &mut W)
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let instr = Instruction::new("disconnect", Vec::new()).encode();
+    let _ = guacd_write.write_all(instr.as_bytes()).await;
+    let _ = guacd_write.shutdown().await;
+}
+
 /// Forward data from WebSocket to guacd, intercepting empty-opcode tunnel
 /// pings. The Guacamole client sends `0.,4.ping,<ts>;` every 500ms over the
 /// "internal data" opcode (the empty string) to keep the tunnel from going
@@ -618,10 +1125,53 @@ async fn guacd_to_ws(
 /// `__guac_user_call_opcode_handler`), so without echoing here the client
 /// would mark the tunnel UNSTABLE after 1.5s of guacd quiet time and close
 /// it after 15s. We mirror Apache's filter behaviour.
+///
+/// Every exit of this function means the browser side of the connection is
+/// done, so the wrapper then actively ends the guacd side (see
+#[allow(clippy::too_many_arguments)]
+/// `send_disconnect_to_guacd`).
 async fn ws_to_guacd(
     mut ws_read: futures_util::stream::SplitStream<WebSocket>,
     mut guacd: tokio::io::WriteHalf<GuacdStream>,
     ws_sink: WsSink,
+    session_id: Uuid,
+    manager: Arc<crate::session::SessionManager>,
+    pending_transfers: Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
+    database: Option<Db>,
+    session_user: Option<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let result = ws_to_guacd_inner(
+        &mut ws_read,
+        &mut guacd,
+        &ws_sink,
+        session_id,
+        &manager,
+        &pending_transfers,
+        &database,
+        &session_user,
+    )
+    .await;
+
+    // The browser side of this connection is done — actively end the guacd
+    // side too. Previously the task simply returned and the detached
+    // guacd→browser read task kept the split socket open, so guacd never
+    // saw EOF and the remote session kept running with no owner, no record
+    // and no reaper.
+    send_disconnect_to_guacd(&mut guacd).await;
+
+    result
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ws_to_guacd_inner(
+    ws_read: &mut futures_util::stream::SplitStream<WebSocket>,
+    guacd: &mut tokio::io::WriteHalf<GuacdStream>,
+    ws_sink: &WsSink,
+    session_id: Uuid,
+    manager: &crate::session::SessionManager,
+    pending_transfers: &Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
+    database: &Option<Db>,
+    session_user: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /// Maximum allowed WebSocket message size (64 MiB).
     const MAX_WS_MSG_SIZE: usize = 64 * 1024 * 1024;
@@ -659,6 +1209,39 @@ async fn ws_to_guacd(
                 if text.contains(".clipboard,") {
                     tracing::info!("browser sent clipboard instruction to guacd");
                 }
+
+                // Audit file-transfer activity (uploads browser → guacd, and
+                // downloads failed by the browser's error acks). Only parsed
+                // when the message might carry a transfer instruction.
+                if text.contains("file,")
+                    || text.contains("blob,")
+                    || text.contains("ack,")
+                    || text.contains("end,")
+                {
+                    let mut parser = crate::protocol::InstructionParser::new();
+                    for instr in parser.receive(&text).into_iter().flatten() {
+                        if matches!(instr.opcode.as_str(), "file" | "blob" | "ack" | "end") {
+                            let mut pending = pending_transfers.lock().await;
+                            for event in sniff_transfer_instruction(
+                                &instr,
+                                TransferDirection::BrowserToGuacd,
+                                &mut pending,
+                            ) {
+                                emit_transfer_audit(
+                                    database.as_ref(),
+                                    session_id,
+                                    session_user.as_deref(),
+                                    event,
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Real client activity (ping echoes `continue`d above), so
+                // idle sessions are not reaped while the user is typing.
+                // Server keepalive pings never reach this point.
+                manager.update_activity(&session_id).await;
                 guacd.write_all(text.as_bytes()).await?;
             }
             Message::Binary(data) => {
@@ -782,5 +1365,252 @@ mod tests {
             "https://console.example.com.attacker.io",
             "console.example.com"
         ));
+    }
+
+    #[test]
+    fn base64_blob_len_counts_decoded_bytes() {
+        assert_eq!(base64_blob_len("AAAAAA=="), 4); // 4 zero bytes
+        assert_eq!(base64_blob_len(""), 0);
+        assert_eq!(base64_blob_len("SGVsbG8="), 5); // "Hello"
+    }
+
+    #[test]
+    fn sniff_upload_instructions_produce_event_with_size() {
+        let mut pending = HashMap::new();
+        let file = Instruction::new(
+            "file",
+            vec![
+                "7".into(),
+                "application/octet-stream".into(),
+                "report.txt".into(),
+            ],
+        );
+        assert!(
+            sniff_transfer_instruction(&file, TransferDirection::BrowserToGuacd, &mut pending)
+                .is_empty()
+        );
+        assert_eq!(pending.len(), 1);
+
+        // "AAAAAA==" is 4 zero bytes
+        let blob = Instruction::new("blob", vec!["7".into(), "AAAAAA==".into()]);
+        assert!(
+            sniff_transfer_instruction(&blob, TransferDirection::BrowserToGuacd, &mut pending)
+                .is_empty()
+        );
+
+        let end = Instruction::new("end", vec!["7".into()]);
+        let events =
+            sniff_transfer_instruction(&end, TransferDirection::BrowserToGuacd, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Upload);
+        assert_eq!(events[0].filename, "report.txt");
+        assert_eq!(events[0].mimetype, "application/octet-stream");
+        assert_eq!(events[0].size, 4);
+        assert!(!events[0].error);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn sniff_download_body_instructions_produce_event() {
+        let mut pending = HashMap::new();
+        let body = Instruction::new(
+            "body",
+            vec![
+                "0".into(),
+                "9".into(),
+                "application/octet-stream".into(),
+                "/home/user/file.zip".into(),
+            ],
+        );
+        assert!(
+            sniff_transfer_instruction(&body, TransferDirection::GuacdToBrowser, &mut pending)
+                .is_empty()
+        );
+        assert!(pending.contains_key(&9));
+
+        // Directory listings (stream-index mimetype) are not transfers.
+        let dir = Instruction::new(
+            "body",
+            vec![
+                "0".into(),
+                "10".into(),
+                "application/vnd.glyptodon.guacamole.stream-index+json".into(),
+                "/home/user".into(),
+            ],
+        );
+        assert!(
+            sniff_transfer_instruction(&dir, TransferDirection::GuacdToBrowser, &mut pending)
+                .is_empty()
+        );
+        assert!(!pending.contains_key(&10));
+
+        let blob = Instruction::new("blob", vec!["9".into(), "AAAAAA==".into()]);
+        sniff_transfer_instruction(&blob, TransferDirection::GuacdToBrowser, &mut pending);
+        let end = Instruction::new("end", vec!["9".into()]);
+        let events =
+            sniff_transfer_instruction(&end, TransferDirection::GuacdToBrowser, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Download);
+        assert_eq!(events[0].filename, "file.zip");
+        assert_eq!(events[0].size, 4);
+        assert!(!events[0].error);
+    }
+
+    #[test]
+    fn sniff_guacd_file_push_instruction_produces_download_event() {
+        // RDP drive pushes / SSH terminal-triggered downloads arrive as
+        // `file,<idx>,<mimetype>,<filename>` from guacd.
+        let mut pending = HashMap::new();
+        let file = Instruction::new(
+            "file",
+            vec![
+                "12".into(),
+                "application/octet-stream".into(),
+                "screenshot.png".into(),
+            ],
+        );
+        assert!(
+            sniff_transfer_instruction(&file, TransferDirection::GuacdToBrowser, &mut pending)
+                .is_empty()
+        );
+        let end = Instruction::new("end", vec!["12".into()]);
+        let events =
+            sniff_transfer_instruction(&end, TransferDirection::GuacdToBrowser, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Download);
+        assert_eq!(events[0].filename, "screenshot.png");
+        assert!(!events[0].error);
+    }
+
+    #[test]
+    fn sniff_upload_failed_by_guacd_ack() {
+        let mut pending = HashMap::new();
+        let file = Instruction::new(
+            "file",
+            vec![
+                "7".into(),
+                "application/octet-stream".into(),
+                "x.bin".into(),
+            ],
+        );
+        sniff_transfer_instruction(&file, TransferDirection::BrowserToGuacd, &mut pending);
+
+        // guacd rejects the upload stream with an error ack.
+        let ack = Instruction::new(
+            "ack",
+            vec!["7".into(), "SFTP: Open failed".into(), "516".into()],
+        );
+        let events =
+            sniff_transfer_instruction(&ack, TransferDirection::GuacdToBrowser, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Upload);
+        assert!(events[0].error);
+        assert_eq!(events[0].filename, "x.bin");
+        assert!(pending.is_empty());
+
+        // Success acks produce no event and keep the transfer tracked.
+        let file2 = Instruction::new(
+            "file",
+            vec![
+                "8".into(),
+                "application/octet-stream".into(),
+                "y.bin".into(),
+            ],
+        );
+        sniff_transfer_instruction(&file2, TransferDirection::BrowserToGuacd, &mut pending);
+        let ok_ack = Instruction::new("ack", vec!["8".into(), "SFTP: OK".into(), "0".into()]);
+        assert!(sniff_transfer_instruction(
+            &ok_ack,
+            TransferDirection::GuacdToBrowser,
+            &mut pending
+        )
+        .is_empty());
+        assert!(pending.contains_key(&8));
+    }
+
+    #[test]
+    fn sniff_download_failed_by_browser_ack() {
+        let mut pending = HashMap::new();
+        let body = Instruction::new(
+            "body",
+            vec![
+                "0".into(),
+                "9".into(),
+                "application/octet-stream".into(),
+                "/data/secret.db".into(),
+            ],
+        );
+        sniff_transfer_instruction(&body, TransferDirection::GuacdToBrowser, &mut pending);
+        // The browser aborts the download.
+        let ack = Instruction::new(
+            "ack",
+            vec!["9".into(), "Client aborted".into(), "776".into()],
+        );
+        let events =
+            sniff_transfer_instruction(&ack, TransferDirection::BrowserToGuacd, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Download);
+        assert!(events[0].error);
+        assert_eq!(events[0].filename, "secret.db");
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn sniff_ignores_unrelated_and_wrong_direction_instructions() {
+        let mut pending = HashMap::new();
+        // `end` for an unknown stream.
+        let end = Instruction::new("end", vec!["77".into()]);
+        assert!(
+            sniff_transfer_instruction(&end, TransferDirection::GuacdToBrowser, &mut pending)
+                .is_empty()
+        );
+        // Unrelated opcodes.
+        let key = Instruction::new("key", vec!["1".into(), "113".into()]);
+        assert!(
+            sniff_transfer_instruction(&key, TransferDirection::BrowserToGuacd, &mut pending)
+                .is_empty()
+        );
+        assert!(pending.is_empty());
+    }
+
+    /// When the browser side of a proxy connection ends, persea must
+    /// actively end the guacd side: write the `disconnect` instruction (the
+    /// same one `Guacamole.Client.disconnect()` sends) and shut the write
+    /// half so guacd sees EOF — the two things together guarantee guacd
+    /// tears the session down instead of leaving an orphan.
+    #[tokio::test]
+    async fn teardown_sends_disconnect_and_eof_reaches_guacd() {
+        // Mock guacd: accept one connection, read everything until EOF, and
+        // return the raw bytes seen.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mock_guacd = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            let mut tmp = [0u8; 256];
+            loop {
+                let n = sock.read(&mut tmp).await.unwrap();
+                if n == 0 {
+                    break; // EOF — the peer shut down its write side
+                }
+                received.extend_from_slice(&tmp[..n]);
+            }
+            received
+        });
+
+        // persea's half of the connection (only the write half is passed to
+        // the teardown; the read half staying alive must not prevent EOF).
+        let client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let boxed: crate::guacd::GuacdStream = Box::new(client);
+        let (_, mut write) = tokio::io::split(boxed);
+
+        send_disconnect_to_guacd(&mut write).await;
+
+        let received = mock_guacd.await.unwrap();
+        // `10.disconnect;` — the length-prefixed wire format persea
+        // synthesizes (encode_element prefixes each element's byte length;
+        // guacd's parser accepts any {len}.{opcode} prefix) — followed by a
+        // shut-down write half (EOF above).
+        assert_eq!(received, b"10.disconnect;");
     }
 }

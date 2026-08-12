@@ -14,6 +14,12 @@
     --text-muted: #64748b;
     --accent: #10b981;
     --accent-hover: #059669;
+    /* --primary is written by theme.js (presets/admin branding); keep a
+       static default so the variables always exist pre-JS. app.css renders
+       accents with --accent; admin branding maps primary onto accent
+       client-side, so --primary is chiefly a palette-consistency anchor. */
+    --primary: #10b981;
+    --primary-hover: #059669;
     --info: #2563eb;
     --info-hover: #1d4ed8;
     --danger: #ef4444;
@@ -45,6 +51,8 @@
     --text-muted: #64748b;
     --accent: #10b981;
     --accent-hover: #059669;
+    --primary: #10b981;
+    --primary-hover: #059669;
     --info: #1d4ed8;
     --info-hover: #1e40af;
     --danger: #ef4444;
@@ -398,6 +406,10 @@ body {
     border-color: var(--border-focus);
     box-shadow: 0 0 0 3px rgba(16,185,129,0.15);
 }
+
+/* Fixed-width filter selects (Users admin page) — loaded after Tailwind and
+   declared after .form-input above, so this wins over both. */
+.form-input.w-40 { width: 10rem; }
 
 /* ── Buttons ─────────────────────────────────────────────── */
 .btn {

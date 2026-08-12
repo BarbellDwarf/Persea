@@ -1,4 +1,4 @@
-//! Admin API for local group management (wayfinder ticket #029).
+//! Admin API for local group management.
 //!
 //! Routes (registered by the orchestrator in `src/main.rs`; all admin-only):
 //!
@@ -28,21 +28,29 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+/// Body for `POST /api/admin/groups`.
 #[derive(Deserialize)]
 pub struct CreateGroupRequest {
+    /// Unique group name.
     pub name: String,
+    /// Optional free-text description.
     #[serde(default)]
     pub description: String,
 }
 
+/// Body for `PUT /api/admin/groups/{id}`.
 #[derive(Deserialize)]
 pub struct UpdateGroupRequest {
+    /// New name when renaming.
     pub name: Option<String>,
+    /// New description when changing it.
     pub description: Option<String>,
 }
 
+/// Body for `POST /api/admin/groups/{id}/mappings`.
 #[derive(Deserialize)]
 pub struct CreateMappingRequest {
+    /// Auth-provider group name to map to the local group.
     pub provider_group: String,
 }
 
@@ -86,7 +94,7 @@ pub(crate) async fn audit_config_change(
 }
 
 /// Map a rusqlite error: UNIQUE violations become 409, everything else 500.
-fn map_group_conflict(e: rusqlite::Error) -> AppError {
+fn map_group_conflict(e: &rusqlite::Error) -> AppError {
     use rusqlite::ErrorCode;
     if matches!(
         e,
@@ -139,7 +147,7 @@ pub async fn create_group(
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
-    .map_err(map_group_conflict)?;
+    .map_err(|e| map_group_conflict(&e))?;
 
     audit_config_change(
         &database,
@@ -260,7 +268,7 @@ pub async fn update_group(
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
-    .map_err(map_group_conflict)?
+    .map_err(|e| map_group_conflict(&e))?
     .ok_or_else(|| AppError::Session("group not found".into()))?;
 
     audit_config_change(

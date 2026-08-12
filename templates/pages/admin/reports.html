@@ -172,12 +172,21 @@ fetch('/api/reports/activity?hours=24').then(function(r) { return r.json(); }).t
         return;
     }
     var maxCount = Math.max.apply(null, data.map(function(d) { return d.count; }));
-    if (maxCount === 0) maxCount = 1;
+    if (maxCount === 0) {
+        area.innerHTML = '<p class="text-[var(--text-muted)] text-sm w-full text-center">No activity in the last 24 hours</p>';
+        return;
+    }
+    // Bars are sized in pixels against the fixed chart area (h-48, p-4): a
+    // percentage height can't resolve against an auto-height flex column, so
+    // compute each bar's height in JS. Reserve room for the hour label.
+    var areaHeight = area.clientHeight || 192;
+    var labelHeight = 20; // text-xs (16px) + mt-1 (4px)
+    var chartHeight = Math.max(1, areaHeight - 32 - labelHeight); // minus p-4 (16px top + bottom)
     area.innerHTML = data.map(function(d) {
-        var pct = (d.count / maxCount * 100).toFixed(1);
+        var barHeight = Math.max(2, Math.round(d.count / maxCount * chartHeight));
         var hourLabel = d.hour.slice(11, 16);
         return '<div class="flex flex-col items-center flex-1 min-w-8" title="' + d.hour + ': ' + d.count + ' sessions">' +
-            '<div class="w-full bg-emerald-600 rounded-t" style="height:' + pct + '%; min-height:2px"></div>' +
+            '<div class="w-full bg-emerald-600 rounded-t" style="height:' + barHeight + 'px"></div>' +
             '<div class="text-xs text-[var(--text-muted)] mt-1">' + hourLabel + '</div>' +
             '</div>';
     }).join('');

@@ -1,4 +1,4 @@
-//! Admin system settings API (ticket #024).
+//! Admin system settings API.
 //!
 //! Settings are persisted as strings in the `system_settings` key/value
 //! table and returned as typed JSON. Config-file values are not available
@@ -12,6 +12,7 @@ use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::error::AppError;
 use axum::extract::Multipart;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
@@ -27,6 +28,7 @@ const SETTING_KEYS: &[&str] = &[
     "tls_cert_path",
     "tls_key_path",
     "session_max_duration_secs",
+    "session_idle_timeout_secs",
     "max_concurrent_sessions",
     "session_history_retention_days",
     "enable_rdp",
@@ -44,7 +46,12 @@ const SETTING_KEYS: &[&str] = &[
     "site_title",
     "logo_url",
     "primary_color",
+    "custom_fields",
 ];
+
+/// Keys whose stored value is a JSON document (serialized as a string in the
+/// `system_settings` table).
+const JSON_KEYS: &[&str] = &["custom_fields"];
 
 const STRING_KEYS: &[&str] = &[
     "listen_addr",
@@ -58,6 +65,7 @@ const STRING_KEYS: &[&str] = &[
 const ADDR_KEYS: &[&str] = &["listen_addr", "guacd_addr"];
 const DURATION_KEYS: &[&str] = &[
     "session_max_duration_secs",
+    "session_idle_timeout_secs",
     "max_concurrent_sessions",
     "session_history_retention_days",
 ];
@@ -92,7 +100,10 @@ const CREATE_TABLE_SQL: &str = "CREATE TABLE IF NOT EXISTS system_settings (
 /// Defaults when a key has not been stored yet. The first four mirror the
 /// hardcoded values in `templates/pages/admin/settings.html`; the rest
 /// mirror the documented defaults in `src/config.rs` (max_sessions: 500,
-/// session_history_retention_days: 90, all feature toggles default off).
+/// session_history_retention_days: 90). Every `enable_*` feature toggle
+/// defaults to true: the runtime treats an unset toggle as enabled
+/// (`settings_merge::toggle_enabled(..., true)`), so reporting anything
+/// else here would make the admin page lie about the actual gate.
 fn default_value(key: &str) -> Value {
     match key {
         "listen_addr" => json!("0.0.0.0:8089"),
@@ -112,13 +123,20 @@ fn default_value(key: &str) -> Value {
         "enable_proxmox" => json!(true),
         "enable_vmware" => json!(true),
         "enable_vdi" => json!(true),
-        "enable_file_transfer" => json!(false),
+        // Unset = enabled everywhere: the runtime gate at
+        // session/create.rs defaults an absent enable_file_transfer toggle
+        // to true (settings_merge::toggle_enabled), so the Settings API
+        // must report true too or the admin checkbox lies about the gate.
+        "enable_file_transfer" => json!(true),
         "enable_browser_sessions" => json!(true),
         "vault_enabled" => json!(false),
         "db_only_mode" => json!(true),
         "site_title" => json!("persea"),
         "logo_url" => json!(""),
         "primary_color" => json!("#10b981"),
+        // Custom field definitions: JSON array, empty by default so the
+        // feature is OFF until an admin configures fields.
+        "custom_fields" => json!([]),
         _ => json!(null),
     }
 }
@@ -140,6 +158,8 @@ fn stored_to_value(key: &str, stored: &str) -> Value {
             "false" => json!(false),
             _ => default_value(key),
         }
+    } else if JSON_KEYS.contains(&key) {
+        serde_json::from_str::<Value>(stored).unwrap_or_else(|_| default_value(key))
     } else {
         default_value(key)
     }
@@ -149,7 +169,7 @@ fn stored_to_value(key: &str, stored: &str) -> Value {
 /// Merge the startup config baseline (from `SettingsBaseline`) with DB
 /// overrides; DB values win.
 fn effective_settings_with_baseline(
-    baseline: Value,
+    baseline: &Value,
     stored: &std::collections::HashMap<String, String>,
 ) -> Value {
     let mut out = serde_json::Map::new();
@@ -165,19 +185,16 @@ fn effective_settings_with_baseline(
     Value::Object(out)
 }
 
-fn effective_settings(stored: &std::collections::HashMap<String, String>) -> Value {
-    let mut out = serde_json::Map::new();
-    for key in SETTING_KEYS {
-        let v = stored
-            .get(*key)
-            .map(|s| stored_to_value(key, s))
-            .unwrap_or_else(|| default_value(key));
-        out.insert((*key).to_string(), v);
+pub(crate) fn read_all_settings(
+    database: &Db,
+) -> Result<std::collections::HashMap<String, String>, AppError> {
+    if crate::db::pool_active() {
+        let rows = crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::settings_load_all_pool(pool)
+        })
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+        return Ok(rows.into_iter().collect());
     }
-    Value::Object(out)
-}
-
-fn read_all_settings(database: &Db) -> Result<std::collections::HashMap<String, String>, AppError> {
     let conn = database.lock().unwrap();
     conn.execute_batch(CREATE_TABLE_SQL)?;
     let mut stmt = conn.prepare("SELECT key, value FROM system_settings")?;
@@ -217,7 +234,7 @@ pub async fn get_settings(
     // overrides (DB wins). Without the extension (tests, direct routers)
     // fall back to defaults only.
     Ok(Json(effective_settings_with_baseline(
-        baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
+        &baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
         &stored,
     )))
 }
@@ -242,6 +259,19 @@ fn parse_bool(value: &Value, key: &str) -> Result<bool, AppError> {
 
 /// Validate one submitted value and reduce it to its canonical string form.
 fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
+    // JSON document keys must be handled BEFORE the array-last
+    // simplification below: a `custom_fields` array must not be truncated
+    // to its last element.
+    if JSON_KEYS.contains(&key) {
+        return canonicalize_custom_fields(key, value);
+    }
+    // The settings form historically submitted checkbox+hidden pairs with
+    // duplicate names; htmx's json-enc collects duplicates as arrays. Take
+    // the last entry so those payloads still validate.
+    let value = match value {
+        Value::Array(items) => items.last().unwrap_or(value),
+        other => other,
+    };
     if ADDR_KEYS.contains(&key) {
         let addr = value
             .as_str()
@@ -270,12 +300,10 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
             .to_string())
     } else if DURATION_KEYS.contains(&key) {
         let n = parse_u64(value, key)?;
-        if key == "session_max_duration_secs" {
-            if n == 0 || n > MAX_DURATION_SECS {
-                return Err(AppError::Validation(format!(
-                    "{key} must be between 1 and {MAX_DURATION_SECS}"
-                )));
-            }
+        if key == "session_max_duration_secs" && (n == 0 || n > MAX_DURATION_SECS) {
+            return Err(AppError::Validation(format!(
+                "{key} must be between 1 and {MAX_DURATION_SECS}"
+            )));
         }
         if key == "session_history_retention_days" && n > MAX_RETENTION_DAYS as u64 {
             return Err(AppError::Validation(format!(
@@ -292,6 +320,105 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
             "internal error: no validator for settings key '{key}'"
         )))
     }
+}
+
+/// Validate the `custom_fields` definitions array and reduce it to its
+/// canonical JSON string. Accepted either as a JSON array (JSON API
+/// clients) or as a JSON-encoded string (form submission via htmx
+/// json-enc, which sends every form value as a string).
+///
+/// Each definition is `{name, type: "text"|"select", options?, required?}`.
+/// Names are trimmed and must be unique; `select` fields must have at least
+/// one option; `required` must be a boolean when present. Unknown keys are
+/// dropped, and only non-default keys are emitted.
+fn canonicalize_custom_fields(key: &str, value: &Value) -> Result<String, AppError> {
+    let parsed = match value {
+        Value::String(s) => serde_json::from_str::<Value>(s).ok(),
+        other => Some(other.clone()),
+    };
+    let arr = parsed
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| AppError::Validation(format!("{key} must be a JSON array")))?;
+    let mut seen = std::collections::HashSet::new();
+    let mut fields: Vec<Value> = Vec::new();
+    for (i, field) in arr.iter().enumerate() {
+        let obj = field
+            .as_object()
+            .ok_or_else(|| AppError::Validation(format!("{key}[{i}] must be an object")))?;
+        let name = obj
+            .get("name")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::Validation(format!("{key}[{i}]: name must be a non-empty string"))
+            })?;
+        if !seen.insert(name.to_ascii_lowercase()) {
+            return Err(AppError::Validation(format!(
+                "{key}: duplicate field name '{name}'"
+            )));
+        }
+        let field_type = obj.get("type").and_then(|v| v.as_str()).unwrap_or("text");
+        if field_type != "text" && field_type != "select" {
+            return Err(AppError::Validation(format!(
+                "{key}[{i}] '{name}': type must be \"text\" or \"select\""
+            )));
+        }
+        let mut options: Vec<String> = Vec::new();
+        if let Some(opts) = obj.get("options") {
+            let opts = opts.as_array().ok_or_else(|| {
+                AppError::Validation(format!(
+                    "{key}[{i}] '{name}': options must be an array of strings"
+                ))
+            })?;
+            for opt in opts {
+                let s = opt.as_str().ok_or_else(|| {
+                    AppError::Validation(format!("{key}[{i}] '{name}': options must be strings"))
+                })?;
+                let trimmed = s.trim().to_string();
+                if !trimmed.is_empty() && !options.contains(&trimmed) {
+                    options.push(trimmed);
+                }
+            }
+        }
+        if field_type == "select" && options.is_empty() {
+            return Err(AppError::Validation(format!(
+                "{key}[{i}] '{name}': select fields need at least one option"
+            )));
+        }
+        let required = match obj.get("required") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => {
+                return Err(AppError::Validation(format!(
+                    "{key}[{i}] '{name}': required must be a boolean"
+                )))
+            }
+        };
+        let mut canon = serde_json::Map::new();
+        canon.insert("name".into(), json!(name));
+        canon.insert("type".into(), json!(field_type));
+        if field_type == "select" {
+            canon.insert("options".into(), json!(options));
+        }
+        if required {
+            canon.insert("required".into(), json!(true));
+        }
+        fields.push(Value::Object(canon));
+    }
+    serde_json::to_string(&fields).map_err(|e| AppError::Internal(e.to_string()))
+}
+
+/// Extract the `custom_fields` definitions array from stored settings,
+/// defaulting to `[]` when unset or unparseable. Consumed by
+/// `GET /api/addressbook/custom-fields` so the connections page can render
+/// the per-entry value inputs.
+pub(crate) fn custom_fields_value(stored: &std::collections::HashMap<String, String>) -> Value {
+    stored
+        .get("custom_fields")
+        .map(|s| stored_to_value("custom_fields", s))
+        .unwrap_or_else(|| default_value("custom_fields"))
 }
 
 /// PUT /api/system/settings — validate and persist settings. Admin-only.
@@ -322,6 +449,9 @@ pub async fn put_settings(
 
     let db_clone = database.clone();
     tokio::task::spawn_blocking(move || {
+        if crate::db::pool_active() {
+            return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| crate::db::settings_put_pool(pool, entries));
+        }
         let conn = db_clone.lock().unwrap();
         conn.execute_batch(CREATE_TABLE_SQL)?;
         for (key, value) in &entries {
@@ -343,14 +473,15 @@ pub async fn put_settings(
         .map_err(|e| AppError::Internal(e.to_string()))??;
     // Same merge as GET so PUT and GET always agree on effective values.
     Ok(Json(effective_settings_with_baseline(
-        baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
+        &baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
         &stored,
     )))
 }
 
 /// POST /api/admin/upload-logo — accept multipart image upload, save to
-/// static/uploads/logo/, return the URL path. Admin-only.
+/// <static_path>/uploads/logo/, return the URL path. Admin-only.
 pub async fn upload_logo(
+    State(state): State<crate::api::AppState>,
     identity: Option<Extension<AuthIdentity>>,
     mut multipart: Multipart,
 ) -> Result<Response, AppError> {
@@ -398,9 +529,12 @@ pub async fn upload_logo(
         )));
     }
 
-    // Build a deterministic name: logo.<ext>
+    // Build a deterministic name: logo.<ext>. Write under the configured
+    // static_path so the file lands exactly where ServeDir serves it from
+    // (the old CWD-relative "static" diverged when static_path was
+    // customized).
     let out_name = format!("logo.{ext}");
-    let uploads_dir = std::path::Path::new("static").join("uploads").join("logo");
+    let uploads_dir = state.config().static_path.join("uploads").join("logo");
     std::fs::create_dir_all(&uploads_dir)
         .map_err(|e| AppError::Internal(format!("failed to create upload dir: {e}")))?;
     let out_path = uploads_dir.join(&out_name);
@@ -409,4 +543,136 @@ pub async fn upload_logo(
 
     let url = format!("/uploads/logo/{out_name}");
     Ok((StatusCode::OK, Json(json!({ "url": url }))).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn custom_fields_default_is_empty_array() {
+        assert_eq!(default_value("custom_fields"), json!([]));
+    }
+
+    #[test]
+    fn enable_file_transfer_default_matches_runtime_gate() {
+        // The runtime treats an unset enable_file_transfer toggle as
+        // enabled (settings_merge::toggle_enabled(..., true) at
+        // session/create.rs), so the Settings API default must agree or the
+        // admin Settings page would show "Off" for a feature that is on.
+        assert_eq!(default_value("enable_file_transfer"), json!(true));
+        assert!(crate::settings_merge::toggle_enabled(
+            &[],
+            "enable_file_transfer",
+            true
+        ));
+        // An explicitly stored "false" still wins on both sides.
+        let stored = vec![("enable_file_transfer".to_string(), "false".to_string())];
+        assert_eq!(
+            stored_to_value("enable_file_transfer", "false"),
+            json!(false)
+        );
+        assert!(!crate::settings_merge::toggle_enabled(
+            &stored,
+            "enable_file_transfer",
+            true
+        ));
+    }
+
+    #[test]
+    fn custom_fields_stored_to_value_round_trips() {
+        let stored =
+            r#"[{"name":"Environment","type":"select","options":["prod","dev"],"required":true}]"#;
+        let v = stored_to_value("custom_fields", stored);
+        assert_eq!(v[0]["name"], "Environment");
+        assert_eq!(v[0]["type"], "select");
+        assert_eq!(v[0]["options"][1], "dev");
+        assert_eq!(v[0]["required"], json!(true));
+        // Garbage falls back to the default.
+        assert_eq!(stored_to_value("custom_fields", "not json"), json!([]));
+    }
+
+    #[test]
+    fn custom_fields_canonicalize_accepts_array_and_string_forms() {
+        let arr = json!([{
+            "name": "Environment",
+            "type": "select",
+            "options": ["Test", "Pilot", "Production"],
+            "required": true,
+        }]);
+        let as_array = canonicalize("custom_fields", &arr).unwrap();
+        let as_string = canonicalize("custom_fields", &json!(as_array.clone())).unwrap();
+        assert_eq!(
+            as_array, as_string,
+            "array and JSON-string forms must agree"
+        );
+        let v: Value = serde_json::from_str(&as_array).unwrap();
+        assert_eq!(v[0]["name"], "Environment");
+        assert_eq!(v[0]["type"], "select");
+        assert_eq!(v[0]["options"][2], "Production");
+        assert_eq!(v[0]["required"], json!(true));
+    }
+
+    #[test]
+    fn custom_fields_rejects_bad_type() {
+        let err =
+            canonicalize("custom_fields", &json!([{"name": "Env", "type": "radio"}])).unwrap_err();
+        assert!(err.to_string().contains("text"), "got: {}", err);
+        assert!(err.to_string().contains("select"), "got: {}", err);
+    }
+
+    #[test]
+    fn custom_fields_rejects_duplicate_names() {
+        let err = canonicalize(
+            "custom_fields",
+            &json!([
+                {"name": "Environment", "type": "text"},
+                {"name": "Environment", "type": "text"},
+            ]),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("duplicate"), "got: {}", err);
+        assert!(err.to_string().contains("Environment"), "got: {}", err);
+    }
+
+    #[test]
+    fn custom_fields_requires_options_for_select() {
+        let err =
+            canonicalize("custom_fields", &json!([{"name": "Env", "type": "select"}])).unwrap_err();
+        assert!(err.to_string().contains("option"), "got: {}", err);
+    }
+
+    #[test]
+    fn custom_fields_rejects_non_bool_required() {
+        let err = canonicalize(
+            "custom_fields",
+            &json!([{"name": "Env", "type": "text", "required": "yes"}]),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("boolean"), "got: {}", err);
+    }
+
+    #[test]
+    fn custom_fields_text_fields_drop_options_and_default_required() {
+        let out = canonicalize(
+            "custom_fields",
+            &json!([{"name": "Owner", "type": "text", "options": ["x"], "required": false}]),
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v[0].get("options").is_none(), "text fields keep no options");
+        assert!(
+            v[0].get("required").is_none(),
+            "default required is omitted"
+        );
+        assert_eq!(v[0]["name"], "Owner");
+    }
+
+    #[test]
+    fn custom_fields_accepts_text_default_type() {
+        let out = canonicalize("custom_fields", &json!([{"name": "Owner"}])).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v[0]["type"], "text");
+    }
 }

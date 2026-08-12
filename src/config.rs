@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// TLS settings for the HTTPS listener and the guacd connection (`[tls]`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct TlsConfig {
     /// Path to server TLS certificate (PEM). Required for HTTPS serving.
@@ -20,9 +21,12 @@ pub struct TlsConfig {
     pub secure_cookies: bool,
 }
 
+/// OpenID Connect provider settings (`[oidc]`).
 #[derive(Deserialize, Clone)]
 pub struct OidcConfig {
+    /// OIDC issuer discovery URL, e.g. "https://auth.example.com/realms/corp".
     pub issuer_url: String,
+    /// Client id registered with the identity provider.
     pub client_id: String,
     /// OIDC client secret. May be set in config.toml or via the
     /// `OIDC_CLIENT_SECRET` environment variable; the env var wins when
@@ -30,7 +34,11 @@ pub struct OidcConfig {
     /// `[oidc]` is configured (see Config::load).
     #[serde(default)]
     pub client_secret: Option<String>,
+    /// Callback URL the provider redirects to after sign-in; must match
+    /// the registered redirect URI.
     pub redirect_uri: String,
+    /// Role assigned to OIDC users whose groups map to no role.
+    /// Default: "operator".
     #[serde(default = "default_oidc_default_role")]
     pub default_role: String,
     /// Name of the OIDC claim containing group memberships (default: "groups").
@@ -76,14 +84,23 @@ fn default_groups_claim() -> String {
     "groups".into()
 }
 
+/// Vault/OpenBao KV v2 backend configuration. Used for `[vault]` and the
+/// optional `[vault_shared]`/`[vault_local]` overrides in [`Config`].
 #[derive(Deserialize, Clone)]
 pub struct VaultConfig {
+    /// Vault server URL, e.g. "https://vault.example.com:8200".
     pub addr: String,
+    /// KV secrets engine mount path. Default: "secret".
     #[serde(default = "default_vault_mount")]
     pub mount: String,
+    /// Base path under the mount where persea stores its entries.
+    /// Default: "persea".
     #[serde(default = "default_vault_base_path")]
     pub base_path: String,
+    /// AppRole role id for authentication; the matching secret id comes
+    /// from the environment at startup.
     pub role_id: String,
+    /// Vault namespace applied to requests (Vault Enterprise).
     pub namespace: Option<String>,
     /// Instance name for instance-scoped address book entries.
     /// Entries under `<base_path>/shared/` are visible to all instances.
@@ -123,6 +140,8 @@ impl std::fmt::Debug for VaultConfig {
     }
 }
 
+/// Drive and file-transfer settings for RDP sessions and LUKS containers
+/// (`[drive]`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct DriveConfig {
     /// Enable drive/file transfer for sessions. Default: false.
@@ -196,6 +215,7 @@ impl Default for DriveConfig {
     }
 }
 
+/// Session recording settings (`[recording]`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct RecordingConfig {
     /// Path for recording files. Overrides top-level `recording_path`.
@@ -347,8 +367,14 @@ pub struct AuthConfig {
     /// Ordered list of primary auth methods. Example: ["ldap", "database", "oidc"]
     #[serde(default = "default_auth_methods")]
     pub methods: Vec<String>,
+    /// LDAP/AD provider settings; active when "ldap" is in
+    /// [`methods`](AuthConfig::methods).
     pub ldap: Option<crate::auth_providers::ldap::LdapConfig>,
+    /// RADIUS provider settings; active when "radius" is in
+    /// [`methods`](AuthConfig::methods).
     pub radius: Option<crate::auth_providers::radius::RadiusConfig>,
+    /// SAML 2.0 provider settings; active when "saml" is in
+    /// [`methods`](AuthConfig::methods).
     pub saml: Option<crate::auth_providers::saml::SamlConfig>,
     /// TOTP second-factor configuration.
     pub totp: Option<AuthTotpConfig>,
@@ -396,6 +422,39 @@ fn default_secure_cookies() -> bool {
     true
 }
 
+/// Password policy configuration (`[password]`).
+///
+/// Enforced at every point a password is set: the admin users API, the CLI
+/// `create-user` command, and the account password-change endpoint.
+#[derive(Debug, Deserialize, Clone)]
+pub struct PasswordConfig {
+    /// Minimum password length in characters. Default: 15.
+    #[serde(default = "default_password_min_length")]
+    pub min_length: usize,
+    /// Number of recent password hashes kept per user for reuse rejection.
+    /// A new password matching any of the last `history` passwords is
+    /// rejected. Default: 5. Set to 0 to disable reuse checking.
+    #[serde(default = "default_password_history")]
+    pub history: usize,
+}
+
+fn default_password_min_length() -> usize {
+    15
+}
+
+fn default_password_history() -> usize {
+    5
+}
+
+impl Default for PasswordConfig {
+    fn default() -> Self {
+        Self {
+            min_length: default_password_min_length(),
+            history: default_password_history(),
+        }
+    }
+}
+
 impl Default for AuthTotpConfig {
     fn default() -> Self {
         Self {
@@ -412,11 +471,19 @@ fn default_auth_methods() -> Vec<String> {
     vec!["database".to_string()]
 }
 
+/// Fully-resolved server configuration.
+///
+/// Built by [`Config::load`] from layered sources: built-in defaults, an
+/// optional TOML file, then `PERSEA_` environment variables. Call
+/// [`Config::validate`] at startup so fatal misconfiguration fails fast
+/// instead of surfacing as runtime errors.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
+    /// Address the HTTP server listens on, e.g. "127.0.0.1:8089".
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
 
+    /// guacd address, e.g. "127.0.0.1:4822".
     #[serde(default = "default_guacd_addr")]
     pub guacd_addr: String,
 
@@ -424,12 +491,16 @@ pub struct Config {
     #[serde(default)]
     pub recording_path: Option<PathBuf>,
 
+    /// Directory for static assets; also holds the themes/ subdirectory.
     #[serde(default = "default_static_path")]
     pub static_path: PathBuf,
 
+    /// SQLite database file path, used when `db_url` is unset.
     #[serde(default = "default_db_path")]
     pub db_path: PathBuf,
 
+    /// Seconds a session may stay in "pending" before it is reaped.
+    /// Default: 60.
     #[serde(default = "default_session_timeout_secs")]
     pub session_pending_timeout_secs: u64,
 
@@ -437,6 +508,14 @@ pub struct Config {
     /// Sessions exceeding this duration are automatically terminated.
     #[serde(default = "default_session_max_duration_secs")]
     pub session_max_duration_secs: u64,
+
+    /// Idle timeout for active sessions in seconds. Default: 1800 (30 min).
+    /// Sessions whose `last_active` timestamp is older than this are
+    /// terminated by the reaper with an "idle-timeout" status. Set to 0 to
+    /// disable idle reaping (max duration still applies). `last_active` is
+    /// refreshed by client-initiated session traffic (WebSocket input).
+    #[serde(default = "default_session_idle_timeout_secs")]
+    pub session_idle_timeout_secs: u64,
 
     /// OIDC auth session TTL in seconds. Default: 86400 (24 hours).
     /// After this period, users must re-authenticate via OIDC.
@@ -447,30 +526,43 @@ pub struct Config {
     #[serde(default = "default_session_history_retention_days")]
     pub session_history_retention_days: u32,
 
+    /// Path to the Xvnc binary used for web browser sessions.
+    /// Default: "Xvnc".
     #[serde(default = "default_xvnc_path")]
     pub xvnc_path: String,
 
+    /// Path to the Chromium binary used for web browser sessions.
+    /// Default: "chromium".
     #[serde(default = "default_chromium_path")]
     pub chromium_path: String,
 
+    /// First X display number Xvnc may use. Default: 100.
     #[serde(default = "default_display_range_start")]
     pub display_range_start: u32,
 
+    /// Last X display number Xvnc may use. Default: 199.
     #[serde(default = "default_display_range_end")]
     pub display_range_end: u32,
 
+    /// First port of the Chromium DevTools (CDP) port range. Default: 9200.
     #[serde(default = "default_cdp_port_range_start")]
     pub cdp_port_range_start: u16,
 
+    /// Last port of the Chromium DevTools (CDP) port range. Default: 9299.
     #[serde(default = "default_cdp_port_range_end")]
     pub cdp_port_range_end: u16,
 
+    /// Seconds a web-session login script may run before it is killed.
+    /// Default: 120.
     #[serde(default = "default_login_script_timeout_secs")]
     pub login_script_timeout_secs: u64,
 
+    /// Directory holding login scripts for web sessions; entries reference
+    /// scripts by filename. Default: /opt/persea/scripts.
     #[serde(default = "default_login_scripts_dir")]
     pub login_scripts_dir: String,
 
+    /// Site title shown in the browser tab and page headers.
     #[serde(default = "default_site_title")]
     pub site_title: String,
 
@@ -545,8 +637,11 @@ pub struct Config {
     #[serde(default = "default_user_credentials_scope")]
     pub user_credentials_default_scope: String,
 
+    /// Authentication provider chain settings (`[auth]`).
     pub auth: Option<AuthConfig>,
+    /// TLS settings for HTTPS and the guacd connection (`[tls]`).
     pub tls: Option<TlsConfig>,
+    /// OIDC provider settings; enables OIDC login when present (`[oidc]`).
     pub oidc: Option<OidcConfig>,
     /// Primary/default Vault backend. Serves any address-book scope that does
     /// not have a dedicated backend below, and is the home of unscoped secrets
@@ -562,12 +657,17 @@ pub struct Config {
     /// instance-scope folders/entries route here. Secret ID via
     /// `VAULT_LOCAL_SECRET_ID`.
     pub vault_local: Option<VaultConfig>,
+    /// Drive and file-transfer settings (`[drive]`).
     pub drive: Option<DriveConfig>,
+    /// Theme overrides applied to the active preset (`[theme]`).
     pub theme: Option<ThemeConfig>,
+    /// Session recording settings (`[recording]`).
     pub recording: Option<RecordingConfig>,
+    /// VDI desktop container settings (`[vdi]`).
     pub vdi: Option<VdiConfig>,
     /// VMware vSphere integration for VM inventory and OS-aware protocol routing.
     pub vsphere: Option<crate::vsphere::VsphereConfig>,
+    /// RDP-wide defaults for entries that leave fields unset (`[rdp]`).
     pub rdp: Option<RdpConfig>,
     /// Optional SQLx database URL for multi-backend support (PostgreSQL,
     /// MySQL, or SQLite via SQLx). When set, `DbPool` is initialised and
@@ -575,16 +675,35 @@ pub struct Config {
     /// to work alongside it.
     pub db_url: Option<String>,
 
-    /// Commercial license key (format: `PSEA-<base64>`).
-    /// When absent, enterprise features are available during the 30-day
-    /// evaluation period.
+    /// Stable identifier for this instance, used by the shared HA
+    /// session registry to mark session ownership. Must be unique
+    /// across the fleet; defaults to `hostname-pid`. Recording rotation and
+    /// the session reaper only operate on sessions/files this instance owns.
+    #[serde(default = "default_instance_id")]
+    pub instance_id: String,
+
+    /// Public base URL of this instance (scheme + host + port), e.g.
+    /// "https://persea-1.example.com". When a session created here is
+    /// joined from another instance, browsers are redirected to this URL
+    /// so the owner instance can serve the guacd stream. Unset: remote
+    /// joins to this instance's sessions are rejected with a clear error.
     #[serde(default)]
-    pub license_key: Option<String>,
+    pub ha_base_url: Option<String>,
+
     /// Storage backend for the address book (connections, credentials).
     /// When `backend = "db"` (default), the DB stores folder/entry metadata
     /// and encrypted credentials. When `backend = "vault"`, metadata stays
     /// in DB but credentials are stored in Vault.
     pub storage: Option<StorageConfig>,
+    /// Password policy (`[password]`): minimum length + reuse history.
+    /// Materialised in `default_toml()` so absent sections cannot silently
+    /// reset the defaults.
+    #[serde(default = "default_password_config")]
+    pub password: Option<PasswordConfig>,
+}
+
+fn default_password_config() -> Option<PasswordConfig> {
+    Some(PasswordConfig::default())
 }
 
 /// Storage backend configuration for the address book.
@@ -623,41 +742,73 @@ impl Default for StorageConfig {
 /// supports it.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct RdpConfig {
+    /// NLA/CredSSP auth package: "ntlm" (default), "kerberos", or
+    /// "negotiate".
     pub default_auth_pkg: Option<String>,
 }
 
 /// Fully-resolved theme palette with all 26 color fields.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ThemeColors {
+    /// Primary action color: buttons, links, active states.
     pub primary: String,
+    /// `primary` in its hovered state.
     pub primary_hover: String,
+    /// Accent color for highlights and secondary emphasis.
     pub accent: String,
+    /// `accent` in its hovered state.
     pub accent_hover: String,
+    /// Page background color.
     pub bg: String,
+    /// Card and panel background color.
     pub surface: String,
+    /// Form input background color.
     pub input: String,
+    /// Primary text color.
     pub text: String,
+    /// Secondary text color (descriptions, timestamps).
     pub text_muted: String,
+    /// Border color for cards, inputs, and dividers.
     pub border: String,
+    /// Tertiary text color (labels, metadata).
     pub text_dim: String,
+    /// Text color used on top of `primary`.
     pub text_on_primary: String,
+    /// Disabled button background color.
     pub btn_disabled: String,
+    /// Color for sessions in the "pending" status.
     pub status_pending: String,
+    /// Color for sessions in the "active" status.
     pub status_active: String,
+    /// Color for sessions in the "completed" status.
     pub status_completed: String,
+    /// Color for sessions in the "error" status.
     pub status_error: String,
+    /// Color for sessions in the "expired" status.
     pub status_expired: String,
+    /// SSH session-type badge background.
     pub type_ssh_bg: String,
+    /// SSH session-type badge text.
     pub type_ssh_fg: String,
+    /// RDP session-type badge background.
     pub type_rdp_bg: String,
+    /// RDP session-type badge text.
     pub type_rdp_fg: String,
+    /// VNC session-type badge background.
     pub type_vnc_bg: String,
+    /// VNC session-type badge text.
     pub type_vnc_fg: String,
+    /// Web session-type badge background.
     pub type_web_bg: String,
+    /// Web session-type badge text.
     pub type_web_fg: String,
+    /// VDI session-type badge background.
     pub type_vdi_bg: String,
+    /// VDI session-type badge text.
     pub type_vdi_fg: String,
+    /// Jump-host badge background.
     pub hop_bg: String,
+    /// Jump-host badge text.
     pub hop_fg: String,
     /// CSS background-image value (gradient, pattern, or "none").
     #[serde(default = "default_bg_pattern")]
@@ -962,74 +1113,109 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
     ]
 }
 
+/// Admin-configurable theme overrides (`[theme]`), resolved to a full
+/// palette by [`ThemeConfig::resolve`] or [`ThemeConfig::resolve_with`].
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct ThemeConfig {
     /// Built-in preset name: aurora (default), dark, light, high-contrast,
     /// terminal, nord, corporate, jaguar.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+    /// Overrides the preset's `primary`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_color: Option<String>,
+    /// Overrides the preset's `primary_hover`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_hover: Option<String>,
+    /// Overrides the preset's `accent`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent_color: Option<String>,
+    /// Overrides the preset's `accent_hover`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent_hover: Option<String>,
+    /// Overrides the preset's `bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bg_color: Option<String>,
+    /// Overrides the preset's `surface`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_color: Option<String>,
+    /// Overrides the preset's `input`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_color: Option<String>,
+    /// Overrides the preset's `text`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_color: Option<String>,
+    /// Overrides the preset's `text_muted`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_muted: Option<String>,
+    /// Overrides the preset's `border`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_color: Option<String>,
+    /// Overrides the preset's `text_dim`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_dim: Option<String>,
+    /// Overrides the preset's `text_on_primary`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_on_primary: Option<String>,
+    /// Overrides the preset's `btn_disabled`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub btn_disabled: Option<String>,
+    /// Overrides the preset's `status_pending`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_pending: Option<String>,
+    /// Overrides the preset's `status_active`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_active: Option<String>,
+    /// Overrides the preset's `status_completed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_completed: Option<String>,
+    /// Overrides the preset's `status_error`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_error: Option<String>,
+    /// Overrides the preset's `status_expired`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_expired: Option<String>,
+    /// Overrides the preset's `type_ssh_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_ssh_bg: Option<String>,
+    /// Overrides the preset's `type_ssh_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_ssh_fg: Option<String>,
+    /// Overrides the preset's `type_rdp_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_rdp_bg: Option<String>,
+    /// Overrides the preset's `type_rdp_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_rdp_fg: Option<String>,
+    /// Overrides the preset's `type_vnc_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_vnc_bg: Option<String>,
+    /// Overrides the preset's `type_vnc_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_vnc_fg: Option<String>,
+    /// Overrides the preset's `type_web_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_web_bg: Option<String>,
+    /// Overrides the preset's `type_web_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_web_fg: Option<String>,
+    /// Overrides the preset's `type_vdi_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_vdi_bg: Option<String>,
+    /// Overrides the preset's `type_vdi_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_vdi_fg: Option<String>,
+    /// Overrides the preset's `hop_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hop_bg: Option<String>,
+    /// Overrides the preset's `hop_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hop_fg: Option<String>,
+    /// Overrides the preset's `bg_pattern` (CSS background-image value).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bg_pattern: Option<String>,
+    /// URL of a custom logo for the header; when set it replaces the site
+    /// title mark.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logo_url: Option<String>,
 }
@@ -1143,6 +1329,13 @@ fn is_valid_theme_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Load all themes from disk, merged over the built-in presets.
+///
+/// Built-ins are always returned first, so a missing
+/// `<static_path>/themes/` directory is not an error. A disk `<name>.toml`
+/// with the same id as a built-in overrides it; new names are appended in
+/// filename order. Malformed or unreadable files are skipped with a
+/// warning.
 pub fn load_themes(static_path: &std::path::Path) -> Vec<(String, ThemeColors)> {
     // Seed with built-ins (always available, in their defined order).
     let mut themes: Vec<(String, ThemeColors)> = builtin_presets()
@@ -1236,6 +1429,10 @@ fn default_session_timeout_secs() -> u64 {
 
 fn default_session_max_duration_secs() -> u64 {
     8 * 3600 // 8 hours
+}
+
+fn default_session_idle_timeout_secs() -> u64 {
+    1800 // 30 minutes
 }
 
 fn default_max_sessions() -> usize {
@@ -1333,6 +1530,7 @@ fn default_toml() -> String {
         "db_path = \"{}\"\n",
         default_db_path().to_string_lossy()
     ));
+    s.push_str(&format!("instance_id = \"{}\"\n", default_instance_id()));
     s.push_str(&format!(
         "session_pending_timeout_secs = {}\n",
         default_session_timeout_secs()
@@ -1340,6 +1538,10 @@ fn default_toml() -> String {
     s.push_str(&format!(
         "session_max_duration_secs = {}\n",
         default_session_max_duration_secs()
+    ));
+    s.push_str(&format!(
+        "session_idle_timeout_secs = {}\n",
+        default_session_idle_timeout_secs()
     ));
     s.push_str(&format!(
         "auth_session_ttl_secs = {}\n",
@@ -1430,7 +1632,41 @@ fn default_toml() -> String {
     // [storage] — backend defaults to "db" when the section is absent.
     s.push_str("[storage]\n");
     s.push_str(&format!("backend = \"{}\"\n", default_storage_backend()));
+    // [password] — password policy (min length + reuse history). Materialised
+    // so absent sections cannot silently reset the defaults.
+    s.push_str("[password]\n");
+    s.push_str(&format!("min_length = {}\n", default_password_min_length()));
+    s.push_str(&format!("history = {}\n", default_password_history()));
     s
+}
+
+/// Stable per-instance identifier for the HA session registry. Defaults to
+/// `hostname-pid`, which is unique across a fleet even when several
+/// instances run on the same host (the local HA demo runs two instances on
+/// one machine). Operators may set a stable id per host instead; the id
+/// must not change across restarts if per-instance recording rotation is
+/// expected to follow a restarted instance.
+fn default_instance_id() -> String {
+    let hostname = {
+        #[cfg(unix)]
+        {
+            let mut buf = [0u8; 256];
+            // SAFETY: buf is a valid 256-byte buffer; gethostname never
+            // writes past it (it truncates). Returns 0 on success.
+            let rc = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+            if rc == 0 {
+                let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+                String::from_utf8_lossy(&buf[..end]).into_owned()
+            } else {
+                "unknown-host".to_string()
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown-host".to_string())
+        }
+    };
+    format!("{}-{}", hostname, std::process::id())
 }
 
 impl Default for Config {
@@ -1443,6 +1679,7 @@ impl Default for Config {
             db_path: default_db_path(),
             session_pending_timeout_secs: default_session_timeout_secs(),
             session_max_duration_secs: default_session_max_duration_secs(),
+            session_idle_timeout_secs: default_session_idle_timeout_secs(),
             auth_session_ttl_secs: default_auth_session_ttl_secs(),
             xvnc_path: default_xvnc_path(),
             chromium_path: default_chromium_path(),
@@ -1481,8 +1718,10 @@ impl Default for Config {
             vsphere: None,
             rdp: None,
             db_url: None,
+            instance_id: default_instance_id(),
+            ha_base_url: None,
             storage: None,
-            license_key: None,
+            password: default_password_config(),
         }
     }
 }
@@ -1506,6 +1745,15 @@ fn sanitize_cidr_list(proto: &str, list: &mut Vec<String>) {
 /// caret pointing at the broken token; we prepend the file path so the message
 /// is unambiguous when multiple paths are searched.
 impl Config {
+    /// Load configuration from defaults, an optional TOML file, and
+    /// `PERSEA_` environment variables.
+    ///
+    /// When an explicit path was given, or `/opt/persea/config.toml`
+    /// exists, a broken config is fatal and the process exits with the
+    /// parse error. Otherwise the built-in defaults win. Resolves
+    /// `OIDC_CLIENT_SECRET` from the environment, fails startup when
+    /// `[oidc]` is configured without any secret, and sanitizes CIDR
+    /// lists in place.
     pub fn load(path: Option<&str>) -> Self {
         // Note: tracing is initialised later (in run_server), so config-load
         // diagnostics go to stderr directly. Misconfigurations are fatal when
@@ -1793,6 +2041,24 @@ impl Config {
             .ok()
             .filter(|k| !k.is_empty())
     }
+
+    /// Minimum password length enforced by the `[password]` policy.
+    /// Default: 15.
+    pub fn password_min_length(&self) -> usize {
+        self.password
+            .as_ref()
+            .map(|p| p.min_length)
+            .unwrap_or_else(default_password_min_length)
+    }
+
+    /// Number of recent password hashes kept per user for reuse rejection.
+    /// Default: 5. 0 disables reuse checking.
+    pub fn password_history_len(&self) -> usize {
+        self.password
+            .as_ref()
+            .map(|p| p.history)
+            .unwrap_or_else(default_password_history)
+    }
 }
 
 #[cfg(test)]
@@ -1882,7 +2148,7 @@ mod tests {
 
     #[test]
     fn test_load_without_file_matches_previous_defaults() {
-        // R19 regression: default_toml() must emit every section/key the
+        // Regression guard: default_toml() must emit every section/key the
         // previous hand-rolled defaults covered, so the config crate's
         // layered merge (defaults → file → env) reproduces them exactly.
         // Loading with an empty path exercises the defaults layer alone.

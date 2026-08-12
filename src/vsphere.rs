@@ -84,7 +84,9 @@ fn default_refresh_interval() -> u64 {
 /// Per-VM credential override.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct VsphereVmCredential {
+    /// Username used to connect to this VM.
     pub username: String,
+    /// Name of the environment variable holding this VM's password.
     #[serde(default = "default_password_env")]
     pub password_env: String,
 }
@@ -95,9 +97,13 @@ pub struct VsphereVmCredential {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PowerState {
+    /// The VM is running.
     PoweredOn,
+    /// The VM is powered off.
     PoweredOff,
+    /// The VM is suspended.
     Suspended,
+    /// The power state could not be determined.
     Unknown,
 }
 
@@ -117,9 +123,13 @@ impl PowerState {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolsStatus {
+    /// VMware Tools is running inside the guest.
     Running,
+    /// VMware Tools is installed but not running.
     NotRunning,
+    /// Tools are installed but unmanaged (e.g. open-vm-tools).
     Unmanaged,
+    /// The tools status could not be determined.
     Unknown,
 }
 
@@ -222,8 +232,11 @@ pub fn detect_protocol(guest_id: &str) -> (String, u16) {
 /// Cached VM inventory with a TTL for the refresh interval.
 #[derive(Debug, Clone)]
 pub struct VmCache {
+    /// The cached VM inventory.
     pub vms: Vec<VmInfo>,
+    /// When the inventory was last fetched from vCenter.
     pub last_refresh: Instant,
+    /// How long the cache stays valid before a refresh is needed.
     pub ttl: Duration,
 }
 

@@ -1,17 +1,188 @@
 # Integrations
 
-> **Audience:** admins wiring persea into OIDC providers, Vault/OpenBao, SSH bastions, Kerberos, HAProxy/Knocknoc, and drive/LUKS storage.
-> **Next:** [Configuration](configuration.md) for the config keys each integration needs.
+This page covers the external systems persea can be wired into: identity
+providers for login (LDAP, SAML, OIDC, RADIUS, TOTP), external secrets stores
+(Vault/OpenBao), hypervisors (Proxmox VE, VMware vSphere), SSH bastion chains,
+Kerberos RDP authentication, encrypted drive storage, and front-door proxies
+(HAProxy, Knocknoc).
 
-## OIDC Single Sign-On
+Every section follows the same shape: **What it is** (plain terms), **When to
+use it**, **Setup** (exact config keys), **Verify**, and **Common problems**.
 
-persea supports OpenID Connect for user authentication. Any OIDC provider works: Authentik, Keycloak, Okta, Azure AD, Google, etc.
+If a setting doesn't exist on this page, it's probably in
+[Configuration](configuration.md), which lists every `config.toml` key.
+
+---
+
+## How login works with several providers
+
+persea tries the auth methods you list in `[auth].methods` **in order, first
+match wins**. A user who isn't found by method 1 is tried against method 2,
+and so on. All the password-based providers (database, LDAP, RADIUS) share the
+same username + password form on the login page; OIDC and SAML get their own
+buttons. API-key auth is independent and works alongside all of them.
+
+```toml
+[auth]
+methods = ["ldap", "database"]   # try LDAP first, fall back to local accounts
+```
+
+Available method names: `database`, `ldap`, `radius`, `saml`, `oidc`, plus
+`totp` as a second factor (see [TOTP](#totp-second-factor)). The database
+provider is always available, so a reasonable setup keeps `database` last as a
+fallback.
+
+---
+
+## LDAP / Active Directory login
+
+**What it is.** Lets people log in with their existing company account
+(Active Directory, OpenLDAP, FreeIPA, anything that speaks LDAP). No separate
+persea passwords to manage.
+
+**When to use it.** Your organisation already has a directory. Users log in
+with their normal username and password, and you can control access by
+directory group membership.
+
+**How it works.** When someone submits the login form, persea connects to your
+LDAP server, binds with a service account, searches for the username, then
+tries to log in as that user with the password they typed. The user's password
+is only sent to your LDAP server: it is not stored by persea.
 
 ### Setup
 
-1. **Register an application** with your OIDC provider
-2. Set the redirect URI to `https://your-host/auth/callback`
-3. Note the client ID and client secret
+```toml
+[auth]
+methods = ["ldap", "database"]
+
+[auth.ldap]
+url = "ldaps://ldap.example.com:636"           # ldap:// or ldaps://
+bind_dn = "cn=binduser,dc=example,dc=com"      # service account that may search
+bind_password = "s3rvice-secret"               # its password
+user_search_base = "ou=users,dc=example,dc=com" # where to look for users (alias: search_base)
+user_search_filter = "(uid={})"                # how to find the user; {} is the typed username (alias: search_filter)
+group_search_base = "ou=groups,dc=example,dc=com"   # optional: where groups live
+group_search_filter = "(member={})"            # optional: {} is the user's DN
+```
+
+Optional keys:
+
+| Key | Default | What it does |
+|-----|---------|-------------|
+| `starttls` (alias `start_tls`) | `false` | Upgrade a plain `ldap://` connection to TLS instead of using `ldaps://` |
+| `tls_skip_verify` | `false` | Skip certificate checks (dev/test with self-signed certs only) |
+| `connect_timeout_secs` | `10` | Seconds before a connection attempt gives up |
+| `display_name_attr` | `cn` | LDAP attribute holding the display name |
+| `email_attr` | `mail` | LDAP attribute holding the email address |
+
+For Active Directory, the search filter is usually `(sAMAccountName={})`.
+
+**Groups.** When `group_search_base` and `group_search_filter` are both set,
+persea resolves the user's group memberships. Groups are used for two things:
+folder access (see [Roles and Access Control](roles-and-access-control.md))
+and automatic role assignment (group-to-role mappings on the Admin page).
+
+### Verify
+
+1. Restart persea (`sudo systemctl restart persea`).
+2. Log in on the web UI with a real directory account.
+3. Check the log for the bind sequence:
+
+```bash
+journalctl -u persea | grep -i ldap
+```
+
+You should see the service bind succeed and the user search find one entry.
+
+### Common problems
+
+| Problem | Likely cause | Fix |
+|---------|-------------|-----|
+| Login fails with a bind error | Wrong `bind_dn` / `bind_password` | Check the service account can bind and search |
+| "No LDAP user found" | `user_search_filter` doesn't match the username format | For AD use `(sAMAccountName={})`; test with `ldapsearch` |
+| "Ambiguous: N LDAP users matched" | The filter matches more than one account | Make the filter unique per user |
+| TLS handshake failure | Self-signed or internal CA | Set `starttls = true` or add the CA to the system trust store; `tls_skip_verify = true` is for debugging only |
+| Groups never resolve | `group_search_base` / `group_search_filter` missing or wrong | Both must be set; the filter's `{}` is replaced with the user's DN |
+
+---
+
+## SAML single sign-on
+
+**What it is.** Browser-based single sign-on: users click "Login", get
+redirected to your identity provider (Okta, Entra ID, ADFS, Keycloak,
+SimpleSAMLphp, ...), authenticate there, and are sent back already logged in.
+SAML is the XML-based SSO protocol that many enterprise IdPs still require.
+
+**When to use it.** Your organisation uses a SAML identity provider and you
+can't use OIDC (persea's simpler, recommended protocol). If your IdP supports
+both, prefer OIDC.
+
+### Setup
+
+**1. Register persea as a service provider (SP) at your IdP.** You'll need two
+values from the IdP: its **metadata URL** (an XML document describing it) and
+the entity ID it expects from persea. At the IdP, register:
+
+- **Entity ID**: your chosen `entity_id` (e.g. `persea`)
+- **ACS URL** (Assertion Consumer Service: where the IdP posts the login
+  response): `https://your-host/auth/saml/acs`
+
+**2. Configure persea:**
+
+```toml
+[auth]
+methods = ["saml", "database"]
+
+[auth.saml]
+idp_metadata_url = "https://idp.example.com/metadata"  # or idp_metadata_file = "/etc/persea/idp-metadata.xml"
+entity_id = "persea"
+acs_url = "https://your-host/auth/saml/acs"
+groups_attribute = "groups"   # optional: SAML attribute carrying group memberships
+```
+
+Optional keys:
+
+| Key | What it does |
+|-----|-------------|
+| `idp_metadata_file` | Local path to the IdP metadata XML (alternative to `idp_metadata_url`) |
+| `certificate` | Base64-encoded SP X.509 certificate, if you want persea to sign its login requests |
+| `private_key` | PEM private key matching `certificate` |
+| `strict_mode` | `true` (default): reject responses with missing or expired assertions |
+| `groups_attribute` | SAML attribute name to read group memberships from (for folder access and group-to-role mappings) |
+
+### Verify
+
+1. Restart persea.
+2. `curl https://your-host/auth/saml/metadata`: persea serves its SP metadata
+   here; check the ACS URL and entity ID match what you registered at the IdP.
+3. Click the SAML button on the login page and complete a login.
+
+### Common problems
+
+| Problem | Likely cause | Fix |
+|---------|-------------|-----|
+| Login fails with an audience error | The `entity_id` doesn't match what the IdP has registered | Register the same value at both ends |
+| Responses rejected | Clock skew between persea and the IdP | Synchronise clocks (NTP) |
+| Metadata won't parse | The URL returns HTML or an auth page instead of XML | Download the XML and use `idp_metadata_file` |
+
+---
+
+## OIDC single sign-on
+
+**What it is.** OpenID Connect, the modern, JSON-based SSO protocol. Users
+click "Login", authenticate at your identity provider (Authentik, Keycloak,
+Okta, Entra ID/Azure AD, Google, ...), and are returned logged in. Works with
+any standards-compliant OIDC provider.
+
+**When to use it.** Your identity provider supports OIDC. This is persea's
+recommended SSO option, simpler to set up than SAML and the most commonly
+supported.
+
+### Setup
+
+1. Register an application with your OIDC provider.
+2. Set the redirect URI to `https://your-host/auth/callback`.
+3. Note the client ID and client secret.
 4. Add the `[oidc]` section to your config:
 
 ```toml
@@ -25,56 +196,55 @@ groups_claim = "groups"
 extra_scopes = ["groups"]
 ```
 
-### Client secret
+| Key | Default | What it does |
+|-----|---------|-------------|
+| `issuer_url` | - | Your provider's issuer URL (from its OIDC discovery document) |
+| `client_id` / `client_secret` | - | The application credentials from your provider |
+| `redirect_uri` | - | Must match what you registered (usually `https://your-host/auth/callback`) |
+| `default_role` | `operator` | Role a brand-new user gets on first login |
+| `groups_claim` | `groups` | Name of the ID-token claim carrying group memberships |
+| `extra_scopes` | `[]` | Extra OAuth scopes to request (e.g. `["groups"]`) |
+| `ca_cert` | - | PEM file of a private/internal CA used by your IdP |
+| `tls_skip_verify` | `false` | Skip certificate checks: debugging only; exposes your client secret and tokens to interception |
 
-The `client_secret` can be provided via the `OIDC_CLIENT_SECRET` environment variable, which takes precedence over the config file. This is recommended for production:
+**Client secret via environment variable.** Recommended for production; the
+env var wins over the config file:
 
 ```bash
-# For systemd
 echo 'OIDC_CLIENT_SECRET=your-secret' >> /opt/persea/env
 chmod 600 /opt/persea/env
 ```
 
-### OIDC groups
+**Groups.** persea reads the `groups_claim` from the ID token and uses it for
+folder access and automatic role assignment (see
+[Roles and Access Control](roles-and-access-control.md)). If your provider
+needs an extra scope to include groups in the token, add it to
+`extra_scopes`. (Exception: Microsoft Entra ID, see below.)
 
-persea extracts group memberships from the OIDC ID token. The claim name is configurable (default: `groups`). Groups are used for:
+### Login flow, end to end
 
-- **Automatic role assignment** via group-to-role mappings (see [Roles and Access Control](roles-and-access-control.md))
-- **Connections folder access** — folders can be restricted to specific OIDC groups
+1. User clicks **Login** on the web UI.
+2. Browser is redirected to the provider (with PKCE, a protocol-level proof of
+   possession).
+3. After authentication, the provider redirects to `/auth/callback`.
+4. persea validates the token, extracts user info and groups.
+5. The user record is created or updated in the database.
+6. Group-to-role mappings are evaluated (highest matching role wins).
+7. A session cookie is set and the user lands in the application.
 
-If your provider requires additional scopes to include groups in the token, add them to `extra_scopes`:
-
-```toml
-extra_scopes = ["groups"]
-```
-
-### Login flow
-
-1. User clicks "Login" on the web UI
-2. Redirected to OIDC provider with PKCE challenge
-3. After authentication, provider redirects to `/auth/callback`
-4. persea validates the token (PKCE + nonce), extracts user info and groups
-5. User is created or updated in the database
-6. Group-to-role mappings are evaluated (highest matching role wins)
-7. A session cookie is set and the user is redirected to the application
-
-### Logout
-
-`GET /auth/logout` clears the session cookie and deletes the auth session from the database.
+**Logout.** `GET /auth/logout` clears the session cookie and deletes the auth
+session from the database.
 
 ### Authentik setup guide
 
-[Authentik](https://goauthentik.io/) is a recommended open-source identity provider that works well with persea.
+Authentik is a recommended open-source identity provider.
 
-**1. Create a `groups` scope mapping** in Authentik (skip if your instance already has one):
+**1. Create a `groups` scope mapping** (Authentik doesn't ship one by default,
+so the `groups` scope can't be selected on the provider until it exists):
 
-Authentik does not ship a `groups` scope mapping by default, so the `groups` scope cannot be selected on the provider until one exists.
-
-- Go to **Customisation > Property Mappings > Create**
+- **Customisation > Property Mappings > Create**
 - Type: **Scope Mapping** (under OAuth2/OpenID)
-- Name: `persea groups`
-- Scope name: `groups`
-- Description (optional): `Group memberships for persea`
+- Name: `persea groups`; Scope name: `groups`
 - Expression:
 
   ```python
@@ -83,31 +253,18 @@ Authentik does not ship a `groups` scope mapping by default, so the `groups` sco
   }
   ```
 
-This creates a `groups` claim in the ID token containing the user's Authentik group names. Used by persea for group-to-role mapping (step 6).
+**2. Create a provider:** **Applications > Providers > Create**, type
+**OAuth2/OpenID Connect**. Name `persea`, pick your authorization flow (e.g.
+`default-provider-authorization-implicit-consent`), client type
+**Confidential**, redirect URI `https://your-persea-host/auth/callback`. Under
+**Advanced protocol settings**, select `openid`, `email`, `profile` **and the
+`persea groups` mapping**.
 
-**2. Create a provider** in Authentik:
+**3. Create an application:** **Applications > Applications > Create**, name
+and slug `persea`, select the provider, launch URL `https://your-persea-host/`.
 
-- Go to **Applications > Providers > Create**
-- Select **OAuth2/OpenID Connect**
-- Name: `persea`
-- Authorization flow: pick your default authorization flow (e.g., `default-provider-authorization-implicit-consent`)
-- Client type: **Confidential**
-- Redirect URIs: `https://your-persea-host/auth/callback`
-- Under **Advanced protocol settings**:
-  - Scopes: ensure `openid`, `email`, `profile`, **and the `persea groups` mapping you created in step 1** are selected
-
-**3. Create an application:**
-
-- Go to **Applications > Applications > Create**
-- Name: `persea`
-- Slug: `persea`
-- Provider: select the provider you just created
-- Launch URL: `https://your-persea-host/`
-
-**4. Note the provider details:**
-
-- Go back to the provider and note the **Client ID** and **Client Secret**
-- The **OpenID Configuration Issuer** will be: `https://authentik.example.com/application/o/persea/`
+**4. Note the Client ID / Client Secret** from the provider page. The issuer
+URL is `https://authentik.example.com/application/o/persea/`.
 
 **5. Configure persea:**
 
@@ -127,44 +284,38 @@ chmod 600 /opt/persea/env
 sudo systemctl restart persea
 ```
 
-**6. (Optional) Set up group-to-role mappings:**
-
-Create groups in Authentik (e.g., `persea-admins`, `persea-operators`) and assign users to them. Then configure group-to-role mappings in the persea Admin page so that group membership automatically assigns roles on login. See [Roles and Access Control](roles-and-access-control.md) for details.
+**6. (Optional) Group-to-role mappings:** create groups in Authentik (e.g.
+`persea-admins`, `persea-operators`), assign users, then map the groups to
+roles on the persea Admin page. See
+[Roles and Access Control](roles-and-access-control.md).
 
 ### Microsoft Entra ID (Azure AD) setup guide
 
-Entra ID works with persea via OIDC, but the way it exposes group memberships is different from Authentik / Keycloak / JumpCloud and trips people up.
+Entra ID works via OIDC, but its groups handling is different from
+Authentik/Keycloak and trips people up.
 
-**Key difference:** Entra ID does **not** have a `groups` OAuth scope. Groups come back as a **claim** in the ID token, configured per app registration. If you copy `extra_scopes = ["groups"]` from the Authentik config above into an Entra setup it will fail at login with:
+> **Key difference:** Entra ID has **no `groups` OAuth scope**. Groups arrive
+> as a **claim** in the ID token, configured per app registration. Copying
+> `extra_scopes = ["groups"]` from the Authentik config fails at login with:
+>
+> ```
+> AADSTS650053: The application asked for scope 'groups' that doesn't exist on the resource '00000003-0000-0000-c000-000000000000'
+> ```
 
-```
-AADSTS650053: The application asked for scope 'groups' that doesn't exist on the resource '00000003-0000-0000-c000-000000000000'
-```
+**1. Register the app:** **Microsoft Entra ID > App registrations > New
+registration**. Name `persea`, account type of your choice, redirect URI type
+**Web**, value `https://your-persea-host/auth/callback`. Note the
+**Application (client) ID** and **Directory (tenant) ID**.
 
-**1. Register the application** in the Entra portal:
+**2. Create a client secret:** under **Certificates & secrets > Client
+secrets**, note the **Value** (shown only once).
 
-- Go to **Microsoft Entra ID > App registrations > New registration**
-- Name: `persea` (or whatever you prefer)
-- Supported account types: **Single tenant** (or whichever fits your deployment)
-- Redirect URI: type **Web**, value `https://your-persea-host/auth/callback`
-- Note the **Application (client) ID** and **Directory (tenant) ID**
-
-**2. Create a client secret:**
-
-- In your new app registration, go to **Certificates & secrets > Client secrets > New client secret**
-- Note the **Value** (it's only shown once)
-
-**3. Add a groups claim to the ID token:**
-
-This is the step that replaces Authentik's `groups` scope.
-
-- In your app registration, go to **Token configuration > Add groups claim**
-- Tick **ID token**
-- Pick the group set to emit:
-  - **Security groups** for security groups only (most common)
-  - **All groups (includes distribution lists and directory roles)** if you need DLs too
-- Under the **Group ID** subsection: keep the default to emit group **object IDs** (recommended; stable across rename), or expand the optional settings and pick **sAMAccountName** if you'd prefer group names. If you pick names, the group-to-role mappings you configure in the persea Admin page must reference those names.
-- Save
+**3. Add a groups claim to the ID token** (this replaces Authentik's `groups`
+scope): **Token configuration > Add groups claim**, tick **ID token**, pick
+the group set (usually **Security groups**). Under **Group ID**, keep the
+default (group **object IDs**, stable across renames) or choose
+**sAMAccountName** if you prefer group names; if you pick names, your
+group-to-role mappings must use those names.
 
 **4. Configure persea:**
 
@@ -175,9 +326,9 @@ client_id = "{application-client-id}"
 redirect_uri = "https://your-persea-host/auth/callback"
 default_role = "operator"
 groups_claim = "groups"
-# DO NOT set extra_scopes = ["groups"] for Entra. Groups come from the
-# claim configured in step 3, not from a scope request. Leave extra_scopes
-# unset (or [] empty) unless you need other Entra scopes.
+# DO NOT set extra_scopes = ["groups"] for Entra: groups come from the
+# claim configured in step 3. Leave extra_scopes unset unless you need
+# other Entra scopes.
 ```
 
 ```bash
@@ -186,25 +337,20 @@ chmod 600 /opt/persea/env
 sudo systemctl restart persea
 ```
 
-Replace `{tenant-id}` with your Directory (tenant) ID from step 1. The `{tenant-id}/v2.0` issuer URL is required (the v1 endpoint won't return the claims persea expects).
+Use the `v2.0` issuer URL: the v1 endpoint won't return the claims persea
+expects.
 
-**5. (Optional) Group-to-role mappings:**
-
-After your first successful login, the groups you belong to appear in the **seen groups** list on the persea Admin page. From there you can map group object IDs (or names, if you chose sAMAccountName in step 3) to persea roles. See [Roles and Access Control](roles-and-access-control.md).
-
-### Troubleshooting
-
-- **`AADSTS650053: scope 'groups' doesn't exist`**: you have `extra_scopes = ["groups"]` in your config. Remove it. Entra's groups arrive via the claim configured in step 3 above, not a scope.
-- **No groups in the token after login**: confirm step 3 was saved against the correct app registration, and that you're using the `v2.0` issuer URL.
-- **Groups appear as object IDs, not names**: that's the default. Either use the object IDs in your group-to-role mappings (stable, recommended) or switch the claim to emit `sAMAccountName` in step 3 and use names.
-- **Login succeeds but `default_role` doesn't get applied**: `default_role` only fires when no group-to-role mapping matches. Configure mappings on the Admin page (or, for a single-user test, set `default_role = "admin"` temporarily to bootstrap).
+**5. (Optional) Group-to-role mappings:** after a first successful login your
+groups appear in the **seen groups** list on the Admin page; map them to roles
+from there.
 
 ### Outbound HTTP proxy (egress)
 
-If persea has to reach your identity provider through an outbound HTTP proxy (for example Squid), no code change or config option is needed. The OIDC client honours the standard proxy environment variables, so set them in the service environment and restart.
+If persea must reach your identity provider through an outbound HTTP proxy
+(for example Squid), no config option is needed; the OIDC client honours the
+standard proxy environment variables:
 
 ```bash
-# For systemd (same env file as the client secret above)
 cat >> /opt/persea/env <<'EOF'
 HTTPS_PROXY=http://squid.internal:3128
 HTTP_PROXY=http://squid.internal:3128
@@ -213,35 +359,180 @@ EOF
 systemctl restart persea
 ```
 
-The proxy URL scheme is `http://` (that is your connection to Squid), even though the OIDC issuer is `https`. persea reaches an `https` issuer through the proxy with an HTTP `CONNECT` tunnel, which Squid allows by default. The variables are read once when persea builds its HTTP client at startup, so a restart is required after changing them.
+Notes:
 
-Two things to watch:
-
-- **Vault/OpenBao egress uses the same variables.** persea's Vault client shares the proxy configuration, so a service-wide `HTTPS_PROXY` also routes Vault traffic through Squid. If your Vault is internal, add its host to `NO_PROXY` (as with `.internal` above). Connections to guacd are local TCP and are never proxied.
-- **TLS interception (SSL bump).** If Squid re-signs TLS, persea must trust Squid's CA. Either add it to the system trust store (`update-ca-certificates`) or point persea at it directly:
+- The proxy URL scheme is `http://` (your connection to Squid) even when the
+  issuer is `https`; persea tunnels through the proxy with an HTTP `CONNECT`.
+- Variables are read once at startup, so restart after changing them.
+- **Vault shares the same variables**: if your Vault is internal, add its
+  host to `NO_PROXY`. Connections to guacd are local TCP and never proxied.
+- **TLS interception (SSL bump):** if Squid re-signs TLS, persea must trust
+  Squid's CA; add it to the system trust store or point persea at it:
 
   ```toml
   [oidc]
   ca_cert = "/etc/persea/squid-ca.pem"
   ```
 
-  Do not use `tls_skip_verify = true` to work around a bump: it disables certificate verification entirely and exposes your `client_secret` and tokens to man-in-the-middle. If Squid is a plain `CONNECT` tunnel with no bump, the provider's certificate passes through end to end and nothing extra is needed.
+  Do **not** use `tls_skip_verify = true` to work around a bump; it disables
+  certificate verification entirely and exposes your client secret and tokens
+  to man-in-the-middle. A plain `CONNECT` tunnel without bump passes the
+  provider's certificate through untouched and needs nothing extra.
+
+### OIDC troubleshooting
+
+- **`AADSTS650053: scope 'groups' doesn't exist`**: you have
+  `extra_scopes = ["groups"]` for Entra. Remove it (see the Entra guide).
+- **No groups after login**: check the groups claim is configured at the
+  provider and that you're using the `v2.0` Entra issuer.
+- **Groups appear as object IDs, not names**: that's Entra's default. Use the
+  object IDs in your mappings, or switch the claim to `sAMAccountName`.
+- **Login works but `default_role` isn't applied**: `default_role` only fires
+  when no group-to-role mapping matches. For a single-user test, set
+  `default_role = "admin"` temporarily to bootstrap.
 
 ---
 
-## Vault / OpenBao Connections
+## RADIUS authentication
 
-The connections feature stores connection entries in [HashiCorp Vault](https://www.vaultproject.io/) or [OpenBao](https://openbao.org/) KV v2. Credentials are read server-side and never sent to the browser. **Either Vault or OpenBao is required for the connections feature** (entries, folders, the Connections page); without it persea falls back to ad-hoc-only sessions via the Sessions page.
+**What it is.** Authenticates usernames and passwords against a RADIUS server, the same protocol your VPN, Wi-Fi, and network gear probably already use.
+persea speaks RADIUS over UDP (RFC 2865) with PAP, CHAP, or MS-CHAPv2, and can
+also act as a second factor using the RADIUS challenge/response flow.
+
+**When to use it.** Your organisation authenticates against RADIUS
+infrastructure (often built on FreeRADIUS or a vendor appliance) and you want
+the same credentials to work here. RADIUS-as-MFA is handy when you already
+push one-time codes through RADIUS (e.g. Duo-style Access-Challenge).
+
+### Setup
+
+```toml
+[auth]
+methods = ["radius", "database"]
+
+[auth.radius]
+hostname = "10.0.0.1"          # RADIUS server
+port = 1812                    # default 1812 (alias: auth_port)
+shared_secret = "your-secret"  # shared between persea and the RADIUS server (alias: secret)
+timeout_secs = 5               # request timeout (alias: timeout)
+retries = 3                    # retries on timeout
+nas_identifier = "persea"      # NAS identifier reported to the server
+# nas_ip = "10.1.2.3"          # NAS IP reported to the server (optional)
+# auth_protocol = "pap"        # pap (default), chap, or mschapv2
+# mode = "primary"             # primary (default) or mfa
+```
+
+**RADIUS as a second factor:** set `mode = "mfa"` and list `radius` in
+`methods` after a primary provider, the password is checked first, then
+persea runs the RADIUS Access-Challenge flow (one-time codes, push prompts)
+before the login completes.
+
+### Verify
+
+1. Restart persea.
+2. Log in with a test account.
+3. On the RADIUS server, watch for the Access-Request from persea followed by
+   Access-Accept (good) or Access-Reject (bad credentials or wrong secret).
+
+### Common problems
+
+| Problem | Likely cause | Fix |
+|---------|-------------|-----|
+| Every login rejected | Wrong `shared_secret` | Confirm it matches the RADIUS client entry for persea |
+| Timeouts | RADIUS unreachable or UDP blocked | Check UDP port 1812 both ways |
+| Works in a RADIUS client test tool but not persea | NAS attributes expected by your server | Set `nas_identifier` / `nas_ip` to values your server expects |
+
+---
+
+## TOTP second factor
+
+**What it is.** Time-based one-time passwords, the 6-digit codes from an
+authenticator app (Google Authenticator, Aegis, 1Password, ...). Each user
+enrolls a secret, and every login asks for a fresh code.
+
+**When to use it.** You want a second factor on top of passwords, either
+voluntarily for everyone, or enforced (admins only, or everyone).
+
+### Setup
+
+```toml
+[auth]
+methods = ["database", "totp"]   # totp is the second factor; order among the rest doesn't matter for it
+
+[auth.totp]
+issuer = "persea"     # shown in the authenticator app
+digits = 6            # code length
+period = 30           # seconds per code
+skew = 1              # how many periods ahead/behind are accepted
+enforcement = "Off"   # Off | AdminsOnly | All
+```
+
+**How enrollment works:** users generate a QR code on their
+**account/TOTP page**, scan it into their authenticator app, and confirm with
+one code. After the first factor succeeds, the login flow redirects to a
+code-entry page.
+
+**Enforcement levels:**
+
+| Setting | Effect |
+|---------|--------|
+| `Off` (default) | No one is required to enroll; users can opt in themselves |
+| `AdminsOnly` | Every admin login requires a TOTP code |
+| `All` | Every user's login requires a TOTP code |
+
+### Verify
+
+1. Restart persea.
+2. Enroll a test account (account/TOTP page) and log in: you should be asked
+   for a code after the password.
+3. Enter a wrong code to confirm it is rejected.
+
+### Common problems
+
+| Problem | Likely cause | Fix |
+|---------|-------------|-----|
+| Codes rejected | Phone clock is off | Sync the phone's clock; TOTP tolerates ~±1 period (`skew`) |
+| No code prompt after password | Enforcement is `Off` | Users must enroll themselves; enforcement needs `AdminsOnly` or `All` |
+| Can't enroll | Recovery codes not saved | Save the recovery codes shown during enrollment: they're the way back in if the app is lost |
+
+---
+
+## Vault / OpenBao for connection credentials
+
+**What it is.** An external secrets manager (HashiCorp Vault or the open-source
+OpenBao) that stores the passwords, keys, and other secrets used by address
+book entries. persea authenticates to Vault with AppRole (a machine
+credential: a `role_id` that lives in config plus a rotating `secret_id` in
+the environment).
+
+**When to use it.** You already run Vault and want connection credentials to
+live there instead of persea's database, or you need credentials shared
+across several persea instances, or separated per instance. **You don't need
+Vault at all by default:** the address book is database-first, and credentials
+are encrypted at rest (AES-256-GCM) whenever `[storage].encryption_key` is
+set (see [Configuration](configuration.md#storage-section)). Switch to Vault
+only if you want an external store:
+
+```toml
+[storage]
+backend = "vault"   # "db" (default) or "vault"
+```
+
+Either way, credentials are read server-side and never sent to the browser.
+The setup below describes Vault mode; the "Entry types", "Name validation",
+and "Credential prompting" sections apply in both modes.
 
 ### Quickstart script
 
-For a fresh single-host install, `contrib/vault-quickstart.sh` automates the manual steps below. It auto-detects the `vault` or `bao` CLI and supports three modes:
+For a fresh single-host install, `contrib/vault-quickstart.sh` automates the
+manual steps below. It auto-detects the `vault` or `bao` CLI and supports
+three modes:
 
 | Mode | What it does | Use it for |
 |------|-------------|------------|
-| (default) | Provision an existing Vault using `$VAULT_ADDR` and `$VAULT_TOKEN` | Already-deployed Vault |
-| `--dev`   | Spawn an in-memory dev-mode server and provision it | Demos, throwaway development |
-| `--local` | Install Vault or OpenBao as a systemd service with file storage and on-disk auto-unseal | Single-host persea deployments |
+| (default) | Provisions an existing Vault using `$VAULT_ADDR` and `$VAULT_TOKEN` | Already-deployed Vault |
+| `--dev` | Spawns an in-memory dev-mode server and provisions it | Demos, throwaway development |
+| `--local` | Installs Vault or OpenBao as a systemd service with file storage and on-disk auto-unseal | Single-host persea deployments |
 
 ```bash
 # Bootstrap an existing Vault:
@@ -256,170 +547,84 @@ sudo ./contrib/vault-quickstart.sh --local
 sudo ./contrib/vault-quickstart.sh --cli bao --local
 ```
 
-The script does **not** install the Vault or OpenBao binary itself. Install one from your distribution or the upstream packages first. After it runs, the script prints the `[vault]` block to drop into `config.toml` and the `VAULT_SECRET_ID` line for the systemd env file.
+The script does **not** install Vault/OpenBao itself; install one from your
+distribution or upstream first. Afterwards it prints the `[vault]` block for
+`config.toml` and the `VAULT_SECRET_ID` line for the systemd env file.
 
-> **`--local` security caveat:** the unseal key is stored on disk at `/etc/vault.d/unseal-key` (or `/etc/openbao/unseal-key`) mode 0400 root:root, and a `SECURITY.txt` file is written next to it. Anyone with root or read access to that file owns the secret store. This trade is fine for single-host persea boxes (where root compromise already means total compromise) but unacceptable for higher-stakes deployments. For real production use cloud-KMS auto-unseal: [Vault](https://developer.hashicorp.com/vault/docs/configuration/seal) | [OpenBao](https://openbao.org/docs/configuration/seal/).
+> **`--local` security caveat:** the unseal key is stored on disk
+> (`/etc/vault.d/unseal-key` or `/etc/openbao/unseal-key`, mode 0400
+> root:root). Anyone who can read it owns the secret store. That trade is
+> acceptable for single-host persea boxes (where root already means total
+> compromise) but not for higher-stakes deployments: there, use cloud-KMS
+> auto-unseal: [Vault](https://developer.hashicorp.com/vault/docs/configuration/seal)
+> | [OpenBao](https://openbao.org/docs/configuration/seal/).
 
-### Vault from Zero — Complete Setup Guide
+### Vault from zero: complete setup guide
 
-This section walks through every step from a bare server to a working persea + Vault integration. Skip sections that are already done.
+Walk through every step from a bare server to a working persea + Vault
+integration, skipping whatever is already done.
 
-#### Installing Vault
+**1. Install Vault** (Debian/Ubuntu, HashiCorp APT repo):
 
 ```bash
-# Debian/Ubuntu (HashiCorp APT repository)
 wget -O- https://apt.releases.hashicorp.com/gpg | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list
 sudo apt update && sudo apt install vault
-
-# Verify installation
 vault --version
 ```
 
-#### Initialize Vault
-
-For single-server deployments (dev/test):
+**2. Initialise Vault.** For dev/test, one key share suffices (NOT for
+production):
 
 ```bash
-# Initialize with 1 key share, 1 key threshold (NOT for production)
 vault operator init -key-shares=1 -key-threshold=1
 ```
 
-Save the output, which contains:
-- Unseal Key (needed to unseal after restart)
-- Root Token (initial admin access)
-
-For production/HA: use 5 shares with threshold 3:
+Save the output: the **Unseal Key** (needed after every restart) and the
+**Root Token** (initial admin access). For production/HA use 5 shares with
+threshold 3:
 
 ```bash
 vault operator init -key-shares=5 -key-threshold=3
 ```
 
-#### Unseal Vault
-
-Vault starts sealed. Unseal after each restart:
+**3. Unseal Vault** after every restart, then confirm it's open:
 
 ```bash
 vault operator unseal <unseal-key>
+vault status   # should show Sealed: false
 ```
 
-Verify: `vault status` should show `Sealed: false`.
-
-#### Enable KV v2 secrets engine
+**4. Enable the KV v2 secrets engine:**
 
 ```bash
 vault secrets enable -path=secret kv-v2
 ```
 
-#### Create persea policy
-
-Create a file `persea-policy.hcl`:
+**5. Create a policy for persea**, `persea-policy.hcl`:
 
 ```hcl
-path "secret/data/persea/*" {
-  capabilities = ["create", "read", "update", "delete", "list"]
-}
-
-path "secret/metadata/persea/*" {
-  capabilities = ["list"]
-}
-```
-
-Apply it:
-
-```bash
-vault policy write persea persea-policy.hcl
-```
-
-#### Enable AppRole authentication
-
-```bash
-vault auth enable approle
-```
-
-Create a role for persea:
-
-```bash
-vault write auth/approle/role/persea \
-    token_policies="persea" \
-    token_ttl=1h \
-    token_max_ttl=4h \
-    secret_id_ttl=0 \
-    token_num_uses=0
-```
-
-Get the role_id and secret_id:
-
-```bash
-vault read auth/approle/role/persea/role-id
-vault write -f auth/approle/role/persea/secret-id
-```
-
-#### Configure persea
-
-Add to `config.toml`:
-
-```toml
-[vault]
-addr = "http://127.0.0.1:8200"
-mount = "secret"
-base_path = "persea"
-role_id = "<role-id from above>"
-```
-
-Set the secret_id via environment variable:
-
-```bash
-export VAULT_SECRET_ID="<secret-id from above>"
-```
-
-#### Verify the setup
-
-```bash
-# Put a test entry
-vault kv put secret/persea/shared/test-folder/test-entry \
-    type=ssh hostname=localhost port=22 username=testuser
-
-# Check persea logs for successful Vault auth
-journalctl -u persea | grep -i vault
-# Expected: "Vault: authenticated via AppRole, token TTL=3600s"
-
-# Open the Connections page in the browser
-# You should see the "test-folder" with "test-entry" inside it
-```
-
-### Vault setup (reference)
-
-The manual steps above are equivalent to what `vault-quickstart.sh` automates. Use them if you want to understand the moving parts or if you need to deviate from the defaults (mount path, policy name, AppRole TTLs).
-
-**1. Enable KV v2** (skip if already enabled):
-
-```bash
-vault secrets enable -path=secret kv-v2
-```
-
-**2. Create a policy** for persea:
-
-```bash
-vault policy write persea - <<'EOF'
 # Connections entries: create, read, update, soft-delete
 path "secret/data/persea/*" {
   capabilities = ["create", "read", "update", "delete"]
 }
 
 # Folder/entry listing and permanent deletion
-# - "list" + "read": browse the connections
-# - "delete": permanently remove entries and folders
-#   (KV v2 permanent deletes go through the metadata/ path, not data/)
+# KV v2 permanent deletes go through the metadata/ path, not data/
 path "secret/metadata/persea/*" {
   capabilities = ["list", "read", "delete"]
 }
-EOF
 ```
 
-> **Note:** Both policy paths are required. A common mistake is omitting `delete` from the metadata path, which causes "vault access denied" errors when deleting entries or folders. See the [Vault KV v2 API docs](https://developer.hashicorp.com/vault/api-docs/secret/kv/kv-v2) for details on the `data/` vs `metadata/` path split.
+```bash
+vault policy write persea persea-policy.hcl
+```
 
-**3. Enable AppRole auth** and create a role:
+> **Both paths are required.** A common mistake is omitting `delete` on the
+> metadata path, which causes "vault access denied" errors when deleting
+> entries or folders.
+
+**6. Enable AppRole auth** and create a role for persea:
 
 ```bash
 vault auth enable approle
@@ -430,35 +635,51 @@ vault write auth/approle/role/persea \
     token_max_ttl=4h \
     secret_id_ttl=0
 
-# Get the role_id (put in config.toml)
+# role_id  -> goes in config.toml
 vault read auth/approle/role/persea/role-id
 
-# Generate a secret_id (set as VAULT_SECRET_ID env var)
+# secret_id -> goes in the environment (VAULT_SECRET_ID)
 vault write -f auth/approle/role/persea/secret-id
 ```
 
-**4. Configure persea:**
+**7. Configure persea:**
 
 ```toml
+[storage]
+backend = "vault"
+
 [vault]
 addr = "https://vault.example.com:8200"
 role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 # mount = "secret"          # KV v2 mount (default)
-# base_path = "persea"    # base path (default)
-# namespace = "my-ns"       # Vault Enterprise / OpenBao
-# instance_name = "prod-1"  # instance-scoped entries
+# base_path = "persea"      # base path (default)
+# namespace = "my-ns"       # Vault Enterprise / OpenBao namespaces
+# instance_name = "prod-1"  # instance-scoped entries (multi-instance)
 ```
-
-Set the secret ID:
 
 ```bash
 echo 'VAULT_SECRET_ID=<secret_id>' > /opt/persea/env
 chmod 600 /opt/persea/env
 ```
 
-### mTLS (client certificate authentication)
+**8. Verify:**
 
-If your Vault or OpenBao server requires mutual TLS (client certificates), add the certificate paths to the `[vault]` section:
+```bash
+# Put a test entry
+vault kv put secret/persea/shared/test-folder/test-entry \
+    type=ssh hostname=localhost port=22 username=testuser
+
+# Check persea logs for successful Vault auth
+journalctl -u persea | grep -i vault
+# Expected: "Vault: authenticated via AppRole, token TTL=3600s"
+
+# Open the Connections page: you should see test-folder with test-entry inside
+```
+
+### mTLS (client certificates)
+
+If your Vault/OpenBao server requires mutual TLS, add certificate paths to
+`[vault]`:
 
 ```toml
 [vault]
@@ -469,13 +690,13 @@ client_cert = "/opt/persea/certs/vault-client.pem"
 client_key = "/opt/persea/certs/vault-client-key.pem"
 ```
 
-| Field | Description |
-|-------|-------------|
-| `ca_cert` | Custom CA certificate (PEM) for verifying the Vault server. Use this when Vault uses a private or self-signed CA. |
-| `client_cert` | Client certificate (PEM) presented to Vault for mTLS. |
-| `client_key` | Client private key (PEM). Required when `client_cert` is set. |
+| Field | What it is |
+|-------|-----------|
+| `ca_cert` | Custom CA (PEM) for verifying the Vault server: for private/self-signed CAs |
+| `client_cert` | Client certificate (PEM) presented to Vault for mTLS |
+| `client_key` | Client private key (PEM); required when `client_cert` is set |
 
-Ensure the certificate files are readable by the `persea` system user and have restrictive permissions:
+Keep the files readable by the `persea` user with tight permissions:
 
 ```bash
 mkdir -p /opt/persea/certs
@@ -485,360 +706,441 @@ chmod 600 /opt/persea/certs/client-key.pem
 chmod 644 /opt/persea/certs/ca.pem /opt/persea/certs/client.pem
 ```
 
-### Vault Enterprise / OpenBao Namespaces
+### Vault Enterprise / OpenBao namespaces
 
-If your Vault instance uses namespaces (Vault Enterprise or OpenBao), set the `namespace` field in your config:
+With namespaces in use, set `namespace` so persea sends the
+`X-Vault-Namespace` header on every request:
 
 ```toml
 [vault]
 namespace = "admin"
 ```
 
-This adds an `X-Vault-Namespace` header to all Vault API requests. All Vault CLI commands must also target the namespace:
+All Vault CLI commands must target the same namespace:
 
 ```bash
-# Enable AppRole inside a namespace
 vault namespace exec -namespace=admin -- vault auth enable approle
-
-# Create policy inside a namespace
 vault namespace exec -namespace=admin -- vault policy write persea persea-policy.hcl
 ```
 
-Without the namespace field, persea talks to the root namespace. If your AppRole is in a sub-namespace, authentication will fail with 403.
+Without the field, persea talks to the root namespace; an AppRole in a
+sub-namespace then fails with 403.
 
 ### KV v2 path structure
 
-| Path | Description |
-|------|-------------|
+| Path | What lives there |
+|------|-----------------|
 | `persea/shared/<folder>/.config` | Folder metadata: `{"allowed_groups":[...], "description":"..."}` |
 | `persea/shared/<folder>/<entry>` | Connection entry (shared across all instances) |
 | `persea/instance/<name>/<folder>/<entry>` | Instance-specific entry (requires `instance_name`) |
 
 ### AppRole token management
 
-persea manages Vault tokens automatically:
+persea manages Vault tokens automatically: authenticates via AppRole on
+startup, renews tokens at 50% of their TTL, falls back to full
+re-authentication on a 403, and retries every 30 seconds if Vault is down at
+startup (not fatal).
 
-- Authenticates via AppRole (`role_id` + `secret_id`) on startup
-- Renews tokens at 50% of their TTL
-- Falls back to full re-authentication on 403 Forbidden responses
-- Retries every 30 seconds if Vault is unavailable at startup (non-fatal)
+### Multiple instances sharing one Vault
 
-### Multi-instance support
-
-When `instance_name` is set, persea sees both shared entries and entries scoped to its instance:
-
-- `shared/` entries are visible to all persea instances
-- `instance/<name>/` entries are only visible to the named instance
-
-This allows a fleet of persea instances to share common entries while maintaining instance-specific ones.
+With `instance_name` set, persea sees both shared entries and entries scoped
+to its instance: `shared/` entries are visible to every instance,
+`instance/<name>/` entries only to the named one, so a fleet can share common
+entries while keeping instance-specific ones. Multiple Vault backends (a
+central `[vault_shared]` plus a per-host `[vault_local]`) are covered in
+[Configuration](configuration.md#multiple-vault-backends-disaster-recovery).
 
 ### Entry types
 
-Connections entries can be SSH, RDP, VNC, or Web connections. Each entry stores:
+Address book entries can be SSH, RDP, VNC, Web, SPICE, VDI, or Proxmox
+connections. Each entry stores: connection type and target (hostname, port,
+URL), credentials (username, password, private key), protocol-specific
+settings, plus:
 
-- Connection type and target (hostname, port, URL)
-- Credentials (username, password, private key)
-- Protocol-specific settings (domain, security mode, certificate ignore, drive override)
-- **Multi-hop SSH tunnel chain** — optional ordered list of SSH bastion hosts to route through (all session types)
-- **Prompt for credentials** — when enabled, users are asked for username/password at connect time, even if stored credentials exist
-- **NLA auth package** (RDP only) — force Kerberos or NTLM for NLA authentication
-- **KDC URL** (RDP only) — Kerberos Key Distribution Center proxy URL
-- **Disable copy / Disable paste** — independently disable clipboard copy (server → client) and paste (client → server) per entry (all session types)
-- **Autofill** (Web only) — pre-populate Chromium's native autofill database with credentials. Supports `$USERNAME` and `$PASSWORD` placeholders. Multiple URL entries can be configured for SSO redirect chains.
-- **Allowed domains** (Web only) — restrict which domains the browser can reach. All other domains are blocked via DNS restriction. Useful for limiting operator access to specific web applications.
-- **Login script** (Web only) — server-side script that runs after Chromium spawns for complex login automation via CDP
+- **Multi-hop SSH tunnel chain**: optional ordered list of SSH bastion hosts
+  (all session types)
+- **Prompt for credentials**: ask the user for credentials at connect time,
+  even when stored credentials exist
+- **NLA auth package** (RDP): force Kerberos or NTLM for NLA
+- **KDC URL** (RDP): Kerberos KDC/proxy URL
+- **Disable copy / Disable paste**: per-entry clipboard control (all types)
+- **Autofill** (Web): pre-populate Chromium's autofill database, with
+  `$USERNAME`/`$PASSWORD` placeholders and multiple URLs for SSO redirect
+  chains
+- **Allowed domains** (Web): restrict which domains the browser can reach
+- **Login script** (Web): server-side script that runs after Chromium spawns
+  for complex login automation
 
 ### Name validation
 
-Folder and entry names are validated: alphanumeric characters, hyphens, underscores, and dots only. Length 1-64. Characters like `/`, `\`, and `..` are blocked to prevent path traversal in Vault.
+Folder and entry names allow alphanumeric characters, hyphens, underscores,
+and dots only, 1–64 characters. `/`, `\`, and `..` are blocked to prevent path
+traversal in Vault.
 
 ### Credential prompting
 
-Connections entries can be configured to prompt users for credentials at connect time. This is useful for:
-
-- **Entries without stored credentials** — e.g., RDP servers where each user has their own AD account. The admin creates the entry with just hostname/port, and users supply their own credentials when connecting.
-- **Entries with stored credentials but prompt enabled** — e.g., a jump host where the stored credentials are a fallback, but users should normally use their own.
-
-The credential prompt appears automatically when:
-1. The entry has **Prompt for credentials** enabled, OR
-2. The entry has no stored password or private key
-
-Prompted credentials are **never stored**. They're used for the current session only and discarded.
-
-For web sessions, prompted credentials are used for autofill substitution (`$USERNAME`/`$PASSWORD` placeholders) and login script credential passing. See [Web Browser Sessions](web-sessions.md) for details.
+Entries can prompt users for credentials at connect time, useful for entries
+without stored credentials (e.g. RDP servers where each user has their own AD
+account: the admin stores just hostname/port) or stored credentials as a
+fallback. The prompt appears when the entry has **Prompt for credentials**
+enabled, **or** when it has no stored password or private key. Prompted
+credentials are **never stored**; used for the current session only. For web
+sessions they feed autofill (`$USERNAME`/`$PASSWORD`) and login scripts (see
+[Web Browser Sessions](web-sessions.md)).
 
 ---
 
-## SSH Tunnel / Multi-Hop Jump Hosts
+## Proxmox VE
 
-persea supports routing all session types (SSH, RDP, VNC, and web browser) through one or more SSH bastion hosts. This is useful when the target machine is not directly reachable from the persea server, for example, accessing an RDP server on an isolated network segment via a bastion host chain.
+**What it is.** Streams the console of a Proxmox VE virtual machine or LXC
+container straight into the browser, through the PVE API; users don't need
+accounts on the PVE host, just an entry in the address book. persea negotiates
+the right console (VNC/SPICE/serial) with PVE automatically.
+
+**When to use it.** Your VMs and containers run on Proxmox VE and you want
+one-click console access from persea.
+
+### Setup
+
+**1. Create an API token in PVE** (Datacenter → Permissions → API Tokens). The
+token ID has the form `user@realm!tokenname` (e.g. `root@pam!persea`). Grant
+it at minimum: **Sys.Audit** on `/`, and **VM.Audit** + **VM.Console** on the
+VMs it should reach.
+
+**2. Create an address book entry** of type **Proxmox VE console** with:
+
+| Field | Example |
+|-------|---------|
+| Proxmox API URL | `https://pve.example.com:8006` |
+| VM ID | `100` (shown in the PVE UI next to the VM name) |
+| Node | leave blank (auto-detected) |
+| API token ID | `root@pam!persea` |
+| API token secret | the token's secret value |
+| Verify TLS | on (leave on unless PVE uses a self-signed cert you don't want to trust) |
+
+These settings are stored per entry (`proxmox_url`, `proxmox_node`,
+`proxmox_vmid`, `proxmox_token_id`, `proxmox_token_secret`,
+`proxmox_verify_tls`); there is no global Proxmox config section.
+
+### Verify
+
+1. Save the entry and click **Connect** on the Connections page.
+2. The VM console should stream in the browser. The session shows up in the
+   Sessions page and in recordings/reports like any other session.
+
+### Common problems
+
+| Problem | Likely cause | Fix |
+|---------|-------------|-----|
+| 401/403 from PVE | Token permissions too narrow | Add Sys.Audit, VM.Audit, VM.Console for the VM(s) |
+| Connection refused | Wrong API URL or port | Confirm `https://<host>:8006` is reachable from the persea server |
+| Certificate error | PVE uses a self-signed cert | Uncheck **Verify TLS** on the entry (or add PVE's CA to the system trust store) |
+| Console hangs / blank | VM powered off or no console agent | Power the VM on; check the VM ID is right |
+
+---
+
+## VMware vSphere
+
+**What it is.** Connects to vCenter Server over the vSphere REST API, lists
+your VMs on the Connections page, and auto-detects the right protocol for
+each one: Windows VMs open through RDP, Linux/BSD/Solaris through SSH,
+everything else through VNC. guacd connects to the guest IP directly.
+
+**When to use it.** Your virtual machines run on vSphere and you want an
+inventory-driven Connections page instead of hand-maintaining entries.
+
+### Setup
+
+**1. Create a vSphere user** (or reuse one) with at least these privileges on
+the target VMs:
+
+- `VirtualMachine.Inventory.List` (to see VMs)
+- `VirtualMachine.Interact.PowerOn` / `PowerOff` / `Reset` / `Suspend` (VM
+  lifecycle from the inventory)
+
+**2. Put the password in the environment** (not in config):
+
+```bash
+echo 'VSPHERE_PASSWORD=your-vcenter-password' >> /opt/persea/env
+chmod 600 /opt/persea/env
+```
+
+**3. Add the section to config.toml:**
+
+```toml
+[vsphere]
+vcenter_addr = "https://vcenter.example.com/sdk"
+username = "administrator@vsphere.local"
+# password_env = "VSPHERE_PASSWORD"  # default, matches step 2
+# insecure = false                   # true for self-signed certs (dev/test)
+# refresh_interval_secs = 300        # VM inventory refresh (5 min)
+```
+
+**4. Restart persea.**
+
+### Configuration reference
+
+| Field | Default | What it is |
+|-------|---------|-----------|
+| `vcenter_addr` | (required) | vCenter SDK URL (ends in `/sdk`) |
+| `username` | (required) | vSphere username (e.g. `administrator@vsphere.local`) |
+| `password_env` | `VSPHERE_PASSWORD` | Name of the environment variable holding the password |
+| `insecure` | `false` | Skip TLS certificate verification (dev/test only) |
+| `refresh_interval_secs` | `300` | How often to refresh the VM inventory (seconds) |
+
+**Per-VM credential overrides**, for VMs whose guest OS user differs from
+the global vSphere credentials:
+
+```toml
+[vsphere.vm_credentials]
+"web-server-01" = { username = "deploy", password_env = "WEB_DEPLOY_PASS" }
+"db-server-02" = { username = "admin", password_env = "DB_ADMIN_PASS" }
+```
+
+VMs without an override use the global username and password.
+
+### Protocol detection
+
+persea maps the guest OS reported by vCenter to a protocol automatically:
+
+| Guest OS family | Protocol | Port |
+|----------------|----------|------|
+| Windows (`win*`) | RDP | 3389 |
+| Linux (`linux*`, `ubuntu*`, `debian*`, `rhel*`, ...) | SSH | 22 |
+| BSD, Solaris | SSH | 22 |
+| Everything else | VNC | 5900 |
+
+### Using the inventory
+
+With `[vsphere]` configured, the Connections page shows a **vSphere Virtual
+Machines** section listing every VM with its power state, guest OS, and IP
+address. Per VM:
+
+- **Connect** opens a session to the guest IP via the detected protocol. The
+  VM must be powered on and report a guest IP (VMware Tools).
+- Guest credentials come from the matching `[vsphere.vm_credentials]` override
+  (keyed by VM name or ID), falling back to the global credentials.
+- The list refreshes on page load; use **Refresh** to re-fetch.
+
+The connect flow is server-side: the session appears in the Sessions page and
+in recordings/reports like any other connection.
+
+### Verify and troubleshoot
+
+**Verify:** open the Connections page: the VM list should populate within a
+refresh interval. **Cannot connect to vCenter:** check `vcenter_addr` ends
+with `/sdk` and HTTPS is reachable; for self-signed certs set `insecure = true`
+or add vCenter's CA to the system trust store. **Empty VM list:** the vSphere
+user needs `VirtualMachine.Inventory.List` at the right scope (datacenter,
+cluster, or folder). **No IP address:** VMware Tools must be installed and
+running in the guest.
+
+---
+
+## SSH tunnels / multi-hop jump hosts
+
+**What it is.** Routes any session type (SSH, RDP, VNC, web browser) through
+one or more SSH bastion hosts, in sequence, for reaching machines on isolated
+networks from the persea server.
+
+**When to use it.** The target isn't directly reachable from persea, e.g. an
+RDP server on a separate network segment behind a bastion chain.
 
 ### How it works
 
-Each jump host in the chain establishes an SSH connection and creates a local TCP port forward using SSH's `direct-tcpip` channel. The hops are chained sequentially:
-
-1. **Hop 1**: persea SSH-connects to `bastion-1:22`, opens a `direct-tcpip` channel to `bastion-2:22`, and listens on a local TCP port
-2. **Hop 2**: persea SSH-connects to `bastion-2:22` (via hop 1's local port), opens a `direct-tcpip` channel to `target:3389`, and listens on another local TCP port
-3. **guacd**: connects to the final local port, which tunnels through the entire chain to the target
+Each hop opens an SSH connection and a `direct-tcpip` port forward to the next
+hop:
 
 ```
 persea -> [SSH] bastion-1:22 -> [SSH] bastion-2:22 -> [TCP] target:3389
 ```
 
-The chain is set up sequentially (each hop must connect before the next starts) and torn down in reverse order when the session ends.
+Hops are set up in order (each must connect before the next starts) and torn
+down in reverse when the session ends.
 
 ### Configuration
 
-#### Connections entries
+**Connections entries:** in the entry editor, click **Add Jump Host** to add
+hops. Each hop has its own credentials. A visual flow diagram shows the path.
+Hop credentials are stored with the entry's other credentials and never sent
+to the browser; editing an entry preserves existing hop passwords/keys when
+the form omits them.
 
-Admins configure jump hosts per entry in the connections editor. Click "Add Jump Host" to add hops to the chain. Each hop has its own credentials (username + password or private key). A visual flow diagram shows the tunnel path.
+**Ad-hoc sessions:** powerusers get the same multi-hop card (SSH Tunnel
+section, **Add Jump Host**) when creating sessions from the Sessions page.
 
-Jump host credentials are stored in Vault alongside the entry's other credentials and are never sent to the browser. When editing an entry, existing hop passwords and keys are preserved if the edit form omits them (per-hop credential merge by index).
+**Per-hop fields:**
 
-#### Ad-hoc sessions
-
-Powerusers can add jump hosts when creating sessions from the Sessions page. The same multi-hop card UI is available. Click "Add Jump Host" in the SSH Tunnel section.
-
-### Per-hop credentials
-
-Each hop in the chain supports independent authentication:
-
-| Field | Description |
-|-------|-------------|
+| Field | What it is |
+|-------|-----------|
 | `hostname` | SSH bastion hostname (required) |
-| `port` | SSH port (default: 22) |
+| `port` | SSH port (default 22) |
 | `username` | SSH username (required) |
 | `password` | SSH password |
 | `private_key` | OpenSSH PEM private key |
 
-At least one of `password` or `private_key` should be provided per hop.
+Provide at least one of `password` or `private_key` per hop.
 
 ### Supported session types
 
-| Session type | Jump hosts supported | Notes |
-|-------------|---------------------|-------|
-| SSH | Yes | Tunnel forwards to SSH target |
-| RDP | Yes | Tunnel forwards to RDP target |
-| VNC | Yes | Tunnel forwards to VNC target |
-| Web | Yes | Tunnel forwards to URL host:port; URL is rewritten to `127.0.0.1:{tunnel_port}` |
+| Session type | Jump hosts | Notes |
+|-------------|-----------|-------|
+| SSH | Yes | Tunnel forwards to the SSH target |
+| RDP | Yes | Tunnel forwards to the RDP target |
+| VNC | Yes | Tunnel forwards to the VNC target |
+| Web | Yes | Tunnel forwards to the URL's host:port (80 for HTTP, 443 for HTTPS); the URL passed to Chromium is rewritten to `{scheme}://127.0.0.1:{tunnel_port}{path}` |
 
-**Web session URL rewriting:** When jump hosts are configured for a web browser session, the SSH tunnel forwards to the URL's host and port (inferred from the scheme: 80 for HTTP, 443 for HTTPS, or explicit port). The URL passed to Chromium is rewritten to `{scheme}://127.0.0.1:{tunnel_port}{path}`. This means HTTPS targets will show certificate warnings since the hostname no longer matches the certificate. The original URL is still displayed in the session list.
+**Web session caveat:** HTTPS targets will show certificate warnings because
+the hostname no longer matches the certificate. The original URL is still
+displayed in the session list.
 
-### Backward compatibility
+### Compatibility and errors
 
-The legacy flat jump host fields (`jump_host`, `jump_port`, `jump_username`, `jump_password`, `jump_private_key`) are still accepted in the API and in existing Vault entries. When present, they are automatically normalized to a single-element `jump_hosts` array. The `jump_hosts` array takes precedence when both are provided.
-
-### Error handling
-
-Tunnel errors include the hop index for easier debugging. For example, if hop 2 in a 3-hop chain fails to connect, the error message will indicate "hop 2" specifically. When any hop fails, all previously established hops are torn down cleanly.
+Legacy flat fields (`jump_host`, `jump_port`, `jump_username`,
+`jump_password`, `jump_private_key`) are still accepted and normalised into a
+single-element `jump_hosts` array (which wins when both are present). Tunnel
+errors name the failing hop ("hop 2"), and when any hop fails all previously
+established hops are torn down cleanly.
 
 ---
 
-## RDP Kerberos NLA Authentication
+## RDP Kerberos NLA authentication
 
-persea includes a patched guacd with Kerberos NLA (Network Level Authentication) support. This allows RDP connections to authenticate using Kerberos instead of NTLM, which is important as Microsoft is phasing out NTLM.
+**What it is.** Lets RDP sessions authenticate to Windows with Kerberos
+instead of NTLM. Microsoft is phasing out NTLM, and accounts in the Active
+Directory **Protected Users** group can't use NTLM at all, so Kerberos is
+required to reach them.
 
-### Background
-
-Windows NLA (Network Level Authentication) normally negotiates the authentication protocol. By default, this typically uses NTLM. Microsoft has announced a multi-phase NTLM deprecation:
-
-- **Phase 1** (current): Auditing and awareness
-- **Phase 2** (H2 2026): New Kerberos features, NTLMv1 blocked by default
-- **Phase 3** (future): NTLM disabled by default
-
-AD accounts in the **Protected Users** security group already cannot use NTLM at all. The `auth_pkg` setting forces Kerberos for NLA, ensuring compatibility as NTLM is deprecated and enabling connections to Protected Users accounts.
+**When to use it.** Your RDP targets are domain-joined Windows machines and
+you have Kerberos working (reachable KDC). Otherwise the default NTLM
+negotiation is fine.
 
 ### How it works
 
-FreeRDP does not implement its own Kerberos stack. The chain is:
-
-```
-guacd -> libfreerdp3 -> libwinpr3 (SSPI/Negotiate) -> libgssapi_krb5 -> libkrb5 (MIT Kerberos)
-```
-
-FreeRDP's WinPR layer implements Windows SSPI on top of the system's MIT Kerberos libraries. This means it reads `/etc/krb5.conf`, uses the system credential cache, and respects `KRB5_CONFIG` and `KRB5_TRACE` environment variables. Username and password are still required. Kerberos replaces the wire authentication protocol (NTLM -> Kerberos), not the credential input.
+FreeRDP doesn't implement Kerberos itself; it delegates to the system's MIT
+Kerberos libraries (via WinPR's SSPI layer), so persea's guacd reads
+`/etc/krb5.conf`, uses the system credential cache, and honours `KRB5_CONFIG`
+and `KRB5_TRACE`. Username and password are still required; Kerberos replaces
+the wire protocol (NTLM → Kerberos), not the credential input.
 
 ### Per-entry configuration
 
-These settings are configured per connections entry in the admin UI:
-
-| Setting | Values | Description |
+| Setting | Values | What it does |
 |---------|--------|-------------|
-| **NLA Auth Package** | `(default)`, `ntlm`, `kerberos` | Force a specific NLA authentication method. Default lets the client and server negotiate. |
-| **KDC URL** | URL | KDC or KDC Proxy URL. Overrides DNS SRV and krb5.conf for KDC discovery. |
-| **Prompt for credentials** | checkbox | Prompt users for username/password/domain at connect time. |
+| **NLA Auth Package** | `(default)`, `ntlm`, `kerberos` | Force a specific NLA method; default negotiates |
+| **KDC URL** | URL | KDC or KDC-proxy URL; overrides DNS SRV and krb5.conf for KDC discovery |
+| **Prompt for credentials** | checkbox | Ask the user for username/password/domain at connect time |
 
-### System prerequisites
+### Prerequisites
 
-#### Packages
-
-On Debian 13, the Kerberos runtime libraries (`libkrb5-3`, `libgssapi-krb5-2`) are already installed as dependencies of FreeRDP 3 (`libwinpr3-3`). No extra packages are required for Kerberos to work.
-
-For **testing and debugging**, install the Kerberos user tools:
-
-```bash
-apt install krb5-user
-```
-
-This provides `kinit`, `klist`, and `kdestroy`, and creates `/etc/krb5.conf` during installation.
-
-#### Network requirements
-
-| Port | Direction | Purpose |
-|------|-----------|---------|
-| TCP 88 | guacd -> Domain Controller | Kerberos AS-REQ/TGS-REQ |
-| TCP 443 | guacd -> KDC Proxy | HTTPS KDC Proxy tunnel (only if using `kdc-url`) |
-| TCP 3389 | guacd -> RDP target | RDP connection |
-
-If using a **KDC Proxy URL** (`kdc-url`), direct access to port 88 is not needed. The KDC Proxy protocol tunnels Kerberos messages over HTTPS, making it ideal for environments where the guacd server is on a different network than the domain controller.
-
-#### Time synchronisation
-
-Kerberos has a default clock skew tolerance of **5 minutes**. Ensure NTP is configured on the persea server:
-
-```bash
-timedatectl status   # verify time is synced
-```
-
-#### DNS requirements
-
-**The RDP target hostname MUST be a fully-qualified domain name (FQDN).** Kerberos constructs a service principal name (`TERMSRV/server.example.com@REALM`) from the hostname. Using IP addresses or NetBIOS short names will cause Kerberos ticket acquisition to fail.
-
-For automatic KDC discovery (without `kdc-url` or `krb5.conf`), the domain needs DNS SRV records:
-
-```
-_kerberos._tcp.EXAMPLE.COM.  SRV  0 0 88  dc1.example.com.
-```
-
-The guacd server itself does not need to be domain-joined. It only needs network access to the KDC.
+- **Packages:** on Debian 13 the Kerberos runtime libraries already come in
+  with FreeRDP 3. Install `krb5-user` only if you want `kinit`/`klist` for
+  testing.
+- **Network:** TCP 88 from guacd to the Domain Controller (AS-REQ/TGS-REQ);
+  TCP 443 to a KDC proxy if you use `kdc-url`; TCP 3389 to the RDP target.
+- **Clock sync:** Kerberos tolerates ~5 minutes of skew: keep NTP on.
+- **DNS:** the RDP target hostname **must be an FQDN** (e.g.
+  `fileserver.corp.example.com`), because Kerberos builds the service
+  principal (`TERMSRV/host@REALM`) from it. IPs and short names fail. For
+  automatic KDC discovery the domain needs an SRV record:
+  `_kerberos._tcp.EXAMPLE.COM. SRV 0 0 88 dc1.example.com.`
+- The guacd server itself does **not** need to be domain-joined: only network
+  access to the KDC.
 
 ### KDC discovery: three options
 
-FreeRDP/libkrb5 finds the KDC in this order of priority:
+In priority order:
 
-**Option 1: KDC Proxy URL (simplest for remote networks)**
+1. **KDC Proxy URL** (simplest across networks): set the entry's **KDC URL**
+   to your KDC proxy (e.g. `https://dc.example.com/KdcProxy`). Bypasses DNS
+   SRV and krb5.conf entirely; Windows Server's KDC Proxy Service can serve
+   this role.
+2. **DNS SRV records** (simplest on-network): if the guacd host uses the
+   domain's DNS and the SRV records exist, nothing more is needed.
+3. **`/etc/krb5.conf`** (explicit): when SRV records aren't available and
+   there's no proxy:
 
-Set the **KDC URL** field on the connections entry to your KDC Proxy endpoint (e.g., `https://dc.example.com/KdcProxy`). This bypasses DNS SRV and krb5.conf entirely. Windows Server's KDC Proxy Service can serve this role.
+   ```ini
+   [libdefaults]
+       default_realm = EXAMPLE.COM
+       dns_lookup_kdc = false
+       dns_lookup_realm = false
+       udp_preference_limit = 1
 
-**Option 2: DNS SRV records (simplest for on-network)**
+   [realms]
+       EXAMPLE.COM = {
+           kdc = tcp/dc1.example.com
+           admin_server = dc1.example.com
+       }
+       example.com = {
+           kdc = tcp/dc1.example.com
+           admin_server = dc1.example.com
+       }
 
-If the guacd server uses the domain's DNS servers and `_kerberos._tcp.REALM` SRV records exist, Kerberos will discover the KDC automatically. No configuration needed on the guacd host.
+   [domain_realm]
+       .example.com = EXAMPLE.COM
+       example.com = EXAMPLE.COM
+   ```
 
-**Option 3: /etc/krb5.conf (explicit configuration)**
-
-If DNS SRV records are not available and you're not using a KDC proxy, create `/etc/krb5.conf`:
-
-```ini
-[libdefaults]
-    default_realm = EXAMPLE.COM
-    dns_lookup_kdc = false
-    dns_lookup_realm = false
-    udp_preference_limit = 1
-
-[realms]
-    EXAMPLE.COM = {
-        kdc = tcp/dc1.example.com
-        admin_server = dc1.example.com
-    }
-    example.com = {
-        kdc = tcp/dc1.example.com
-        admin_server = dc1.example.com
-    }
-
-[domain_realm]
-    .example.com = EXAMPLE.COM
-    example.com = EXAMPLE.COM
-```
-
-Important notes for krb5.conf:
-
-- **Define realms in both uppercase AND lowercase**. GSSAPI on Linux is case-sensitive (unlike Windows)
-- **Use `tcp/` prefix** for KDC entries to force TCP transport (avoids UDP response size issues)
-- **A broken krb5.conf is worse than none**. If krb5.conf points to unreachable KDCs, FreeRDP 3 can hang indefinitely during authentication (deadlock in the SSPI/Negotiate layer). Delete or fix any stale krb5.conf.
+   Notes: define realms in **both uppercase and lowercase** (GSSAPI on Linux
+   is case-sensitive); use `tcp/` prefixes to force TCP; and remember **a
+   broken krb5.conf is worse than none**; stale entries can hang FreeRDP 3
+   indefinitely during authentication.
 
 ### Username format
 
-Use **UPN format** for usernames: `user@EXAMPLE.COM` (e.g., `jdoe@CORP.EXAMPLE.COM`). This is more reliable with GSSAPI on Linux than the `DOMAIN\user` format.
+Use UPN format (`user@EXAMPLE.COM`), more reliable with GSSAPI on Linux than
+`DOMAIN\user`. The **Domain** field takes the AD domain name (`EXAMPLE.COM`).
 
-The **Domain** field should be the AD domain name (e.g., `EXAMPLE.COM`).
+### Example entry
 
-### Example: Kerberos RDP entry
+- **Type**: RDP; **Hostname**: `fileserver.corp.example.com` (FQDN);
+  **Port**: 3389; **Security**: NLA; **NLA Auth Package**: Kerberos;
+  **KDC URL**: `https://dc.corp.example.com/KdcProxy` (if the KDC isn't
+  directly reachable); **Prompt for credentials**: checked; **Domain**:
+  `CORP.EXAMPLE.COM`
 
-Create an connections entry with:
-
-- **Type**: RDP
-- **Hostname**: `fileserver.corp.example.com` (must be FQDN)
-- **Port**: 3389
-- **Security**: NLA
-- **NLA Auth Package**: Kerberos
-- **KDC URL**: `https://dc.corp.example.com/KdcProxy` (if KDC is not directly reachable)
-- **Prompt for credentials**: checked (users supply their own AD credentials)
-- **Domain**: `CORP.EXAMPLE.COM`
-
-When a user connects, they'll be prompted for username, password, and domain. The connection will authenticate via Kerberos NLA to the target.
-
-### guacd patch details
-
-The Kerberos NLA support is provided by patch `002-kerberos-nla.patch`, which adds three connection parameters to guacd's RDP handler:
-
-| Parameter | FreeRDP 3 setting | Description |
-|-----------|-------------------|-------------|
-| `auth-pkg` | `AuthenticationPackageList` | `kerberos` sets `!ntlm,kerberos`; `ntlm` sets `ntlm,!kerberos`; empty negotiates |
-| `kdc-url` | `KerberosKdcUrl` | KDC or KDC Proxy URL — overrides DNS SRV and krb5.conf |
-| `kerberos-cache` | `KerberosCache` | Path to a credential cache (ccache) file — advanced use |
-
-This patch is based on the upstream [GUACAMOLE-2057](https://issues.apache.org/jira/browse/GUACAMOLE-2057) work (guacamole-server PR #581), adapted for FreeRDP 3.x on Debian 13. Differences from upstream: dropped the FreeRDP 2 code path, fixed a `guac_strdup()` memory leak, and fixed typos.
+Users are then prompted for username, password, and domain, and the session
+authenticates via Kerberos NLA.
 
 ### Troubleshooting
 
-**Enable Kerberos tracing** by adding to the persea environment file:
+Enable Kerberos tracing to see what's happening:
 
 ```bash
 echo 'KRB5_TRACE=/dev/stderr' >> /opt/persea/env
 sudo systemctl restart persea
-# View trace output:
 journalctl -u persea -f
 ```
 
-**Test Kerberos manually** from the guacd server:
+Test Kerberos by hand from the guacd server:
 
 ```bash
-# Check DNS SRV records
 dig SRV _kerberos._tcp.EXAMPLE.COM
-
-# Test obtaining a ticket
-kinit user@EXAMPLE.COM
-klist
-
-# Test RDP directly with xfreerdp3
+kinit user@EXAMPLE.COM && klist
 xfreerdp3 /v:server.example.com /u:user@EXAMPLE.COM /d:EXAMPLE.COM \
   /auth-pkg-list:'!ntlm,kerberos' /cert:ignore
 ```
 
-**Common issues:**
-
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| Connection hangs indefinitely | Broken `/etc/krb5.conf` with unreachable KDC entries | Delete or fix krb5.conf, or use `kdc-url` instead |
-| "Authentication failed" | Wrong username format, unreachable KDC, or wrong domain | Use UPN format (`user@REALM`), verify KDC connectivity |
-| "Clock skew too great" | Time out of sync by more than 5 minutes | Configure NTP: `timedatectl set-ntp true` |
-| Kerberos fails, no NTLM fallback | `auth-pkg` set to `kerberos` disables NTLM | Fix Kerberos setup, or use default (negotiate) to allow fallback |
-| "Cannot resolve host" / SPN failure | RDP hostname is an IP or short name | Use FQDN (e.g., `server.example.com` not `server` or `10.0.1.5`) |
-| TGT succeeds but TGS fails | SPN mismatch — hostname doesn't match AD computer object | Verify the hostname matches the AD computer account's DNS name |
+| Connection hangs indefinitely | Broken krb5.conf with unreachable KDCs | Fix/delete krb5.conf, or use `kdc-url` |
+| "Authentication failed" | Wrong username format, unreachable KDC, wrong domain | Use UPN (`user@REALM`), verify KDC connectivity |
+| "Clock skew too great" | Time off by > 5 minutes | `timedatectl set-ntp true` |
+| Kerberos fails, no NTLM fallback | `kerberos` auth package disables NTLM | Fix Kerberos, or use default (negotiate) for fallback |
+| "Cannot resolve host"/SPN failure | Hostname is an IP or short name | Use the FQDN matching the AD computer object |
 
 ---
 
-## Drive / File Transfer / LUKS Encryption
+## Drive / file transfer / LUKS encryption
 
-persea supports file transfer for RDP and SSH sessions.
+**What it is.** File transfer for RDP and SSH sessions. RDP gets a virtual
+drive (a per-session folder on the persea server mounted into the Windows
+session); SSH gets SFTP, which runs browser ⇄ target directly; no files are
+stored on the persea server. The RDP drive storage can sit on a
+LUKS-encrypted volume whose key lives in Vault.
 
 ### RDP drive redirection
-
-When drive is enabled, each RDP session gets a per-session directory under `drive_path`. guacd mounts this as a virtual drive visible in the remote Windows session (e.g., "Shared Drive" in Explorer).
-
-- Files are **temporary** — the session directory is deleted when the session ends (configurable)
-- The drive appears as a network drive in the Windows session
-- Upload and download can be independently enabled/disabled
 
 ```toml
 [drive]
@@ -851,22 +1153,32 @@ cleanup_on_close = true
 retention_secs = 0
 ```
 
-#### Cleanup behaviour
+- Each session gets its own directory under `drive_path` (named with the
+  session UUID) mounted as a virtual drive in the Windows session.
+- Upload and download can be enabled/disabled independently.
+- Files are temporary: the session directory is deleted when the session ends
+  (configurable).
+
+**Cleanup behaviour:**
 
 | Setting | Default | What it does |
 |---------|---------|-------------|
-| `cleanup_on_close` | `true` | Whether to remove the per-session drive directory when the session ends. Set to `false` to leave files on disk (still scoped to the per-session UUID subdirectory under `drive_path`). |
-| `retention_secs` | `0` | When `cleanup_on_close = true`, how long to wait after session end before removing the directory. `0` removes immediately. **Has no effect when `cleanup_on_close = false`**. Without cleanup the retention timer never starts. |
+| `cleanup_on_close` | `true` | Remove the per-session drive directory when the session ends; `false` leaves the files (still in the per-session UUID subdirectory) |
+| `retention_secs` | `0` | When cleanup is on, delay before removal; `0` = immediate. Has no effect when `cleanup_on_close = false` |
 
-Each session gets its own subdirectory under `drive_path` named with the session UUID, so files do not persist *across* sessions even with `cleanup_on_close = false`. Cross-session persistence (a "personal drive" model) is not currently supported; the flag only controls whether the on-disk artefacts of a finished session linger.
+Files never persist *across* sessions even with cleanup off; there's no
+"personal drive" model; the flag only controls whether finished-session files
+linger on disk.
 
 ### SSH SFTP
 
-For SSH sessions, SFTP file transfer happens directly between the browser and the target SSH server via guacd. No files are stored on the persea server.
+SFTP runs directly between the browser and the target SSH server via guacd;
+no files touch the persea server.
 
-### LUKS encryption
+### LUKS-encrypted drive storage
 
-For RDP drive storage, the `drive_path` can be backed by a LUKS-encrypted volume. The encryption key is stored in Vault and the volume is only unlocked while persea is running.
+The `drive_path` volume can be a LUKS container. The encryption key is read
+from Vault, and the volume is unlocked only while persea runs:
 
 ```toml
 [drive]
@@ -877,59 +1189,25 @@ luks_name = "persea-drives"
 luks_key_path = "persea/luks-key"
 ```
 
-#### LUKS lifecycle
+**Lifecycle:** on startup persea reads the key from Vault KV, opens the
+container (`cryptsetup open --type luks --key-file=-`), mounts it at
+`drive_path`, and sets ownership for the persea user. On shutdown it unmounts
+and closes the container. The key is passed via stdin, never on the command
+line or disk.
 
-On startup:
-1. Read encryption key from Vault KV
-2. Open LUKS container via `sudo cryptsetup open --type luks --key-file=-`
-3. Mount the mapped device at `drive_path`
-4. Set ownership to the persea user
-
-On shutdown:
-1. Unmount the volume
-2. Close the LUKS container via `sudo cryptsetup close`
-
-The key is passed to cryptsetup via stdin, never on the command line or written to disk.
-
-#### Setup
-
-Run the interactive setup script:
-
-```bash
-sudo /opt/persea/bin/drive-setup.sh
-```
-
-This creates the LUKS container file, generates a random encryption key, stores the key in Vault, and configures the necessary sudoers rules.
-
-#### Sudoers rules
-
-The persea user needs specific sudo permissions for LUKS operations. These are installed automatically:
-
-```
-persea ALL=(root) NOPASSWD: /usr/sbin/cryptsetup open --type luks --key-file=- <device> <name>
-persea ALL=(root) NOPASSWD: /usr/sbin/cryptsetup close <name>
-persea ALL=(root) NOPASSWD: /bin/mount /dev/mapper/<name> <mount_point>
-persea ALL=(root) NOPASSWD: /bin/umount <mount_point>
-persea ALL=(root) NOPASSWD: /bin/chown *:* <mount_point>
-```
+**Setup:** run `sudo /opt/persea/bin/drive-setup.sh`: it creates the
+container file, generates a random key, stores it in Vault, and installs the
+sudoers rules the persea user needs for `cryptsetup`/`mount`/`umount`/`chown`.
 
 ---
 
-## HAProxy Reverse Proxy
+## HAProxy reverse proxy
 
-An example HAProxy configuration is provided in `haproxy.example.cfg`. This is the recommended production deployment pattern.
-
-For nginx, Caddy, Apache, and Traefik setups, see [reverse-proxies.md](reverse-proxies.md) and note the `%2F` gotcha documented there if you run into 404s on nested subfolders.
-
-### Features
-
-- **TLS termination** at HAProxy with modern ciphersuites (TLS 1.2+, ECDHE)
-- **HTTP to HTTPS redirect**
-- **X-Forwarded-For handling** — strips incoming headers and adds the real client IP
-- **WebSocket support** — `timeout tunnel 8h` for long-lived sessions
-- **Health checks** against `/api/health`
-- **Slowloris protection** — `timeout http-request 10s`
-- **HSTS header** — `max-age=31536000; includeSubDomains`
+**What it is.** A production front-door example (in `haproxy.example.cfg`)
+with TLS termination, HTTP→HTTPS redirect, real client IPs, WebSocket
+support, health checks, slowloris protection, and HSTS. For nginx, Caddy,
+Apache, and Traefik, see [reverse-proxies.md](reverse-proxies.md), and mind
+the `%2F` gotcha documented there if you hit 404s on nested subfolders.
 
 ### Minimal example
 
@@ -947,7 +1225,7 @@ backend persea
     server persea 127.0.0.1:8089 ssl verify none check inter 30s
 ```
 
-persea must trust HAProxy's IP:
+persea must trust HAProxy's IP for correct client-IP logging:
 
 ```toml
 trusted_proxies = ["127.0.0.1/32"]
@@ -955,137 +1233,38 @@ trusted_proxies = ["127.0.0.1/32"]
 
 ### Double TLS
 
-In the default configuration, traffic is encrypted twice on the loopback:
-1. HAProxy terminates the client's TLS connection
-2. HAProxy connects to persea over TLS (persea's own self-signed cert)
-
-This is belt-and-suspenders for environments where even loopback traffic should be encrypted.
-
----
-
-## VMware vSphere Integration
-
-persea connects to vCenter Server via the vSphere REST API to list VMs and auto-detect the right connection protocol. Windows VMs route through RDP, Linux VMs through SSH, and everything else through VNC. guacd connects to the guest IP directly.
-
-### Requirements
-
-- vCenter Server 7.03 or later with REST API access
-- HTTPS access from persea to vCenter
-- A vSphere user with `VM Inventory List` and `Virtual Machine Interaction` privileges
-- VMware Tools running on guests for IP address detection
-
-### Setup
-
-**1. Create a vSphere user** (or use an existing one):
-
-The user needs at minimum these privileges on the target VMs:
-- `VirtualMachine.Inventory.List`
-- `VirtualMachine.Interact.PowerOn`
-- `VirtualMachine.Interact.PowerOff`
-- `VirtualMachine.Interact.Reset`
-- `VirtualMachine.Interact.Suspend`
-
-**2. Set the password environment variable:**
-
-```bash
-echo 'VSPHERE_PASSWORD=your-vcenter-password' >> /opt/persea/env
-chmod 600 /opt/persea/env
-```
-
-**3. Add the vSphere section to config.toml:**
-
-```toml
-[vsphere]
-vcenter_addr = "https://vcenter.example.com/sdk"
-username = "administrator@vsphere.local"
-# password_env = "VSPHERE_PASSWORD"  # default, matches step 2
-# insecure = false                   # set true for self-signed certs
-# refresh_interval_secs = 300        # VM cache refresh interval (5 min)
-```
-
-**4. Restart persea:**
-
-```bash
-sudo systemctl restart persea
-```
-
-### Configuration reference
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `vcenter_addr` | (required) | vCenter SDK URL (e.g. `https://vcenter.example.com/sdk`) |
-| `username` | (required) | vSphere username (e.g. `administrator@vsphere.local`) |
-| `password_env` | `VSPHERE_PASSWORD` | Name of the environment variable holding the password |
-| `insecure` | `false` | Skip TLS certificate verification (dev/test only) |
-| `refresh_interval_secs` | `300` | How often to refresh the VM inventory (seconds) |
-
-### Per-VM credential overrides
-
-For VMs where the guest OS user differs from the global vSphere credentials:
-
-```toml
-[vsphere.vm_credentials]
-"web-server-01" = { username = "deploy", password_env = "WEB_DEPLOY_PASS" }
-"db-server-02" = { username = "admin", password_env = "DB_ADMIN_PASS" }
-```
-
-VMs without an override use the global `username` and password from the environment variable.
-
-### Protocol detection
-
-persea maps the vSphere guest OS identifier to a Guacamole protocol:
-
-| Guest OS family | Protocol | Port |
-|----------------|----------|------|
-| Windows (`win*`) | RDP | 3389 |
-| Linux (`linux*`, `ubuntu*`, `debian*`, `rhel*`, etc.) | SSH | 22 |
-| BSD, Solaris | SSH | 22 |
-| Everything else | VNC | 5900 |
-
-The detection is automatic based on the `guest_OS` field reported by vCenter. No manual mapping needed.
-
-### Connections page
-
-When `[vsphere]` is configured, the Connections page (`/connections.html`) shows a **vSphere Virtual Machines** section listing every VM in the inventory with its power state, guest OS, and IP address. Per VM:
-
-- **Connect** opens a session to the guest IP, routed through the protocol detected from the guest OS (RDP for Windows, SSH for Linux). The VM must be powered on and report a guest IP (VMware Tools).
-- Guest credentials come from the matching `[vsphere.vm_credentials]` override keyed by VM name or ID, falling back to the global vSphere `username` and the password from the environment variable.
-- The list auto-refreshes on page load; use **Refresh** to re-fetch the inventory.
-
-The connect flow is server-side (same pattern as `/api/connect`): `GET /api/vsphere/vms/{vm_id}/connect` creates the session and redirects to its client page. The session shows up in the Sessions page and in recordings/reports like any other connection.
-
-### Troubleshooting
-
-**Cannot connect to vCenter:** Check that `vcenter_addr` ends with `/sdk` and that HTTPS is reachable from the persea server. If using self-signed certs, set `insecure = true` (or add vCenter's CA to the system trust store).
-
-**Empty VM list:** Verify the vSphere user has `VirtualMachine.Inventory.List` permission on the VMs you want to see. The user also needs access at the correct scope (datacenter, cluster, or folder).
-
-**No IP address shown:** VMware Tools must be installed and running on the guest. Without it, persea cannot detect the guest IP and cannot route the session.
+In the default config, traffic is encrypted twice on loopback: HAProxy
+terminates the client's TLS, then re-encrypts to persea (persea's own
+self-signed cert). Belt-and-suspenders for environments where even loopback
+should be encrypted.
 
 ---
 
-## Knocknoc Zero-Trust Access
+## Knocknoc zero-trust access
 
-[Knocknoc](https://knocknoc.io) provides identity-aware network access control. The integration works at the HAProxy layer: knocknoc-agent dynamically adds and removes client IPs to HAProxy ACLs via the admin socket.
+**What it is.** [Knocknoc](https://knocknoc.io) provides identity-aware network
+access control in front of persea: a `knocknoc-agent` adds and removes client
+IPs on HAProxy ACLs, so only authenticated users can even see the login page.
 
 ### How it works
 
-1. User authenticates through Knocknoc (SSO, MFA, etc.)
-2. knocknoc-agent adds the user's IP to HAProxy ACL #600 via the admin socket
-3. HAProxy allows access to the login page (`/` path only)
-4. User logs in via OIDC (persea's own auth layer)
-5. When the Knocknoc session expires, the IP is removed from the ACL
+1. User authenticates through Knocknoc (SSO, MFA, ...).
+2. `knocknoc-agent` adds the user's IP to HAProxy ACL #600 via the admin
+   socket.
+3. HAProxy allows access to the front page (`/`) only for those IPs.
+4. The user then logs in via persea's own auth layer (e.g. OIDC).
+5. When the Knocknoc session expires, the IP is removed.
 
 ### What is gated
 
-Only the front page (`/`) is gated behind Knocknoc. All other paths pass through to persea's own authentication:
+Only the front page (`/`) is gated. Everything else passes through to
+persea's own authentication, so callbacks and share links keep working even
+when the user hasn't gone through Knocknoc:
 
-- `/api/*` — API key or OIDC session auth
-- `/auth/*` — OIDC login/callback flow
-- `/ws/*` — WebSocket connections (session auth)
-- `/share/*` — Share links (share token auth)
-
-This ensures OIDC callbacks and share links work even when the user hasn't authenticated through Knocknoc, while hiding the login UI from scanners and bots.
+- `/api/*`: API key or session auth
+- `/auth/*`: OIDC/SAML login flows
+- `/ws/*`: WebSocket connections
+- `/share/*`: share links (share-token auth)
 
 ### HAProxy configuration
 

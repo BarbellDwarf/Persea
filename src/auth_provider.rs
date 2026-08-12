@@ -77,9 +77,13 @@ impl fmt::Display for Capabilities {
 pub enum AuthResult {
     /// Authentication succeeded.
     Success {
+        /// Stable identifier for the authenticated user (email, username, sub claim).
         subject: String,
+        /// Human-readable name for display in the UI.
         display_name: String,
+        /// Group memberships the provider resolved.
         groups: Vec<String>,
+        /// Optional role override; falls back to group-based mapping when absent.
         role: Option<String>,
     },
     /// Authentication failed (bad credentials, account locked, etc.).

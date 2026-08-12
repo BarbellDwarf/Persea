@@ -36,9 +36,13 @@ pub struct ContainerSpec {
 /// Info about a managed VDI container (for the active desktops list).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ManagedContainer {
+    /// Docker container ID.
     pub container_id: String,
+    /// Docker container name.
     pub container_name: String,
+    /// User the container was created for.
     pub username: String,
+    /// Image the container was created from.
     pub image: String,
     /// Address book entry key for reconnecting.
     #[serde(skip_serializing_if = "Option::is_none")]

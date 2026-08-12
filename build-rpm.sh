@@ -19,9 +19,10 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GUACD_SRC_URL="https://github.com/apache/guacamole-server.git"
-# Pinned guacamole-server commit — must match build-deb.sh, install.sh, and release.yml
-GUACD_COMMIT="de97609007c088b5e6afd827eff5e9076013a247"
+GUACD_SRC_URL="https://github.com/BarbellDwarf/persea-guacamole-server.git"
+# guacd source is the maintained fork branch persea-1.6.1-freerdp3 — must
+# match build-deb.sh and install.sh (GUACD_BRANCH)
+GUACD_BRANCH="persea-1.6.1-freerdp3"
 GUACD_SRC="${SCRIPT_DIR}/../guacamole-server"
 STAGING="${SCRIPT_DIR}/rpm/staging"
 PREFIX="/opt/persea"
@@ -47,35 +48,15 @@ info "Building persea ${VERSION}"
 # ---------------------------------------------------------------------------
 # Step 2: Build guacd into rpm/staging
 # ---------------------------------------------------------------------------
-apply_guacd_patches() {
-    local src="$1"
-    local patch_dir="${SCRIPT_DIR}/patches"
-
-    if [[ ! -d "$patch_dir" ]]; then
-        return 0
-    fi
-
-    for patch in "$patch_dir"/*.patch; do
-        [[ -f "$patch" ]] || continue
-        if git -C "$src" apply --check "$patch" 2>/dev/null; then
-            info "Applying patch: $(basename "$patch")"
-            git -C "$src" apply "$patch"
-        else
-            info "Patch already applied or N/A: $(basename "$patch")"
-        fi
-    done
-}
-
 build_guacd() {
     if [[ ! -d "$GUACD_SRC/.git" ]]; then
-        info "guacamole-server not found at $GUACD_SRC — cloning..."
+        info "guacamole-server not found at $GUACD_SRC — cloning fork..."
         git clone "$GUACD_SRC_URL" "$GUACD_SRC"
     fi
 
-    info "Checking out guacd commit $GUACD_COMMIT..."
-    git -C "$GUACD_SRC" -c advice.detachedHead=false checkout -q "$GUACD_COMMIT"
-
-    apply_guacd_patches "$GUACD_SRC"
+    info "Checking out guacd branch $GUACD_BRANCH..."
+    git -C "$GUACD_SRC" fetch --quiet origin
+    git -C "$GUACD_SRC" -c advice.detachedHead=false checkout -q "$GUACD_BRANCH"
 
     info "Building guacd from $GUACD_SRC..."
 

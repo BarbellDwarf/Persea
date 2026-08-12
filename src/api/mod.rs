@@ -15,6 +15,7 @@ pub mod vsphere;
 use crate::vault::{AddressBookEntry, FolderConfig, VaultBackend, VaultError};
 use std::sync::Arc;
 
+/// Shared session manager state, injected into handlers via axum `State`.
 pub type AppState = Arc<crate::session::SessionManager>;
 
 /// Site title from config, shared via Extension.
@@ -60,7 +61,7 @@ pub struct CredentialDefaultScope(pub String);
 pub struct StorageKey(pub Option<String>);
 
 /// Names of configured OIDC providers for the login page's SSO buttons
-/// (multi-provider support, wayfinder D29).
+/// (multi-provider support).
 #[derive(Clone)]
 pub struct OidcProviderNames(pub Vec<String>);
 
@@ -132,6 +133,9 @@ impl VaultBackends {
 
     // ── Scope-routed address-book operations (dispatch to the scope's backend) ──
 
+    /// List the immediate subfolders of `parent` in `scope`, via the
+    /// scope's backend. Errors with `VaultError::Unavailable` when that
+    /// backend is down.
     pub async fn list_subfolders(
         &self,
         scope: &str,
@@ -143,10 +147,15 @@ impl VaultBackends {
             .await
     }
 
+    /// List entry names under `folder` in `scope`. Errors with
+    /// `VaultError::Unavailable` when the scope's backend is down.
     pub async fn list_entries(&self, scope: &str, folder: &str) -> Result<Vec<String>, VaultError> {
         self.scoped(scope).await?.list_entries(scope, folder).await
     }
 
+    /// Fetch one entry by name. `VaultError::Unavailable` when the
+    /// backend is down, `VaultError::NotFound` when the entry does not
+    /// exist.
     pub async fn get_entry(
         &self,
         scope: &str,
@@ -159,6 +168,8 @@ impl VaultBackends {
             .await
     }
 
+    /// Create or replace an entry in `folder`. Errors with
+    /// `VaultError::Unavailable` when the backend is down.
     pub async fn put_entry(
         &self,
         scope: &str,
@@ -172,6 +183,8 @@ impl VaultBackends {
             .await
     }
 
+    /// Delete an entry. Errors with `VaultError::Unavailable` when the
+    /// backend is down.
     pub async fn delete_entry(
         &self,
         scope: &str,
@@ -184,6 +197,8 @@ impl VaultBackends {
             .await
     }
 
+    /// Fetch the ACL config of a folder. Errors with
+    /// `VaultError::Unavailable` when the backend is down.
     pub async fn get_folder_config(
         &self,
         scope: &str,
@@ -195,6 +210,8 @@ impl VaultBackends {
             .await
     }
 
+    /// Replace the ACL config of a folder. Errors with
+    /// `VaultError::Unavailable` when the backend is down.
     pub async fn put_folder_config(
         &self,
         scope: &str,
@@ -207,6 +224,9 @@ impl VaultBackends {
             .await
     }
 
+    /// Delete a folder and everything below it, returning
+    /// `(folders_deleted, entries_deleted)`. Errors with
+    /// `VaultError::Unavailable` when the backend is down.
     pub async fn delete_folder(
         &self,
         scope: &str,
@@ -215,6 +235,8 @@ impl VaultBackends {
         self.scoped(scope).await?.delete_folder(scope, folder).await
     }
 
+    /// Ask the backend whether `user_groups` may access `folder`. Errors
+    /// with `VaultError::Unavailable` when the backend is down.
     pub async fn resolve_folder_access(
         &self,
         scope: &str,
@@ -229,6 +251,8 @@ impl VaultBackends {
 
     // ── Per-user credential variables ──
 
+    /// True when the shared and local scopes point at different backend
+    /// cells, which splits per-user credential variables across two stores.
     pub fn creds_split(&self) -> bool {
         !Arc::ptr_eq(&self.shared, &self.local)
     }
@@ -238,6 +262,9 @@ impl VaultBackends {
         cell.read().await.clone().ok_or(VaultError::Unavailable)
     }
 
+    /// Read one user's credential variables from the shared or local
+    /// store. Errors with `VaultError::Unavailable` when that backend is
+    /// down.
     pub async fn get_user_credentials_scoped(
         &self,
         email: &str,
@@ -249,6 +276,9 @@ impl VaultBackends {
             .await
     }
 
+    /// Replace one user's credential variables in the shared or local
+    /// store. Errors with `VaultError::Unavailable` when that backend is
+    /// down.
     pub async fn put_user_credentials_scoped(
         &self,
         email: &str,
@@ -261,6 +291,10 @@ impl VaultBackends {
             .await
     }
 
+    /// Read a user's credential variables across scopes. With split
+    /// backends the shared and local maps are merged, local winning on key
+    /// clashes; with a single backend only the local store is read. A down
+    /// store contributes nothing rather than failing the call.
     pub async fn get_user_credentials(
         &self,
         email: &str,
@@ -288,6 +322,10 @@ impl VaultBackends {
 
     // ── Fan-out across scopes ──
 
+    /// List folders across the shared and instance scopes, fanning out
+    /// to each scope's backend. Returns the folders and the scopes whose
+    /// backends were unavailable; `VaultError::Unavailable` only when no
+    /// scope has a connected backend.
     pub async fn list_all_folders(
         &self,
     ) -> Result<(Vec<crate::vault::FolderInfo>, Vec<String>), VaultError> {
@@ -317,6 +355,8 @@ impl VaultBackends {
     }
 }
 
+/// Shared Vault backend set, injected into handlers via axum
+/// `Extension`.
 pub type VaultState = Arc<VaultBackends>;
 
 // ── Re-exports for main.rs compatibility ──

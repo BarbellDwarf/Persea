@@ -10,8 +10,11 @@ use std::fmt;
 /// Supported database backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DbKind {
+    /// PostgreSQL backend, reached through `postgres://` or `postgresql://` URLs.
     Postgres,
+    /// MySQL backend, reached through `mysql://` URLs.
     MySQL,
+    /// SQLite backend, reached through `sqlite://` URLs.
     SQLite,
 }
 
@@ -33,8 +36,11 @@ impl fmt::Display for DbKind {
 /// - `sqlite://` → SQLite
 #[derive(Clone)]
 pub enum DbPool {
+    /// PostgreSQL pool, from a `postgres://` or `postgresql://` URL.
     Postgres(PgPool),
+    /// MySQL pool, from a `mysql://` URL.
     MySQL(MySqlPool),
+    /// SQLite pool, from a `sqlite://` URL.
     SQLite(SqlitePool),
     /// Placeholder for when no SQLx pool is configured (existing rusqlite-only mode).
     None,

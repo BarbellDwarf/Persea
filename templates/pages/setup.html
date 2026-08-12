@@ -1,15 +1,19 @@
 {% extends "base.html" %}
-{% block title %}Setup — Persea{% endblock %}
+{% block title %}Setup — {{ site_title }}{% endblock %}
 
 {% block body %}
 <div class="login-wrapper">
     <div class="login-card" style="max-width:520px">
 
         <div class="login-logo">
+            {% if logo_url is defined and logo_url %}
+            <img src="{{ logo_url }}" alt="{{ site_title }}" style="height:40px">
+            {% else %}
             <div class="login-logo-icon">ps</div>
+            {% endif %}
         </div>
 
-        <h1 class="login-title">Persea Setup</h1>
+        <h1 class="login-title">{{ site_title }} Setup</h1>
         <p class="login-subtitle">Configure your installation</p>
 
         {% if error %}
@@ -41,6 +45,26 @@
                 <label class="form-label" for="db_path">Database Path</label>
                 <input type="text" id="db_path" name="db_path" class="form-input"
                        value="{{ db_path }}" placeholder="/opt/persea/data/persea.db">
+            </div>
+
+            <div class="form-group">
+                {% if backend %}
+                <div style="margin:0 0 10px;padding:10px 12px;background:rgba(34,197,94,.1);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-secondary)">
+                    This server stores its data in <strong>{{ backend }}</strong>
+                    (configured via <code>db_url</code>) — the admin account below
+                    will be created there. Keep the Database URL filled in.
+                </div>
+                {% endif %}
+                <label class="form-label" for="db_url">Database URL (optional)</label>
+                <input type="text" id="db_url" name="db_url" class="form-input"
+                       value="{{ db_url | escape }}" placeholder="postgres://user:pass@dbhost:5432/persea">
+                <p style="margin:6px 0 0;font-size:12px;color:var(--text-secondary)">
+                    Leave empty to use the local SQLite file above. To store all data
+                    in a managed backend from first run, enter a
+                    <code>postgres://</code>, <code>mysql://</code> or
+                    <code>sqlite://</code> URL — persea connects, runs the schema
+                    migrations and creates the admin there. Restart after setup.
+                </p>
             </div>
 
             <!-- guacd -->

@@ -7,8 +7,11 @@ use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::time::{timeout, Duration};
 
+#[cfg(test)]
 use aes::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
+#[cfg(test)]
 use hmac::Hmac;
+#[cfg(test)]
 use sha1::Sha1;
 
 /// Allocates numbers from a fixed range pool.
@@ -46,10 +49,15 @@ impl RangeAllocator {
 
 /// Handles for the spawned Xvnc and Chromium processes.
 pub struct BrowserSession {
+    /// X display number allocated from the pool for this session.
     pub display: u32,
+    /// VNC port Xvnc listens on (`5900 + display`).
     pub vnc_port: u16,
+    /// Handle to the spawned Xvnc process.
     pub xvnc_child: Child,
+    /// Handle to the spawned Chromium process.
     pub chromium_child: Child,
+    /// Per-session Chromium profile directory, removed when the session ends.
     pub profile_dir: PathBuf,
     /// CDP port allocated for this session (if login script requested).
     pub cdp_port: Option<u16>,
@@ -67,6 +75,8 @@ pub struct BrowserManager {
 
 impl BrowserManager {
     #[allow(clippy::too_many_arguments)]
+    /// Create a manager with the given binary paths, display-number and
+    /// CDP port pools, and login script settings.
     pub fn new(
         xvnc_path: String,
         chromium_path: String,
@@ -290,7 +300,7 @@ impl BrowserManager {
             "--disable-crash-reporter",
             "--no-default-browser-check",
             "--window-position=0,0",
-            // Disable autofill/credential storage for ephemeral VDI sessions (H09)
+            // Disable autofill/credential storage for ephemeral VDI sessions
             "--disable-autofill",
         ];
         // Owned strings that need to outlive the args slice
@@ -615,6 +625,7 @@ impl BrowserManager {
 /// On Linux without a keyring (our case — headless Xvnc), Chromium uses:
 /// 1. PBKDF2("peanuts", "saltysalt", 1 iteration, SHA-1) → 16-byte AES key
 /// 2. AES-128-CBC with IV = 16 × 0x20 (space chars)
+#[cfg(test)]
 /// 3. Blob format: "v10" prefix + encrypted ciphertext
 fn encrypt_chromium_password(plaintext: &str) -> Result<Vec<u8>, String> {
     // Derive the AES key: PBKDF2(password="peanuts", salt="saltysalt", iterations=1, dkLen=16)
@@ -687,13 +698,20 @@ async fn collect_stderr(child: &mut Child) -> String {
     }
 }
 
+/// Errors from spawning or running a browser session.
 #[derive(Debug)]
 #[must_use]
 pub enum BrowserError {
+    /// The X display number pool is exhausted.
     NoDisplayAvailable,
+    /// The CDP port pool is exhausted.
     NoCdpPortAvailable,
+    /// Xvnc failed to start or never opened its VNC port.
     XvncSpawn(String),
+    /// Chromium failed to spawn or exited immediately after launch.
     ChromiumSpawn(String),
+    /// The login script is missing, not executable, or escapes the scripts
+    /// directory.
     LoginScript(String),
 }
 
