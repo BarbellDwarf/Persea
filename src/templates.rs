@@ -72,6 +72,11 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     )
     .expect("Failed to register pages/admin/groups.html");
     env.add_template(
+        "pages/admin/roles.html",
+        include_str!("../templates/pages/admin/roles.html"),
+    )
+    .expect("Failed to register pages/admin/roles.html");
+    env.add_template(
         "pages/admin/audit.html",
         include_str!("../templates/pages/admin/audit.html"),
     )
@@ -408,6 +413,22 @@ pub struct AdminGroupsTemplate {
 impl IntoResponse for AdminGroupsTemplate {
     fn into_response(self) -> Response {
         render_template("pages/admin/groups.html", &self)
+    }
+}
+
+/// Admin custom roles page template context (T05/T06).
+#[derive(Serialize)]
+pub struct AdminRolesTemplate {
+    pub site_title: String,
+    pub logo_url: String,
+    pub is_admin: bool,
+    pub active_page: String,
+    pub csp_nonce: String,
+}
+
+impl IntoResponse for AdminRolesTemplate {
+    fn into_response(self) -> Response {
+        render_template("pages/admin/roles.html", &self)
     }
 }
 
