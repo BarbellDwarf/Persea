@@ -28,6 +28,7 @@ const SETTING_KEYS: &[&str] = &[
     "tls_cert_path",
     "tls_key_path",
     "session_max_duration_secs",
+    "session_idle_timeout_secs",
     "max_concurrent_sessions",
     "session_history_retention_days",
     "enable_rdp",
@@ -59,6 +60,7 @@ const STRING_KEYS: &[&str] = &[
 const ADDR_KEYS: &[&str] = &["listen_addr", "guacd_addr"];
 const DURATION_KEYS: &[&str] = &[
     "session_max_duration_secs",
+    "session_idle_timeout_secs",
     "max_concurrent_sessions",
     "session_history_retention_days",
 ];

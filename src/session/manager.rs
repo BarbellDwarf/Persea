@@ -550,6 +550,40 @@ impl SessionManager {
         count
     }
 
+    /// Reap sessions idle past the configured idle timeout.
+    /// Returns the number of sessions reaped.
+    ///
+    /// Semantics: `last_activity` is refreshed by client-initiated session
+    /// traffic (WebSocket input) only — the client's own tunnel keepalive
+    /// pings do NOT count as activity, so a live-but-silent session is
+    /// still reaped. `session_idle_timeout_secs = 0` disables idle reaping
+    /// (max duration still applies).
+    ///
+    /// Terminated sessions are recorded in the session history with status
+    /// "idle-timeout" (distinguishable from max-duration reaping), cancelled,
+    /// and their in-memory status moves to the terminal state used by
+    /// `delete_session`. A `SessionStatus::IdleTimeout` variant does not
+    /// exist yet (src/session/types.rs) — when one lands, flip the status
+    /// here and in `delete_session` for a live-API-distinguishable label.
+    pub async fn reap_idle_sessions(&self) -> usize {
+        let idle_timeout = self.config.session_idle_timeout_secs;
+        if idle_timeout == 0 {
+            return 0;
+        }
+        let to_delete = self.get_idle_sessions(idle_timeout as i64).await;
+        for id in &to_delete {
+            let recording = self.is_recording_enabled(*id).await;
+            self.end_session_history(*id, "idle-timeout", 0, recording);
+            tracing::warn!(
+                session_id = %id,
+                idle_timeout_secs = idle_timeout,
+                "Reaping session (idle timeout)"
+            );
+            self.delete_session(*id).await;
+        }
+        to_delete.len()
+    }
+
     /// Remove sessions in terminal states (Completed, Error, Expired) that have
     /// been in that state longer than the configured cleanup delay. The session
     /// history in SQLite is not affected — this only frees in-memory state.

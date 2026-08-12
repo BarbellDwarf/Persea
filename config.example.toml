@@ -74,6 +74,15 @@ session_pending_timeout_secs = 60
 # Env: PERSEA_SESSION_MAX_DURATION_SECS
 session_max_duration_secs = 28800
 
+# Idle timeout for active sessions in seconds. Sessions whose last client
+# activity is older than this are terminated (status "idle-timeout" in the
+# session history). Client tunnel keepalive pings do NOT count as activity,
+# so a live-but-silent session is still reaped. Set to 0 to disable idle
+# reaping (max duration still applies).
+# Default: 1800 (30 minutes)
+# Env: PERSEA_SESSION_IDLE_TIMEOUT_SECS
+session_idle_timeout_secs = 1800
+
 # OIDC auth session TTL in seconds. After this period, users must
 # re-authenticate via their identity provider.
 # Default: 86400 (24 hours)

@@ -471,6 +471,14 @@ pub struct Config {
     #[serde(default = "default_session_max_duration_secs")]
     pub session_max_duration_secs: u64,
 
+    /// Idle timeout for active sessions in seconds. Default: 1800 (30 min).
+    /// Sessions whose `last_active` timestamp is older than this are
+    /// terminated by the reaper with an "idle-timeout" status. Set to 0 to
+    /// disable idle reaping (max duration still applies). `last_active` is
+    /// refreshed by client-initiated session traffic (WebSocket input).
+    #[serde(default = "default_session_idle_timeout_secs")]
+    pub session_idle_timeout_secs: u64,
+
     /// OIDC auth session TTL in seconds. Default: 86400 (24 hours).
     /// After this period, users must re-authenticate via OIDC.
     #[serde(default = "default_auth_session_ttl_secs")]
@@ -1280,6 +1288,10 @@ fn default_session_max_duration_secs() -> u64 {
     8 * 3600 // 8 hours
 }
 
+fn default_session_idle_timeout_secs() -> u64 {
+    1800 // 30 minutes
+}
+
 fn default_max_sessions() -> usize {
     500
 }
@@ -1382,6 +1394,10 @@ fn default_toml() -> String {
     s.push_str(&format!(
         "session_max_duration_secs = {}\n",
         default_session_max_duration_secs()
+    ));
+    s.push_str(&format!(
+        "session_idle_timeout_secs = {}\n",
+        default_session_idle_timeout_secs()
     ));
     s.push_str(&format!(
         "auth_session_ttl_secs = {}\n",
@@ -1493,6 +1509,7 @@ impl Default for Config {
             db_path: default_db_path(),
             session_pending_timeout_secs: default_session_timeout_secs(),
             session_max_duration_secs: default_session_max_duration_secs(),
+            session_idle_timeout_secs: default_session_idle_timeout_secs(),
             auth_session_ttl_secs: default_auth_session_ttl_secs(),
             xvnc_path: default_xvnc_path(),
             chromium_path: default_chromium_path(),

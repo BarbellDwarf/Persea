@@ -369,6 +369,17 @@ async fn main() {
             // merge maps the fields that have config equivalents.
             if let Ok(overrides) = crate::settings_merge::load_db_settings(&database) {
                 crate::settings_merge::apply_db_settings(&mut config, &overrides);
+                // session_idle_timeout_secs has no settings_merge arm yet
+                // (that module is frozen); overlay it here so the admin
+                // settings API value is honoured at startup.
+                if let Some((_, v)) = overrides
+                    .iter()
+                    .find(|(k, _)| k == "session_idle_timeout_secs")
+                {
+                    if let Ok(secs) = v.parse::<u64>() {
+                        config.session_idle_timeout_secs = secs;
+                    }
+                }
                 // DB values bypass the earlier validate() pass — re-run it so
                 // an invalid saved value fails fast with a clear message.
                 match config.validate() {
@@ -1440,10 +1451,26 @@ async fn run_server(
         database.clone(),
     ));
 
-    // Spawn background task to reap sessions that exceed max duration
+    // Spawn background task to reap sessions that exceed max duration or
+    // have been idle past the configured idle timeout. The check interval
+    // tracks the SMALLER of the two timeouts so idle reaping is prompt
+    // (max duration /4 and idle /4, floored at 60s).
     {
         let reaper_manager = manager.clone();
-        let check_interval = std::cmp::max(manager.session_max_duration_secs() / 4, 60);
+        let idle_effective = {
+            let idle = manager.config().session_idle_timeout_secs;
+            if idle == 0 {
+                manager.session_max_duration_secs()
+            } else {
+                idle.min(manager.session_max_duration_secs())
+            }
+        };
+        let check_interval = std::cmp::max(idle_effective / 4, 60);
+        tracing::info!(
+            session_idle_timeout_secs = manager.config().session_idle_timeout_secs,
+            check_interval_secs = check_interval,
+            "Session reaper started (max duration + idle timeout)"
+        );
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(std::time::Duration::from_secs(check_interval));
@@ -1453,6 +1480,10 @@ async fn run_server(
                 let reaped = reaper_manager.reap_expired_sessions().await;
                 if reaped > 0 {
                     tracing::info!("Reaped {} expired sessions", reaped);
+                }
+                let idle_reaped = reaper_manager.reap_idle_sessions().await;
+                if idle_reaped > 0 {
+                    tracing::info!("Reaped {} idle sessions", idle_reaped);
                 }
             }
         });

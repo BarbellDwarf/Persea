@@ -247,7 +247,7 @@ username = "administrator@vsphere.local"
 - **Password policies**: Argon2id (NIST 800-63B), enforced 15-char minimum (`password.min_length`), reuse history — the last 5 hashes per user are stored (`password.history`) and reusing one is rejected
 - **Account lockout**: account lockout after 5 failed attempts
 - **Audit logging**: SHA-256 hash chain with tamper evidence, verification via admin UI and API
-- **Session management**: Idle timeout, max duration, concurrent limits, activity tracking
+- **Session management**: idle timeout (sessions silent past `session_idle_timeout_secs` are reaped with an "idle-timeout" history status; 0 disables), max duration, concurrent limits
 - **RBAC**: System + object permissions, recursive group inheritance
 - **TLS hot-reload**: SIGHUP re-reads `tls.cert_path`/`tls.key_path` and atomically swaps the served certificate for new connections; a failed reload logs the error and keeps serving the previous certificate
 - **Multi-DB**: MySQL, PostgreSQL, SQLite via SQLx enum dispatch
