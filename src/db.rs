@@ -8753,6 +8753,18 @@ pub fn pool_active() -> bool {
     pool_store().is_some()
 }
 
+/// Deep-ping the active pool THROUGH the worker thread. The health check
+/// must not touch the pool from the axum runtime: pool connections returned
+/// by the worker's own runtime can race with the axum runtime's acquire
+/// waiter (sqlx cross-runtime lost-wakeup, observed as a full 30s
+/// acquire_timeout on the deep health ping).
+pub fn ping_active_pool() -> rusqlite::Result<()> {
+    if !pool_active() {
+        return Ok(());
+    }
+    pool_call(move |pool: &'static DbPool| async move { pool.ping().await.map_err(map_sqlx_err) })
+}
+
 // ── RBAC ───────────────────────────────────────────────────────────────
 
 pub(crate) async fn rbac_create_group_pool(

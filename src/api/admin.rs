@@ -80,7 +80,7 @@ pub async fn health(
     let db_pool_start = std::time::Instant::now();
     let db_pool_status = match db_pool.0.kind() {
         None => "unavailable",
-        Some(kind) => match db_pool.0.ping().await {
+        Some(kind) => match crate::db::ping_active_pool() {
             Ok(()) => "up",
             Err(e) => {
                 tracing::warn!(error = %e, backend = %kind, "health: db_pool error");
