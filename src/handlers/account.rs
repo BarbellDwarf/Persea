@@ -62,9 +62,7 @@ pub async fn change_password(
             _ => false,
         };
         if !valid {
-            return Err(AppError::Validation(
-                "current password is incorrect".into(),
-            ));
+            return Err(AppError::Validation("current password is incorrect".into()));
         }
 
         // Reuse check: reject passwords used recently (last `history` hashes).

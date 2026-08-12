@@ -257,6 +257,17 @@ pub async fn setup_submit(
         );
     }
 
+    // Enforce the password policy minimum length (R108) before hashing.
+    let min_len = config.password.as_ref().map(|p| p.min_length).unwrap_or(15);
+    if form.admin_password.len() < min_len {
+        return error_response(
+            &site_title.0,
+            format!("Password must be at least {min_len} characters long"),
+            &form,
+            &nonce.0,
+        );
+    }
+
     // Hash password
     let password_hash = match crate::password::hash_password(&form.admin_password) {
         Ok(h) => h,

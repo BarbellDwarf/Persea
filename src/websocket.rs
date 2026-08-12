@@ -325,7 +325,15 @@ async fn handle_ws(
 
     // Run the bidirectional proxy
     let start = Instant::now();
-    let proxy_outcome = proxy_ws_guacd(session_id, ws, guacd_stream, recording_file, cancel).await;
+    let proxy_outcome = proxy_ws_guacd(
+        session_id,
+        ws,
+        guacd_stream,
+        recording_file,
+        cancel,
+        manager.clone(),
+    )
+    .await;
     let elapsed = start.elapsed();
     let server_disconnected = proxy_outcome.server_disconnected;
     let proxy_result = proxy_outcome.result;
@@ -477,6 +485,7 @@ async fn proxy_ws_guacd(
     guacd: GuacdStream,
     recording_file: Option<tokio::fs::File>,
     cancel: CancellationToken,
+    manager: Arc<crate::session::SessionManager>,
 ) -> ProxyOutcome {
     let (guacd_read, guacd_write) = tokio::io::split(guacd);
     let (ws_write, ws_read) = ws.split();
@@ -513,8 +522,9 @@ async fn proxy_ws_guacd(
 
     // browser → guacd
     let ws_sink_b = ws_sink.clone();
-    let browser_to_guacd =
-        tokio::spawn(async move { ws_to_guacd(ws_read, guacd_write, ws_sink_b).await });
+    let browser_to_guacd = tokio::spawn(async move {
+        ws_to_guacd(ws_read, guacd_write, ws_sink_b, session_id, manager).await
+    });
 
     // Wait for either direction to finish, or cancellation
     let result = tokio::select! {
@@ -671,6 +681,8 @@ async fn ws_to_guacd(
     mut ws_read: futures_util::stream::SplitStream<WebSocket>,
     mut guacd: tokio::io::WriteHalf<GuacdStream>,
     ws_sink: WsSink,
+    session_id: Uuid,
+    manager: Arc<crate::session::SessionManager>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /// Maximum allowed WebSocket message size (64 MiB).
     const MAX_WS_MSG_SIZE: usize = 64 * 1024 * 1024;
@@ -708,6 +720,10 @@ async fn ws_to_guacd(
                 if text.contains(".clipboard,") {
                     tracing::info!("browser sent clipboard instruction to guacd");
                 }
+                // Real client activity (ping echoes `continue`d above), so
+                // idle sessions are not reaped while the user is typing.
+                // Server keepalive pings never reach this point (R109).
+                manager.update_activity(&session_id).await;
                 guacd.write_all(text.as_bytes()).await?;
             }
             Message::Binary(data) => {

@@ -1491,10 +1491,7 @@ fn default_toml() -> String {
     // [password] — password policy (min length + reuse history). Materialised
     // so absent sections cannot silently reset the defaults.
     s.push_str("[password]\n");
-    s.push_str(&format!(
-        "min_length = {}\n",
-        default_password_min_length()
-    ));
+    s.push_str(&format!("min_length = {}\n", default_password_min_length()));
     s.push_str(&format!("history = {}\n", default_password_history()));
     s
 }

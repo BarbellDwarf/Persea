@@ -357,6 +357,9 @@ async fn main() {
         "max_concurrent_sessions": config.max_sessions,
         "session_history_retention_days": config.session_history_retention_days,
         "enable_vdi": config.vdi.as_ref().map(|v| v.enabled).unwrap_or(false),
+        "site_title": config.site_title,
+        "logo_url": config.theme.as_ref().and_then(|t| t.logo_url.clone()).unwrap_or_default(),
+        "primary_color": config.theme.as_ref().and_then(|t| t.primary_color.clone()).unwrap_or_default(),
         "vault_enabled": config.vault.is_some(),
         "db_only_mode": config.storage.as_ref().map(|st| st.backend != "vault").unwrap_or(true),
     }));

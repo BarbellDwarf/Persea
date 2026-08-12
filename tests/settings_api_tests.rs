@@ -19,7 +19,7 @@ mod error {
     pub use persea::error::*;
 }
 mod api {
-    pub use persea::api::SettingsBaseline;
+    pub use persea::api::{AppState, SettingsBaseline};
 }
 
 #[path = "../src/api/settings.rs"]

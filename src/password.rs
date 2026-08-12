@@ -14,6 +14,7 @@ use argon2::{
     Argon2, PasswordHash, PasswordHasher, PasswordVerifier,
 };
 use rusqlite::params;
+use sqlx::Row;
 
 /// OWASP-recommended Argon2id parameters.
 const OWASP_MEMORY_KIB: u32 = 46 * 1024; // 46 MiB
@@ -120,8 +121,8 @@ pub fn recent_password_hashes(
         return Ok(Vec::new());
     }
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
-            async move { pool_recent_hashes(pool, user_id, keep).await }
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| async move {
+            pool_recent_hashes(pool, user_id, keep).await
         });
     }
     let conn = db.lock().unwrap();
@@ -130,9 +131,7 @@ pub fn recent_password_hashes(
         "SELECT password_hash FROM password_history
          WHERE user_id = ?1 ORDER BY id DESC LIMIT ?2",
     )?;
-    let rows = stmt.query_map(params![user_id, keep as i64], |row| {
-        row.get::<_, String>(0)
-    })?;
+    let rows = stmt.query_map(params![user_id, keep as i64], |row| row.get::<_, String>(0))?;
     let mut out = Vec::new();
     for row in rows {
         out.push(row?);
@@ -153,37 +152,37 @@ async fn pool_recent_hashes(
             "SELECT password_hash FROM password_history WHERE user_id = ? ORDER BY id DESC LIMIT ?"
         }
     };
-    let rows = match pool {
-        crate::db_pool::DbPool::Postgres(p) => {
-            sqlx::query(sql)
-                .bind(user_id)
-                .bind(keep as i64)
-                .fetch_all(p)
-                .await
-                .map_err(map_sqlx_err)?
-        }
-        crate::db_pool::DbPool::MySQL(p) => {
-            sqlx::query(sql)
-                .bind(user_id)
-                .bind(keep as i64)
-                .fetch_all(p)
-                .await
-                .map_err(map_sqlx_err)?
-        }
-        crate::db_pool::DbPool::SQLite(p) => {
-            sqlx::query(sql)
-                .bind(user_id)
-                .bind(keep as i64)
-                .fetch_all(p)
-                .await
-                .map_err(map_sqlx_err)?
-        }
+    let rows: Vec<String> = match pool {
+        crate::db_pool::DbPool::Postgres(p) => sqlx::query(sql)
+            .bind(user_id)
+            .bind(keep as i64)
+            .fetch_all(p)
+            .await
+            .map_err(map_sqlx_err)?
+            .iter()
+            .map(|r| r.get::<String, _>(0))
+            .collect(),
+        crate::db_pool::DbPool::MySQL(p) => sqlx::query(sql)
+            .bind(user_id)
+            .bind(keep as i64)
+            .fetch_all(p)
+            .await
+            .map_err(map_sqlx_err)?
+            .iter()
+            .map(|r| r.get::<String, _>(0))
+            .collect(),
+        crate::db_pool::DbPool::SQLite(p) => sqlx::query(sql)
+            .bind(user_id)
+            .bind(keep as i64)
+            .fetch_all(p)
+            .await
+            .map_err(map_sqlx_err)?
+            .iter()
+            .map(|r| r.get::<String, _>(0))
+            .collect(),
         crate::db_pool::DbPool::None => return Err(no_pool_err()),
     };
-    Ok(rows
-        .iter()
-        .map(|r| r.get::<String, _>(0))
-        .collect::<Vec<_>>())
+    Ok(rows)
 }
 
 /// `true` when `password` matches any of the user's last `keep` stored
@@ -218,8 +217,8 @@ pub fn record_password_history(
     }
     let hash = password_hash.to_string();
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
-            async move { pool_record_history(pool, user_id, hash, keep).await }
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| async move {
+            pool_record_history(pool, user_id, hash, keep).await
         });
     }
     let conn = db.lock().unwrap();
@@ -341,8 +340,8 @@ pub fn update_user_password_hash(
 ) -> rusqlite::Result<()> {
     let hash = password_hash.to_string();
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
-            async move { pool_update_password_hash(pool, user_id, hash).await }
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| async move {
+            pool_update_password_hash(pool, user_id, hash).await
         });
     }
     let conn = db.lock().unwrap();
@@ -486,8 +485,12 @@ mod tests {
     fn history_reuse_detection() {
         let db = test_db();
         let uid = insert_user(&db, "b@example.com", "h0");
-        record_password_history(&db, uid, "h1", 5).unwrap();
-        record_password_history(&db, uid, "h2", 5).unwrap();
+        // The history stores Argon2id hashes; reuse is detected by verifying
+        // the candidate against each stored hash.
+        let h1 = hash_password("h1").unwrap();
+        let h2 = hash_password("h2").unwrap();
+        record_password_history(&db, uid, &h1, 5).unwrap();
+        record_password_history(&db, uid, &h2, 5).unwrap();
 
         assert!(password_is_recent(&db, uid, "h1", 5).unwrap());
         assert!(password_is_recent(&db, uid, "h2", 5).unwrap());
