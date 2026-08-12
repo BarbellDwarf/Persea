@@ -13,6 +13,7 @@ use axum::{extract::Path, http::StatusCode, Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
 
+/// Body for `POST /api/admin/users/{email}/role`.
 #[derive(Deserialize)]
 pub struct SetRoleRequest {
     /// A premade role name (admin/poweruser/operator/viewer), a custom
@@ -20,29 +21,43 @@ pub struct SetRoleRequest {
     pub role: Option<String>,
 }
 
+/// Body for `POST /api/admin/users`.
 #[derive(Deserialize)]
 pub struct CreateUserRequest {
+    /// Login email, unique per user.
     pub email: String,
+    /// Display name.
     pub name: String,
+    /// Initial password, checked against the configured password policy.
     pub password: String,
+    /// Premade role to assign (admin/poweruser/operator/viewer).
     pub role: Option<String>,
     /// Optional custom role NAME to assign (validated to exist).
     #[serde(default)]
     pub custom_role: Option<String>,
 }
 
+/// Body for `POST /api/admin/group-mappings`.
 #[derive(Deserialize)]
 pub struct CreateGroupMappingRequest {
+    /// Auth-provider group name.
     pub group: String,
+    /// Role granted to members of the group.
     pub role: String,
 }
 
+/// Body for `PUT /api/admin/group-mappings/{id}`.
 #[derive(Deserialize)]
 pub struct UpdateGroupMappingRequest {
+    /// New group name for the mapping.
     pub group: String,
+    /// New role for the mapping.
     pub role: String,
 }
 
+/// `GET /api/admin/users`: list all users with roles, custom roles,
+/// and login metadata. Admin only; `AppError::Forbidden` for lower
+/// roles.
 pub async fn list_users(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -88,6 +103,10 @@ pub async fn list_users(
     Ok(Json(json!(out)))
 }
 
+/// `POST /api/admin/users`: create a local user, enforcing the
+/// password policy (minimum length, reuse history). Admin only. Returns
+/// 201 plus the created user, `AppError::Conflict` for duplicate emails,
+/// `AppError::Validation` for policy violations.
 pub async fn create_user(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -215,6 +234,10 @@ pub async fn create_user(
     ))
 }
 
+/// `POST /api/admin/users/{email}/role`: assign a premade role
+/// (clearing any custom role), clear a custom role, or assign a custom
+/// role by name. Admin only. Returns `AppError::Session` when the user
+/// is missing.
 pub async fn set_user_role(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -371,6 +394,7 @@ pub async fn set_user_role(
     })))
 }
 
+/// `DELETE /api/admin/users/{email}`: delete a user. Admin only.
 pub async fn delete_user(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -424,6 +448,9 @@ pub async fn delete_user(
     }
 }
 
+/// `DELETE /api/admin/users/{email}/sessions`: revoke all of a
+/// user's sessions and tokens. Admin only. Returns the number of
+/// sessions revoked.
 pub async fn delete_user_sessions(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -453,6 +480,9 @@ pub async fn delete_user_sessions(
     Ok(Json(json!({"ok": true, "sessions_revoked": count})))
 }
 
+/// `GET /api/me`: the current user's profile, including role,
+/// groups, auth source, Vault availability, and custom role. Returns
+/// `AppError::Auth` when not authenticated.
 pub async fn me(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -514,11 +544,16 @@ pub async fn me(
     }
 }
 
+/// Body for `PUT /api/me`.
 #[derive(Deserialize)]
 pub struct UpdateMeRequest {
+    /// New display name.
     pub name: String,
 }
 
+/// `PUT /api/me`: change the current user's display name. Returns
+/// `AppError::Auth` for non-user identities and `AppError::Session`
+/// when the account is missing.
 pub async fn update_me(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -553,6 +588,9 @@ pub async fn update_me(
     })))
 }
 
+/// `POST /api/admin/users/{email}/disable`: block the user from
+/// logging in. Admin only; `AppError::Session` when the user is
+/// missing.
 pub async fn disable_user(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -601,6 +639,8 @@ pub async fn disable_user(
     }
 }
 
+/// `POST /api/admin/users/{email}/enable`: lift a previous
+/// disable. Admin only; `AppError::Session` when the user is missing.
 pub async fn enable_user(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -648,6 +688,8 @@ pub async fn enable_user(
     }
 }
 
+/// `GET /api/admin/group-mappings`: list all provider-group to role
+/// mappings. Admin only.
 pub async fn list_group_mappings(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -667,6 +709,8 @@ pub async fn list_group_mappings(
     Ok(Json(json!(mappings)))
 }
 
+/// `GET /api/admin/known-groups`: list group names seen in
+/// authentication claims. Admin only.
 pub async fn list_known_groups(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -686,6 +730,9 @@ pub async fn list_known_groups(
     Ok(Json(json!({ "groups": groups })))
 }
 
+/// `POST /api/admin/group-mappings`: map an auth-provider group to
+/// a role. Admin only. Returns `AppError::Conflict` when the group is
+/// already mapped.
 pub async fn create_group_mapping(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -751,6 +798,9 @@ pub async fn create_group_mapping(
     Ok(Json(json!(mapping)))
 }
 
+/// `PUT /api/admin/group-mappings/{id}`: change a mapping's group
+/// name or role. Admin only; `AppError::Session` when the mapping is
+/// missing.
 pub async fn update_group_mapping(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -792,6 +842,9 @@ pub async fn update_group_mapping(
     }
 }
 
+/// `DELETE /api/admin/group-mappings/{id}`: remove a mapping. Admin
+/// only. Returns 204 on success, `AppError::Session` when the mapping
+/// is missing.
 pub async fn delete_group_mapping(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
