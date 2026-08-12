@@ -23,24 +23,36 @@ use tokio_util::io::ReaderStream;
 #[allow(dead_code)]
 const MAX_CSV_EXPORT_ROWS: u32 = 100_000;
 
+/// Query parameters for the session-report endpoints.
 #[derive(Deserialize)]
 pub struct ReportQuery {
+    /// Filter by the user who created the session.
     pub user: Option<String>,
+    /// Filter by the address book entry slug.
     pub entry: Option<String>,
+    /// Filter by session type (ssh, rdp, vnc, ...).
     #[serde(rename = "type")]
     pub session_type: Option<String>,
+    /// Start of the time window (RFC 3339).
     pub from: Option<String>,
+    /// End of the time window (RFC 3339).
     pub to: Option<String>,
+    /// Row limit; clamped per endpoint.
     pub limit: Option<u32>,
+    /// Pagination offset.
     pub offset: Option<u32>,
 }
 
+/// Query parameters for `GET /api/recordings`.
 #[derive(Deserialize)]
 pub struct RecordingQuery {
     /// Case-insensitive substring filter across entry display name, user, and folder.
     pub q: Option<String>,
 }
 
+/// `GET /api/recordings`: list recording files with metadata from
+/// their sidecar files, newest first. Requires poweruser or admin.
+/// Returns `AppError::Forbidden` for lower roles.
 pub async fn list_recordings(
     State(manager): State<AppState>,
     Query(query): Query<RecordingQuery>,
@@ -161,6 +173,9 @@ pub async fn list_recordings(
     Ok(Json(json!(recordings)))
 }
 
+/// `GET /api/recordings/typescripts`: list typescript files when
+/// `recording.typescript_path` is configured. Requires poweruser or
+/// admin. Returns `AppError::Forbidden` for lower roles.
 pub async fn list_typescripts(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
@@ -234,6 +249,9 @@ pub async fn list_typescripts(
     Ok(Json(json!({"path": ts_path_str, "items": items})))
 }
 
+/// `GET /api/reports/sessions`: session history with filters and
+/// pagination. Requires poweruser or admin. `AppError::Forbidden` for
+/// lower roles; `AppError::Internal` on database errors.
 pub async fn report_sessions(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -263,6 +281,8 @@ pub async fn report_sessions(
     ))
 }
 
+/// `GET /api/reports/sessions.csv`: the same session history as a
+/// downloadable CSV attachment. Requires poweruser or admin.
 pub async fn report_sessions_csv(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -304,6 +324,8 @@ pub async fn report_sessions_csv(
         .into_response())
 }
 
+/// `GET /api/reports/top-connections`: most-used address book entries
+/// in the window. Requires poweruser or admin.
 pub async fn report_top_connections(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -321,6 +343,8 @@ pub async fn report_top_connections(
     Ok(Json(json!(rows)))
 }
 
+/// `GET /api/reports/top-users`: most active users in the window.
+/// Requires poweruser or admin.
 pub async fn report_top_users(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -338,6 +362,8 @@ pub async fn report_top_users(
     Ok(Json(json!(rows)))
 }
 
+/// `GET /api/reports/summary`: aggregate counts for the reports page.
+/// Requires poweruser or admin.
 pub async fn report_summary(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -353,11 +379,15 @@ pub async fn report_summary(
     Ok(Json(summary))
 }
 
+/// Query parameters for `GET /api/reports/activity`.
 #[derive(Deserialize)]
 pub struct ActivityQuery {
+    /// Window size in hours; clamped to 1..=168.
     pub hours: Option<i32>,
 }
 
+/// `GET /api/reports/activity`: session starts per hour over the
+/// window. Requires poweruser or admin.
 pub async fn report_activity(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -408,6 +438,10 @@ pub(crate) fn is_safe_recording_name(name: &str, recording_dir: &std::path::Path
     }
 }
 
+/// `GET /api/recordings/{name}`: stream a recording for playback.
+/// Requires poweruser or admin. Encrypted recordings are decrypted
+/// on the fly with the storage key. Returns `AppError::Internal` for
+/// unsafe names, and `AppError::Session` when the recording is missing.
 pub async fn serve_recording(
     State(manager): State<AppState>,
     Path(name): Path<String>,
@@ -484,6 +518,10 @@ pub async fn serve_recording(
         .into_response())
 }
 
+/// `DELETE /api/recordings/{name}`: remove a recording and its
+/// sidecar, both the plaintext and encrypted variants. Admin only;
+/// `AppError::Forbidden` for lower roles, `AppError::Session` when the
+/// recording does not exist.
 pub async fn delete_recording(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
