@@ -864,7 +864,9 @@ async fn proxy_ws_guacd(
     let pending_g = pending_transfers.clone();
     let db_g = database.clone();
     let user_g = session_user.clone();
-    let guacd_to_browser = tokio::spawn(async move {
+    // The handles are kept (`mut`) so the teardown below can abort whichever
+    // task is still running after the proxy ends.
+    let mut guacd_to_browser = tokio::spawn(async move {
         guacd_to_ws(
             session_id,
             guacd_read,
@@ -884,7 +886,7 @@ async fn proxy_ws_guacd(
     let pending_b = pending_transfers.clone();
     let db_b = database.clone();
     let user_b = session_user.clone();
-    let browser_to_guacd = tokio::spawn(async move {
+    let mut browser_to_guacd = tokio::spawn(async move {
         ws_to_guacd(
             ws_read,
             guacd_write,
@@ -900,7 +902,7 @@ async fn proxy_ws_guacd(
 
     // Wait for either direction to finish, or cancellation
     let result = tokio::select! {
-        result = guacd_to_browser => {
+        result = &mut guacd_to_browser => {
             let err = match result {
                 Ok(Err(e)) => Some(e.to_string()),
                 Err(e) => Some(e.to_string()),
@@ -908,7 +910,7 @@ async fn proxy_ws_guacd(
             };
             ProxyResult::GuacdEnded(err)
         }
-        result = browser_to_guacd => {
+        result = &mut browser_to_guacd => {
             let err = match result {
                 Ok(Err(e)) => Some(e.to_string()),
                 Err(e) => Some(e.to_string()),
@@ -920,6 +922,28 @@ async fn proxy_ws_guacd(
             ProxyResult::Cancelled
         }
     };
+
+    // ── Active teardown ──────────────────────────────────────────────
+    // The proxy is done, but the two I/O tasks must not be left running
+    // detached: whichever one is still running holds half of the split
+    // guacd socket, so a zombie task keeps the socket (and with it the
+    // guacd session) alive forever — this is exactly how a tab close used
+    // to orphan the remote session. Abort both, then wait for them to
+    // actually stop (bounded, in case a task is stuck in a syscall) so the
+    // socket halves are dropped and guacd sees EOF before we return. On the
+    // browser-closed path `ws_to_guacd` has already written a `disconnect`
+    // instruction and shut its write half; the abort covers every other
+    // path: network drop, cancellation, reap, API terminate, and guacd
+    // ending the connection.
+    guacd_to_browser.abort();
+    browser_to_guacd.abort();
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        async {
+            let _ = tokio::join!(guacd_to_browser, browser_to_guacd);
+        },
+    )
+    .await;
 
     let guacd_err = guacd_error.lock().await.take();
 
@@ -1073,6 +1097,27 @@ async fn guacd_to_ws(
     Ok(())
 }
 
+/// Best-effort clean teardown of the guacd side of a proxy connection.
+///
+/// Writes the Guacamole `disconnect` instruction — the same one
+/// `Guacamole.Client.disconnect()` sends (`tunnel.sendMessage("disconnect")`,
+/// i.e. `11.disconnect;`) — then shuts the write half down so guacd sees EOF
+/// immediately, even before the aborted read task drops its half of the
+/// socket. guacd treats `disconnect` as ending only this user
+/// (`__guac_handle_disconnect` → `guac_user_stop`), so a viewer's tab close
+/// can never kill the owner's session; the guacd session ends when the last
+/// user's connection closes. Best-effort: if guacd already closed the
+/// connection, the write fails silently and the proxy's task abort still
+/// closes the socket.
+async fn send_disconnect_to_guacd<W>(guacd_write: &mut W)
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let instr = Instruction::new("disconnect", Vec::new()).encode();
+    let _ = guacd_write.write_all(instr.as_bytes()).await;
+    let _ = guacd_write.shutdown().await;
+}
+
 /// Forward data from WebSocket to guacd, intercepting empty-opcode tunnel
 /// pings. The Guacamole client sends `0.,4.ping,<ts>;` every 500ms over the
 /// "internal data" opcode (the empty string) to keep the tunnel from going
@@ -1081,8 +1126,12 @@ async fn guacd_to_ws(
 /// `__guac_user_call_opcode_handler`), so without echoing here the client
 /// would mark the tunnel UNSTABLE after 1.5s of guacd quiet time and close
 /// it after 15s. We mirror Apache's filter behaviour.
+///
+/// Every exit of this function means the browser side of the connection is
+/// done, so the wrapper then actively ends the guacd side (see
+/// `send_disconnect_to_guacd`).
 async fn ws_to_guacd(
-    mut ws_read: futures_util::stream::SplitStream<WebSocket>,
+    ws_read: futures_util::stream::SplitStream<WebSocket>,
     mut guacd: tokio::io::WriteHalf<GuacdStream>,
     ws_sink: WsSink,
     session_id: Uuid,
@@ -1090,6 +1139,38 @@ async fn ws_to_guacd(
     pending_transfers: Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
     database: Option<Db>,
     session_user: Option<String>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let result = ws_to_guacd_inner(
+        &mut ws_read,
+        &mut guacd,
+        &ws_sink,
+        session_id,
+        &manager,
+        &pending_transfers,
+        &database,
+        &session_user,
+    )
+    .await;
+
+    // The browser side of this connection is done — actively end the guacd
+    // side too. Previously the task simply returned and the detached
+    // guacd→browser read task kept the split socket open, so guacd never
+    // saw EOF and the remote session kept running with no owner, no record
+    // and no reaper.
+    send_disconnect_to_guacd(&mut guacd).await;
+
+    result
+}
+
+async fn ws_to_guacd_inner(
+    ws_read: &mut futures_util::stream::SplitStream<WebSocket>,
+    guacd: &mut tokio::io::WriteHalf<GuacdStream>,
+    ws_sink: &WsSink,
+    session_id: Uuid,
+    manager: &crate::session::SessionManager,
+    pending_transfers: &Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
+    database: &Option<Db>,
+    session_user: &Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /// Maximum allowed WebSocket message size (64 MiB).
     const MAX_WS_MSG_SIZE: usize = 64 * 1024 * 1024;
@@ -1491,5 +1572,44 @@ mod tests {
                 .is_empty()
         );
         assert!(pending.is_empty());
+    }
+
+    /// When the browser side of a proxy connection ends, persea must
+    /// actively end the guacd side: write the `disconnect` instruction (the
+    /// same one `Guacamole.Client.disconnect()` sends) and shut the write
+    /// half so guacd sees EOF — the two things together guarantee guacd
+    /// tears the session down instead of leaving an orphan.
+    #[tokio::test]
+    async fn teardown_sends_disconnect_and_eof_reaches_guacd() {
+        // Mock guacd: accept one connection, read everything until EOF, and
+        // return the raw bytes seen.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mock_guacd = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut received = Vec::new();
+            let mut tmp = [0u8; 256];
+            loop {
+                let n = sock.read(&mut tmp).await.unwrap();
+                if n == 0 {
+                    break; // EOF — the peer shut down its write side
+                }
+                received.extend_from_slice(&tmp[..n]);
+            }
+            received
+        });
+
+        // persea's half of the connection (only the write half is passed to
+        // the teardown; the read half staying alive must not prevent EOF).
+        let client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let boxed: crate::guacd::GuacdStream = Box::new(client);
+        let (_, mut write) = tokio::io::split(boxed);
+
+        send_disconnect_to_guacd(&mut write).await;
+
+        let received = mock_guacd.await.unwrap();
+        // `11.disconnect;` — the exact instruction the JS client sends on
+        // Disconnect — followed by a shut-down write half (EOF above).
+        assert_eq!(received, b"11.disconnect;");
     }
 }
