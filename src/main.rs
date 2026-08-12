@@ -182,7 +182,7 @@ enum Command {
         /// User email
         #[arg(long)]
         email: String,
-        /// Role: admin, poweruser, operator, or viewer
+        /// Role: admin, poweruser, operator, viewer, or a custom role name
         #[arg(long)]
         role: String,
     },
@@ -728,19 +728,46 @@ fn cmd_list_users(database: &Db) {
 }
 
 fn cmd_set_role(database: &Db, email: &str, role: &str) {
-    if !auth::is_valid_role(role) {
-        eprintln!("Role must be admin, poweruser, operator, or viewer.");
-        std::process::exit(1);
-    }
-    match db::set_user_role(database, email, role) {
-        Ok(true) => println!("User '{}' role set to '{}'.", email, role),
-        Ok(false) => {
-            eprintln!("User '{}' not found.", email);
-            std::process::exit(1);
+    if auth::is_valid_role(role) {
+        // Premade role: set the base role and clear any custom role
+        // (selecting a premade role in the UI clears the custom one).
+        let _ = rbac::set_user_custom_role(database, email, None);
+        match db::set_user_role(database, email, role) {
+            Ok(true) => println!("User '{}' role set to '{}'.", email, role),
+            Ok(false) => {
+                eprintln!("User '{}' not found.", email);
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
+    } else {
+        // Custom role name: validate it exists, assign by id, keep the
+        // base role untouched (custom roles are additive).
+        match rbac::get_custom_role_by_name(database, role) {
+            Ok(Some(role_rec)) => {
+                match rbac::set_user_custom_role(database, email, Some(&role_rec.id)) {
+                    Ok(true) => println!("User '{}' custom role set to '{}'.", email, role),
+                    Ok(false) => {
+                        eprintln!("User '{}' not found.", email);
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            Ok(None) => {
+                eprintln!("Role must be admin, poweruser, operator, viewer, or a custom role name.");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
     }
 }

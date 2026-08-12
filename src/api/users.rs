@@ -3,13 +3,16 @@ use crate::audit;
 use crate::auth::AuthIdentity;
 use crate::db::{self, Db};
 use crate::error::AppError;
+use crate::rbac;
 use axum::{extract::Path, http::StatusCode, Extension, Json};
 use serde::Deserialize;
 use serde_json::json;
 
 #[derive(Deserialize)]
 pub struct SetRoleRequest {
-    pub role: String,
+    /// A premade role name (admin/poweruser/operator/viewer), a custom
+    /// role NAME, or NULL/empty to clear the custom role.
+    pub role: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -18,6 +21,9 @@ pub struct CreateUserRequest {
     pub name: String,
     pub password: String,
     pub role: Option<String>,
+    /// Optional custom role NAME to assign (validated to exist).
+    #[serde(default)]
+    pub custom_role: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -48,7 +54,33 @@ pub async fn list_users(
     let users = tokio::task::spawn_blocking(move || db::list_users(&db_clone))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
-    Ok(Json(json!(users)))
+    // Resolve custom role ids to {id, name} in one pass.
+    let roles = rbac::list_custom_roles(&database).unwrap_or_default();
+    let roles_by_id: std::collections::HashMap<&str, &rbac::CustomRole> =
+        roles.iter().map(|r| (r.id.as_str(), r)).collect();
+    let out: Vec<serde_json::Value> = users
+        .iter()
+        .map(|u| {
+            let custom_role = u
+                .custom_role_id
+                .as_deref()
+                .and_then(|id| roles_by_id.get(id))
+                .map(|r| json!({"id": r.id, "name": r.name}));
+            json!({
+                "id": u.id,
+                "email": u.email,
+                "name": u.name,
+                "oidc_subject": u.oidc_subject,
+                "role": u.role,
+                "disabled": u.disabled,
+                "created_at": u.created_at,
+                "last_login_at": u.last_login_at,
+                "oidc_groups": u.oidc_groups,
+                "custom_role": custom_role.unwrap_or(serde_json::Value::Null),
+            })
+        })
+        .collect();
+    Ok(Json(json!(out)))
 }
 
 pub async fn create_user(
@@ -80,6 +112,30 @@ pub async fn create_user(
     let password = body.password.clone();
     let role_clone = role.clone();
 
+    // Validate the custom role BEFORE creating the user so an unknown name
+    // rejects the request without leaving a half-created account behind.
+    let custom_role_name = body.custom_role.clone().filter(|n| !n.trim().is_empty());
+    let custom_role_id = match custom_role_name {
+        Some(ref name) => {
+            let db_for_lookup = database.clone();
+            let name_for_lookup = name.clone();
+            let role_rec = tokio::task::spawn_blocking(move || {
+                rbac::get_custom_role_by_name(&db_for_lookup, &name_for_lookup)
+            })
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))??;
+            match role_rec {
+                Some(role_rec) => Some(role_rec.id),
+                None => {
+                    return Err(AppError::Validation(format!(
+                        "unknown custom role '{name}'"
+                    )));
+                }
+            }
+        }
+        None => None,
+    };
+
     tokio::task::spawn_blocking(move || {
         let password_hash = crate::password::hash_password(&password)
             .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -107,6 +163,17 @@ pub async fn create_user(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;
 
+    if let Some(ref role_id) = custom_role_id {
+        let db_for_assign = database.clone();
+        let email_for_assign = email.clone();
+        let role_id_for_assign = role_id.clone();
+        tokio::task::spawn_blocking(move || {
+            rbac::set_user_custom_role(&db_for_assign, &email_for_assign, Some(&role_id_for_assign))
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    }
+
     let role_for_response = role.clone();
 
     let admin_name = identity
@@ -115,13 +182,14 @@ pub async fn create_user(
         .unwrap_or_default();
     let email_audit = body.email.clone();
     let role_audit = role.clone();
+    let custom_role_audit = custom_role_name.clone();
     let db_audit = database.clone();
     tokio::task::spawn_blocking(move || {
         let _ = audit::log_event(
             &db_audit,
             &mut audit::EventBuilder::new("admin.user.create", "success")
                 .user_id(&admin_name)
-                .details(serde_json::json!({"email": email_audit, "role": role_audit}))
+                .details(serde_json::json!({"email": email_audit, "role": role_audit, "custom_role": custom_role_audit}))
                 .build(),
         );
     })
@@ -130,7 +198,7 @@ pub async fn create_user(
 
     Ok((
         StatusCode::CREATED,
-        Json(json!({"email": body.email, "role": role_for_response})),
+        Json(json!({"email": body.email, "role": role_for_response, "custom_role": custom_role_name})),
     ))
 }
 
@@ -148,65 +216,145 @@ pub async fn set_user_role(
         return Err(AppError::Forbidden("admin role required".into()));
     }
 
-    if !crate::auth::is_valid_role(&req.role) {
-        return Err(AppError::Internal(
-            "role must be admin, poweruser, operator, or viewer".into(),
-        ));
-    }
+    let role = req.role.unwrap_or_default();
 
-    let db_clone = database.clone();
-    let role = req.role.clone();
-    // Fetch old role for audit before updating
-    let old_role = {
+    // Fetch old role + custom role for audit before updating.
+    let (old_role, old_custom_role_id) = {
         let db_for_read = database.clone();
         let email_clone = email.clone();
         tokio::task::spawn_blocking(move || {
             db::get_user_by_email(&db_for_read, &email_clone)
                 .ok()
-                .map(|u| u.role)
+                .map(|u| (u.role, u.custom_role_id))
         })
         .await
-        .unwrap_or(None)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| (String::new(), None))
     };
-    let email_for_update = email.clone();
-    let role_for_update = role.clone();
-    let found = tokio::task::spawn_blocking(move || {
-        db::set_user_role(&db_clone, &email_for_update, &role_for_update)
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))??;
-    if found {
-        // Audit: role change
-        {
-            let db_audit = database.clone();
-            let email_audit = email.clone();
-            let new_role = role.clone();
-            let admin_name = identity
-                .as_ref()
-                .map(|id| id.display_name().to_string())
-                .unwrap_or_default();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                let _ = audit::log_event(
-                    &db_audit,
-                    &mut audit::EventBuilder::new("admin.role.change", "success")
-                        .user_id(&admin_name)
-                        .details(serde_json::json!({
-                            "target_email": email_audit,
-                            "old_role": old_role,
-                            "new_role": new_role,
-                        }))
-                        .build(),
-                );
-            })
-            .await
-            {
-                tracing::error!(error = %e, "audit task failed");
+
+    // Premade role: set the base role AND clear any custom role (they are
+    // mutually exclusive in the UI; the assignment is still additive).
+    let custom_role_name: Option<String> = if crate::auth::is_valid_role(&role) {
+        let db_for_update = database.clone();
+        let email_for_update = email.clone();
+        let role_for_update = role.clone();
+        let found = tokio::task::spawn_blocking(move || {
+            db::set_user_role(&db_for_update, &email_for_update, &role_for_update)
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+        if !found {
+            return Err(AppError::Session("user not found".into()));
+        }
+        let db_for_clear = database.clone();
+        let email_for_clear = email.clone();
+        tokio::task::spawn_blocking(move || {
+            rbac::set_user_custom_role(&db_for_clear, &email_for_clear, None)
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+        None
+    } else if role.is_empty() {
+        // NULL/empty: clear the custom role, keep the base role.
+        let db_for_clear = database.clone();
+        let email_for_clear = email.clone();
+        let found = tokio::task::spawn_blocking(move || {
+            rbac::set_user_custom_role(&db_for_clear, &email_for_clear, None)
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+        if !found {
+            return Err(AppError::Session("user not found".into()));
+        }
+        None
+    } else {
+        // Custom role name: validate it exists, assign by id, keep the
+        // base role untouched (custom roles are additive).
+        let db_for_lookup = database.clone();
+        let name_for_lookup = role.clone();
+        let role_rec = tokio::task::spawn_blocking(move || {
+            rbac::get_custom_role_by_name(&db_for_lookup, &name_for_lookup)
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+        match role_rec {
+            Some(role_rec) => {
+                let db_for_assign = database.clone();
+                let email_for_assign = email.clone();
+                let role_id_for_assign = role_rec.id.clone();
+                let found = tokio::task::spawn_blocking(move || {
+                    rbac::set_user_custom_role(
+                        &db_for_assign,
+                        &email_for_assign,
+                        Some(&role_id_for_assign),
+                    )
+                })
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))??;
+                if !found {
+                    return Err(AppError::Session("user not found".into()));
+                }
+                Some(role_rec.name)
+            }
+            None => {
+                return Err(AppError::Internal(
+                    "role must be admin, poweruser, operator, viewer, or a custom role name".into(),
+                ));
             }
         }
-        Ok(Json(json!({"ok": true})))
-    } else {
-        Err(AppError::Session("user not found".into()))
+    };
+
+    // Audit: role change
+    {
+        let db_audit = database.clone();
+        let email_audit = email.clone();
+        let new_role = role.clone();
+        let new_custom_role = custom_role_name.clone();
+        let admin_name = identity
+            .as_ref()
+            .map(|id| id.display_name().to_string())
+            .unwrap_or_default();
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let _ = audit::log_event(
+                &db_audit,
+                &mut audit::EventBuilder::new("admin.role.change", "success")
+                    .user_id(&admin_name)
+                    .details(serde_json::json!({
+                        "target_email": email_audit,
+                        "old_role": old_role,
+                        "new_role": new_role,
+                        "old_custom_role_id": old_custom_role_id,
+                        "new_custom_role": new_custom_role,
+                    }))
+                    .build(),
+            );
+        })
+        .await
+        {
+            tracing::error!(error = %e, "audit task failed");
+        }
     }
+
+    // Response carries the post-change state so the UI can refresh badges.
+    let db_for_read = database.clone();
+    let email_for_read = email.clone();
+    let user = tokio::task::spawn_blocking(move || db::get_user_by_email(&db_for_read, &email_for_read))
+        .await
+        .ok()
+        .and_then(|r| r.ok());
+    let custom_role_info = match user.as_ref().and_then(|u| u.custom_role_id.as_deref()) {
+        Some(role_id) => rbac::get_custom_role(&database, role_id)
+            .ok()
+            .flatten()
+            .map(|r| json!({"id": r.id, "name": r.name})),
+        None => None,
+    };
+    Ok(Json(json!({
+        "ok": true,
+        "role": user.map(|u| u.role).unwrap_or(role),
+        "custom_role": custom_role_info.unwrap_or(serde_json::Value::Null),
+    })))
 }
 
 pub async fn delete_user(
@@ -307,10 +455,17 @@ pub async fn me(
             let db_clone = database.clone();
             let email_clone = email.clone();
             let user_result = tokio::task::spawn_blocking(move || {
-                db::get_user_by_email(&db_clone, &email_clone).ok()
+                let user = db::get_user_by_email(&db_clone, &email_clone).ok();
+                // Resolve the assigned custom role in the same blocking
+                // call so the DB mutex is not touched from the async side.
+                let custom_role = user
+                    .as_ref()
+                    .and_then(|u| u.custom_role_id.as_deref())
+                    .and_then(|id| rbac::get_custom_role(&db_clone, id).ok().flatten());
+                (user, custom_role)
             })
             .await
-            .unwrap_or(None);
+            .unwrap_or((None, None));
             let auth_source_clone = database.clone();
             let email_clone2 = email.clone();
             let auth_source = tokio::task::spawn_blocking(move || {
@@ -333,6 +488,11 @@ pub async fn me(
                 "vault_enabled": vault_available,
                 "vault_configured": vault_configured.0,
                 "created_at": created_at,
+                "custom_role": user_result
+                    .1
+                    .as_ref()
+                    .map(|r| json!({"id": r.id, "name": r.name}))
+                    .unwrap_or(serde_json::Value::Null),
             })))
         }
         None => Err(AppError::Auth("not authenticated".into())),
