@@ -94,7 +94,7 @@ pub(crate) async fn audit_config_change(
 }
 
 /// Map a rusqlite error: UNIQUE violations become 409, everything else 500.
-fn map_group_conflict(e: rusqlite::Error) -> AppError {
+fn map_group_conflict(e: &rusqlite::Error) -> AppError {
     use rusqlite::ErrorCode;
     if matches!(
         e,
@@ -147,7 +147,7 @@ pub async fn create_group(
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
-    .map_err(map_group_conflict)?;
+    .map_err(|e| map_group_conflict(&e))?;
 
     audit_config_change(
         &database,
@@ -268,7 +268,7 @@ pub async fn update_group(
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
-    .map_err(map_group_conflict)?
+    .map_err(|e| map_group_conflict(&e))?
     .ok_or_else(|| AppError::Session("group not found".into()))?;
 
     audit_config_change(

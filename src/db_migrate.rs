@@ -15,19 +15,7 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::crypto::{encrypt_value, EncryptionKey};
 use crate::db::{self, Db};
-use crate::vault::{self, AddressBookEntry, FolderConfig, VaultClient, VaultError};
-
-/// Credential fields that contain plaintext secrets and must be encrypted
-/// before writing to the DB.
-const CREDENTIAL_FIELDS: &[&str] = &[
-    "password",
-    "private_key",
-    "container_password",
-    "proxmox_token_secret",
-    "jump_password",
-    "jump_private_key",
-    "spice_ca_cert",
-];
+use crate::vault::{AddressBookEntry, FolderConfig, VaultClient, VaultError};
 
 /// Resolve the AES-256-GCM encryption key hex string from the environment.
 /// `PERSEA_STORAGE_KEY` is the standard name (matches the runtime app);
@@ -403,7 +391,7 @@ fn insert_ab_entry(
         Ok(id) => id,
         // A re-run with --overwrite updates the existing row instead of
         // failing on the UNIQUE(folder_id, name) constraint.
-        Err(e) if overwrite => {
+        Err(_) if overwrite => {
             let existing = db::get_ab_entry(db, folder.id, name)
                 .map_err(|e2| format!("overwrite lookup: {}", e2))?;
             db::update_ab_entry(

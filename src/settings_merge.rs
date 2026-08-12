@@ -88,7 +88,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
             "listen_addr" if !value.is_empty() => config.listen_addr = value.clone(),
             "guacd_addr" if !value.is_empty() => config.guacd_addr = value.clone(),
             "tls_cert_path" if !value.is_empty() => {
-                let tls = config.tls.get_or_insert_with(|| crate::config::TlsConfig {
+                let tls = config.tls.get_or_insert(crate::config::TlsConfig {
                     cert_path: None,
                     key_path: None,
                     guacd_cert_path: None,
@@ -97,7 +97,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                 tls.cert_path = Some(std::path::PathBuf::from(value));
             }
             "tls_key_path" if !value.is_empty() => {
-                let tls = config.tls.get_or_insert_with(|| crate::config::TlsConfig {
+                let tls = config.tls.get_or_insert(crate::config::TlsConfig {
                     cert_path: None,
                     key_path: None,
                     guacd_cert_path: None,

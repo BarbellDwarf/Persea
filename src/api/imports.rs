@@ -834,10 +834,7 @@ pub async fn import_template(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Response, AppError> {
-    let allowed = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("operator") => true,
-        _ => false,
-    };
+    let allowed = matches!(identity.as_ref(), Some(Extension(id)) if id.has_role("operator"));
     if !allowed {
         return Err(AppError::Forbidden("operator role required".into()));
     }

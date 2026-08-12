@@ -268,8 +268,7 @@ pub fn encrypt_recording_file(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
     let plaintext = std::fs::read(guac_path)?;
-    let encrypted = crypto::encrypt_bytes(&key, &plaintext)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let encrypted = crypto::encrypt_bytes(&key, &plaintext).map_err(std::io::Error::other)?;
 
     let enc_path = guac_path.with_extension("guac.enc");
     std::fs::write(&enc_path, &encrypted)?;

@@ -400,7 +400,7 @@ pub async fn report_activity(
     {
         return Err(AppError::Forbidden("poweruser role required".into()));
     }
-    let hours = q.hours.unwrap_or(24).max(1).min(168);
+    let hours = q.hours.unwrap_or(24).clamp(1, 168);
     let rows = db::session_activity_by_hour(&database, hours)?;
     Ok(Json(json!(rows)))
 }

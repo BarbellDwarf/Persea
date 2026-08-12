@@ -29,6 +29,7 @@ fn main() {
     let out_path = Path::new(&out_dir).join("docs-rendered.rs");
     let mut out = fs::File::create(&out_path).expect("Failed to create docs-rendered.rs");
 
+    writeln!(out, "#[allow(missing_docs)]").unwrap();
     writeln!(out, "pub const DOCS: &[(&str, &str, &str)] = &[").unwrap();
 
     for filename in DOC_FILES {

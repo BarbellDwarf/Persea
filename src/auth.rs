@@ -115,7 +115,7 @@ impl WsTicketStore {
                 let expires_at = crate::db::registry_ts(
                     chrono::Utc::now() + chrono::Duration::seconds(WS_TICKET_TTL_SECS as i64),
                 );
-                let res = tokio::task::spawn_blocking(move || {
+                let _ = tokio::task::spawn_blocking(move || {
                     crate::db::ws_ticket_insert(
                         &db,
                         &hash,

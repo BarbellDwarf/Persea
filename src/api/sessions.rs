@@ -236,7 +236,7 @@ pub async fn list_sessions(
         .map(|s| redact_share_url(s, &identity))
         .collect();
     // Sort by creation time descending (most recent first)
-    sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.created_at));
     if let Some(limit) = q.limit {
         sessions.truncate(limit);
     }

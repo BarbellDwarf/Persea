@@ -276,6 +276,7 @@ pub struct CallbackParams {
 }
 
 /// GET /auth/callback — exchange code for tokens, create session.
+#[allow(clippy::too_many_arguments)]
 pub async fn callback(
     State(registry): State<std::sync::Arc<OidcRegistry>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

@@ -136,22 +136,23 @@ fn sniff_transfer_instruction(
             // guacd responds to get requests with body instructions. The
             // stream-index mimetype denotes a directory listing, not a
             // transfer; anything else is a file download (name = path).
-            if direction == TransferDirection::GuacdToBrowser && instr.args.len() >= 4 {
-                if instr.args[2] != "application/vnd.glyptodon.guacamole.stream-index+json" {
-                    if let Ok(idx) = instr.args[1].parse::<i64>() {
-                        if idx >= 0 {
-                            let path = instr.args[3].clone();
-                            let filename = path.rsplit('/').next().unwrap_or(&path).to_string();
-                            pending.insert(
-                                idx,
-                                PendingTransfer {
-                                    kind: TransferKind::Download,
-                                    filename,
-                                    mimetype: instr.args[2].clone(),
-                                    size: 0,
-                                },
-                            );
-                        }
+            if direction == TransferDirection::GuacdToBrowser
+                && instr.args.len() >= 4
+                && instr.args[2] != "application/vnd.glyptodon.guacamole.stream-index+json"
+            {
+                if let Ok(idx) = instr.args[1].parse::<i64>() {
+                    if idx >= 0 {
+                        let path = instr.args[3].clone();
+                        let filename = path.rsplit('/').next().unwrap_or(&path).to_string();
+                        pending.insert(
+                            idx,
+                            PendingTransfer {
+                                kind: TransferKind::Download,
+                                filename,
+                                mimetype: instr.args[2].clone(),
+                                size: 0,
+                            },
+                        );
                     }
                 }
             }
@@ -192,17 +193,16 @@ fn sniff_transfer_instruction(
                 if let Some(p) = pending.get(&idx) {
                     if (p.kind == TransferKind::Upload)
                         == (direction == TransferDirection::GuacdToBrowser)
+                        && instr.args.get(2).map(|s| s.as_str()).unwrap_or("0") != "0"
                     {
-                        if instr.args.get(2).map(|s| s.as_str()).unwrap_or("0") != "0" {
-                            if let Some(p) = pending.remove(&idx) {
-                                events.push(TransferAuditEvent {
-                                    kind: p.kind,
-                                    filename: p.filename,
-                                    mimetype: p.mimetype,
-                                    size: p.size,
-                                    error: true,
-                                });
-                            }
+                        if let Some(p) = pending.remove(&idx) {
+                            events.push(TransferAuditEvent {
+                                kind: p.kind,
+                                filename: p.filename,
+                                mimetype: p.mimetype,
+                                size: p.size,
+                                error: true,
+                            });
                         }
                     }
                 }
@@ -812,6 +812,7 @@ async fn handle_ws(
 }
 
 /// Bidirectional proxy between WebSocket and guacd stream (TCP or TLS).
+#[allow(clippy::too_many_arguments)]
 async fn proxy_ws_guacd(
     session_id: Uuid,
     ws: WebSocket,
@@ -971,6 +972,7 @@ const MAX_GUACD_CARRY: usize = 16 * 1024 * 1024;
 /// of instruction was not ';' nor ','". To prevent that, every Message::Text
 /// we emit ends at a true Guacamole instruction boundary; partial tail data
 /// is held in `carry` until the next read completes it.
+#[allow(clippy::too_many_arguments)]
 async fn guacd_to_ws(
     session_id: Uuid,
     mut guacd: tokio::io::ReadHalf<GuacdStream>,
@@ -1031,51 +1033,49 @@ async fn guacd_to_ws(
         // here gives the operator the reason in persea's own logs, and the
         // message is used as the disconnect reason when the proxy ends.
         let mut parser = crate::protocol::InstructionParser::new();
-        for parsed in parser.receive(&text) {
-            if let Ok(instr) = parsed {
-                if instr.opcode == "error" {
-                    // guacd encodes the error instruction as
-                    // `error,<message>,<code>` (guac_protocol_send_error).
-                    let message = instr
-                        .args
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| "unknown error".to_string());
-                    let code = instr.args.get(1).cloned().unwrap_or_default();
-                    tracing::warn!(
-                        session_id = %session_id,
-                        code = %code,
-                        "guacd reported upstream error: {}", message
-                    );
-                    *last_error.lock().await = Some(message);
-                } else if instr.opcode == "filesystem" {
-                    // guacd exposed an SFTP session (SSH) or drive (RDP).
-                    // Availability alone is not a transfer, so this is logged
-                    // but not audited.
-                    tracing::info!(
-                        session_id = %session_id,
-                        name = instr.args.get(1).map(String::as_str).unwrap_or("?"),
-                        "guacd exposed a filesystem (SFTP or drive)"
-                    );
-                } else if matches!(
-                    instr.opcode.as_str(),
-                    "file" | "blob" | "ack" | "end" | "body"
+        for instr in parser.receive(&text).into_iter().flatten() {
+            if instr.opcode == "error" {
+                // guacd encodes the error instruction as
+                // `error,<message>,<code>` (guac_protocol_send_error).
+                let message = instr
+                    .args
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "unknown error".to_string());
+                let code = instr.args.get(1).cloned().unwrap_or_default();
+                tracing::warn!(
+                    session_id = %session_id,
+                    code = %code,
+                    "guacd reported upstream error: {}", message
+                );
+                *last_error.lock().await = Some(message);
+            } else if instr.opcode == "filesystem" {
+                // guacd exposed an SFTP session (SSH) or drive (RDP).
+                // Availability alone is not a transfer, so this is logged
+                // but not audited.
+                tracing::info!(
+                    session_id = %session_id,
+                    name = instr.args.get(1).map(String::as_str).unwrap_or("?"),
+                    "guacd exposed a filesystem (SFTP or drive)"
+                );
+            } else if matches!(
+                instr.opcode.as_str(),
+                "file" | "blob" | "ack" | "end" | "body"
+            ) {
+                // Audit file-transfer activity (downloads delivered by
+                // guacd, uploads failed by guacd's error acks).
+                let mut pending = pending_transfers.lock().await;
+                for event in sniff_transfer_instruction(
+                    &instr,
+                    TransferDirection::GuacdToBrowser,
+                    &mut pending,
                 ) {
-                    // Audit file-transfer activity (downloads delivered by
-                    // guacd, uploads failed by guacd's error acks).
-                    let mut pending = pending_transfers.lock().await;
-                    for event in sniff_transfer_instruction(
-                        &instr,
-                        TransferDirection::GuacdToBrowser,
-                        &mut pending,
-                    ) {
-                        emit_transfer_audit(
-                            database.as_ref(),
-                            session_id,
-                            session_user.as_deref(),
-                            event,
-                        );
-                    }
+                    emit_transfer_audit(
+                        database.as_ref(),
+                        session_id,
+                        session_user.as_deref(),
+                        event,
+                    );
                 }
             }
         }
@@ -1128,6 +1128,7 @@ where
 ///
 /// Every exit of this function means the browser side of the connection is
 /// done, so the wrapper then actively ends the guacd side (see
+#[allow(clippy::too_many_arguments)]
 /// `send_disconnect_to_guacd`).
 async fn ws_to_guacd(
     mut ws_read: futures_util::stream::SplitStream<WebSocket>,
@@ -1161,6 +1162,7 @@ async fn ws_to_guacd(
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn ws_to_guacd_inner(
     ws_read: &mut futures_util::stream::SplitStream<WebSocket>,
     guacd: &mut tokio::io::WriteHalf<GuacdStream>,
@@ -1217,22 +1219,20 @@ async fn ws_to_guacd_inner(
                     || text.contains("end,")
                 {
                     let mut parser = crate::protocol::InstructionParser::new();
-                    for parsed in parser.receive(&text) {
-                        if let Ok(instr) = parsed {
-                            if matches!(instr.opcode.as_str(), "file" | "blob" | "ack" | "end") {
-                                let mut pending = pending_transfers.lock().await;
-                                for event in sniff_transfer_instruction(
-                                    &instr,
-                                    TransferDirection::BrowserToGuacd,
-                                    &mut pending,
-                                ) {
-                                    emit_transfer_audit(
-                                        database.as_ref(),
-                                        session_id,
-                                        session_user.as_deref(),
-                                        event,
-                                    );
-                                }
+                    for instr in parser.receive(&text).into_iter().flatten() {
+                        if matches!(instr.opcode.as_str(), "file" | "blob" | "ack" | "end") {
+                            let mut pending = pending_transfers.lock().await;
+                            for event in sniff_transfer_instruction(
+                                &instr,
+                                TransferDirection::BrowserToGuacd,
+                                &mut pending,
+                            ) {
+                                emit_transfer_audit(
+                                    database.as_ref(),
+                                    session_id,
+                                    session_user.as_deref(),
+                                    event,
+                                );
                             }
                         }
                     }

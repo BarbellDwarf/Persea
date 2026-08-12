@@ -307,7 +307,7 @@ async fn main() {
                     eprintln!("FATAL: SQLx migrations failed for {}: {}", url, e);
                     std::process::exit(1);
                 }
-                if let Err(_) = crate::db::set_active_pool(pool) {
+                if crate::db::set_active_pool(pool).is_err() {
                     eprintln!("FATAL: failed to start the database worker thread");
                     std::process::exit(1);
                 }
@@ -806,7 +806,7 @@ use crate::csrf::SecureCookies;
 use crate::csrf::TlsEnabled;
 
 async fn security_headers(
-    tls: Extension<TlsEnabled>,
+    _tls: Extension<TlsEnabled>,
     request: Request,
     next: middleware::Next,
 ) -> Response {
@@ -1346,7 +1346,8 @@ async fn run_server(
         let title = &config.site_title;
         let mut pages = std::collections::HashMap::new();
         // Disk-served HTML pages (only index.html — all others use templates)
-        for name in &["index.html"] {
+        {
+            let name = &"index.html";
             let path = std::path::Path::new(&static_path).join(name);
             if let Ok(html) = std::fs::read_to_string(&path) {
                 pages.insert(name.to_string(), rewrite_branding(&html, title, logo));
@@ -2183,7 +2184,7 @@ async fn run_server(
         .layer(Extension(database.clone()));
 
     // Add OIDC routes if configured (always rate-limited to prevent brute-force)
-    if let Some(ref oidc_st) = oidc_state {
+    if let Some(ref _oidc_st) = oidc_state {
         let auth_rate_conf = GovernorConfigBuilder::default()
             .per_second(1)
             .burst_size(5)

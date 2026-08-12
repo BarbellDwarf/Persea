@@ -705,7 +705,6 @@ async fn read_instruction(
 #[must_use]
 /// Why a guacd interaction failed. Returned by the handshake and join
 /// functions; the string payloads carry the underlying message.
-#[must_use]
 pub enum GuacdError {
     /// Could not reach guacd, timed out, or the connection closed early.
     Connection(String),

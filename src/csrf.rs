@@ -217,7 +217,7 @@ where
             // the inner service.  Used both for the double-submit check
             // (state-changing methods) and to re-set the cookie on the
             // response without generating a fresh token each time.
-            let incoming_cookie = extract_cookie(&req.headers(), CSRF_COOKIE);
+            let incoming_cookie = extract_cookie(req.headers(), CSRF_COOKIE);
 
             if is_state_changing(&method) {
                 let header_token = req
@@ -311,7 +311,7 @@ where
             // token, and whichever Set-Cookie arrived last "won", leaving
             // earlier callers with a stale cookie value.
             {
-                let token = incoming_cookie.unwrap_or_else(|| generate_token());
+                let token = incoming_cookie.unwrap_or_else(generate_token);
                 let secure = if is_https { " Secure" } else { "" };
                 let cookie = format!("{}={}; Path=/; SameSite=Lax;{}", CSRF_COOKIE, token, secure);
                 resp.headers_mut()

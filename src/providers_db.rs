@@ -37,24 +37,31 @@ pub const PROVIDER_TYPES: &[&str] = &["ldap", "saml", "radius", "database", "tot
 /// A row from the `auth_providers` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DbProvider {
+    /// Row id.
     pub id: i64,
+    /// Provider display name.
     pub name: String,
     /// Provider type, one of [`PROVIDER_TYPES`].
     #[serde(rename = "type")]
     pub provider_type: String,
+    /// Whether the provider is active in the chain.
     pub enabled: bool,
     /// Chain order; lower runs first.
     pub position: i64,
     /// Free-form JSON config object (may contain secrets).
     pub config: Value,
+    /// Row creation timestamp.
     pub created_at: String,
+    /// Row last-update timestamp.
     pub updated_at: String,
 }
 
 /// Direction for [`move_provider`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveDirection {
+    /// Move the provider earlier in the chain.
     Up,
+    /// Move the provider later in the chain.
     Down,
 }
 

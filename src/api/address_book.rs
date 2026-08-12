@@ -4,7 +4,7 @@
 //! Handlers enforce role gates (operator or higher for reads and connects,
 //! admin for writes) plus folder and entry ACLs, and report failures as
 //! `AppError` (403 for denied access, 404 for missing folders or entries).
-use super::{AppState, StorageBackend, StorageKey, VaultBackends, VaultState};
+use super::{AppState, StorageBackend, StorageKey, VaultState};
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
@@ -843,28 +843,6 @@ pub(crate) async fn log_ab_event(
     }
 }
 
-pub(crate) async fn check_folder_access(
-    vault: &VaultBackends,
-    scope: &str,
-    folder: &str,
-    identity: &AuthIdentity,
-) -> Result<(), AppError> {
-    if identity.has_role("admin") {
-        return Ok(());
-    }
-
-    let user_groups = identity.groups();
-    match vault
-        .resolve_folder_access(scope, folder, user_groups)
-        .await
-    {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(AppError::Forbidden("no access to this folder".into())),
-        Err(VaultError::NotFound) => Err(AppError::Vault("folder not found".into())),
-        Err(e) => Err(AppError::Vault(e.to_string())),
-    }
-}
-
 /// DB-based descendant walk: true if the folder itself grants access, or any
 /// DB folder with a slash-path under it does (mirrors the vault subtree walk).
 fn folder_or_descendant_accessible_db(
@@ -1370,7 +1348,7 @@ pub async fn ab_connect_entry(
     // Per-user preset fallback: entries without their own password use the
     // user's preset credentials (set on the profile page). This covers
     // rotating-password setups where shared entry credentials are left blank.
-    if ab_entry.password.as_deref().map_or(true, |p| p.is_empty()) {
+    if ab_entry.password.as_deref().is_none_or(|p| p.is_empty()) {
         let user_email = match &id {
             AuthIdentity::User { email, .. } => Some(email.clone()),
             _ => None,
@@ -1387,7 +1365,7 @@ pub async fn ab_connect_entry(
                                 if let Ok(pw) =
                                     crate::crypto::decrypt_value(&key, &preset_password_enc)
                                 {
-                                    if ab_entry.username.as_deref().map_or(true, |u| u.is_empty())
+                                    if ab_entry.username.as_deref().is_none_or(|u| u.is_empty())
                                         && !preset_username.is_empty()
                                     {
                                         ab_entry.username = Some(preset_username);
@@ -1406,7 +1384,7 @@ pub async fn ab_connect_entry(
     // user's login password (LDAP/database/etc.) is reused for entries that
     // carry no credentials. Applies only when the entry and the preset are
     // both empty, and only within the login TTL.
-    if ab_entry.password.as_deref().map_or(true, |p| p.is_empty())
+    if ab_entry.password.as_deref().is_none_or(|p| p.is_empty())
         && manager
             .config()
             .auth
@@ -1431,7 +1409,7 @@ pub async fn ab_connect_entry(
                                 if let Ok(pw) =
                                     crate::crypto::decrypt_value(&key, &login_password_enc)
                                 {
-                                    if ab_entry.username.as_deref().map_or(true, |u| u.is_empty())
+                                    if ab_entry.username.as_deref().is_none_or(|u| u.is_empty())
                                         && !login_username.is_empty()
                                     {
                                         ab_entry.username = Some(login_username);
@@ -1790,6 +1768,7 @@ pub async fn ab_get_folder_config(
 /// folder, its subfolders, and its entries. Admin only, or a custom
 /// role with the Delete object permission on the folder. Returns the
 /// number of subfolders and entries removed.
+#[allow(clippy::too_many_arguments)]
 pub async fn ab_delete_folder(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
@@ -2372,6 +2351,7 @@ pub async fn ab_update_entry(
 /// `DELETE /api/addressbook/folders/{scope}/{folder}/entries/{entry}`:
 /// delete an entry and its stored credentials. Admin only, or a
 /// custom role with the Delete object permission on the entry.
+#[allow(clippy::too_many_arguments)]
 /// Returns 204 on success.
 pub async fn ab_delete_entry(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

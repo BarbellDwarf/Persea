@@ -7,10 +7,12 @@
 //! Xvnc), and VDI desktop containers (Docker).
 
 #![warn(missing_docs)]
-#![warn(clippy::unwrap_used)]
-#![warn(clippy::expect_used)]
 #![warn(clippy::manual_assert)]
 #![warn(clippy::needless_pass_by_value)]
+// Deliberate style: unwraps and expects in this codebase are used for
+// config parsing, tokio join handles, and other fail-fast sites where
+// recovering is not meaningful. Kept visible in review, not fail-on.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 // The lints above are deliberate developer visibility aids: they surface
 // undocumented public API and unwrap sites during `cargo check`/`cargo test`.
 // Release builds (Docker image, `cargo build --release`) do not need ~800

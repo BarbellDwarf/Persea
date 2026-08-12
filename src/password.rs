@@ -89,6 +89,7 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool, argon2::passw
 
 /// Map an SQLx error to a rusqlite error so the pool path can reuse the
 /// same `rusqlite::Result` return type as the legacy file path.
+#[allow(clippy::needless_pass_by_value)] // duplicate of db.rs helper, kept local for the pool path
 fn map_sqlx_err(e: sqlx::Error) -> rusqlite::Error {
     rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(1), Some(e.to_string()))
 }

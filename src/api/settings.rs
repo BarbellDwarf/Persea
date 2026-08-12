@@ -169,7 +169,7 @@ fn stored_to_value(key: &str, stored: &str) -> Value {
 /// Merge the startup config baseline (from `SettingsBaseline`) with DB
 /// overrides; DB values win.
 fn effective_settings_with_baseline(
-    baseline: Value,
+    baseline: &Value,
     stored: &std::collections::HashMap<String, String>,
 ) -> Value {
     let mut out = serde_json::Map::new();
@@ -179,18 +179,6 @@ fn effective_settings_with_baseline(
             .get(*key)
             .map(|s| stored_to_value(key, s))
             .or_else(|| base.get(*key).cloned())
-            .unwrap_or_else(|| default_value(key));
-        out.insert((*key).to_string(), v);
-    }
-    Value::Object(out)
-}
-
-fn effective_settings(stored: &std::collections::HashMap<String, String>) -> Value {
-    let mut out = serde_json::Map::new();
-    for key in SETTING_KEYS {
-        let v = stored
-            .get(*key)
-            .map(|s| stored_to_value(key, s))
             .unwrap_or_else(|| default_value(key));
         out.insert((*key).to_string(), v);
     }
@@ -246,7 +234,7 @@ pub async fn get_settings(
     // overrides (DB wins). Without the extension (tests, direct routers)
     // fall back to defaults only.
     Ok(Json(effective_settings_with_baseline(
-        baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
+        &baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
         &stored,
     )))
 }
@@ -312,12 +300,10 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
             .to_string())
     } else if DURATION_KEYS.contains(&key) {
         let n = parse_u64(value, key)?;
-        if key == "session_max_duration_secs" {
-            if n == 0 || n > MAX_DURATION_SECS {
-                return Err(AppError::Validation(format!(
-                    "{key} must be between 1 and {MAX_DURATION_SECS}"
-                )));
-            }
+        if key == "session_max_duration_secs" && (n == 0 || n > MAX_DURATION_SECS) {
+            return Err(AppError::Validation(format!(
+                "{key} must be between 1 and {MAX_DURATION_SECS}"
+            )));
         }
         if key == "session_history_retention_days" && n > MAX_RETENTION_DAYS as u64 {
             return Err(AppError::Validation(format!(
@@ -487,7 +473,7 @@ pub async fn put_settings(
         .map_err(|e| AppError::Internal(e.to_string()))??;
     // Same merge as GET so PUT and GET always agree on effective values.
     Ok(Json(effective_settings_with_baseline(
-        baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
+        &baseline.map(|b| b.0 .0).unwrap_or_else(|| json!({})),
         &stored,
     )))
 }

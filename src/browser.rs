@@ -7,8 +7,11 @@ use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::time::{timeout, Duration};
 
+#[cfg(test)]
 use aes::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
+#[cfg(test)]
 use hmac::Hmac;
+#[cfg(test)]
 use sha1::Sha1;
 
 /// Allocates numbers from a fixed range pool.
@@ -622,6 +625,7 @@ impl BrowserManager {
 /// On Linux without a keyring (our case — headless Xvnc), Chromium uses:
 /// 1. PBKDF2("peanuts", "saltysalt", 1 iteration, SHA-1) → 16-byte AES key
 /// 2. AES-128-CBC with IV = 16 × 0x20 (space chars)
+#[cfg(test)]
 /// 3. Blob format: "v10" prefix + encrypted ciphertext
 fn encrypt_chromium_password(plaintext: &str) -> Result<Vec<u8>, String> {
     // Derive the AES key: PBKDF2(password="peanuts", salt="saltysalt", iterations=1, dkLen=16)

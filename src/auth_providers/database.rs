@@ -5,6 +5,7 @@
 //! (added automatically on first use).
 
 use async_trait::async_trait;
+#[cfg(test)]
 use rusqlite::params;
 
 use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};

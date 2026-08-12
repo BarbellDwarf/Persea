@@ -85,11 +85,7 @@ impl SessionManager {
             None => Vec::new(),
         };
         let toggle = |key: &str| crate::settings_merge::toggle_enabled(&settings, key, true);
-        check_session_type_enabled(
-            req.session_type.clone(),
-            req.address_book_entry.as_deref(),
-            toggle,
-        )?;
+        check_session_type_enabled(&req.session_type, req.address_book_entry.as_deref(), toggle)?;
 
         let session_id = Uuid::new_v4();
         // Protocol-specific params land in flattened sub-structs (see
@@ -236,7 +232,7 @@ impl SessionManager {
                 let typescript = self
                     .config
                     .ssh_typescript()
-                    .filter(|_| ssh.map_or(false, |s| s.record_typescript == Some(true)))
+                    .filter(|_| ssh.is_some_and(|s| s.record_typescript == Some(true)))
                     .map(|(path, name, create)| {
                         let template = name.as_deref().unwrap_or(DEFAULT_TYPESCRIPT_NAME);
                         let connection = req
@@ -704,10 +700,10 @@ impl SessionManager {
                     .await?;
 
                 if url_host == "169.254.169.254"
-                    || url_host.parse::<std::net::IpAddr>().map_or(false, |ip| {
+                    || url_host.parse::<std::net::IpAddr>().is_ok_and(|ip| {
                         "169.254.0.0/16"
                             .parse::<ipnetwork::IpNetwork>()
-                            .map_or(false, |net| net.contains(ip))
+                            .is_ok_and(|net| net.contains(ip))
                     })
                 {
                     return Err(SessionError::ValidationError(
@@ -718,7 +714,7 @@ impl SessionManager {
                 tracing::info!(
                     session_id = %session_id,
                     url = %url,
-                    has_login_script = web.map_or(false, |s| s.login_script.is_some()),
+                    has_login_script = web.is_some_and(|s| s.login_script.is_some()),
                     "Creating new web session"
                 );
 
@@ -1018,7 +1014,7 @@ impl SessionManager {
                 url.as_ref().unwrap().clone()
             };
 
-            let need_cdp = web.map_or(false, |s| s.login_script.is_some());
+            let need_cdp = web.is_some_and(|s| s.login_script.is_some());
 
             // Parse autofill credentials JSON and substitute placeholders
             let autofill_creds = parse_autofill_credentials(
@@ -1104,7 +1100,7 @@ impl SessionManager {
                         .map_err(|e| e.to_string())
                 }
             )
-            .map_err(|e| SessionError::GuacdConnection(e))?;
+            .map_err(SessionError::GuacdConnection)?;
 
             tracing::info!(
                 session_id = %session_id,
@@ -1554,15 +1550,15 @@ fn protocol_label(session_type: &SessionType) -> &'static str {
 /// API with an `address_book_entry` of the form `vsphere/<vm name>`; they
 /// additionally require `enable_vmware`.
 fn check_session_type_enabled(
-    session_type: SessionType,
+    session_type: &SessionType,
     address_book_entry: Option<&str>,
     toggle: impl Fn(&str) -> bool,
 ) -> Result<(), SessionError> {
-    if let Some(key) = protocol_toggle(&session_type) {
+    if let Some(key) = protocol_toggle(session_type) {
         if !toggle(key) {
             return Err(SessionError::ValidationError(format!(
                 "{} sessions are disabled by an administrator",
-                protocol_label(&session_type)
+                protocol_label(session_type)
             )));
         }
     }
@@ -1836,7 +1832,7 @@ mod tests {
     fn all_protocols_allowed_when_toggles_unset() {
         for st in ALL_TYPES {
             assert!(
-                check_session_type_enabled(st.clone(), None, |_| true).is_ok(),
+                check_session_type_enabled(&st, None, |_| true).is_ok(),
                 "{:?} should be allowed when everything is enabled",
                 st
             );
@@ -1845,7 +1841,7 @@ mod tests {
 
     #[test]
     fn rdp_disabled_blocks_rdp_sessions() {
-        let err = check_session_type_enabled(SessionType::Rdp, None, only_off(&["enable_rdp"]))
+        let err = check_session_type_enabled(&SessionType::Rdp, None, only_off(&["enable_rdp"]))
             .unwrap_err();
         assert!(
             format!("{}", err).contains("RDP sessions are disabled by an administrator"),
@@ -1858,7 +1854,7 @@ mod tests {
     fn ssh_has_no_toggle_and_is_never_blocked() {
         // Semantic change (T03): enable_ssh_tunnels no longer gates SSH
         // sessions — it only controls the jump-host management UI.
-        assert!(check_session_type_enabled(SessionType::Ssh, None, |_| false).is_ok());
+        assert!(check_session_type_enabled(&SessionType::Ssh, None, |_| false).is_ok());
     }
 
     #[test]
@@ -1869,7 +1865,7 @@ mod tests {
             (SessionType::Web, "enable_web_sessions", "Web browser"),
             (SessionType::Vdi, "enable_vdi", "VDI"),
         ] {
-            let err = check_session_type_enabled(st.clone(), None, only_off(&[key])).unwrap_err();
+            let err = check_session_type_enabled(&st, None, only_off(&[key])).unwrap_err();
             assert!(
                 format!("{}", err).contains(&format!(
                     "{} sessions are disabled by an administrator",
@@ -1886,13 +1882,11 @@ mod tests {
         for st in ALL_TYPES {
             if st == SessionType::Spice {
                 assert!(
-                    check_session_type_enabled(st.clone(), None, only_off(&["enable_spice"]))
-                        .is_err()
+                    check_session_type_enabled(&st, None, only_off(&["enable_spice"])).is_err()
                 );
             } else {
                 assert!(
-                    check_session_type_enabled(st.clone(), None, only_off(&["enable_spice"]))
-                        .is_ok(),
+                    check_session_type_enabled(&st, None, only_off(&["enable_spice"])).is_ok(),
                     "{:?} must not be affected by enable_spice",
                     st
                 );
@@ -1902,13 +1896,13 @@ mod tests {
 
     #[test]
     fn vnc_has_no_toggle_and_is_never_blocked() {
-        assert!(check_session_type_enabled(SessionType::Vnc, None, |_| false).is_ok());
+        assert!(check_session_type_enabled(&SessionType::Vnc, None, |_| false).is_ok());
     }
 
     #[test]
     fn vmware_entries_gated_by_enable_vmware() {
         let err = check_session_type_enabled(
-            SessionType::Rdp,
+            &SessionType::Rdp,
             Some("vsphere/webserver-01"),
             only_off(&["enable_vmware"]),
         )
@@ -1918,13 +1912,15 @@ mod tests {
             "got: {}",
             err
         );
-        assert!(
-            check_session_type_enabled(SessionType::Rdp, Some("vsphere/webserver-01"), |_| true)
-                .is_ok()
-        );
+        assert!(check_session_type_enabled(
+            &SessionType::Rdp,
+            Some("vsphere/webserver-01"),
+            |_| true
+        )
+        .is_ok());
         assert!(
             check_session_type_enabled(
-                SessionType::Rdp,
+                &SessionType::Rdp,
                 Some("shared/folder/entry"),
                 only_off(&["enable_vmware"]),
             )

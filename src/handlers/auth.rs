@@ -130,6 +130,7 @@ pub struct LoginQueryParams {
 /// GET / — login page, or a redirect to the connections page when a valid
 /// session cookie is already present. First run redirects to the setup
 /// wizard (no users exist yet).
+#[allow(clippy::too_many_arguments)]
 pub async fn login_page(
     State(state): State<crate::api::AppState>,
     _addr: ConnectInfo<SocketAddr>,
@@ -199,6 +200,7 @@ pub async fn login_page(
     tmpl.into_response()
 }
 
+#[allow(clippy::too_many_arguments)]
 /// POST /auth/login — password-based auth (tries DB/LDAP/RADIUS in chain order).
 pub async fn login_submit(
     State(state): State<crate::api::AppState>,
@@ -727,6 +729,7 @@ pub struct LoginFormData {
 
 /// POST /auth/saml/acs — SAML Assertion Consumer Service callback.
 ///
+#[allow(clippy::too_many_arguments)]
 /// Receives the SAMLResponse from the IdP, validates it, creates an auth
 /// session, and redirects to connections.
 pub async fn saml_acs(

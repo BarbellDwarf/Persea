@@ -352,16 +352,14 @@ fn verify_events(events: Vec<(i64, AuditEvent)>, first_id: Option<i64>) -> Chain
                     ),
                 });
             }
-        } else if event.prev_hash != "0".repeat(64) {
-            if first_id != Some(id) {
-                errors.push(ChainError {
-                    event_id: id,
-                    message: format!(
-                        "prev_hash {} does not match genesis hash or preceding event",
-                        event.prev_hash
-                    ),
-                });
-            }
+        } else if event.prev_hash != "0".repeat(64) && first_id != Some(id) {
+            errors.push(ChainError {
+                event_id: id,
+                message: format!(
+                    "prev_hash {} does not match genesis hash or preceding event",
+                    event.prev_hash
+                ),
+            });
         }
 
         let computed = compute_event_hash(&event);

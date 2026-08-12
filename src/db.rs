@@ -1452,7 +1452,7 @@ pub fn ensure_local_groups(db: &Db, groups: &[String]) -> rusqlite::Result<usize
     if groups.is_empty() {
         return Ok(0);
     }
-    let mut conn = db.lock().unwrap();
+    let conn = db.lock().unwrap();
     let mut created = 0usize;
     {
         let mut stmt = conn.prepare(
@@ -4685,7 +4685,8 @@ type PoolJobResult = Result<PoolBoxed, PoolBoxed>;
 
 /// Store-call error types must be constructible when the worker thread is
 /// unreachable so fail-closed behavior is possible in every caller.
-trait StoreErr: Send + 'static {
+pub trait StoreErr: Send + 'static {
+    /// Convert a store-failure message into this error type.
     fn from_store_failure(msg: &str) -> Self;
 }
 
@@ -4702,6 +4703,7 @@ impl StoreErr for AuthError {
 }
 
 struct PoolJob {
+    #[allow(clippy::type_complexity)]
     run: Box<
         dyn FnOnce(
                 &'static DbPool,
@@ -4794,6 +4796,7 @@ where
         E::from_store_failure("no active database pool configured (db_url not set)")
     })?;
     let (done_tx, done_rx) = std::sync::mpsc::channel();
+    #[allow(clippy::type_complexity)]
     let run: Box<
         dyn FnOnce(
                 &'static DbPool,
@@ -5120,7 +5123,7 @@ async fn upsert_user_pool(
             Arg::Str(groups_str),
         ],
     };
-    pool_exec(pool, &sql, &args).await.map_err(map_sqlx_err)?;
+    pool_exec(pool, sql, &args).await.map_err(map_sqlx_err)?;
 
     let rows = match pool {
         DbPool::Postgres(p) => {
@@ -5606,6 +5609,7 @@ async fn get_login_credentials_pool(
 
 /// Login-path lookup for the database auth provider: id, email, name, role,
 /// disabled, password_hash. `Ok(None)` when the user does not exist.
+#[allow(clippy::type_complexity)]
 pub fn get_user_login_info(
     db: &Db,
     email: &str,
@@ -7958,11 +7962,6 @@ macro_rules! ab_cred_row {
     };
 }
 
-const AB_FOLDER_SELECT: &str =
-    "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at FROM address_book_folders";
-const AB_ENTRY_SELECT: &str =
-    "SELECT id, folder_id, name, display_name, protocol, hostname, port, username, protocol_config, allowed_groups, created_at, updated_at FROM address_book_entries";
-
 async fn create_ab_folder_pool(
     pool: &DbPool,
     scope: String,
@@ -8639,9 +8638,9 @@ async fn count_group_name_references_pool(
         }
     };
     let row = match pool {
-        DbPool::Postgres(p) => pg_fetch_opt(p, &sql, &args).await,
-        DbPool::MySQL(p) => mysql_fetch_opt(p, &sql, &args).await,
-        DbPool::SQLite(p) => sqlite_fetch_opt(p, &sql, &args).await,
+        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &args).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &args).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &args).await,
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
@@ -9296,9 +9295,9 @@ pub(crate) async fn rbac_check_connection_permission_pool(
         ),
     };
     let row = match pool {
-        DbPool::Postgres(p) => pg_fetch_opt(p, &sql, &args).await,
-        DbPool::MySQL(p) => mysql_fetch_opt(p, &sql, &args).await,
-        DbPool::SQLite(p) => sqlite_fetch_opt(p, &sql, &args).await,
+        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &args).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &args).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &args).await,
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;

@@ -404,6 +404,7 @@ pub async fn audit_events(
         } else {
             &event.event_hash
         };
+        let short_hash_display = format!("{short_hash}…");
         let details = if event.details.is_null() {
             "-".to_string()
         } else if let Some(obj) = event.details.as_object() {
@@ -439,12 +440,12 @@ pub async fn audit_events(
             escaped_details,
             escaped_details,
             escaped_hash,
-            format!("{}…", short_hash),
+            short_hash_display,
         ));
     }
 
     // Append pagination info as hx-headers so the client can update pagination controls
-    let total_pages = (total + limit - 1) / limit;
+    let total_pages = total.div_ceil(limit);
     let current_page = offset / limit + 1;
     html.push_str(&format!(
         r#"<tr id="audit-pagination-data" data-total="{}" data-pages="{}" data-current="{}" data-limit="{}" style="display:none"></tr>"#,

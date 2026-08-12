@@ -423,7 +423,7 @@ impl SessionManager {
         issued_by: &str,
     ) -> Option<(String, DateTime<Utc>)> {
         use sha2::{Digest, Sha256};
-        let Some(ref db) = self.db else { return None };
+        let db = self.db.as_ref()?;
 
         let mut rng = rand::rng();
         let bytes: [u8; 16] = rng.random();

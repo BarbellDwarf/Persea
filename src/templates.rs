@@ -273,8 +273,8 @@ impl FeatureFlags {
     }
 }
 
-/// Request-scoped feature flags, carried across awaits for the duration of
-/// one HTML-page request (mirrors the ERROR_CONTEXT pattern in error.rs).
+// Request-scoped feature flags, carried across awaits for the duration of
+// one HTML-page request (mirrors the ERROR_CONTEXT pattern in error.rs).
 tokio::task_local! {
     static REQUEST_FEATURES: Arc<FeatureFlags>;
 }

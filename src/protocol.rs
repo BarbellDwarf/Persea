@@ -106,7 +106,6 @@ fn encode_element(s: &str) -> String {
 #[derive(Debug, PartialEq)]
 #[must_use]
 /// Why a Guacamole instruction could not be parsed from wire format.
-#[must_use]
 pub enum ParseError {
     /// The instruction contained no elements at all (empty input or a bare `;`).
     Empty,
