@@ -37,7 +37,9 @@ pub struct PveSpiceConfig {
 /// VM type in PVE — determines which API sub-path to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PveVmType {
+    /// A QEMU/KVM virtual machine.
     Qemu,
+    /// An LXC container.
     Lxc,
 }
 
@@ -114,6 +116,13 @@ pub struct PveBroker {
     pub verify_tls: bool,
 }
 
+/// Errors from Proxmox VE API calls.
+///
+/// `Transport` covers connect, TLS, and timeout failures, `Api` carries
+/// the HTTP status plus PVE's own error body, and `Parse` means the
+/// response was not what the client expected. No variant can hold a
+/// credential or ticket: only successful proxy responses carry those,
+/// and this module never puts response bodies into error text.
 #[derive(Debug)]
 #[must_use]
 pub enum PveError {
