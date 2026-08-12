@@ -1994,7 +1994,10 @@ pub fn registry_delete_session(_db: &Db, session_id: &str) -> rusqlite::Result<(
 }
 
 /// Fetch one registry row. No pool → `Ok(None)`.
-pub fn registry_get_session(_db: &Db, session_id: &str) -> rusqlite::Result<Option<SessionRegistryRow>> {
+pub fn registry_get_session(
+    _db: &Db,
+    session_id: &str,
+) -> rusqlite::Result<Option<SessionRegistryRow>> {
     if pool_store().is_none() {
         return Ok(None);
     }
@@ -2064,7 +2067,11 @@ pub fn registry_delete_all_owned(_db: &Db, owner_instance: &str) -> rusqlite::Re
     if pool_store().is_none() {
         return Ok(0);
     }
-    db_route!(db, registry_delete_all_owned_pool, owner_instance.to_string());
+    db_route!(
+        db,
+        registry_delete_all_owned_pool,
+        owner_instance.to_string()
+    );
     Ok(0)
 }
 
@@ -6405,41 +6412,59 @@ async fn end_session_history_pool(
 
 /// Upsert differs only in the conflict clause: Postgres and SQLite share
 /// `ON CONFLICT (session_id) DO UPDATE SET`, MySQL uses
-/// `ON DUPLICATE KEY UPDATE`.
-fn registry_upsert_sql() -> &'static str {
-    "INSERT INTO session_registry \
-     (session_id, owner_instance, owner_base_url, session_type, status, \
-      hostname, username, created_by, created_at, last_active_at, connection_id) \
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-     ON CONFLICT (session_id) DO UPDATE SET \
-      owner_instance = excluded.owner_instance, \
-      owner_base_url = excluded.owner_base_url, \
-      session_type = excluded.session_type, \
-      status = excluded.status, \
-      hostname = excluded.hostname, \
-      username = excluded.username, \
-      created_by = excluded.created_by, \
-      created_at = excluded.created_at, \
-      last_active_at = excluded.last_active_at, \
-      connection_id = excluded.connection_id"
-}
-
-fn registry_upsert_sql_mysql() -> &'static str {
-    "INSERT INTO session_registry \
-     (session_id, owner_instance, owner_base_url, session_type, status, \
-      hostname, username, created_by, created_at, last_active_at, connection_id) \
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-     ON DUPLICATE KEY UPDATE \
-      owner_instance = VALUES(owner_instance), \
-      owner_base_url = VALUES(owner_base_url), \
-      session_type = VALUES(session_type), \
-      status = VALUES(status), \
-      hostname = VALUES(hostname), \
-      username = VALUES(username), \
-      created_by = VALUES(created_by), \
-      created_at = VALUES(created_at), \
-      last_active_at = VALUES(last_active_at), \
-      connection_id = VALUES(connection_id)"
+/// `ON DUPLICATE KEY UPDATE`. Placeholder syntax differs too (`$n` on
+/// Postgres, `?` elsewhere) — selected by backend.
+fn registry_upsert_sql(pool: &DbPool) -> String {
+    match pool {
+        DbPool::Postgres(_) => "INSERT INTO session_registry \
+             (session_id, owner_instance, owner_base_url, session_type, status, \
+              hostname, username, created_by, created_at, last_active_at, connection_id) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
+             ON CONFLICT (session_id) DO UPDATE SET \
+              owner_instance = excluded.owner_instance, \
+              owner_base_url = excluded.owner_base_url, \
+              session_type = excluded.session_type, \
+              status = excluded.status, \
+              hostname = excluded.hostname, \
+              username = excluded.username, \
+              created_by = excluded.created_by, \
+              created_at = excluded.created_at, \
+              last_active_at = excluded.last_active_at, \
+              connection_id = excluded.connection_id"
+            .to_string(),
+        DbPool::MySQL(_) => "INSERT INTO session_registry \
+             (session_id, owner_instance, owner_base_url, session_type, status, \
+              hostname, username, created_by, created_at, last_active_at, connection_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON DUPLICATE KEY UPDATE \
+              owner_instance = VALUES(owner_instance), \
+              owner_base_url = VALUES(owner_base_url), \
+              session_type = VALUES(session_type), \
+              status = VALUES(status), \
+              hostname = VALUES(hostname), \
+              username = VALUES(username), \
+              created_by = VALUES(created_by), \
+              created_at = VALUES(created_at), \
+              last_active_at = VALUES(last_active_at), \
+              connection_id = VALUES(connection_id)"
+            .to_string(),
+        _ => "INSERT INTO session_registry \
+             (session_id, owner_instance, owner_base_url, session_type, status, \
+              hostname, username, created_by, created_at, last_active_at, connection_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+             ON CONFLICT (session_id) DO UPDATE SET \
+              owner_instance = excluded.owner_instance, \
+              owner_base_url = excluded.owner_base_url, \
+              session_type = excluded.session_type, \
+              status = excluded.status, \
+              hostname = excluded.hostname, \
+              username = excluded.username, \
+              created_by = excluded.created_by, \
+              created_at = excluded.created_at, \
+              last_active_at = excluded.last_active_at, \
+              connection_id = excluded.connection_id"
+            .to_string(),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -6457,13 +6482,10 @@ async fn registry_upsert_session_pool(
     last_active_at: String,
     connection_id: String,
 ) -> rusqlite::Result<()> {
-    let sql = match pool {
-        DbPool::MySQL(_) => registry_upsert_sql_mysql(),
-        _ => registry_upsert_sql(),
-    };
+    let sql = registry_upsert_sql(pool);
     pool_exec(
         pool,
-        sql,
+        &sql,
         &[
             Arg::Str(session_id),
             Arg::Str(owner_instance),
@@ -6491,8 +6513,16 @@ async fn registry_set_status_pool(
 ) -> rusqlite::Result<()> {
     pool_exec(
         pool,
-        "UPDATE session_registry SET status = ?, last_active_at = ? WHERE session_id = ?",
-        &[Arg::Str(status), Arg::Str(last_active_at), Arg::Str(session_id)],
+        qsql!(
+            pool,
+            "UPDATE session_registry SET status = $1, last_active_at = $2 WHERE session_id = $3",
+            "UPDATE session_registry SET status = ?, last_active_at = ? WHERE session_id = ?"
+        ),
+        &[
+            Arg::Str(status),
+            Arg::Str(last_active_at),
+            Arg::Str(session_id),
+        ],
     )
     .await
     .map_err(map_sqlx_err)?;
@@ -6508,7 +6538,11 @@ async fn registry_set_shadow_token_pool(
 ) -> rusqlite::Result<()> {
     pool_exec(
         pool,
-        "UPDATE session_registry SET shadow_token_hash = ?, shadow_issued_by = ?, shadow_expires_at = ? WHERE session_id = ?",
+        qsql!(
+            pool,
+            "UPDATE session_registry SET shadow_token_hash = $1, shadow_issued_by = $2, shadow_expires_at = $3 WHERE session_id = $4",
+            "UPDATE session_registry SET shadow_token_hash = ?, shadow_issued_by = ?, shadow_expires_at = ? WHERE session_id = ?"
+        ),
         &[
             Arg::Str(token_hash),
             Arg::Str(issued_by),
@@ -6521,13 +6555,14 @@ async fn registry_set_shadow_token_pool(
     Ok(())
 }
 
-async fn registry_delete_session_pool(
-    pool: &DbPool,
-    session_id: String,
-) -> rusqlite::Result<()> {
+async fn registry_delete_session_pool(pool: &DbPool, session_id: String) -> rusqlite::Result<()> {
     pool_exec(
         pool,
-        "DELETE FROM session_registry WHERE session_id = ?",
+        qsql!(
+            pool,
+            "DELETE FROM session_registry WHERE session_id = $1",
+            "DELETE FROM session_registry WHERE session_id = ?"
+        ),
         &[Arg::Str(session_id)],
     )
     .await
@@ -6585,8 +6620,14 @@ async fn registry_list_sessions_pool(pool: &DbPool) -> rusqlite::Result<Vec<Sess
     Ok(rows.iter().map(registry_row_from).collect())
 }
 
-async fn registry_list_owned_pool(pool: &DbPool, owner_instance: String) -> rusqlite::Result<Vec<String>> {
-    let sql = "SELECT session_id FROM session_registry WHERE owner_instance = ?";
+async fn registry_list_owned_pool(
+    pool: &DbPool,
+    owner_instance: String,
+) -> rusqlite::Result<Vec<String>> {
+    let sql = match pool {
+        DbPool::Postgres(_) => "SELECT session_id FROM session_registry WHERE owner_instance = $1",
+        _ => "SELECT session_id FROM session_registry WHERE owner_instance = ?",
+    };
     let rows = match pool {
         DbPool::Postgres(p) => pg_fetch(p, sql, &[Arg::Str(owner_instance)]).await,
         DbPool::MySQL(p) => mysql_fetch(p, sql, &[Arg::Str(owner_instance)]).await,
@@ -6614,7 +6655,8 @@ async fn registry_delete_stale_pool(
                (status = 'pending' AND created_at < $1) \
              OR (status IN ('completed','error','expired') AND created_at < $2) \
              OR (status NOT IN ('pending','completed','error','expired') \
-                 AND owner_instance <> $3 AND created_at < $4)".to_string(),
+                 AND owner_instance <> $3 AND created_at < $4)"
+                .to_string(),
             vec![
                 Arg::Str(pending_cutoff),
                 Arg::Str(terminal_cutoff),
@@ -6627,7 +6669,8 @@ async fn registry_delete_stale_pool(
                (status = 'pending' AND created_at < ?) \
              OR (status IN ('completed','error','expired') AND created_at < ?) \
              OR (status NOT IN ('pending','completed','error','expired') \
-                 AND owner_instance <> ? AND created_at < ?)".to_string(),
+                 AND owner_instance <> ? AND created_at < ?)"
+                .to_string(),
             vec![
                 Arg::Str(pending_cutoff),
                 Arg::Str(terminal_cutoff),
@@ -6638,13 +6681,15 @@ async fn registry_delete_stale_pool(
         (DbPool::Postgres(_), None) => (
             "DELETE FROM session_registry WHERE \
                (status = 'pending' AND created_at < $1) \
-             OR (status IN ('completed','error','expired') AND created_at < $2)".to_string(),
+             OR (status IN ('completed','error','expired') AND created_at < $2)"
+                .to_string(),
             vec![Arg::Str(pending_cutoff), Arg::Str(terminal_cutoff)],
         ),
         (_, None) => (
             "DELETE FROM session_registry WHERE \
                (status = 'pending' AND created_at < ?) \
-             OR (status IN ('completed','error','expired') AND created_at < ?)".to_string(),
+             OR (status IN ('completed','error','expired') AND created_at < ?)"
+                .to_string(),
             vec![Arg::Str(pending_cutoff), Arg::Str(terminal_cutoff)],
         ),
     };
@@ -6658,7 +6703,11 @@ async fn registry_delete_all_owned_pool(
 ) -> rusqlite::Result<usize> {
     let n = pool_exec(
         pool,
-        "DELETE FROM session_registry WHERE owner_instance = ?",
+        qsql!(
+            pool,
+            "DELETE FROM session_registry WHERE owner_instance = $1",
+            "DELETE FROM session_registry WHERE owner_instance = ?"
+        ),
         &[Arg::Str(owner_instance)],
     )
     .await
@@ -6678,8 +6727,13 @@ async fn ws_ticket_insert_pool(
 ) -> rusqlite::Result<()> {
     pool_exec(
         pool,
-        "INSERT INTO ws_tickets (ticket_hash, identity_json, session_id, issued_by, expires_at) \
-         VALUES (?, ?, ?, ?, ?)",
+        qsql!(
+            pool,
+            "INSERT INTO ws_tickets (ticket_hash, identity_json, session_id, issued_by, expires_at) \
+             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO ws_tickets (ticket_hash, identity_json, session_id, issued_by, expires_at) \
+             VALUES (?, ?, ?, ?, ?)"
+        ),
         &[
             Arg::Str(ticket_hash),
             Arg::Str(identity_json),
@@ -6697,7 +6751,12 @@ async fn ws_ticket_get_pool(
     pool: &DbPool,
     ticket_hash: String,
 ) -> rusqlite::Result<Option<(String, String)>> {
-    let sql = "SELECT identity_json, expires_at FROM ws_tickets WHERE ticket_hash = ?";
+    let sql = match pool {
+        DbPool::Postgres(_) => {
+            "SELECT identity_json, expires_at FROM ws_tickets WHERE ticket_hash = $1"
+        }
+        _ => "SELECT identity_json, expires_at FROM ws_tickets WHERE ticket_hash = ?",
+    };
     let row = match pool {
         DbPool::Postgres(p) => pg_fetch_opt(p, sql, &[Arg::Str(ticket_hash)]).await,
         DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &[Arg::Str(ticket_hash)]).await,
@@ -6711,7 +6770,11 @@ async fn ws_ticket_get_pool(
 async fn ws_ticket_delete_pool(pool: &DbPool, ticket_hash: String) -> rusqlite::Result<bool> {
     let n = pool_exec(
         pool,
-        "DELETE FROM ws_tickets WHERE ticket_hash = ?",
+        qsql!(
+            pool,
+            "DELETE FROM ws_tickets WHERE ticket_hash = $1",
+            "DELETE FROM ws_tickets WHERE ticket_hash = ?"
+        ),
         &[Arg::Str(ticket_hash)],
     )
     .await
@@ -6719,13 +6782,14 @@ async fn ws_ticket_delete_pool(pool: &DbPool, ticket_hash: String) -> rusqlite::
     Ok(n > 0)
 }
 
-async fn ws_ticket_cleanup_expired_pool(
-    pool: &DbPool,
-    cutoff: String,
-) -> rusqlite::Result<usize> {
+async fn ws_ticket_cleanup_expired_pool(pool: &DbPool, cutoff: String) -> rusqlite::Result<usize> {
     let n = pool_exec(
         pool,
-        "DELETE FROM ws_tickets WHERE expires_at < ?",
+        qsql!(
+            pool,
+            "DELETE FROM ws_tickets WHERE expires_at < $1",
+            "DELETE FROM ws_tickets WHERE expires_at < ?"
+        ),
         &[Arg::Str(cutoff)],
     )
     .await
