@@ -23,6 +23,26 @@
         </div>
     </div>
 
+    <!-- Filter bar (hidden until folders exist) -->
+    <div id="filter-bar" class="hidden" style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
+        <select id="filter-type" class="form-input" style="width:150px" title="Filter by session type">
+            <option value="">All types</option>
+            <option value="ssh">SSH</option>
+            {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
+            <option value="vnc">VNC</option>
+            {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
+            {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
+            {% if features.vdi %}<option value="vdi">VDI</option>{% endif %}
+            {% if features.proxmox %}<option value="proxmox">Proxmox</option>{% endif %}
+        </select>
+        <select id="filter-folder" class="form-input" style="width:200px" title="Filter by folder">
+            <option value="">All folders</option>
+        </select>
+        <input type="text" id="filter-desc" class="form-input" style="width:200px" placeholder="Filter by description..." autocomplete="off">
+        <div id="filter-custom-fields" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"></div>
+        <button id="filter-clear" class="btn btn-secondary btn-sm" style="width:auto">Clear filters</button>
+    </div>
+
     <!-- Vault unavailable warning (hidden by default) -->
     <div id="vault-unavailable" class="hidden" role="alert" aria-live="polite" style="padding:12px 16px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;color:#fbbf24;font-size:13px;margin-bottom:20px">
         <strong>Connections temporarily unavailable.</strong> Cannot reach the Vault server or database. Retrying automatically.
@@ -213,6 +233,7 @@
                 </select>
                 <div id="em-type-help" class="text-xs text-[var(--text-muted)] mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
             </div>
+            <div id="em-custom-fields"></div>
             <div>
                 <label class="form-label" for="em-hostname">Hostname</label>
                 <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
@@ -571,6 +592,7 @@
     var rbacUsers = null;
     var emRbac = [];
     var emRbacOrig = [];
+    var customFieldDefs = [];
 
     function folderKey(scope, path) {
         return scope + '\u0000' + path;
@@ -647,6 +669,8 @@
                 folderMap = new Map();
                 folders.forEach(function(f) { folderMap.set(folderKey(f.scope, f.path), f); });
                 folders.forEach(function(f) { expandedKeys.add(folderKey(f.scope, f.path)); });
+                populateFilterFolders();
+                document.getElementById('filter-bar').classList.toggle('hidden', folders.length === 0);
                 if (folders.length === 0) {
                     if (isAdmin) {
                         document.getElementById('main-content').classList.add('hidden');
@@ -686,8 +710,10 @@
             if (reqId !== entriesReqId) return;
             if (unavailable) { showUnavailable(); return; }
             entriesByFolder = buffer;
+            refreshCustomFilterOptions();
             renderFolders();
-            if (searchQuery) runSearch();
+            var af = activeFilters();
+            if (searchQuery || af.active) runSearch();
             else if (selectedFolder && folderMap.get(folderKey(selectedFolder.scope, selectedFolder.path))) {
                 selectFolder(selectedFolder);
             } else if (folders.length) {
@@ -860,13 +886,154 @@
         }).join('');
         wireEntryRows(container);
     }
+    // ── Custom fields (entry modal + filters) ────────────────────────
+    function findCustomFieldDef(name) {
+        for (var i = 0; i < customFieldDefs.length; i++) {
+            if (customFieldDefs[i].name === name) return customFieldDefs[i];
+        }
+        return null;
+    }
+    function loadCustomFields() {
+        fetch('/api/addressbook/custom-fields', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(defs) {
+                customFieldDefs = Array.isArray(defs) ? defs : [];
+                renderCustomFieldFilters();
+            })
+            .catch(function() { customFieldDefs = []; });
+    }
+    function renderCustomFieldInputs(values) {
+        var container = document.getElementById('em-custom-fields');
+        container.innerHTML = '';
+        values = values || {};
+        var html = [];
+        customFieldDefs.forEach(function(def) {
+            var name = def.name;
+            var val = values[name] !== undefined && values[name] !== null ? String(values[name]) : '';
+            var req = !!def.required;
+            var reqMark = req ? ' <span style="color:#f87171">*</span>' : '';
+            html.push('<div>');
+            html.push('<label class="form-label" for="em-cf-' + escapeAttr(name) + '">' + escapeHtml(name) + reqMark + '</label>');
+            if (def.type === 'select') {
+                html.push('<select id="em-cf-' + escapeAttr(name) + '" class="form-input" data-cf-name="' + escapeAttr(name) + '" data-cf-required="' + (req ? '1' : '0') + '">');
+                html.push('<option value="">(none)</option>');
+                (def.options || []).forEach(function(o) {
+                    html.push('<option value="' + escapeAttr(o) + '"' + (val === o ? ' selected' : '') + '>' + escapeHtml(o) + '</option>');
+                });
+                html.push('</select>');
+            } else {
+                html.push('<input type="text" id="em-cf-' + escapeAttr(name) + '" class="form-input" data-cf-name="' + escapeAttr(name) + '" data-cf-required="' + (req ? '1' : '0') + '" value="' + escapeAttr(val) + '" autocomplete="off">');
+            }
+            html.push('</div>');
+        });
+        container.innerHTML = html.join('');
+        container.style.display = customFieldDefs.length ? '' : 'none';
+    }
+    function distinctCustomFieldValues(name) {
+        var seen = [];
+        entriesByFolder.forEach(function(list) {
+            list.forEach(function(e) {
+                var cf = e.custom_fields || {};
+                if (cf[name] !== undefined && cf[name] !== null && String(cf[name]) !== '') {
+                    var v = String(cf[name]);
+                    if (seen.indexOf(v) === -1) seen.push(v);
+                }
+            });
+        });
+        return seen.sort();
+    }
+    function renderCustomFieldFilters() {
+        var container = document.getElementById('filter-custom-fields');
+        container.innerHTML = '';
+        customFieldDefs.forEach(function(def) {
+            var sel = document.createElement('select');
+            sel.className = 'form-input';
+            sel.style.width = '150px';
+            sel.setAttribute('data-cf-filter', def.name);
+            sel.title = 'Filter by ' + def.name;
+            var allOpt = document.createElement('option');
+            allOpt.value = '';
+            allOpt.textContent = def.name + ': all';
+            sel.appendChild(allOpt);
+            if (def.type === 'select') {
+                (def.options || []).forEach(function(o) {
+                    var opt = document.createElement('option');
+                    opt.value = o;
+                    opt.textContent = o;
+                    sel.appendChild(opt);
+                });
+            } else {
+                distinctCustomFieldValues(def.name).forEach(function(v) {
+                    var opt = document.createElement('option');
+                    opt.value = v;
+                    opt.textContent = v;
+                    sel.appendChild(opt);
+                });
+            }
+            sel.addEventListener('change', runSearch);
+            container.appendChild(sel);
+        });
+    }
+    function refreshCustomFilterOptions() {
+        var sels = document.querySelectorAll('#filter-custom-fields select[data-cf-filter]');
+        for (var i = 0; i < sels.length; i++) {
+            var sel = sels[i];
+            var def = findCustomFieldDef(sel.getAttribute('data-cf-filter'));
+            if (!def || def.type === 'select') continue;
+            var current = sel.value;
+            var opts = distinctCustomFieldValues(def.name);
+            if (current && opts.indexOf(current) === -1) opts.push(current);
+            var html = ['<option value="">' + escapeHtml(def.name) + ': all</option>'];
+            opts.forEach(function(o) {
+                html.push('<option value="' + escapeAttr(o) + '"' + (o === current ? ' selected' : '') + '>' + escapeHtml(o) + '</option>');
+            });
+            sel.innerHTML = html.join('');
+        }
+    }
+    function populateFilterFolders() {
+        var sel = document.getElementById('filter-folder');
+        sel.innerHTML = '<option value="">All folders</option>';
+        var sf = document.getElementById('scope-filter').value;
+        folders.forEach(function(f) {
+            if (sf && f.scope !== sf) return;
+            var opt = document.createElement('option');
+            opt.value = f.scope + '|' + f.path;
+            opt.textContent = f.path + (f.scope === 'instance' ? ' (instance)' : '');
+            sel.appendChild(opt);
+        });
+    }
+    function activeFilters() {
+        var type = document.getElementById('filter-type').value;
+        var folder = document.getElementById('filter-folder').value;
+        var desc = document.getElementById('filter-desc').value.trim().toLowerCase();
+        var custom = {};
+        var cfs = document.querySelectorAll('#filter-custom-fields select[data-cf-filter]');
+        var anyCustom = false;
+        for (var i = 0; i < cfs.length; i++) {
+            var v = cfs[i].value;
+            if (v) { custom[cfs[i].getAttribute('data-cf-filter')] = v; anyCustom = true; }
+        }
+        return {
+            type: type, folder: folder, desc: desc, custom: custom,
+            active: !!(type || folder || desc || anyCustom)
+        };
+    }
+    function clearFilters() {
+        document.getElementById('filter-type').value = '';
+        document.getElementById('filter-folder').value = '';
+        document.getElementById('filter-desc').value = '';
+        var cfs = document.querySelectorAll('#filter-custom-fields select[data-cf-filter]');
+        for (var i = 0; i < cfs.length; i++) cfs[i].value = '';
+        runSearch();
+    }
     function runSearch() {
         var input = document.getElementById('connections-search');
         var q = (input.value || '').trim().toLowerCase();
         searchQuery = q;
+        var filters = activeFilters();
         var header = document.getElementById('entries-header');
         var container = document.getElementById('entries-content');
-        if (!q) {
+        if (!q && !filters.active) {
             if (selectedFolder) selectFolder(selectedFolder);
             return;
         }
@@ -874,17 +1041,38 @@
         var results = [];
         folders.forEach(function(f) {
             if (scopeFilter && f.scope !== scopeFilter) return;
+            if (filters.folder) {
+                var fp = filters.folder.split('|');
+                if (f.scope !== fp[0] || f.path !== fp[1]) return;
+            }
             (entriesByFolder.get(folderKey(f.scope, f.path)) || []).forEach(function(e) {
+                if (filters.type && (e.session_type || '').toLowerCase() !== filters.type) return;
+                if (filters.desc && (e.description || '').toLowerCase().indexOf(filters.desc) === -1) return;
+                var cf = e.custom_fields || {};
+                var customKeys = Object.keys(filters.custom);
+                for (var ci = 0; ci < customKeys.length; ci++) {
+                    if (String(cf[customKeys[ci]] || '') !== filters.custom[customKeys[ci]]) return;
+                }
                 var host = entryHost(e);
                 var hay = [e.name, e.display_name || '', e.description || '', host, e.username || '', e.url || '', e.domain || '', e.session_type, f.name, f.scope].join(' ').toLowerCase();
-                if (hay.indexOf(q) !== -1) results.push({ scope: f.scope, path: f.path, folderName: f.name, entry: e });
+                if (q && hay.indexOf(q) === -1) return;
+                results.push({ scope: f.scope, path: f.path, folderName: f.name, entry: e });
             });
         });
         header.classList.remove('hidden');
         syncPlaceholder();
         document.getElementById('entries-title').textContent = 'Search results';
         document.getElementById('entries-count').textContent = String(results.length);
-        document.getElementById('entries-desc').textContent = 'matching "' + q + '"';
+        var descParts = [];
+        if (q) descParts.push('"' + q + '"');
+        if (filters.type) descParts.push('type ' + filters.type.toUpperCase());
+        if (filters.folder) {
+            var ff = filters.folder.split('|');
+            descParts.push('folder ' + ff[1] + (ff[0] === 'instance' ? ' (instance)' : ''));
+        }
+        if (filters.desc) descParts.push('description contains "' + filters.desc + '"');
+        for (var ck in filters.custom) descParts.push(ck + ' = ' + filters.custom[ck]);
+        document.getElementById('entries-desc').textContent = descParts.length ? descParts.join(' \u00B7 ') : '';
         if (results.length === 0) {
             container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">No connections match your search.</p>';
             return;
@@ -900,7 +1088,9 @@
             .then(function(r) { return r.ok ? r.json() : []; })
             .then(function(list) {
                 entriesByFolder.set(folderKey(selectedFolder.scope, selectedFolder.path), list || []);
-                if (searchQuery) runSearch();
+                refreshCustomFilterOptions();
+                var af = activeFilters();
+                if (searchQuery || af.active) runSearch();
                 else if (selectedFolder) selectFolder(selectedFolder);
             });
     }
@@ -1015,6 +1205,12 @@
         add('Container user', e.container_username);
         add('Created', e.created_at);
         add('Updated', e.updated_at);
+        if (e.custom_fields && typeof e.custom_fields === 'object') {
+            Object.keys(e.custom_fields).forEach(function(k) {
+                var v = e.custom_fields[k];
+                if (v !== null && v !== undefined && String(v) !== '') add(k, v);
+            });
+        }
         var connection = detailSection('Connection', rows);
 
         rows = '';
@@ -1536,6 +1732,7 @@
         document.getElementById('em-type').disabled = false;
         clearEntryFields();
         updateIdentifierPreview();
+        renderCustomFieldInputs({});
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
@@ -1599,6 +1796,7 @@
         document.getElementById('em-rdp-domain').value = selectedEntry.domain || '';
         updateKdcField();
         updateIdentifierPreview();
+        renderCustomFieldInputs(selectedEntry.custom_fields || {});
         document.getElementById('em-error').textContent = '';
         document.getElementById('em-error').classList.add('hidden');
         document.getElementById('em-groups-input').value = '';
@@ -1762,6 +1960,27 @@
             }
         }
         if (cp) entry.container_password = cp;
+        // Custom fields: enforce required, then send the FULL map of defined
+        // fields — the server merges per key, so untouched fields keep their
+        // stored values while cleared inputs wipe theirs.
+        var customFields = {};
+        var cfInputs = document.querySelectorAll('#em-custom-fields [data-cf-name]');
+        var cfError = null;
+        for (var ci = 0; ci < cfInputs.length; ci++) {
+            var cfEl = cfInputs[ci];
+            var cfName = cfEl.getAttribute('data-cf-name');
+            var cfVal = cfEl.value.trim();
+            if (cfEl.getAttribute('data-cf-required') === '1' && !cfVal) {
+                if (!cfError) cfError = '"' + cfName + '" is required.';
+            }
+            customFields[cfName] = cfVal;
+        }
+        if (cfError) {
+            errEl.textContent = cfError;
+            errEl.classList.remove('hidden');
+            return;
+        }
+        if (Object.keys(customFields).length > 0) entry.custom_fields = customFields;
         addGroupFromInput('em');
         if (emGroups.length > 0) entry.allowed_groups = emGroups.slice();
 
@@ -2317,6 +2536,15 @@
     }
     function onScopeChange() {
         var sf = document.getElementById('scope-filter').value;
+        populateFilterFolders();
+        var ff = document.getElementById('filter-folder');
+        if (ff.value) {
+            var parts = ff.value.split('|');
+            var still = folders.some(function(f) {
+                return f.scope === parts[0] && f.path === parts[1] && (!sf || f.scope === sf);
+            });
+            if (!still) ff.value = '';
+        }
         if (selectedFolder && sf && selectedFolder.scope !== sf) {
             selectedFolder = null;
             clearEntrySelection();
@@ -2324,7 +2552,8 @@
             document.getElementById('entries-content').innerHTML = '';
             syncPlaceholder();
         }
-        if (searchQuery) runSearch();
+        var af = activeFilters();
+        if (searchQuery || af.active) runSearch();
         else renderFolders();
     }
     function debounce(fn, ms) {
@@ -2449,8 +2678,13 @@
 
     document.getElementById('connections-search').addEventListener('input', debounce(runSearch, 250));
     document.getElementById('scope-filter').addEventListener('change', onScopeChange);
+    document.getElementById('filter-type').addEventListener('change', runSearch);
+    document.getElementById('filter-folder').addEventListener('change', runSearch);
+    document.getElementById('filter-desc').addEventListener('input', debounce(runSearch, 250));
+    document.getElementById('filter-clear').addEventListener('click', clearFilters);
     document.getElementById('btn-vsphere-refresh').addEventListener('click', loadVSphere);
     loadVSphere();
+    loadCustomFields();
 
     // ── Recent sessions ──────────────────────────────────────────────
     function loadRecentSessions() {
