@@ -80,6 +80,25 @@ session_max_duration_secs = 28800
 # Env: PERSEA_AUTH_SESSION_TTL_SECS
 # auth_session_ttl_secs = 86400
 
+# ─── Password Policy ─────────────────────────────────────────────────────────
+
+# Enforced wherever a password is set: the admin users API, the CLI
+# `create-user` command, and the account password-change endpoint.
+# The setup wizard's first-admin password is not policy-checked.
+
+# [password]
+# Minimum password length in characters. Default: 15.
+# Env: PERSEA_PASSWORD__MIN_LENGTH
+# min_length = 15
+#
+# How many recent password hashes to keep per user. A new password matching
+# any of the last `history` passwords is rejected. Default: 5. Set to 0 to
+# disable reuse checking. Hashes are stored in the `password_history` table
+# (created by the per-backend migrations; legacy SQLite creates it on first
+# use).
+# Env: PERSEA_PASSWORD__HISTORY
+# history = 5
+
 # ─── Session Limits ──────────────────────────────────────────────────────────
 
 # Maximum concurrent sessions (all types). Default: 500. Set to 0 for unlimited.

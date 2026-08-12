@@ -54,6 +54,7 @@ pub async fn list_users(
 pub async fn create_user(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    policy: Option<Extension<crate::password::PasswordPolicy>>,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
     let id = identity
@@ -63,6 +64,16 @@ pub async fn create_user(
     if !id.has_role("admin") {
         return Err(AppError::Forbidden("admin role required".into()));
     }
+
+    // Password policy (R108): minimum length enforced at creation, and the
+    // new hash goes into the per-user reuse history. Handlers fall back to
+    // the documented defaults when the extension is absent (test routers).
+    let policy = policy
+        .map(|Extension(p)| p)
+        .unwrap_or_default();
+    policy
+        .check_length(&body.password)
+        .map_err(AppError::Validation)?;
 
     let role = body.role.unwrap_or_else(|| "viewer".to_string());
     let db_clone = database.clone();
@@ -83,6 +94,16 @@ pub async fn create_user(
             "local",
         )
         .map_err(|e| AppError::Internal(e.to_string()))?;
+        // Record the initial hash in the reuse history. The user row was
+        // just inserted, so the lookup cannot fail in practice.
+        if let Ok(user) = db::get_user_by_email(&db_clone, &email) {
+            let _ = crate::password::record_password_history(
+                &db_clone,
+                user.id,
+                &password_hash,
+                policy.history,
+            );
+        }
         Ok::<_, AppError>(())
     })
     .await

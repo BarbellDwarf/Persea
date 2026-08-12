@@ -244,7 +244,7 @@ username = "administrator@vsphere.local"
 
 ## Enterprise features
 
-- **Password policies**: Argon2id (NIST 800-63B), 15-char minimum, breach screening (HIBP), history tracking
+- **Password policies**: Argon2id (NIST 800-63B), enforced 15-char minimum (`password.min_length`), reuse history — the last 5 hashes per user are stored (`password.history`) and reusing one is rejected
 - **Account lockout**: account lockout after 5 failed attempts
 - **Audit logging**: SHA-256 hash chain with tamper evidence, verification via admin UI and API
 - **Session management**: Idle timeout, max duration, concurrent limits, activity tracking

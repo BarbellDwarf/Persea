@@ -396,6 +396,39 @@ fn default_secure_cookies() -> bool {
     true
 }
 
+/// Password policy configuration (`[password]`).
+///
+/// Enforced at every point a password is set: the admin users API, the CLI
+/// `create-user` command, and the account password-change endpoint.
+#[derive(Debug, Deserialize, Clone)]
+pub struct PasswordConfig {
+    /// Minimum password length in characters. Default: 15.
+    #[serde(default = "default_password_min_length")]
+    pub min_length: usize,
+    /// Number of recent password hashes kept per user for reuse rejection.
+    /// A new password matching any of the last `history` passwords is
+    /// rejected. Default: 5. Set to 0 to disable reuse checking.
+    #[serde(default = "default_password_history")]
+    pub history: usize,
+}
+
+fn default_password_min_length() -> usize {
+    15
+}
+
+fn default_password_history() -> usize {
+    5
+}
+
+impl Default for PasswordConfig {
+    fn default() -> Self {
+        Self {
+            min_length: default_password_min_length(),
+            history: default_password_history(),
+        }
+    }
+}
+
 impl Default for AuthTotpConfig {
     fn default() -> Self {
         Self {
@@ -585,6 +618,15 @@ pub struct Config {
     /// and encrypted credentials. When `backend = "vault"`, metadata stays
     /// in DB but credentials are stored in Vault.
     pub storage: Option<StorageConfig>,
+    /// Password policy (`[password]`): minimum length + reuse history.
+    /// Materialised in `default_toml()` so absent sections cannot silently
+    /// reset the defaults.
+    #[serde(default = "default_password_config")]
+    pub password: Option<PasswordConfig>,
+}
+
+fn default_password_config() -> Option<PasswordConfig> {
+    Some(PasswordConfig::default())
 }
 
 /// Storage backend configuration for the address book.
@@ -1430,6 +1472,14 @@ fn default_toml() -> String {
     // [storage] — backend defaults to "db" when the section is absent.
     s.push_str("[storage]\n");
     s.push_str(&format!("backend = \"{}\"\n", default_storage_backend()));
+    // [password] — password policy (min length + reuse history). Materialised
+    // so absent sections cannot silently reset the defaults.
+    s.push_str("[password]\n");
+    s.push_str(&format!(
+        "min_length = {}\n",
+        default_password_min_length()
+    ));
+    s.push_str(&format!("history = {}\n", default_password_history()));
     s
 }
 
@@ -1483,6 +1533,7 @@ impl Default for Config {
             db_url: None,
             storage: None,
             license_key: None,
+            password: default_password_config(),
         }
     }
 }
@@ -1792,6 +1843,24 @@ impl Config {
         std::env::var("PERSEA_STORAGE_KEY")
             .ok()
             .filter(|k| !k.is_empty())
+    }
+
+    /// Minimum password length enforced by the `[password]` policy.
+    /// Default: 15.
+    pub fn password_min_length(&self) -> usize {
+        self.password
+            .as_ref()
+            .map(|p| p.min_length)
+            .unwrap_or_else(default_password_min_length)
+    }
+
+    /// Number of recent password hashes kept per user for reuse rejection.
+    /// Default: 5. 0 disables reuse checking.
+    pub fn password_history_len(&self) -> usize {
+        self.password
+            .as_ref()
+            .map(|p| p.history)
+            .unwrap_or_else(default_password_history)
     }
 }
 

@@ -88,6 +88,9 @@ Examples:
 | site_title | PERSEA_SITE_TITLE | Persea | Browser tab title |
 | session_pending_timeout_secs | PERSEA_SESSION_PENDING_TIMEOUT_SECS | 60 | Pending session timeout |
 | session_max_duration_secs | PERSEA_SESSION_MAX_DURATION_SECS | 28800 | Max session duration (8h) |
+| session_idle_timeout_secs | PERSEA_SESSION_IDLE_TIMEOUT_SECS | 1800 | Session idle timeout (0 = disabled) |
+| password.min_length | PERSEA_PASSWORD__MIN_LENGTH | 15 | Minimum password length |
+| password.history | PERSEA_PASSWORD__HISTORY | 5 | Recent password hashes kept for reuse rejection (0 = disabled) |
 | auth_session_ttl_secs | PERSEA_AUTH_SESSION_TTL_SECS | 86400 | OIDC session TTL (24h) |
 | session_history_retention_days | PERSEA_SESSION_HISTORY_RETENTION_DAYS | 90 | History retention days |
 | xvnc_path | PERSEA_XVNC_PATH | Xvnc | Xvnc binary path |

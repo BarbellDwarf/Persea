@@ -424,7 +424,14 @@ async fn main() {
             password,
             role,
         }) => {
-            cmd_create_user(&database, &email, &name, &password, &role);
+            cmd_create_user(
+                &database,
+                &email,
+                &name,
+                &password,
+                &role,
+                crate::password::PasswordPolicy::from_config(&config),
+            );
         }
         Some(Command::AddAdmin {
             name,
@@ -496,7 +503,18 @@ async fn main() {
     }
 }
 
-fn cmd_create_user(database: &Db, email: &str, name: &str, password: &str, role: &str) {
+fn cmd_create_user(
+    database: &Db,
+    email: &str,
+    name: &str,
+    password: &str,
+    role: &str,
+    policy: crate::password::PasswordPolicy,
+) {
+    if let Err(msg) = policy.check_length(password) {
+        eprintln!("Error: {}", msg);
+        std::process::exit(1);
+    }
     let hash = match crate::password::hash_password(password) {
         Ok(h) => h,
         Err(e) => {
@@ -506,6 +524,16 @@ fn cmd_create_user(database: &Db, email: &str, name: &str, password: &str, role:
     };
     match crate::db::create_user_with_password(database, email, name, &hash, role, "database") {
         Ok(()) => {
+            // Record the initial hash in the reuse history (R108). The user
+            // row was just inserted, so the lookup cannot fail in practice.
+            if let Ok(user) = crate::db::get_user_by_email(database, email) {
+                let _ = crate::password::record_password_history(
+                    database,
+                    user.id,
+                    &hash,
+                    policy.history,
+                );
+            }
             println!("User '{}' created (email: {}, role: {})", name, email, role);
             println!("Password: {}", password);
         }
@@ -1392,6 +1420,16 @@ async fn run_server(
         );
     }
 
+    // Password policy (R108) — extracted before config is moved into
+    // SessionManager so the admin users API and the account password-change
+    // endpoint can enforce minimum length + reuse history.
+    let password_policy = crate::password::PasswordPolicy::from_config(&config);
+    tracing::info!(
+        min_length = password_policy.min_length,
+        history = password_policy.history,
+        "Password policy loaded"
+    );
+
     // Create session manager
     // Clone the config first — the setup wizard (routed below) needs the
     // configured db_url/db_path to prefill its backend fields.
@@ -1664,6 +1702,8 @@ async fn run_server(
             delete(api::delete_group_mapping),
         )
         .route("/api/me", get(api::me).put(api::update_me))
+        // Password change (self-service) — enforced against the password policy
+        .route("/api/me/password", post(handlers::account::change_password))
         // User API token self-service
         .route("/api/me/tokens", get(api::list_my_tokens))
         .route("/api/me/tokens", post(api::create_my_token))
@@ -1834,6 +1874,7 @@ async fn run_server(
     let api_routes = api_routes
         .layer(csrf::CsrfLayer)
         .layer(middleware::from_fn(auth::require_auth))
+        .layer(Extension(password_policy))
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(vault_client.clone()))
         .layer(Extension(vault_configured.clone()))
