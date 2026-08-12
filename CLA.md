@@ -17,7 +17,7 @@ Subject to the terms of this Agreement, You hereby grant to the Licensor and its
 
 - Reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute Your Contribution and such derivative works
 - Use, copy, modify, merge, publish, distribute, sublicense, and sell copies of the Contribution
-- Incorporate the Contribution into the Project under any license, including the AGPL-3.0 license and any commercial license offered by the Licensor
+- Incorporate the Contribution into the Project under any license, including the Apache License 2.0 offered by the Licensor
 
 This license is granted for the full term of copyright in the Contribution and is irrevocable.
 

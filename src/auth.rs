@@ -24,12 +24,11 @@ struct WsTicket {
 
 /// Thread-safe store of pending WebSocket tickets.
 ///
-/// Enterprise HA: when a shared backend pool is active AND the FEAT_HA
-/// license grants it, every ticket is also persisted (SHA-256 hash only) to
-/// the `ws_tickets` table so any instance can validate a ticket issued by
-/// another. The in-memory map remains the fast path; a miss falls through to
-/// the DB. Without the license/pool the store is purely in-memory — the
-/// legacy single-instance behavior, unchanged.
+/// When a shared backend pool is active, every ticket is also persisted
+/// (SHA-256 hash only) to the `ws_tickets` table so any instance can
+/// validate a ticket issued by another. The in-memory map remains the fast
+/// path; a miss falls through to the DB. Without a pool the store is purely
+/// in-memory — the legacy single-instance behavior, unchanged.
 #[derive(Clone)]
 pub struct WsTicketStore {
     inner: Arc<Mutex<HashMap<String, WsTicket>>>,
@@ -58,10 +57,9 @@ async fn api_keys_enabled(db: &Db) -> bool {
 #[derive(Clone)]
 pub struct TicketAuthenticated;
 
-/// Whether ticket persistence is active right now (license + shared pool).
+/// Whether ticket persistence is active right now (shared pool present).
 fn ws_ticket_persist_enabled() -> bool {
     crate::db::active_pool().is_some()
-        && crate::license::global().is_some_and(|lm| lm.has_feature(crate::license::FEAT_HA))
 }
 
 fn ticket_hash(ticket: &str) -> String {
@@ -77,8 +75,8 @@ impl WsTicketStore {
         }
     }
 
-    /// Create a store that persists tickets to the shared backend when the
-    /// HA license is active (see `ws_ticket_persist_enabled`).
+    /// Create a store that persists tickets to the shared backend when a
+    /// pool is present (see `ws_ticket_persist_enabled`).
     pub fn new_with_db(db: Option<Db>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),

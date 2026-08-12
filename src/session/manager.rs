@@ -41,20 +41,11 @@ impl SessionManager {
         mgr
     }
 
-    /// Whether the given enterprise feature is licensed. Delegates to the
-    /// process-global license handle (`crate::license::set_global`, set
-    /// once at startup) since callers of this method (e.g. the WebSocket
-    /// recording-encryption check) aren't axum handlers and can't take an
-    /// `Extension<LicenseManager>` directly.
-    pub fn has_feature(&self, feature: &str) -> bool {
-        crate::license::global().is_some_and(|lm| lm.has_feature(feature))
-    }
-
-    /// Enterprise HA is active when the FEAT_HA license grants it AND
-    /// a shared backend pool is installed. Without either, every HA code
-    /// path stays inert and behavior is byte-for-byte single-instance.
+    /// Enterprise HA is active when a shared backend pool is installed.
+    /// Without one, every HA code path stays inert and behavior is
+    /// byte-for-byte single-instance.
     pub fn ha_enabled(&self) -> bool {
-        crate::db::active_pool().is_some() && self.has_feature(crate::license::FEAT_HA)
+        crate::db::active_pool().is_some()
     }
 
     /// This instance's stable identifier (registry owner tag).
@@ -70,13 +61,13 @@ impl SessionManager {
 
     // ── Registry persistence (enterprise HA) ────────────────────────────────────
     //
-    // All writes are gated on `ha_enabled()` (FEAT_HA license + shared
-    // backend pool); the store functions also no-op without a pool, so
-    // single-instance mode is unchanged.
+    // All writes are gated on `ha_enabled()` (shared backend pool); the
+    // store functions also no-op without a pool, so single-instance mode
+    // is unchanged.
 
     fn registry_set_status(&self, id: Uuid, status: &str) {
-        // FEAT_HA gate: without the license (or a shared backend) this is a
-        // no-op — single-instance behavior unchanged, byte-for-byte.
+        // Without a shared backend this is a no-op — single-instance
+        // behavior unchanged, byte-for-byte.
         if !self.ha_enabled() {
             return;
         }

@@ -5,7 +5,6 @@ use crate::error::AppError;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{extract::State, Extension, Json};
-use serde::Deserialize;
 use serde_json::json;
 
 pub async fn health(
@@ -478,7 +477,6 @@ pub async fn audit_verify(
 pub async fn audit_export(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
-    Extension(license_manager): Extension<std::sync::Arc<crate::license::LicenseManager>>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     if !identity
@@ -487,13 +485,6 @@ pub async fn audit_export(
         .unwrap_or(false)
     {
         return Err(AppError::Forbidden("admin role required".into()));
-    }
-    // Basic audit logging/viewing/verification stays free; compliance
-    // export (CSV/JSON download) is the enterprise-gated part.
-    if !license_manager.has_feature(crate::license::FEAT_AUDIT_RETENTION) {
-        return Err(AppError::Forbidden(
-            "audit log export requires an enterprise license".into(),
-        ));
     }
 
     let filters = crate::audit::AuditFilters {
@@ -553,77 +544,4 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
-}
-
-// ── License API ──
-
-/// `GET /api/admin/license` — return current license status as JSON.
-pub async fn get_license_status(
-    identity: Option<Extension<AuthIdentity>>,
-    Extension(license_mgr): Extension<std::sync::Arc<crate::license::LicenseManager>>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
-
-    let status = license_mgr.status();
-    let license = license_mgr.license();
-
-    let status_str = match &status {
-        crate::license::LicenseStatus::Valid => "valid",
-        crate::license::LicenseStatus::Expired => "expired",
-        crate::license::LicenseStatus::Evaluating { .. } => "evaluating",
-        crate::license::LicenseStatus::NoLicense => "no_license",
-    };
-
-    let mut resp = json!({
-        "status": status_str,
-        "customer_name": license.as_ref().map(|l| l.customer_name.as_str()).unwrap_or(""),
-        "expiry": license.as_ref().map(|l| l.expiry.to_rfc3339()),
-        "features": license.as_ref().map(|l| &l.features).cloned().unwrap_or_default(),
-        "raw_key": license_mgr.raw_key(),
-    });
-
-    if let crate::license::LicenseStatus::Evaluating { days_remaining } = &status {
-        resp["eval_days_remaining"] = json!(days_remaining);
-    }
-
-    Ok(Json(resp))
-}
-
-/// Request body for license key submission.
-#[derive(Deserialize)]
-pub struct SetLicenseRequest {
-    /// The license key string (PSEA-...).
-    license_key: String,
-}
-
-/// `POST /api/admin/license` — validate and save a new license key.
-pub async fn set_license_key(
-    identity: Option<Extension<AuthIdentity>>,
-    Extension(license_mgr): Extension<std::sync::Arc<crate::license::LicenseManager>>,
-    Json(req): Json<SetLicenseRequest>,
-) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
-
-    match license_mgr.set_key(&req.license_key) {
-        Ok(()) => Ok(Json(json!({
-            "ok": true,
-            "message": "License key validated and activated for this session",
-        }))),
-        Err(e) => Ok(Json(json!({
-            "ok": false,
-            "error": e.to_string(),
-        }))),
-    }
 }

@@ -6,7 +6,7 @@ use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::templates::{
     AdminAuditTemplate, AdminAuthTemplate, AdminBrandingTemplate, AdminGroupsTemplate,
-    AdminLicenseTemplate, AdminReportsTemplate, AdminSettingsTemplate, AdminTunnelsTemplate,
+    AdminReportsTemplate, AdminSettingsTemplate, AdminTunnelsTemplate,
     AdminUsersTemplate, ConnectionsPageTemplate, RecordingsPageTemplate, SessionsPageTemplate,
 };
 use crate::CspNonce;
@@ -220,23 +220,6 @@ pub async fn admin_tunnels_page(
         logo_url: logo_url(&theme),
         is_admin: is_admin(&identity),
         active_page: "tunnels".to_string(),
-        csp_nonce: nonce.0.clone(),
-    };
-    tmpl.into_response()
-}
-
-/// GET /admin/license.html — admin license management page.
-pub async fn admin_license_page(
-    Extension(site_title): Extension<SiteTitle>,
-    Extension(theme): Extension<ThemeData>,
-    identity: Option<Extension<AuthIdentity>>,
-    Extension(nonce): Extension<CspNonce>,
-) -> Response {
-    let tmpl = AdminLicenseTemplate {
-        site_title: site_title.0.clone(),
-        logo_url: logo_url(&theme),
-        is_admin: is_admin(&identity),
-        active_page: "license".to_string(),
         csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()

@@ -41,11 +41,7 @@ async fn check_totp_enforcement(
     user_id: i64,
     role: &str,
     enforcement: &TotpEnforcement,
-    license_manager: &crate::license::LicenseManager,
 ) -> bool {
-    if !license_manager.has_feature(crate::license::FEAT_TOTP) {
-        return false;
-    }
     match enforcement {
         TotpEnforcement::Off => false,
         TotpEnforcement::AdminsOnly => {
@@ -170,15 +166,14 @@ pub async fn login_page(
         .as_ref()
         .and_then(|t| t.logo_url.clone())
         .unwrap_or_default();
-    // SAML is only offered when it's BOTH configured and licensed — the
-    // routes are dropped entirely for unlicensed instances (main.rs), so
-    // showing the button here would point at a 404.
+    // SAML is offered whenever it's configured — the routes are
+    // registered for both config-file and DB-configured providers
+    // (main.rs), so the button matches what's actually reachable.
     let saml_enabled = state
         .config()
         .auth
         .as_ref()
-        .is_some_and(|a| a.saml.is_some())
-        && crate::license::global().is_some_and(|m| m.has_feature(crate::license::FEAT_SAML));
+        .is_some_and(|a| a.saml.is_some());
 
     let providers = oidc_provider_names
         .map(|Extension(p)| p.0.clone())
@@ -206,7 +201,6 @@ pub async fn login_submit(
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(tls_enabled): Extension<TlsEnabled>,
     Extension(auth_chain): Extension<Arc<AuthChain>>,
-    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<LoginFormData>,
 ) -> Response {
@@ -290,7 +284,6 @@ pub async fn login_submit(
                 user.id,
                 &effective_role,
                 &totp_enforcement,
-                &license_manager,
             )
             .await
             {
@@ -737,7 +730,6 @@ pub async fn saml_acs(
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(totp_enforcement): Extension<TotpEnforcement>,
     Extension(tls_enabled): Extension<TlsEnabled>,
-    Extension(license_manager): Extension<Arc<crate::license::LicenseManager>>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<SamlAcsForm>,
 ) -> Response {
@@ -745,11 +737,6 @@ pub async fn saml_acs(
     use std::collections::HashMap;
 
     let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
-
-    if !license_manager.has_feature(crate::license::FEAT_SAML) {
-        tracing::warn!(client_ip = %client_ip, "SAML login attempted without an enterprise license");
-        return Redirect::to("/?error=saml_not_licensed").into_response();
-    }
 
     if form.SAMLResponse.is_empty() {
         return Redirect::to("/?error=saml_missing_response").into_response();
@@ -820,7 +807,6 @@ pub async fn saml_acs(
                 user.id,
                 &effective_role,
                 &totp_enforcement,
-                &license_manager,
             )
             .await
             {

@@ -97,11 +97,6 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     )
     .expect("Failed to register pages/admin/tunnels.html");
     env.add_template(
-        "pages/admin/license.html",
-        include_str!("../templates/pages/admin/license.html"),
-    )
-    .expect("Failed to register pages/admin/license.html");
-    env.add_template(
         "pages/admin/branding.html",
         include_str!("../templates/pages/admin/branding.html"),
     )
@@ -509,22 +504,6 @@ pub struct AdminBrandingTemplate {
 impl IntoResponse for AdminBrandingTemplate {
     fn into_response(self) -> Response {
         render_template("pages/admin/branding.html", &self)
-    }
-}
-
-/// Admin license page template context.
-#[derive(Serialize)]
-pub struct AdminLicenseTemplate {
-    pub site_title: String,
-    pub logo_url: String,
-    pub is_admin: bool,
-    pub active_page: String,
-    pub csp_nonce: String,
-}
-
-impl IntoResponse for AdminLicenseTemplate {
-    fn into_response(self) -> Response {
-        render_template("pages/admin/license.html", &self)
     }
 }
 

@@ -2,8 +2,7 @@
 
 [![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
-[![Commercial License](https://img.shields.io/badge/License-Commercial-green.svg)](COMMERCIAL_LICENSE.md)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
 
@@ -66,13 +65,13 @@ guacd (C, from guacamole-server)
 
 - **OIDC single sign-on**: Authentik, Google, Okta, Keycloak, or any OpenID Connect provider
 - **LDAP / Active Directory**: bind + search authentication
-- **SAML 2.0**: service provider with signature verification (**Enterprise**)
+- **SAML 2.0**: service provider with signature verification
 - **RADIUS**: PAP authentication for network equipment integration
 - **Database auth**: local password accounts with Argon2id hashing
 - **TOTP two-factor**: enrollment, QR codes, recovery codes
-- **TOTP / MFA enforcement**: mandatory two-factor policies (**Enterprise**)
+- **TOTP / MFA enforcement**: mandatory two-factor policies
 - **4-tier role system**: admin, poweruser, operator, viewer with OIDC group mapping
-- **Fine-grained RBAC**: connection-level permissions and group inheritance (**Enterprise**)
+- **Fine-grained RBAC**: connection-level permissions and group inheritance
 - **API key auth**: SHA-256 hashed keys with IP allowlists and expiry
 - **Vault-backed connections**: credentials in HashiCorp Vault or OpenBao KV v2, never reach the browser (see [Requirements](#requirements))
 - **TLS everywhere**: HTTPS for clients, TLS between persea and guacd
@@ -82,8 +81,8 @@ guacd (C, from guacamole-server)
 - **Session recording**: Guacamole format with playback UI, disk rotation, per-entry limits
 - **Encrypted session recording**: recordings encrypted at rest
 - **Audit logging**: SHA-256 hash chain with tamper evidence
-- **Audit log retention and compliance exports** (**Enterprise**)
-- **High availability / clustering**: multi-instance deployments behind a load balancer (**Enterprise**)
+- **Audit log retention and compliance exports**
+- **High availability / clustering**: multi-instance deployments behind a load balancer
 
 ### Connectivity
 
