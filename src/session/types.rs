@@ -11,13 +11,20 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionType {
+    /// SSH terminal session.
     #[default]
     Ssh,
+    /// Web browser session (headless Chromium on Xvnc).
     Web,
+    /// Remote desktop protocol session.
     Rdp,
+    /// VNC session.
     Vnc,
+    /// Docker desktop container session (RDP to xrdp).
     Vdi,
+    /// Direct SPICE session.
     Spice,
+    /// Proxmox VE console session (SPICE brokered via spiceproxy).
     Proxmox,
 }
 
@@ -28,7 +35,9 @@ pub enum SessionType {
 /// struct regardless of `session_type`.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct SshParams {
+    /// PEM-encoded private key for key-based auth instead of a password.
     pub private_key: Option<String>,
+    /// Generate an ephemeral Ed25519 keypair and inject it into the target's authorized_keys.
     pub generate_keypair: Option<bool>,
     /// Enable SSH typescript recording for this session (#159). Default
     /// off; SSH only; requires `[recording].typescript_path` configured.
@@ -38,7 +47,9 @@ pub struct SshParams {
 /// RDP-specific session parameters (NLA, RemoteApp, GFX pipeline, ...).
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct RdpParams {
+    /// Windows domain for the login user (NTLM/Kerberos).
     pub domain: Option<String>,
+    /// RDP security layer: "any", "rdp", "tls", or "nla".
     pub security: Option<String>,
     /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
     pub auth_pkg: Option<String>,
@@ -47,8 +58,11 @@ pub struct RdpParams {
     /// Kerberos ticket cache path (optional).
     pub kerberos_cache: Option<String>,
     // RDP RemoteApp (RAIL)
+    /// RemoteApp program path (RAIL): launch a single application instead of the full desktop.
     pub remote_app: Option<String>,
+    /// RemoteApp working directory.
     pub remote_app_dir: Option<String>,
+    /// RemoteApp command-line arguments.
     pub remote_app_args: Option<String>,
     /// Enable RDP Graphics Pipeline Extension (GFX).
     pub enable_gfx: Option<bool>,
@@ -73,12 +87,14 @@ pub struct RdpParams {
 /// once, in declaration order, so the key must not be duplicated elsewhere.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct VncParams {
+    /// Color depth in bits per pixel (also honoured by SPICE sessions).
     pub color_depth: Option<u8>,
 }
 
 /// Web-browser session parameters (Xvnc + Chromium).
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct WebParams {
+    /// URL the browser session starts on.
     pub url: Option<String>,
     /// Login script filename to run after browser spawns (web sessions only).
     pub login_script: Option<String>,
@@ -160,12 +176,17 @@ pub struct ProxmoxParams {
 #[derive(Debug, Default, Deserialize)]
 pub struct CreateSessionRequest {
     #[serde(default)]
+    /// Which protocol family the session uses; defaults to SSH when omitted.
     pub session_type: SessionType,
     // Network/credential fields shared by SSH/RDP/VNC/SPICE (and used for
     // $RUSTGUAC_USERNAME/$RUSTGUAC_PASSWORD substitution in web URLs).
+    /// Remote host for SSH/RDP/VNC/SPICE sessions (also substituted into web session URLs).
     pub hostname: Option<String>,
+    /// Remote port for SSH/RDP/VNC/SPICE sessions.
     pub port: Option<u16>,
+    /// Login username for the target (also substituted into web session URLs).
     pub username: Option<String>,
+    /// Login password for the target (also substituted into web session URLs).
     pub password: Option<String>,
     /// Ignore TLS/certificate errors (RDP NLA and SPICE TLS).
     pub ignore_cert: Option<bool>,
@@ -174,17 +195,27 @@ pub struct CreateSessionRequest {
     /// which it advertises to the client. Default 1 (single monitor).
     pub max_monitors: Option<u32>,
     // SSH tunnel / jump host fields (multi-hop)
+    /// Ordered chain of SSH jump hosts to tunnel the target connection through.
     pub jump_hosts: Option<Vec<tunnel::JumpHost>>,
     // Legacy flat fields for backward compat (single jump host)
+    /// Legacy single jump host (superseded by `jump_hosts`).
     pub jump_host: Option<String>,
+    /// Legacy single jump host port.
     pub jump_port: Option<u16>,
+    /// Legacy single jump host username.
     pub jump_username: Option<String>,
+    /// Legacy single jump host password.
     pub jump_password: Option<String>,
+    /// Legacy single jump host private key.
     pub jump_private_key: Option<String>,
     // Common display / session settings
+    /// Initial display width in pixels (RDP/VNC/SPICE/VDI) or terminal columns (SSH).
     pub width: Option<u32>,
+    /// Initial display height in pixels (RDP/VNC/SPICE/VDI) or terminal rows (SSH).
     pub height: Option<u32>,
+    /// Reported display density in DPI.
     pub dpi: Option<u32>,
+    /// Notice text shown to the user in the client when the session connects.
     pub banner: Option<String>,
     /// Override drive/file transfer setting for this session.
     pub enable_drive: Option<bool>,
@@ -193,6 +224,7 @@ pub struct CreateSessionRequest {
     /// Disable clipboard paste (client → server).
     pub disable_paste: Option<bool>,
     // Recording / reporting metadata
+    /// Record this session to a .guac file (requires recording config).
     pub enable_recording: Option<bool>,
     /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
     pub address_book_entry: Option<String>,
@@ -261,28 +293,45 @@ pub enum SessionStatus {
 /// Public session info returned by the API.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionInfo {
+    /// Unique session identifier.
     pub session_id: Uuid,
+    /// Protocol family of the session.
     pub session_type: SessionType,
+    /// Current lifecycle status.
     pub status: SessionStatus,
+    /// When the session was created.
     pub created_at: DateTime<Utc>,
+    /// Path to the client page for this session.
     pub client_url: String,
+    /// Share URL, present when sharing is allowed; omitted otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub share_url: Option<String>,
+    /// WebSocket path for the session stream.
     pub ws_url: String,
+    /// Target hostname.
     pub hostname: String,
+    /// Login username on the target.
     pub username: String,
+    /// Number of connected viewers (owner plus joins and shadows).
     pub active_connections: u32,
+    /// Identity of the user who created the session.
     pub created_by: String,
+    /// Notice text shown to the user in the client.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub banner: Option<String>,
+    /// URL the web-browser session opened (web sessions only).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// Address book entry key (e.g. "shared/folder/entry") for recording metadata.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address_book_entry: Option<String>,
+    /// Address book folder name (for reporting).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address_book_folder: Option<String>,
+    /// Display name of the address book entry (for reporting).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_display_name: Option<String>,
+    /// Path to the session's thumbnail image, when available.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumbnail_url: Option<String>,
     /// Open the client in fullscreen on connect (#154). Read by client.html
@@ -315,22 +364,39 @@ pub struct SessionInfo {
 
 /// Internal session state including the guacd connection.
 pub struct Session {
+    /// Unique session identifier.
     pub id: Uuid,
+    /// Protocol family of the session.
     pub session_type: SessionType,
+    /// Current lifecycle status.
     pub status: SessionStatus,
+    /// When the session was created.
     pub created_at: DateTime<Utc>,
+    /// Target hostname.
     pub hostname: String,
+    /// Login username on the target.
     pub username: String,
+    /// URL the web-browser session opened (web sessions only).
     pub url: Option<String>,
+    /// Notice text shown to the user in the client.
     pub banner: Option<String>,
+    /// Live guacd connection, taken by the owner's WebSocket on connect.
     pub guacd_stream: Option<GuacdStream>,
+    /// guacd-assigned connection id, used to join the session.
     pub connection_id: String,
+    /// Long-lived owner share token (hex), validated on share URL connect.
     pub share_token: String,
+    /// Initial display width in pixels.
     pub width: u32,
+    /// Initial display height in pixels.
     pub height: u32,
+    /// Number of connected viewers.
     pub active_connections: u32,
+    /// Identity of the user who created the session.
     pub created_by: String,
+    /// Cancelled to end the session and drop the guacd connection.
     pub cancel: tokio_util::sync::CancellationToken,
+    /// Running browser (Xvnc + Chromium) for web sessions.
     pub browser_session: Option<BrowserSession>,
     /// Connection params for deferred guacd connection (ephemeral keypair sessions).
     /// When set, the guacd connection is established when the WebSocket connects
@@ -393,8 +459,11 @@ pub struct Session {
 /// memory so the token can't be lifted from a runtime snapshot.
 #[derive(Debug, Clone)]
 pub struct ShadowToken {
+    /// SHA-256 hex of the raw token; the raw value is never stored.
     pub token_hash: String,
+    /// Identity of the admin who minted the token.
     pub issued_by: String,
+    /// When the token stops validating; expired tokens are pruned on mint.
     pub expires_at: DateTime<Utc>,
 }
 
@@ -404,25 +473,40 @@ pub struct ShadowToken {
 /// so a leaked token's blast radius is observable after the fact).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ShareTokenValidation {
+    /// The provided token matched nothing.
     Invalid,
+    /// The provided token is the session owner's share token.
     Owner,
-    Shadow { issued_by: String },
+    /// The provided token is an admin-minted shadow token, issued by the named admin.
+    Shadow {
+        /// Identity of the admin who minted the token.
+        issued_by: String,
+    },
 }
 
 impl ShareTokenValidation {
+    /// True for `Owner` and `Shadow`, false for `Invalid`.
     pub fn is_valid(&self) -> bool {
         !matches!(self, ShareTokenValidation::Invalid)
     }
 }
 
+/// Why a session operation failed. Produced by the manager's join and
+/// delete paths; the string payloads carry the underlying message.
 #[derive(Debug)]
 #[must_use]
 pub enum SessionError {
+    /// Could not reach guacd, or the handshake failed; carries the underlying message.
     GuacdConnection(String),
+    /// No session with the requested id exists.
     NotFound,
+    /// The session exists but is not in a joinable state.
     NotActive,
+    /// The request parameters failed validation; carries the reason.
     ValidationError(String),
+    /// Xvnc or Chromium failed to start; carries the underlying message.
     BrowserSpawn(String),
+    /// Docker container lifecycle failed; carries the underlying message.
     VdiError(String),
 }
 
@@ -451,6 +535,7 @@ impl Session {
         self.last_activity.load(Ordering::Relaxed)
     }
 
+    /// Build the public `SessionInfo` view used by API responses.
     pub fn info(&self) -> SessionInfo {
         SessionInfo {
             session_id: self.id,
