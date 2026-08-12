@@ -32,54 +32,87 @@ fn current_error_context() -> Option<ErrorContext> {
     ERROR_CONTEXT.try_with(|c| c.clone()).ok()
 }
 
+/// Unified application error type used across handlers and API code.
+///
+/// Module errors (session, guacd, vault, auth, browser, vdi, tunnel,
+/// protocol, drive, pve, vsphere) convert into this type via `From`
+/// impls, and `IntoResponse` maps each variant to an HTTP status.
+/// Variants whose messages are safe to expose keep their detail;
+/// infrastructure variants are logged in full and sanitized in the
+/// response body.
 #[derive(Debug, thiserror::Error)]
 #[must_use]
 pub enum AppError {
+    /// Session lookup, creation, or lifecycle failure. Messages containing
+    /// "not found", "validation", or "not active" map to 404, 400, or 409;
+    /// the rest are sanitized to a 502 response.
     #[error("session error: {0}")]
     Session(String),
 
+    /// guacd connection or handshake failure. The message stays
+    /// server-side; clients get a generic 502.
     #[error("guacd error: {0}")]
     Guacd(String),
 
+    /// Vault/OpenBao operation failure. "not found", "forbidden",
+    /// "unavailable", and "invalid name" messages map to 404, 403, 503,
+    /// or 400; the rest are sanitized to 502.
     #[error("vault error: {0}")]
     Vault(String),
 
+    /// Authentication failure; always a 401 with the message shown.
     #[error("auth error: {0}")]
     Auth(String),
 
+    /// Authorization failure; always a 403 with the message shown.
     #[error("forbidden: {0}")]
     Forbidden(String),
 
+    /// State conflict, e.g. creating something that already exists;
+    /// always a 409 with the message shown.
     #[error("conflict: {0}")]
     Conflict(String),
 
+    /// Xvnc/Chromium browser-session failure; sanitized to 502.
     #[error("browser error: {0}")]
     Browser(String),
 
+    /// VDI container failure. "not enabled" and "timeout" messages map to
+    /// 503 and 504; the rest are sanitized to 502.
     #[error("vdi error: {0}")]
     Vdi(String),
 
+    /// SSH tunnel (jump host) failure; sanitized to 502.
     #[error("tunnel error: {0}")]
     Tunnel(String),
 
+    /// Guacamole wire protocol parse or encode failure; sanitized to 502.
     #[error("protocol error: {0}")]
     Protocol(String),
 
+    /// LUKS drive or file-transfer failure; sanitized to 500.
     #[error("drive error: {0}")]
     Drive(String),
 
+    /// Proxmox VE API failure; sanitized to 502 so tickets never reach
+    /// the client.
     #[error("pve error: {0}")]
     Pve(String),
 
+    /// VMware vSphere API failure; sanitized to 502.
     #[error("vsphere error: {0}")]
     Vsphere(String),
 
+    /// Client input failed validation; always a 400 with the message shown.
     #[error("validation error: {0}")]
     Validation(String),
 
+    /// The requested resource does not exist; always a 404 with the
+    /// message shown.
     #[error("not found: {0}")]
     NotFound(String),
 
+    /// Unexpected internal failure; always a 500 with a generic message.
     #[error("{0}")]
     Internal(String),
 }
@@ -114,12 +147,19 @@ impl AppError {
         (status, axum::Json(body)).into_response()
     }
 
+    /// Render a 500 response for an unexpected internal error, logging
+    /// the full message server-side. Use this when a handler must respond
+    /// inline; otherwise return a typed `Err` and let `?` convert it.
     pub fn internal_response(message: impl Into<String>) -> Response {
         let msg = message.into();
         tracing::error!(error = %msg, "internal error");
         Self::status_for_response(StatusCode::INTERNAL_SERVER_ERROR, &msg)
     }
 
+    /// Render an error response with an explicit status and message.
+    ///
+    /// The message goes into the response body verbatim, so only pass
+    /// content that is safe to expose to the client.
     pub fn error_response(status: StatusCode, message: impl Into<String>) -> Response {
         let msg = message.into();
         Self::status_for_response(status, &msg)
