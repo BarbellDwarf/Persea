@@ -189,7 +189,11 @@ pub async fn create_user(
             &db_audit,
             &mut audit::EventBuilder::new("admin.user.create", "success")
                 .user_id(&admin_name)
-                .details(serde_json::json!({"email": email_audit, "role": role_audit, "custom_role": custom_role_audit}))
+                .details(serde_json::json!({
+                    "email": email_audit,
+                    "role": role_audit,
+                    "custom_role": custom_role_audit
+                }))
                 .build(),
         );
     })
@@ -198,7 +202,11 @@ pub async fn create_user(
 
     Ok((
         StatusCode::CREATED,
-        Json(json!({"email": body.email, "role": role_for_response, "custom_role": custom_role_name})),
+        Json(json!({
+            "email": body.email,
+            "role": role_for_response,
+            "custom_role": custom_role_name
+        })),
     ))
 }
 
@@ -339,10 +347,11 @@ pub async fn set_user_role(
     // Response carries the post-change state so the UI can refresh badges.
     let db_for_read = database.clone();
     let email_for_read = email.clone();
-    let user = tokio::task::spawn_blocking(move || db::get_user_by_email(&db_for_read, &email_for_read))
-        .await
-        .ok()
-        .and_then(|r| r.ok());
+    let user =
+        tokio::task::spawn_blocking(move || db::get_user_by_email(&db_for_read, &email_for_read))
+            .await
+            .ok()
+            .and_then(|r| r.ok());
     let custom_role_info = match user.as_ref().and_then(|u| u.custom_role_id.as_deref()) {
         Some(role_id) => rbac::get_custom_role(&database, role_id)
             .ok()

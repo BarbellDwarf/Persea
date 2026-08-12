@@ -9511,9 +9511,15 @@ pub(crate) async fn rbac_user_has_custom_permission_pool(
         )"
     );
     let row = match pool {
-        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &[Arg::I64(user_id), Arg::Str(permission)]).await,
-        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &[Arg::I64(user_id), Arg::Str(permission)]).await,
-        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &[Arg::I64(user_id), Arg::Str(permission)]).await,
+        DbPool::Postgres(p) => {
+            pg_fetch_opt(p, sql, &[Arg::I64(user_id), Arg::Str(permission)]).await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch_opt(p, sql, &[Arg::I64(user_id), Arg::Str(permission)]).await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch_opt(p, sql, &[Arg::I64(user_id), Arg::Str(permission)]).await
+        }
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
