@@ -293,6 +293,10 @@ pub async fn system_status(
             "drive": drive_configured,
             "tls": tls_configured,
         },
+        "instance": {
+            "instance_id": manager.instance_id(),
+            "ha_enabled": manager.ha_enabled(),
+        },
     })))
 }
 

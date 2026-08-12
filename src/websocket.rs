@@ -53,6 +53,35 @@ pub struct WsQuery {
     pub token: Option<String>,
 }
 
+/// Parts of the WS upgrade request the handler needs beyond the typed
+/// extracts: the raw query string (for preserving ?token= etc. on the
+/// cross-instance redirect, R110) and whether the identity came from a
+/// consumed ticket (which lets the origin check be skipped — the ticket is
+/// the anti-CSWSh credential). Implemented as a parts extractor so it can
+/// coexist with `WebSocketUpgrade` (both cannot consume the body).
+#[derive(Clone)]
+pub struct WsRequestParts {
+    pub query_string: Option<String>,
+    pub ticket_authenticated: bool,
+}
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for WsRequestParts {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self {
+            query_string: parts.uri.query().map(|q| q.to_string()),
+            ticket_authenticated: parts
+                .extensions
+                .get::<crate::auth::TicketAuthenticated>()
+                .is_some(),
+        })
+    }
+}
+
 /// GET /ws/:session_id — Upgrade to WebSocket and proxy to guacd.
 #[allow(clippy::too_many_arguments)]
 pub async fn ws_handler(
@@ -64,49 +93,61 @@ pub async fn ws_handler(
     identity: Option<Extension<AuthIdentity>>,
     trusted: Option<Extension<TrustedProxies>>,
     database: Option<Extension<Db>>,
+    ticket_store: Extension<crate::auth::WsTicketStore>,
+    ws_parts: WsRequestParts,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let ip = client_ip(&headers, addr.ip(), &proxies);
     let identity = identity.map(|Extension(id)| id);
 
+    // R110: when the identity came from a consumed WebSocket ticket, the
+    // ticket itself is the anti-CSWSh credential (minted only by
+    // authenticated callers, single-use, 30s TTL) — the Origin/Host match is
+    // skipped so cross-instance join/shadow redirects (which necessarily
+    // carry another instance's Origin) can land here. Without a ticket the
+    // strict Origin check below still applies.
+    let ticket_authenticated = ws_parts.ticket_authenticated;
+
     // Validate Origin header to prevent cross-site WebSocket hijacking (CSWSH).
     // Compare Origin's hostname against the request's Host header hostname.
     // Only the hostname is compared (ports stripped) to avoid false rejections
     // behind reverse proxies that may add/remove default ports.
     // Reject WebSocket upgrades when Origin is missing to prevent CSWSH.
-    match headers.get("origin").and_then(|v| v.to_str().ok()) {
-        Some(origin) => {
-            let host = headers
-                .get("host")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            if !origin_host_matches(origin, host) {
+    if !ticket_authenticated {
+        match headers.get("origin").and_then(|v| v.to_str().ok()) {
+            Some(origin) => {
+                let host = headers
+                    .get("host")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                if !origin_host_matches(origin, host) {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        client_ip = %ip,
+                        origin = %origin,
+                        host = %host,
+                        "WebSocket upgrade rejected: Origin does not match Host (possible CSWSH)"
+                    );
+                    return (
+                        StatusCode::FORBIDDEN,
+                        axum::Json(json!({"error": "cross-origin WebSocket request rejected"})),
+                    )
+                        .into_response();
+                }
+            }
+            None => {
                 tracing::warn!(
                     session_id = %session_id,
                     client_ip = %ip,
-                    origin = %origin,
-                    host = %host,
-                    "WebSocket upgrade rejected: Origin does not match Host (possible CSWSH)"
+                    "WebSocket upgrade rejected: missing Origin header (possible CSWSH)"
                 );
                 return (
                     StatusCode::FORBIDDEN,
-                    axum::Json(json!({"error": "cross-origin WebSocket request rejected"})),
+                    axum::Json(json!({"error": "WebSocket upgrade requires Origin header"})),
                 )
                     .into_response();
             }
-        }
-        None => {
-            tracing::warn!(
-                session_id = %session_id,
-                client_ip = %ip,
-                "WebSocket upgrade rejected: missing Origin header (possible CSWSH)"
-            );
-            return (
-                StatusCode::FORBIDDEN,
-                axum::Json(json!({"error": "WebSocket upgrade requires Origin header"})),
-            )
-                .into_response();
         }
     }
 
@@ -118,6 +159,82 @@ pub async fn ws_handler(
             axum::Json(json!({"error": "server is shutting down"})),
         )
             .into_response();
+    }
+
+    // R110 — cross-instance join/shadow/owner-reconnect: the guacd stream
+    // lives on the owning instance, so a WebSocket that lands here for a
+    // remote session is redirected to the owner's WS endpoint. The ticket is
+    // DB-backed, so the owner instance validates it; a fresh ticket is
+    // minted with the (already authenticated) identity so the forwarded
+    // connection carries credentials the owner trusts. The share token
+    // (?token=) is preserved verbatim — the owner validates it in-memory.
+    if let Some(info) = manager.get_session(session_id).await {
+        if info.remote {
+            let Some(owner_base) = info.owner_base_url.as_deref() else {
+                tracing::warn!(
+                    session_id = %session_id,
+                    client_ip = %ip,
+                    owner = %info.owner_instance.as_deref().unwrap_or("?"),
+                    "Remote session join rejected: owning instance advertises no ha_base_url"
+                );
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    axum::Json(json!({
+                        "error": "session is hosted by another instance that advertises no ha_base_url — configure ha_base_url on the owning instance"
+                    })),
+                )
+                    .into_response();
+            };
+            let Some(id) = identity else {
+                tracing::warn!(
+                    session_id = %session_id,
+                    client_ip = %ip,
+                    "Remote session join rejected: no authenticated identity to forward"
+                );
+                return (
+                    StatusCode::FORBIDDEN,
+                    axum::Json(json!({
+                        "error": "authentication required to join a session on another instance"
+                    })),
+                )
+                    .into_response();
+            };
+
+            // Preserve every query param except `ticket` (the old ticket was
+            // already consumed by the auth middleware; the fresh one below
+            // replaces it).
+            let mut kept: Vec<String> = Vec::new();
+            if let Some(qs) = ws_parts.query_string.as_deref() {
+                for pair in qs.split('&') {
+                    if pair.is_empty() {
+                        continue;
+                    }
+                    let key = pair.split('=').next().unwrap_or("");
+                    if key == "ticket" {
+                        continue;
+                    }
+                    kept.push(pair.to_string());
+                }
+            }
+            let fresh_ticket = ticket_store.forward(id).await;
+            let mut location = format!("{}/ws/{}?ticket={}", owner_base.trim_end_matches('/'), session_id, fresh_ticket);
+            if !kept.is_empty() {
+                location.push('&');
+                location.push_str(&kept.join("&"));
+            }
+            tracing::info!(
+                session_id = %session_id,
+                client_ip = %ip,
+                owner = %info.owner_instance.as_deref().unwrap_or("?"),
+                location = %location,
+                "Redirecting cross-instance WebSocket to the owning instance"
+            );
+            return axum::response::Response::builder()
+                .status(StatusCode::TEMPORARY_REDIRECT)
+                .header(axum::http::header::LOCATION, location)
+                .body(axum::body::Body::empty())
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
     }
 
     // Check if this is an owner connection (session is Pending or Disconnected)

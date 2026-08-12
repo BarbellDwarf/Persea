@@ -263,6 +263,18 @@ pub async fn delete_session(
         }
     }
 
+    // R110: a session hosted by another instance cannot be terminated from
+    // here — its guacd stream and reaper live on the owning instance. Fail
+    // with an explicit message instead of a misleading 404.
+    if let Some(info) = manager.get_session(id).await {
+        if info.remote {
+            return Err(AppError::Session(format!(
+                "session is owned by instance {} — terminate it from that instance",
+                info.owner_instance.as_deref().unwrap_or("unknown")
+            )));
+        }
+    }
+
     if manager.delete_session(id).await {
         tracing::info!(
             session_id = %id,
@@ -403,10 +415,21 @@ pub async fn shadow_session(
         .ok_or_else(|| AppError::Session("session not found".into()))?;
 
     let admin_email = id_inner.display_name().to_string();
-    let (raw, expires_at) = manager
-        .mint_shadow_token(id, &admin_email)
-        .await
-        .ok_or_else(|| AppError::Session("session not found".into()))?;
+    // R110: for a session hosted by another instance, the shadow token is
+    // persisted on the shared registry row (the in-memory session — and its
+    // token list — lives on the owning instance). Either instance can then
+    // validate it; the browser is redirected to the owner for the stream.
+    let (raw, expires_at) = if info.remote {
+        manager
+            .mint_remote_shadow_token(id, &admin_email)
+            .await
+            .ok_or_else(|| AppError::Session("session not found".into()))?
+    } else {
+        manager
+            .mint_shadow_token(id, &admin_email)
+            .await
+            .ok_or_else(|| AppError::Session("session not found".into()))?
+    };
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let ip = client_ip(&headers, addr.ip(), &proxies).to_string();
