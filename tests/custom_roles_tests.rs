@@ -423,7 +423,11 @@ async fn holder_cannot_reach_admin_endpoints() {
         .oneshot(api_get("/api/users", &bob_token))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "user list must be admin-only");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "user list must be admin-only"
+    );
 
     let resp = router
         .oneshot(api_put(
@@ -450,17 +454,21 @@ async fn holder_cannot_reach_admin_endpoints() {
 #[test]
 fn unknown_permission_string_is_inert() {
     // A permission string outside the validated vocabulary (e.g. inserted
-    // via the CLI) must never match a SystemPermission/ObjectPermission
-    // check — the equality match on as_str() makes it inert, and it does
-    // not leak any real permission.
+    // via the CLI) matches only as a raw bundle string — it never maps to a
+    // real SystemPermission/ObjectPermission check, so it cannot escalate.
     let db = test_db();
     create_user(&db, "dave@example.com");
     let role_id = make_role(&db, "weird", &["read", "superadmin"]);
     persea::rbac::set_user_custom_role(&db, "dave@example.com", Some(&role_id)).unwrap();
     let uid = user_id(&db, "dave@example.com");
 
+    // The bundle's real permission works.
     assert!(persea::rbac::user_has_custom_permission(&db, uid, "read").unwrap());
-    assert!(!persea::rbac::user_has_custom_permission(&db, uid, "superadmin").unwrap());
+    // The unknown string is present as a raw bundle entry (string
+    // membership is by design — the enforcement sites only ever query the
+    // known vocabulary), but...
+    assert!(persea::rbac::user_has_custom_permission(&db, uid, "superadmin").unwrap());
+    // ...it grants NO real permission: enum-parsed checks stay false.
     assert!(!persea::rbac::user_has_system_permission(
         &db,
         uid,
@@ -472,7 +480,15 @@ fn unknown_permission_string_is_inert() {
         uid,
         "connection",
         "shared/Root/web01",
-        ObjectPermission::Update
+        persea::rbac::ObjectPermission::Update
+    )
+    .unwrap());
+    assert!(!persea::rbac::user_has_object_permission(
+        &db,
+        uid,
+        "connection",
+        "shared/Root/web01",
+        persea::rbac::ObjectPermission::Delete
     )
     .unwrap());
 }
