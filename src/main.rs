@@ -1976,6 +1976,27 @@ async fn run_server(
             "/api/admin/rbac/connections/{id}/permissions",
             delete(handlers::rbac::revoke_connection_permission),
         )
+        // Custom roles management endpoints (T05)
+        .route(
+            "/api/admin/roles",
+            get(handlers::rbac::list_custom_roles),
+        )
+        .route(
+            "/api/admin/roles",
+            post(handlers::rbac::create_custom_role),
+        )
+        .route(
+            "/api/admin/roles/{id}",
+            get(handlers::rbac::get_custom_role),
+        )
+        .route(
+            "/api/admin/roles/{id}",
+            put(handlers::rbac::update_custom_role),
+        )
+        .route(
+            "/api/admin/roles/{id}",
+            delete(handlers::rbac::delete_custom_role),
+        )
         .merge(session_create_route)
         .with_state(manager.clone());
     if rate_limit_enabled {
@@ -2160,6 +2181,10 @@ async fn run_server(
         .route(
             "/admin/license.html",
             get(handlers::pages::admin_license_page),
+        )
+        .route(
+            "/admin/roles.html",
+            get(handlers::rbac::admin_roles_page),
         )
         .route(
             "/admin/branding.html",

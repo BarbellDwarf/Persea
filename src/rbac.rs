@@ -7,6 +7,7 @@
 
 use crate::db::Db;
 use rusqlite::params;
+use rusqlite::OptionalExtension;
 
 // ── Permission enums ──
 
@@ -482,6 +483,459 @@ pub fn list_connection_permissions(
         })
     })?;
     rows.collect()
+}
+
+// ── Custom roles ──
+//
+// A custom role is a named bundle of GLOBAL permissions (the existing
+// SystemPermission/ObjectPermission vocabulary) assignable to a user via
+// `users.custom_role_id`. Custom roles are ADDITIVE on top of the fixed
+// 4-tier role floor; admin always bypasses every check.
+
+/// A named permission bundle assignable to a user.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CustomRole {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub permissions: Vec<String>,
+    pub created_at: String,
+}
+
+fn custom_role_from_row(row: &rusqlite::Row) -> rusqlite::Result<CustomRole> {
+    Ok(CustomRole {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        description: row.get(2)?,
+        permissions: Vec::new(),
+        created_at: row.get(3)?,
+    })
+}
+
+/// List all custom roles with their permission bundles.
+pub fn list_custom_roles(db: &Db) -> rusqlite::Result<Vec<CustomRole>> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_list_custom_roles_pool(pool)
+        });
+    }
+    let conn = db.lock().unwrap();
+    let mut roles = Vec::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, created_at FROM custom_roles ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], custom_role_from_row)?;
+        for row in rows {
+            roles.push(row?);
+        }
+    }
+    let mut stmt = conn.prepare(
+        "SELECT role_id, permission FROM custom_role_permissions ORDER BY permission",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        let (role_id, permission) = row?;
+        if let Some(role) = roles.iter_mut().find(|r| r.id == role_id) {
+            role.permissions.push(permission);
+        }
+    }
+    Ok(roles)
+}
+
+/// Fetch one custom role by id (None when it does not exist).
+pub fn get_custom_role(db: &Db, id: &str) -> rusqlite::Result<Option<CustomRole>> {
+    if crate::db::pool_active() {
+        let __id = id.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_get_custom_role_pool(pool, __id)
+        });
+    }
+    let conn = db.lock().unwrap();
+    let mut role = conn
+        .query_row(
+            "SELECT id, name, description, created_at FROM custom_roles WHERE id = ?1",
+            params![id],
+            custom_role_from_row,
+        )
+        .optional()?;
+    if let Some(role_ref) = role.as_mut() {
+        load_role_permissions(&conn, role_ref)?;
+    }
+    Ok(role)
+}
+
+/// Fetch one custom role by name (None when it does not exist).
+pub fn get_custom_role_by_name(db: &Db, name: &str) -> rusqlite::Result<Option<CustomRole>> {
+    if crate::db::pool_active() {
+        let __name = name.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_get_custom_role_by_name_pool(pool, __name)
+        });
+    }
+    let conn = db.lock().unwrap();
+    let mut role = conn
+        .query_row(
+            "SELECT id, name, description, created_at FROM custom_roles WHERE name = ?1",
+            params![name],
+            custom_role_from_row,
+        )
+        .optional()?;
+    if let Some(role_ref) = role.as_mut() {
+        load_role_permissions(&conn, role_ref)?;
+    }
+    Ok(role)
+}
+
+/// Create a custom role. Returns the new role id. Duplicate names surface
+/// as a UNIQUE constraint error (mapped to 409 by the handlers).
+pub fn create_custom_role(
+    db: &Db,
+    name: &str,
+    description: Option<&str>,
+    permissions: &[String],
+) -> rusqlite::Result<String> {
+    if crate::db::pool_active() {
+        let __name = name.to_string();
+        let __desc = description.map(str::to_string);
+        let __perms = permissions.to_vec();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_create_custom_role_pool(pool, __name, __desc, __perms)
+        });
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO custom_roles (id, name, description) VALUES (?1, ?2, ?3)",
+        params![id, name, description],
+    )?;
+    insert_role_permissions(&conn, &id, permissions)?;
+    Ok(id)
+}
+
+/// Update a custom role's name/description and REPLACE its permission
+/// bundle. Returns false when the role does not exist.
+pub fn update_custom_role(
+    db: &Db,
+    id: &str,
+    name: &str,
+    description: Option<&str>,
+    permissions: &[String],
+) -> rusqlite::Result<bool> {
+    if crate::db::pool_active() {
+        let __id = id.to_string();
+        let __name = name.to_string();
+        let __desc = description.map(str::to_string);
+        let __perms = permissions.to_vec();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_update_custom_role_pool(pool, __id, __name, __desc, __perms)
+        });
+    }
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE custom_roles SET name = ?1, description = ?2 WHERE id = ?3",
+        params![name, description, id],
+    )?;
+    if changed == 0 {
+        return Ok(false);
+    }
+    conn.execute(
+        "DELETE FROM custom_role_permissions WHERE role_id = ?1",
+        params![id],
+    )?;
+    insert_role_permissions(&conn, id, permissions)?;
+    Ok(true)
+}
+
+/// Delete a custom role: removes its permission rows, clears
+/// `users.custom_role_id` references (set NULL) and deletes the role.
+/// Returns false when the role does not exist.
+pub fn delete_custom_role(db: &Db, id: &str) -> rusqlite::Result<bool> {
+    if crate::db::pool_active() {
+        let __id = id.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_delete_custom_role_pool(pool, __id)
+        });
+    }
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "DELETE FROM custom_role_permissions WHERE role_id = ?1",
+        params![id],
+    )?;
+    conn.execute(
+        "UPDATE users SET custom_role_id = NULL WHERE custom_role_id = ?1",
+        params![id],
+    )?;
+    let changed = conn.execute("DELETE FROM custom_roles WHERE id = ?1", params![id])?;
+    Ok(changed > 0)
+}
+
+/// Assign (or clear, with `None`) a user's custom role by email. Returns
+/// false when the user does not exist. The fixed 4-tier role is untouched —
+/// custom roles are additive.
+pub fn set_user_custom_role(
+    db: &Db,
+    email: &str,
+    role_id: Option<&str>,
+) -> rusqlite::Result<bool> {
+    if crate::db::pool_active() {
+        let __email = email.to_string();
+        let __role_id = role_id.map(str::to_string);
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_set_user_custom_role_pool(pool, __email, __role_id)
+        });
+    }
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE users SET custom_role_id = ?1 WHERE email = ?2",
+        params![role_id, email],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Fetch the custom role assigned to a user (None when unassigned).
+pub fn user_custom_role(db: &Db, user_id: i64) -> rusqlite::Result<Option<CustomRole>> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_user_custom_role_pool(pool, user_id)
+        });
+    }
+    let conn = db.lock().unwrap();
+    let mut role = conn
+        .query_row(
+            "SELECT cr.id, cr.name, cr.description, cr.created_at
+             FROM custom_roles cr
+             JOIN users u ON u.custom_role_id = cr.id
+             WHERE u.id = ?1",
+            params![user_id],
+            custom_role_from_row,
+        )
+        .optional()?;
+    if let Some(role_ref) = role.as_mut() {
+        load_role_permissions(&conn, role_ref)?;
+    }
+    Ok(role)
+}
+
+/// True when the user's custom role bundle contains the permission
+/// (global scope — no per-object grants involved).
+pub fn user_has_custom_permission(
+    db: &Db,
+    user_id: i64,
+    permission: &str,
+) -> rusqlite::Result<bool> {
+    if crate::db::pool_active() {
+        let __permission = permission.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_user_has_custom_permission_pool(pool, user_id, __permission)
+        });
+    }
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM custom_role_permissions crp
+            JOIN users u ON u.custom_role_id = crp.role_id
+            WHERE u.id = ?1 AND crp.permission = ?2
+        )",
+        params![user_id, permission],
+        |row| row.get(0),
+    )
+}
+
+/// Effective object-permission check: union of the custom role bundle
+/// (global scope) and the existing `rbac_permissions` grants (direct user
+/// grants + group-inherited CTE). Admin always allowed — callers branch on
+/// `has_role("admin")` before calling this, so no grant keeps the current
+/// behavior (403 / admin-only) for everyone else.
+pub fn user_has_object_permission(
+    db: &Db,
+    user_id: i64,
+    object_type: &str,
+    object_id: &str,
+    permission: ObjectPermission,
+) -> rusqlite::Result<bool> {
+    if user_has_custom_permission(db, user_id, permission.as_str())? {
+        return Ok(true);
+    }
+    match object_type {
+        "connection" => check_connection_permission(db, user_id, object_id, permission),
+        "connection_group" => {
+            if crate::db::pool_active() {
+                let __object_id = object_id.to_string();
+                let __permission = permission.as_str().to_string();
+                return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+                    crate::db::rbac_check_group_object_permission_pool(
+                        pool,
+                        user_id,
+                        __object_id,
+                        __permission,
+                    )
+                });
+            }
+            check_group_object_permission(db, user_id, object_id, permission)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// System-permission check: only the custom role bundle can carry system
+/// permissions (`rbac_permissions` has no system-permission rows).
+pub fn user_has_system_permission(
+    db: &Db,
+    user_id: i64,
+    permission: SystemPermission,
+) -> rusqlite::Result<bool> {
+    user_has_custom_permission(db, user_id, permission.as_str())
+}
+
+/// Identity-level system-permission check: admin short-circuits, otherwise
+/// the user's custom role bundle decides (fail closed for unknown users).
+pub fn identity_has_system_permission(
+    db: &Db,
+    identity: &crate::auth::AuthIdentity,
+    permission: SystemPermission,
+) -> bool {
+    if identity.has_role("admin") {
+        return true;
+    }
+    match identity_user_id(db, identity) {
+        Some(user_id) => user_has_system_permission(db, user_id, permission).unwrap_or(false),
+        None => false,
+    }
+}
+
+/// Identity-level effective object-permission check (see
+/// `user_has_object_permission`); admin short-circuits.
+pub fn identity_has_object_permission(
+    db: &Db,
+    identity: &crate::auth::AuthIdentity,
+    object_type: &str,
+    object_id: &str,
+    permission: ObjectPermission,
+) -> bool {
+    if identity.has_role("admin") {
+        return true;
+    }
+    match identity_user_id(db, identity) {
+        Some(user_id) => {
+            user_has_object_permission(db, user_id, object_type, object_id, permission)
+                .unwrap_or(false)
+        }
+        None => false,
+    }
+}
+
+/// Identity-level custom-bundle check (admin short-circuits). Used where a
+/// per-object grant cannot be resolved (e.g. entry-level ACLs keyed by
+/// folder id + entry name instead of the full connection id).
+pub fn identity_has_custom_permission(
+    db: &Db,
+    identity: &crate::auth::AuthIdentity,
+    permission: &str,
+) -> bool {
+    if identity.has_role("admin") {
+        return true;
+    }
+    match identity_user_id(db, identity) {
+        Some(user_id) => user_has_custom_permission(db, user_id, permission).unwrap_or(false),
+        None => false,
+    }
+}
+
+/// Numeric DB id for a user identity (None for API keys / unknown users).
+fn identity_user_id(db: &Db, identity: &crate::auth::AuthIdentity) -> Option<i64> {
+    match identity {
+        crate::auth::AuthIdentity::User { email, .. } => {
+            crate::db::get_user_by_email(db, email).ok().map(|u| u.id)
+        }
+        crate::auth::AuthIdentity::ApiKey(_) => None,
+    }
+}
+
+/// Insert a permission bundle, de-duplicated so the UNIQUE(role_id,
+/// permission) constraint cannot fire on duplicate payload entries.
+fn insert_role_permissions(
+    conn: &rusqlite::Connection,
+    role_id: &str,
+    permissions: &[String],
+) -> rusqlite::Result<()> {
+    let mut seen: Vec<&str> = Vec::new();
+    let mut stmt = conn.prepare(
+        "INSERT INTO custom_role_permissions (role_id, permission) VALUES (?1, ?2)",
+    )?;
+    for permission in permissions {
+        if seen.contains(&permission.as_str()) {
+            continue;
+        }
+        seen.push(permission.as_str());
+        stmt.execute(params![role_id, permission])?;
+    }
+    Ok(())
+}
+
+fn load_role_permissions(
+    conn: &rusqlite::Connection,
+    role: &mut CustomRole,
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT permission FROM custom_role_permissions WHERE role_id = ?1 ORDER BY permission",
+    )?;
+    let rows = stmt.query_map(params![role.id], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        role.permissions.push(row?);
+    }
+    Ok(())
+}
+
+/// Group-object permission check (folder-level grants): direct user grant
+/// on the object, or a group the user belongs to granted on the object or
+/// on an ancestor rbac group (recursive CTE over `parent_id`).
+fn check_group_object_permission(
+    db: &Db,
+    user_id: i64,
+    object_id: &str,
+    permission: ObjectPermission,
+) -> rusqlite::Result<bool> {
+    let conn = db.lock().unwrap();
+
+    let direct: bool = conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1 FROM rbac_permissions
+            WHERE entity_id = ?1 AND entity_type = 'user'
+              AND object_type = 'connection_group' AND object_id = ?2
+              AND permission = ?3
+        )",
+        params![user_id, object_id, permission.as_str()],
+        |row| row.get(0),
+    )?;
+    if direct {
+        return Ok(true);
+    }
+
+    let inherited: bool = conn.query_row(
+        "WITH RECURSIVE group_ancestors(group_id) AS (
+            SELECT DISTINCT entity_id
+            FROM rbac_permissions
+            WHERE entity_type = 'group' AND object_type = 'connection_group'
+              AND object_id = ?2 AND permission = ?3
+            UNION
+            SELECT g.parent_id
+            FROM rbac_groups g
+            JOIN group_ancestors ga ON g.id = ga.group_id
+            WHERE g.parent_id IS NOT NULL
+        )
+        SELECT EXISTS(
+            SELECT 1
+            FROM rbac_user_groups ug
+            INNER JOIN group_ancestors ga ON ug.group_id = ga.group_id
+            WHERE ug.user_id = ?1
+        )",
+        params![user_id, object_id, permission.as_str()],
+        |row| row.get(0),
+    )?;
+    Ok(inherited)
 }
 
 // ── Helpers ──

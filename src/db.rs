@@ -3,7 +3,7 @@
 use crate::audit::{compute_event_hash, AuditEvent, AuditFilters};
 use crate::db_pool::DbPool;
 use crate::providers_db::{DbProvider, MoveDirection};
-use crate::rbac::{ConnectionGroup, EntityType, ObjectPermission, PermissionEntry};
+use crate::rbac::{ConnectionGroup, CustomRole, EntityType, ObjectPermission, PermissionEntry};
 use crate::role::role_level;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use rand::RngExt;
@@ -9197,6 +9197,498 @@ pub(crate) async fn rbac_list_connection_permissions_pool(
             }
         })
         .collect())
+}
+
+// ── Custom roles (src/rbac.rs) ─────────────────────────────────────────
+
+pub(crate) async fn rbac_list_custom_roles_pool(
+    pool: &DbPool,
+) -> rusqlite::Result<Vec<CustomRole>> {
+    let mut roles: Vec<CustomRole> = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch(
+                p,
+                "SELECT id, name, description, created_at FROM custom_roles ORDER BY name",
+                &[],
+            )
+            .await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch(
+                p,
+                "SELECT id, name, description, created_at FROM custom_roles ORDER BY name",
+                &[],
+            )
+            .await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch(
+                p,
+                "SELECT id, name, description, created_at FROM custom_roles ORDER BY name",
+                &[],
+            )
+            .await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?
+    .iter()
+    .map(|row| CustomRole {
+        id: row.get(0),
+        name: row.get(1),
+        description: row.get(2),
+        permissions: Vec::new(),
+        created_at: row.get(3),
+    })
+    .collect();
+    let perms: Vec<(String, String)> = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch(
+                p,
+                "SELECT role_id, permission FROM custom_role_permissions ORDER BY permission",
+                &[],
+            )
+            .await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch(
+                p,
+                "SELECT role_id, permission FROM custom_role_permissions ORDER BY permission",
+                &[],
+            )
+            .await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch(
+                p,
+                "SELECT role_id, permission FROM custom_role_permissions ORDER BY permission",
+                &[],
+            )
+            .await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?
+    .iter()
+    .map(|row| (row.get::<String>(0), row.get::<String>(1)))
+    .collect();
+    for (role_id, permission) in perms {
+        if let Some(role) = roles.iter_mut().find(|r| r.id == role_id) {
+            role.permissions.push(permission);
+        }
+    }
+    Ok(roles)
+}
+
+pub(crate) async fn rbac_get_custom_role_pool(
+    pool: &DbPool,
+    id: String,
+) -> rusqlite::Result<Option<CustomRole>> {
+    let sql = qsql!(
+        pool,
+        "SELECT id, name, description, created_at FROM custom_roles WHERE id = $1",
+        "SELECT id, name, description, created_at FROM custom_roles WHERE id = ?"
+    );
+    let row = match pool {
+        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &[Arg::Str(id.clone())]).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &[Arg::Str(id.clone())]).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &[Arg::Str(id.clone())]).await,
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    let Some(row) = row else { return Ok(None) };
+    let mut role = CustomRole {
+        id: row.get(0),
+        name: row.get(1),
+        description: row.get(2),
+        permissions: Vec::new(),
+        created_at: row.get(3),
+    };
+    rbac_load_role_permissions_pool(pool, &mut role).await?;
+    Ok(Some(role))
+}
+
+pub(crate) async fn rbac_get_custom_role_by_name_pool(
+    pool: &DbPool,
+    name: String,
+) -> rusqlite::Result<Option<CustomRole>> {
+    let sql = qsql!(
+        pool,
+        "SELECT id, name, description, created_at FROM custom_roles WHERE name = $1",
+        "SELECT id, name, description, created_at FROM custom_roles WHERE name = ?"
+    );
+    let row = match pool {
+        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &[Arg::Str(name)]).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &[Arg::Str(name)]).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &[Arg::Str(name)]).await,
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    let Some(row) = row else { return Ok(None) };
+    let mut role = CustomRole {
+        id: row.get(0),
+        name: row.get(1),
+        description: row.get(2),
+        permissions: Vec::new(),
+        created_at: row.get(3),
+    };
+    rbac_load_role_permissions_pool(pool, &mut role).await?;
+    Ok(Some(role))
+}
+
+pub(crate) async fn rbac_create_custom_role_pool(
+    pool: &DbPool,
+    name: String,
+    description: Option<String>,
+    permissions: Vec<String>,
+) -> rusqlite::Result<String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "INSERT INTO custom_roles (id, name, description) VALUES ($1, $2, $3)",
+            "INSERT INTO custom_roles (id, name, description) VALUES (?, ?, ?)"
+        ),
+        &[
+            Arg::Str(id.clone()),
+            Arg::Str(name),
+            Arg::OptStr(description),
+        ],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    rbac_insert_role_permissions_pool(pool, &id, &permissions).await?;
+    Ok(id)
+}
+
+pub(crate) async fn rbac_update_custom_role_pool(
+    pool: &DbPool,
+    id: String,
+    name: String,
+    description: Option<String>,
+    permissions: Vec<String>,
+) -> rusqlite::Result<bool> {
+    let changed = pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "UPDATE custom_roles SET name = $1, description = $2 WHERE id = $3",
+            "UPDATE custom_roles SET name = ?, description = ? WHERE id = ?"
+        ),
+        &[Arg::Str(name), Arg::OptStr(description), Arg::Str(id.clone())],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    if changed == 0 {
+        return Ok(false);
+    }
+    pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "DELETE FROM custom_role_permissions WHERE role_id = $1",
+            "DELETE FROM custom_role_permissions WHERE role_id = ?"
+        ),
+        &[Arg::Str(id.clone())],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    rbac_insert_role_permissions_pool(pool, &id, &permissions).await?;
+    Ok(true)
+}
+
+pub(crate) async fn rbac_delete_custom_role_pool(
+    pool: &DbPool,
+    id: String,
+) -> rusqlite::Result<bool> {
+    pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "DELETE FROM custom_role_permissions WHERE role_id = $1",
+            "DELETE FROM custom_role_permissions WHERE role_id = ?"
+        ),
+        &[Arg::Str(id.clone())],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "UPDATE users SET custom_role_id = NULL WHERE custom_role_id = $1",
+            "UPDATE users SET custom_role_id = NULL WHERE custom_role_id = ?"
+        ),
+        &[Arg::Str(id.clone())],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    let changed = pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "DELETE FROM custom_roles WHERE id = $1",
+            "DELETE FROM custom_roles WHERE id = ?"
+        ),
+        &[Arg::Str(id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(changed > 0)
+}
+
+pub(crate) async fn rbac_set_user_custom_role_pool(
+    pool: &DbPool,
+    email: String,
+    role_id: Option<String>,
+) -> rusqlite::Result<bool> {
+    let changed = pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "UPDATE users SET custom_role_id = $1 WHERE email = $2",
+            "UPDATE users SET custom_role_id = ? WHERE email = ?"
+        ),
+        &[Arg::OptStr(role_id), Arg::Str(email)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(changed > 0)
+}
+
+pub(crate) async fn rbac_user_custom_role_pool(
+    pool: &DbPool,
+    user_id: i64,
+) -> rusqlite::Result<Option<CustomRole>> {
+    let sql = qsql!(
+        pool,
+        "SELECT cr.id, cr.name, cr.description, cr.created_at
+         FROM custom_roles cr
+         JOIN users u ON u.custom_role_id = cr.id
+         WHERE u.id = $1",
+        "SELECT cr.id, cr.name, cr.description, cr.created_at
+         FROM custom_roles cr
+         JOIN users u ON u.custom_role_id = cr.id
+         WHERE u.id = ?"
+    );
+    let row = match pool {
+        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &[Arg::I64(user_id)]).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &[Arg::I64(user_id)]).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &[Arg::I64(user_id)]).await,
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    let Some(row) = row else { return Ok(None) };
+    let mut role = CustomRole {
+        id: row.get(0),
+        name: row.get(1),
+        description: row.get(2),
+        permissions: Vec::new(),
+        created_at: row.get(3),
+    };
+    rbac_load_role_permissions_pool(pool, &mut role).await?;
+    Ok(Some(role))
+}
+
+pub(crate) async fn rbac_user_has_custom_permission_pool(
+    pool: &DbPool,
+    user_id: i64,
+    permission: String,
+) -> rusqlite::Result<bool> {
+    let sql = qsql!(
+        pool,
+        "SELECT EXISTS(
+            SELECT 1 FROM custom_role_permissions crp
+            JOIN users u ON u.custom_role_id = crp.role_id
+            WHERE u.id = $1 AND crp.permission = $2
+        )",
+        "SELECT EXISTS(
+            SELECT 1 FROM custom_role_permissions crp
+            JOIN users u ON u.custom_role_id = crp.role_id
+            WHERE u.id = ? AND crp.permission = ?
+        )"
+    );
+    let row = match pool {
+        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &[Arg::I64(user_id), Arg::Str(permission)]).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &[Arg::I64(user_id), Arg::Str(permission)]).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &[Arg::I64(user_id), Arg::Str(permission)]).await,
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(row.map(|r| r.get::<bool>(0)).unwrap_or(false))
+}
+
+/// Group-object (folder-level) permission check: direct user grant on the
+/// object, or a group the user belongs to granted on the object or on an
+/// ancestor rbac group. Mirrors the rusqlite path in src/rbac.rs
+/// (`check_group_object_permission`).
+pub(crate) async fn rbac_check_group_object_permission_pool(
+    pool: &DbPool,
+    user_id: i64,
+    object_id: String,
+    permission: String,
+) -> rusqlite::Result<bool> {
+    // 1. Direct user grant on the object
+    let direct_sql = qsql!(
+        pool,
+        "SELECT EXISTS(
+            SELECT 1 FROM rbac_permissions
+            WHERE entity_id = $1 AND entity_type = 'user'
+              AND object_type = 'connection_group' AND object_id = $2
+              AND permission = $3
+        )",
+        "SELECT EXISTS(
+            SELECT 1 FROM rbac_permissions
+            WHERE entity_id = ? AND entity_type = 'user'
+              AND object_type = 'connection_group' AND object_id = ?
+              AND permission = ?
+        )"
+    );
+    let direct = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch_opt(
+                p,
+                direct_sql,
+                &[Arg::I64(user_id), Arg::Str(object_id.clone()), Arg::Str(permission.clone())],
+            )
+            .await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch_opt(
+                p,
+                direct_sql,
+                &[Arg::I64(user_id), Arg::Str(object_id.clone()), Arg::Str(permission.clone())],
+            )
+            .await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch_opt(
+                p,
+                direct_sql,
+                &[Arg::I64(user_id), Arg::Str(object_id.clone()), Arg::Str(permission.clone())],
+            )
+            .await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    if direct.map(|r| r.get::<bool>(0)).unwrap_or(false) {
+        return Ok(true);
+    }
+
+    // 2. Group grants on the object or on ancestor rbac groups (recursive CTE)
+    let cte_sql = qsql!(
+        pool,
+        "WITH RECURSIVE group_ancestors(group_id) AS (
+            SELECT DISTINCT entity_id
+            FROM rbac_permissions
+            WHERE entity_type = 'group' AND object_type = 'connection_group'
+              AND object_id = $1 AND permission = $2
+            UNION
+            SELECT g.parent_id
+            FROM rbac_groups g
+            JOIN group_ancestors ga ON g.id = ga.group_id
+            WHERE g.parent_id IS NOT NULL
+        )
+        SELECT EXISTS(
+            SELECT 1
+            FROM rbac_user_groups ug
+            INNER JOIN group_ancestors ga ON ug.group_id = ga.group_id
+            WHERE ug.user_id = $3
+        )",
+        "WITH RECURSIVE group_ancestors(group_id) AS (
+            SELECT DISTINCT entity_id
+            FROM rbac_permissions
+            WHERE entity_type = 'group' AND object_type = 'connection_group'
+              AND object_id = ? AND permission = ?
+            UNION
+            SELECT g.parent_id
+            FROM rbac_groups g
+            JOIN group_ancestors ga ON g.id = ga.group_id
+            WHERE g.parent_id IS NOT NULL
+        )
+        SELECT EXISTS(
+            SELECT 1
+            FROM rbac_user_groups ug
+            INNER JOIN group_ancestors ga ON ug.group_id = ga.group_id
+            WHERE ug.user_id = ?
+        )"
+    );
+    let row = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch_opt(
+                p,
+                cte_sql,
+                &[Arg::Str(object_id.clone()), Arg::Str(permission.clone()), Arg::I64(user_id)],
+            )
+            .await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch_opt(
+                p,
+                cte_sql,
+                &[Arg::Str(object_id.clone()), Arg::Str(permission.clone()), Arg::I64(user_id)],
+            )
+            .await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch_opt(
+                p,
+                cte_sql,
+                &[Arg::Str(object_id.clone()), Arg::Str(permission.clone()), Arg::I64(user_id)],
+            )
+            .await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(row.map(|r| r.get::<bool>(0)).unwrap_or(false))
+}
+
+async fn rbac_insert_role_permissions_pool(
+    pool: &DbPool,
+    role_id: &str,
+    permissions: &[String],
+) -> rusqlite::Result<()> {
+    let mut seen: Vec<&str> = Vec::new();
+    let sql = qsql!(
+        pool,
+        "INSERT INTO custom_role_permissions (role_id, permission) VALUES ($1, $2)",
+        "INSERT INTO custom_role_permissions (role_id, permission) VALUES (?, ?)"
+    );
+    for permission in permissions {
+        if seen.contains(&permission.as_str()) {
+            continue;
+        }
+        seen.push(permission.as_str());
+        pool_exec(pool, sql, &[Arg::Str(role_id.to_string()), Arg::Str(permission.clone())])
+            .await
+            .map_err(map_sqlx_err)?;
+    }
+    Ok(())
+}
+
+async fn rbac_load_role_permissions_pool(
+    pool: &DbPool,
+    role: &mut CustomRole,
+) -> rusqlite::Result<()> {
+    let sql = qsql!(
+        pool,
+        "SELECT permission FROM custom_role_permissions WHERE role_id = $1 ORDER BY permission",
+        "SELECT permission FROM custom_role_permissions WHERE role_id = ? ORDER BY permission"
+    );
+    let rows = match pool {
+        DbPool::Postgres(p) => pg_fetch(p, sql, &[Arg::Str(role.id.clone())]).await,
+        DbPool::MySQL(p) => mysql_fetch(p, sql, &[Arg::Str(role.id.clone())]).await,
+        DbPool::SQLite(p) => sqlite_fetch(p, sql, &[Arg::Str(role.id.clone())]).await,
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    for row in rows {
+        role.permissions.push(row.get::<String>(0));
+    }
+    Ok(())
 }
 
 // ── Audit hash chain (src/audit.rs) ────────────────────────────────────
