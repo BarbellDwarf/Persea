@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// TLS settings for the HTTPS listener and the guacd connection (`[tls]`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct TlsConfig {
     /// Path to server TLS certificate (PEM). Required for HTTPS serving.
@@ -20,9 +21,12 @@ pub struct TlsConfig {
     pub secure_cookies: bool,
 }
 
+/// OpenID Connect provider settings (`[oidc]`).
 #[derive(Deserialize, Clone)]
 pub struct OidcConfig {
+    /// OIDC issuer discovery URL, e.g. "https://auth.example.com/realms/corp".
     pub issuer_url: String,
+    /// Client id registered with the identity provider.
     pub client_id: String,
     /// OIDC client secret. May be set in config.toml or via the
     /// `OIDC_CLIENT_SECRET` environment variable; the env var wins when
@@ -30,7 +34,11 @@ pub struct OidcConfig {
     /// `[oidc]` is configured (see Config::load).
     #[serde(default)]
     pub client_secret: Option<String>,
+    /// Callback URL the provider redirects to after sign-in; must match
+    /// the registered redirect URI.
     pub redirect_uri: String,
+    /// Role assigned to OIDC users whose groups map to no role.
+    /// Default: "operator".
     #[serde(default = "default_oidc_default_role")]
     pub default_role: String,
     /// Name of the OIDC claim containing group memberships (default: "groups").
@@ -76,14 +84,23 @@ fn default_groups_claim() -> String {
     "groups".into()
 }
 
+/// Vault/OpenBao KV v2 backend configuration. Used for `[vault]` and the
+/// optional `[vault_shared]`/`[vault_local]` overrides in [`Config`].
 #[derive(Deserialize, Clone)]
 pub struct VaultConfig {
+    /// Vault server URL, e.g. "https://vault.example.com:8200".
     pub addr: String,
+    /// KV secrets engine mount path. Default: "secret".
     #[serde(default = "default_vault_mount")]
     pub mount: String,
+    /// Base path under the mount where persea stores its entries.
+    /// Default: "persea".
     #[serde(default = "default_vault_base_path")]
     pub base_path: String,
+    /// AppRole role id for authentication; the matching secret id comes
+    /// from the environment at startup.
     pub role_id: String,
+    /// Vault namespace applied to requests (Vault Enterprise).
     pub namespace: Option<String>,
     /// Instance name for instance-scoped address book entries.
     /// Entries under `<base_path>/shared/` are visible to all instances.
@@ -123,6 +140,8 @@ impl std::fmt::Debug for VaultConfig {
     }
 }
 
+/// Drive and file-transfer settings for RDP sessions and LUKS containers
+/// (`[drive]`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct DriveConfig {
     /// Enable drive/file transfer for sessions. Default: false.
@@ -196,6 +215,7 @@ impl Default for DriveConfig {
     }
 }
 
+/// Session recording settings (`[recording]`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct RecordingConfig {
     /// Path for recording files. Overrides top-level `recording_path`.
@@ -347,8 +367,14 @@ pub struct AuthConfig {
     /// Ordered list of primary auth methods. Example: ["ldap", "database", "oidc"]
     #[serde(default = "default_auth_methods")]
     pub methods: Vec<String>,
+    /// LDAP/AD provider settings; active when "ldap" is in
+    /// [`methods`](AuthConfig::methods).
     pub ldap: Option<crate::auth_providers::ldap::LdapConfig>,
+    /// RADIUS provider settings; active when "radius" is in
+    /// [`methods`](AuthConfig::methods).
     pub radius: Option<crate::auth_providers::radius::RadiusConfig>,
+    /// SAML 2.0 provider settings; active when "saml" is in
+    /// [`methods`](AuthConfig::methods).
     pub saml: Option<crate::auth_providers::saml::SamlConfig>,
     /// TOTP second-factor configuration.
     pub totp: Option<AuthTotpConfig>,
@@ -445,11 +471,19 @@ fn default_auth_methods() -> Vec<String> {
     vec!["database".to_string()]
 }
 
+/// Fully-resolved server configuration.
+///
+/// Built by [`Config::load`] from layered sources: built-in defaults, an
+/// optional TOML file, then `PERSEA_` environment variables. Call
+/// [`Config::validate`] at startup so fatal misconfiguration fails fast
+/// instead of surfacing as runtime errors.
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
+    /// Address the HTTP server listens on, e.g. "127.0.0.1:8089".
     #[serde(default = "default_listen_addr")]
     pub listen_addr: String,
 
+    /// guacd address, e.g. "127.0.0.1:4822".
     #[serde(default = "default_guacd_addr")]
     pub guacd_addr: String,
 
@@ -457,12 +491,16 @@ pub struct Config {
     #[serde(default)]
     pub recording_path: Option<PathBuf>,
 
+    /// Directory for static assets; also holds the themes/ subdirectory.
     #[serde(default = "default_static_path")]
     pub static_path: PathBuf,
 
+    /// SQLite database file path, used when `db_url` is unset.
     #[serde(default = "default_db_path")]
     pub db_path: PathBuf,
 
+    /// Seconds a session may stay in "pending" before it is reaped.
+    /// Default: 60.
     #[serde(default = "default_session_timeout_secs")]
     pub session_pending_timeout_secs: u64,
 
@@ -488,30 +526,43 @@ pub struct Config {
     #[serde(default = "default_session_history_retention_days")]
     pub session_history_retention_days: u32,
 
+    /// Path to the Xvnc binary used for web browser sessions.
+    /// Default: "Xvnc".
     #[serde(default = "default_xvnc_path")]
     pub xvnc_path: String,
 
+    /// Path to the Chromium binary used for web browser sessions.
+    /// Default: "chromium".
     #[serde(default = "default_chromium_path")]
     pub chromium_path: String,
 
+    /// First X display number Xvnc may use. Default: 100.
     #[serde(default = "default_display_range_start")]
     pub display_range_start: u32,
 
+    /// Last X display number Xvnc may use. Default: 199.
     #[serde(default = "default_display_range_end")]
     pub display_range_end: u32,
 
+    /// First port of the Chromium DevTools (CDP) port range. Default: 9200.
     #[serde(default = "default_cdp_port_range_start")]
     pub cdp_port_range_start: u16,
 
+    /// Last port of the Chromium DevTools (CDP) port range. Default: 9299.
     #[serde(default = "default_cdp_port_range_end")]
     pub cdp_port_range_end: u16,
 
+    /// Seconds a web-session login script may run before it is killed.
+    /// Default: 120.
     #[serde(default = "default_login_script_timeout_secs")]
     pub login_script_timeout_secs: u64,
 
+    /// Directory holding login scripts for web sessions; entries reference
+    /// scripts by filename. Default: /opt/persea/scripts.
     #[serde(default = "default_login_scripts_dir")]
     pub login_scripts_dir: String,
 
+    /// Site title shown in the browser tab and page headers.
     #[serde(default = "default_site_title")]
     pub site_title: String,
 
@@ -586,8 +637,11 @@ pub struct Config {
     #[serde(default = "default_user_credentials_scope")]
     pub user_credentials_default_scope: String,
 
+    /// Authentication provider chain settings (`[auth]`).
     pub auth: Option<AuthConfig>,
+    /// TLS settings for HTTPS and the guacd connection (`[tls]`).
     pub tls: Option<TlsConfig>,
+    /// OIDC provider settings; enables OIDC login when present (`[oidc]`).
     pub oidc: Option<OidcConfig>,
     /// Primary/default Vault backend. Serves any address-book scope that does
     /// not have a dedicated backend below, and is the home of unscoped secrets
@@ -603,12 +657,17 @@ pub struct Config {
     /// instance-scope folders/entries route here. Secret ID via
     /// `VAULT_LOCAL_SECRET_ID`.
     pub vault_local: Option<VaultConfig>,
+    /// Drive and file-transfer settings (`[drive]`).
     pub drive: Option<DriveConfig>,
+    /// Theme overrides applied to the active preset (`[theme]`).
     pub theme: Option<ThemeConfig>,
+    /// Session recording settings (`[recording]`).
     pub recording: Option<RecordingConfig>,
+    /// VDI desktop container settings (`[vdi]`).
     pub vdi: Option<VdiConfig>,
     /// VMware vSphere integration for VM inventory and OS-aware protocol routing.
     pub vsphere: Option<crate::vsphere::VsphereConfig>,
+    /// RDP-wide defaults for entries that leave fields unset (`[rdp]`).
     pub rdp: Option<RdpConfig>,
     /// Optional SQLx database URL for multi-backend support (PostgreSQL,
     /// MySQL, or SQLite via SQLx). When set, `DbPool` is initialised and
@@ -683,6 +742,8 @@ impl Default for StorageConfig {
 /// supports it.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct RdpConfig {
+    /// NLA/CredSSP auth package: "ntlm" (default), "kerberos", or
+    /// "negotiate".
     pub default_auth_pkg: Option<String>,
 }
 
@@ -1612,6 +1673,15 @@ fn sanitize_cidr_list(proto: &str, list: &mut Vec<String>) {
 /// caret pointing at the broken token; we prepend the file path so the message
 /// is unambiguous when multiple paths are searched.
 impl Config {
+    /// Load configuration from defaults, an optional TOML file, and
+    /// `PERSEA_` environment variables.
+    ///
+    /// When an explicit path was given, or `/opt/persea/config.toml`
+    /// exists, a broken config is fatal and the process exits with the
+    /// parse error. Otherwise the built-in defaults win. Resolves
+    /// `OIDC_CLIENT_SECRET` from the environment, fails startup when
+    /// `[oidc]` is configured without any secret, and sanitizes CIDR
+    /// lists in place.
     pub fn load(path: Option<&str>) -> Self {
         // Note: tracing is initialised later (in run_server), so config-load
         // diagnostics go to stderr directly. Misconfigurations are fatal when
