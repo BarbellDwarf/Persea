@@ -106,12 +106,19 @@
         <form id="edit-role-form">
             <input type="hidden" name="email" id="edit-role-email">
             <div class="mb-4">
-                <label class="form-label">New Role</label>
+                <label class="form-label">System Role</label>
                 <select name="role" id="edit-role-value" class="form-input">
+                    <option value="">No system role</option>
                     <option value="viewer">Viewer</option>
                     <option value="operator">Operator</option>
                     <option value="poweruser">Power User</option>
                     <option value="admin">Admin</option>
+                </select>
+            </div>
+            <div class="mb-4">
+                <label class="form-label">Custom Role</label>
+                <select id="edit-role-custom" class="form-input">
+                    <option value="">No custom role</option>
                 </select>
             </div>
             <div class="flex justify-end gap-3">
@@ -157,9 +164,24 @@ function closeModal(id) {
     m.setAttribute('aria-hidden', 'true');
 }
 
-function editUserRole(email, currentRole) {
+function selectOption(sel, value) {
+    for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === value) { sel.selectedIndex = i; return true; }
+    }
+    return false;
+}
+
+function editUserRole(email, currentRole, customRole) {
     document.getElementById('edit-role-email').value = email;
-    document.getElementById('edit-role-value').value = currentRole;
+    var sysSel = document.getElementById('edit-role-value');
+    var customSel = document.getElementById('edit-role-custom');
+    sysSel.value = '';
+    customSel.value = '';
+    if (customRole && selectOption(customSel, customRole)) {
+        sysSel.value = '';
+    } else if (!selectOption(sysSel, currentRole || '')) {
+        selectOption(customSel, currentRole || '');
+    }
     openModal('edit-role-modal');
 }
 
@@ -177,14 +199,19 @@ function toggleUserStatus(email, currentStatus) {
         .then(function() { loadUsers(); });
 }
 
-function roleBadge(role) {
+function roleBadge(user) {
     var colors = {
         admin: 'bg-red-900/50 text-red-300 border-red-800',
         poweruser: 'bg-amber-900/50 text-amber-300 border-amber-800',
         operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
         viewer: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]'
     };
-    var safeRole = esc(role || 'viewer');
+    if (user && user.custom_role && user.custom_role.name) {
+        var safeCustom = esc(user.custom_role.name);
+        return '<span class="inline-block px-2 py-0.5 text-xs rounded border bg-purple-900/30 text-purple-300 border-purple-700">' + safeCustom + '</span>';
+    }
+    var role = (user && user.role) || 'viewer';
+    var safeRole = esc(role);
     return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[role] || colors.viewer) + '">' + safeRole + '</span>';
 }
 
@@ -201,12 +228,12 @@ function renderUserRow(user) {
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
         '<td class="px-4 py-3 text-sm text-[var(--text-primary)]">' + safeName + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + safeEmail + '</td>' +
-        '<td class="px-4 py-3">' + roleBadge(user.role) + '</td>' +
+        '<td class="px-4 py-3">' + roleBadge(user) + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + safeAuth + '</td>' +
         '<td class="px-4 py-3 text-sm ' + statusClass + '">' + statusText + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + safeLogin + '</td>' +
         '<td class="px-4 py-3 text-right text-sm">' +
-            '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + esc(user.role || '') + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit Role</button>' +
+            '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + esc(user.role || '') + '" data-custom-role="' + esc((user.custom_role && user.custom_role.name) || '') + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit Role</button>' +
             '<button data-action="toggle-status" data-email="' + safeEmail + '" data-status="' + statusLower + '" class="' + toggleClass + ' mr-3">' + toggleLabel + '</button>' +
             '<button data-action="delete-user" data-email="' + safeEmail + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
         '</td></tr>';
@@ -218,7 +245,7 @@ function getFilteredUsers() {
     var statusFilter = document.getElementById('status-filter').value;
     return _allUsers.filter(function(u) {
         if (query && (u.name || '').toLowerCase().indexOf(query) === -1 && (u.email || '').toLowerCase().indexOf(query) === -1) return false;
-        if (roleFilter && u.role !== roleFilter) return false;
+        if (roleFilter && u.role !== roleFilter && !(u.custom_role && u.custom_role.name === roleFilter)) return false;
         if (statusFilter === 'active' && u.disabled) return false;
         if (statusFilter === 'disabled' && !u.disabled) return false;
         return true;
@@ -257,7 +284,7 @@ document.getElementById('user-table-body').addEventListener('click', function(e)
     var action = btn.getAttribute('data-action');
     var email = btn.getAttribute('data-email');
     if (action === 'edit-role') {
-        editUserRole(email, btn.getAttribute('data-role'));
+        editUserRole(email, btn.getAttribute('data-role'), btn.getAttribute('data-custom-role'));
     } else if (action === 'toggle-status') {
         toggleUserStatus(email, btn.getAttribute('data-status'));
     } else if (action === 'delete-user') {
@@ -280,6 +307,13 @@ document.getElementById('btn-cancel-edit-role').addEventListener('click', functi
 });
 document.getElementById('btn-cancel-delete-user').addEventListener('click', function() {
     closeModal('delete-user-modal');
+});
+
+document.getElementById('edit-role-value').addEventListener('change', function() {
+    if (this.value) { document.getElementById('edit-role-custom').value = ''; }
+});
+document.getElementById('edit-role-custom').addEventListener('change', function() {
+    if (this.value) { document.getElementById('edit-role-value').value = ''; }
 });
 
 document.getElementById('add-user-form').addEventListener('submit', function(e) {
@@ -310,7 +344,12 @@ document.getElementById('add-user-form').addEventListener('submit', function(e) 
 document.getElementById('edit-role-form').addEventListener('submit', function(e) {
     e.preventDefault();
     var email = document.getElementById('edit-role-email').value;
-    var role = document.getElementById('edit-role-value').value;
+    var customRole = document.getElementById('edit-role-custom').value;
+    var role = customRole || document.getElementById('edit-role-value').value;
+    if (!role) {
+        alert('Select a system role or a custom role');
+        return;
+    }
     fetch('/api/users/' + encodeURIComponent(email) + '/role', {
         method: 'PUT',
         headers: apiHeaders(),
@@ -343,6 +382,34 @@ document.getElementById('delete-user-form').addEventListener('submit', function(
     }).catch(function() { alert('Failed to delete user'); });
 });
 
+function populateCustomRoles() {
+    var customSel = document.getElementById('edit-role-custom');
+    customSel.innerHTML = '<option value="">No custom role</option>';
+    var filter = document.getElementById('role-filter');
+    var existing = filter.querySelector('option[data-custom]');
+    if (existing) { existing.remove(); }
+    fetch('/api/admin/roles', { headers: apiHeaders(), credentials: 'same-origin' })
+        .then(function(r) { return r.ok ? r.json() : []; })
+        .then(function(data) {
+            var roles = Array.isArray(data) ? data : (data && data.roles) || [];
+            for (var i = 0; i < roles.length; i++) {
+                var r = roles[i];
+                if (!r || !r.name) { continue; }
+                var opt = document.createElement('option');
+                opt.value = r.name;
+                opt.textContent = r.name;
+                opt.setAttribute('data-custom', '1');
+                filter.appendChild(opt);
+                var copt = document.createElement('option');
+                copt.value = r.name;
+                copt.textContent = r.name;
+                customSel.appendChild(copt);
+            }
+        })
+        .catch(function() {});
+}
+
 loadUsers();
+populateCustomRoles();
 </script>
 {% endblock %}
