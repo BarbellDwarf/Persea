@@ -23,12 +23,17 @@ use tokio_util::sync::CancellationToken;
 /// A single jump host in a multi-hop chain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JumpHost {
+    /// Hostname or IP address of the jump host.
     pub hostname: String,
+    /// SSH port on the jump host. Defaults to 22.
     #[serde(default = "default_ssh_port")]
     pub port: u16,
+    /// SSH login user on the jump host.
     pub username: String,
+    /// Password for password authentication. Tried after the private key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+    /// PEM private key for public-key authentication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_key: Option<String>,
     /// SSH server public key in OpenSSH format (e.g. "ssh-ed25519 AAAA...").
@@ -44,8 +49,11 @@ fn default_ssh_port() -> u16 {
 /// Non-secret jump host metadata for API responses.
 #[derive(Debug, Clone, Serialize)]
 pub struct JumpHostInfo {
+    /// Hostname or IP address of the jump host.
     pub hostname: String,
+    /// SSH port on the jump host.
     pub port: u16,
+    /// SSH login user on the jump host.
     pub username: String,
     /// SSH server host key fingerprint (e.g. "SHA256:...") if pinned.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,12 +83,19 @@ impl Drop for SshTunnel {
 
 /// Configuration for establishing an SSH tunnel.
 pub struct TunnelConfig {
+    /// Hostname or IP address of the jump host.
     pub jump_host: String,
+    /// SSH port on the jump host.
     pub jump_port: u16,
+    /// SSH login user on the jump host.
     pub jump_username: String,
+    /// Password for the jump host, used when no private key is set.
     pub jump_password: Option<String>,
+    /// PEM private key for the jump host, tried before the password.
     pub jump_private_key: Option<String>,
+    /// Hostname or IP the tunnel forwards to.
     pub target_host: String,
+    /// TCP port the tunnel forwards to.
     pub target_port: u16,
     /// Expected SSH server host key in OpenSSH format. If set, the connection
     /// is rejected when the server presents a different key.
@@ -93,9 +108,13 @@ pub struct TunnelConfig {
 #[derive(Debug)]
 #[must_use]
 pub enum TunnelError {
+    /// The SSH connection or channel failed at the given hop.
     Ssh(usize, String),
+    /// Authentication against the jump host was rejected.
     Auth(usize, String),
+    /// The local TCP listener could not be bound.
     Bind(usize, String),
+    /// A private key could not be decoded or a host key check failed.
     Key(usize, String),
 }
 
