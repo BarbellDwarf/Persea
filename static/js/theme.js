@@ -101,16 +101,19 @@ function initTheme(t) {
     _adminPreset = t.admin_preset || 'aurora';
     var userTheme = localStorage.getItem('persea_theme');
     var active = userTheme && _themePresets[userTheme] ? userTheme : null;
+    // 'brand' is a stored choice for the admin branding theme entry.
+    var brandChosen = userTheme === 'brand';
     if (active) {
         // Explicit user choice always wins over admin branding. Adapt it to
         // the current mode so a refresh doesn't re-apply the raw (dark)
         // palette on top of a persisted light-mode adaptation.
         applyThemeColors(_adaptToMode(_themePresets[active]));
         _adminColors = null;
-    } else if (t.admin_colors) {
-        // Admin branding applies when the user never picked a preset. Only
-        // when the admin actually configured something, though — the resolved
-        // default (aurora) must not override the app.css green look.
+    } else if (t.admin_colors && (brandChosen || !userTheme)) {
+        // Admin branding is its own theme entry and the default for users
+        // who have not chosen anything. Only when the admin actually
+        // configured something, though — the resolved default (aurora) must
+        // not override the app.css green look.
         var base = _themePresets[_adminPreset];
         var customized = _adminPreset !== 'aurora' || !base || !_sameColors(t.admin_colors, base);
         if (customized) {
@@ -119,15 +122,50 @@ function initTheme(t) {
         } else {
             _adminColors = null;
         }
+    } else {
+        _adminColors = null;
     }
     if (t.logo_url) { var l = document.getElementById('site-logo'); if (l) { if (l.src !== t.logo_url && !l.src.endsWith(t.logo_url)) l.src = t.logo_url; l.style.display = ''; } }
     var menu = document.getElementById('um-theme-list');
     if (menu) {
         menu.innerHTML = '';
-        // "Default" option — clears preset, restores CSS green defaults
-        // (or the admin branding when one is configured)
+        var hasBrand = !!_adminColors;
+        // Brand is the default selection for users who have not chosen
+        // anything; 'default' is always the persea green look.
+        var brandActive = hasBrand && (brandChosen || !userTheme);
+        var defaultActive = !brandActive && !active && !brandChosen;
+        if (hasBrand) {
+            // Admin branding as its own theme entry.
+            var brandItem = document.createElement('div');
+            brandItem.className = 'um-item' + (brandActive ? ' active' : '');
+            var bSw = document.createElement('span');
+            bSw.className = 'um-swatch';
+            bSw.style.background = 'linear-gradient(135deg,' + (_adminColors.primary || '#059669') + ' 50%,' + (_adminColors.accent || '#10b981') + ' 50%)';
+            brandItem.appendChild(bSw);
+            var bInfo = document.createElement('div');
+            bInfo.className = 'um-theme-info';
+            var bNm = document.createElement('span');
+            bNm.className = 'um-theme-name';
+            bNm.textContent = 'brand';
+            bInfo.appendChild(bNm);
+            var bDesc = document.createElement('span');
+            bDesc.className = 'um-theme-desc';
+            bDesc.textContent = 'Admin branding — colors from settings';
+            bInfo.appendChild(bDesc);
+            brandItem.appendChild(bInfo);
+            brandItem.addEventListener('click', function() {
+                localStorage.setItem('persea_theme', 'brand');
+                localStorage.removeItem('persea_theme_colors');
+                applyThemeColors(_adaptToMode(_adminColors));
+                menu.querySelectorAll('.um-item').forEach(function(el) { el.classList.remove('active'); });
+                brandItem.classList.add('active');
+                document.getElementById('user-menu').style.display = 'none';
+            });
+            menu.appendChild(brandItem);
+        }
+        // "Default" option — always restores the CSS green defaults
         var defItem = document.createElement('div');
-        defItem.className = 'um-item' + (!active ? ' active' : '');
+        defItem.className = 'um-item' + (defaultActive ? ' active' : '');
         var defSw = document.createElement('span');
         defSw.className = 'um-swatch';
         defSw.style.background = 'linear-gradient(135deg, #059669 50%, #10b981 50%)';
@@ -140,14 +178,13 @@ function initTheme(t) {
         defInfo.appendChild(defNm);
         var defDesc = document.createElement('span');
         defDesc.className = 'um-theme-desc';
-        defDesc.textContent = _adminColors ? 'Admin branding — colors from settings' : 'Persea green — the original';
+        defDesc.textContent = 'Persea green — the original';
         defInfo.appendChild(defDesc);
         defItem.appendChild(defInfo);
         defItem.addEventListener('click', function() {
             localStorage.removeItem('persea_theme');
             localStorage.removeItem('persea_theme_colors');
             document.documentElement.style.cssText = '';
-            if (_adminColors) applyThemeColors(_adaptToMode(_adminColors));
             menu.querySelectorAll('.um-item').forEach(function(el) { el.classList.remove('active'); });
             defItem.classList.add('active');
             document.getElementById('user-menu').style.display = 'none';
