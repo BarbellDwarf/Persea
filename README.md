@@ -207,6 +207,10 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 - [API Reference](docs/api.md): REST API endpoints, the session connection flow, and headless ws-ticket integration
 - [Migration from Apache Guacamole](docs/migration.md): MySQL/MariaDB to Vault
 
+## Acknowledgements
+
+[OpenCode](https://opencode.ai) and the OpenCode Go subscription made this project possible. An AI coding agent that just works, a subscription that is worth every cent, and isn't that many cents either. If you are a dev who needs solid pricing for AI coding agents, this is the way to go. They are not a sponsor by the way, just love the product and the ethos.
+
 ## License
 
 persea is free software under the [Apache License 2.0](LICENSE). Use it, modify it, sell it: it is a hobby project, everything is included, nothing is gated.
