@@ -13,11 +13,14 @@ const MAX_PROTOCOL_BUFFER_LEN: usize = 1_048_576;
 /// A single Guacamole protocol instruction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Instruction {
+    /// Instruction name, e.g. `"size"`, `"select"`, `"connect"`.
     pub opcode: String,
+    /// Positional arguments for the instruction, in wire order.
     pub args: Vec<String>,
 }
 
 impl Instruction {
+    /// Build an instruction from an opcode and its argument list.
     pub fn new(opcode: impl Into<String>, args: Vec<String>) -> Self {
         Self {
             opcode: opcode.into(),
@@ -102,11 +105,18 @@ fn encode_element(s: &str) -> String {
 
 #[derive(Debug, PartialEq)]
 #[must_use]
+/// Why a Guacamole instruction could not be parsed from wire format.
+#[must_use]
 pub enum ParseError {
+    /// The instruction contained no elements at all (empty input or a bare `;`).
     Empty,
+    /// An element was missing its `.` length separator.
     MalformedElement,
+    /// The length prefix was not a valid `usize` (non-numeric, negative, or overflowing).
     InvalidLength,
+    /// The declared length ran past the end of the data, or cut through the middle of a UTF-8 character.
     Truncated,
+    /// A byte appeared where the parser expected `,` or the end of the instruction.
     UnexpectedChar,
 }
 
@@ -227,6 +237,7 @@ impl Default for InstructionParser {
 }
 
 impl InstructionParser {
+    /// Create an empty parser, ready to receive data.
     pub fn new() -> Self {
         Self::default()
     }
