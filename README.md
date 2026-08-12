@@ -1,7 +1,6 @@
 # Persea
 
 [![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/BarbellDwarf/persea/actions/workflows/codeql.yml/badge.svg)](https://github.com/BarbellDwarf/persea/security/code-scanning)
 [![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/BarbellDwarf/persea/total)](https://github.com/BarbellDwarf/persea/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
