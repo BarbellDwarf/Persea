@@ -694,6 +694,7 @@ async fn collect_stderr(child: &mut Child) -> String {
     }
 }
 
+/// Errors from spawning or running a browser session.
 #[derive(Debug)]
 #[must_use]
 pub enum BrowserError {
