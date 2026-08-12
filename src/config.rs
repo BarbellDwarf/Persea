@@ -750,35 +750,65 @@ pub struct RdpConfig {
 /// Fully-resolved theme palette with all 26 color fields.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ThemeColors {
+    /// Primary action color: buttons, links, active states.
     pub primary: String,
+    /// `primary` in its hovered state.
     pub primary_hover: String,
+    /// Accent color for highlights and secondary emphasis.
     pub accent: String,
+    /// `accent` in its hovered state.
     pub accent_hover: String,
+    /// Page background color.
     pub bg: String,
+    /// Card and panel background color.
     pub surface: String,
+    /// Form input background color.
     pub input: String,
+    /// Primary text color.
     pub text: String,
+    /// Secondary text color (descriptions, timestamps).
     pub text_muted: String,
+    /// Border color for cards, inputs, and dividers.
     pub border: String,
+    /// Tertiary text color (labels, metadata).
     pub text_dim: String,
+    /// Text color used on top of `primary`.
     pub text_on_primary: String,
+    /// Disabled button background color.
     pub btn_disabled: String,
+    /// Color for sessions in the "pending" status.
     pub status_pending: String,
+    /// Color for sessions in the "active" status.
     pub status_active: String,
+    /// Color for sessions in the "completed" status.
     pub status_completed: String,
+    /// Color for sessions in the "error" status.
     pub status_error: String,
+    /// Color for sessions in the "expired" status.
     pub status_expired: String,
+    /// SSH session-type badge background.
     pub type_ssh_bg: String,
+    /// SSH session-type badge text.
     pub type_ssh_fg: String,
+    /// RDP session-type badge background.
     pub type_rdp_bg: String,
+    /// RDP session-type badge text.
     pub type_rdp_fg: String,
+    /// VNC session-type badge background.
     pub type_vnc_bg: String,
+    /// VNC session-type badge text.
     pub type_vnc_fg: String,
+    /// Web session-type badge background.
     pub type_web_bg: String,
+    /// Web session-type badge text.
     pub type_web_fg: String,
+    /// VDI session-type badge background.
     pub type_vdi_bg: String,
+    /// VDI session-type badge text.
     pub type_vdi_fg: String,
+    /// Jump-host badge background.
     pub hop_bg: String,
+    /// Jump-host badge text.
     pub hop_fg: String,
     /// CSS background-image value (gradient, pattern, or "none").
     #[serde(default = "default_bg_pattern")]
@@ -1083,74 +1113,109 @@ pub fn builtin_presets() -> Vec<(&'static str, ThemeColors)> {
     ]
 }
 
+/// Admin-configurable theme overrides (`[theme]`), resolved to a full
+/// palette by [`ThemeConfig::resolve`] or [`ThemeConfig::resolve_with`].
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct ThemeConfig {
     /// Built-in preset name: aurora (default), dark, light, high-contrast,
     /// terminal, nord, corporate, jaguar.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub preset: Option<String>,
+    /// Overrides the preset's `primary`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_color: Option<String>,
+    /// Overrides the preset's `primary_hover`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_hover: Option<String>,
+    /// Overrides the preset's `accent`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent_color: Option<String>,
+    /// Overrides the preset's `accent_hover`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent_hover: Option<String>,
+    /// Overrides the preset's `bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bg_color: Option<String>,
+    /// Overrides the preset's `surface`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_color: Option<String>,
+    /// Overrides the preset's `input`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_color: Option<String>,
+    /// Overrides the preset's `text`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_color: Option<String>,
+    /// Overrides the preset's `text_muted`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_muted: Option<String>,
+    /// Overrides the preset's `border`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub border_color: Option<String>,
+    /// Overrides the preset's `text_dim`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_dim: Option<String>,
+    /// Overrides the preset's `text_on_primary`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_on_primary: Option<String>,
+    /// Overrides the preset's `btn_disabled`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub btn_disabled: Option<String>,
+    /// Overrides the preset's `status_pending`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_pending: Option<String>,
+    /// Overrides the preset's `status_active`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_active: Option<String>,
+    /// Overrides the preset's `status_completed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_completed: Option<String>,
+    /// Overrides the preset's `status_error`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_error: Option<String>,
+    /// Overrides the preset's `status_expired`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status_expired: Option<String>,
+    /// Overrides the preset's `type_ssh_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_ssh_bg: Option<String>,
+    /// Overrides the preset's `type_ssh_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_ssh_fg: Option<String>,
+    /// Overrides the preset's `type_rdp_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_rdp_bg: Option<String>,
+    /// Overrides the preset's `type_rdp_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_rdp_fg: Option<String>,
+    /// Overrides the preset's `type_vnc_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_vnc_bg: Option<String>,
+    /// Overrides the preset's `type_vnc_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_vnc_fg: Option<String>,
+    /// Overrides the preset's `type_web_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_web_bg: Option<String>,
+    /// Overrides the preset's `type_web_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_web_fg: Option<String>,
+    /// Overrides the preset's `type_vdi_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_vdi_bg: Option<String>,
+    /// Overrides the preset's `type_vdi_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_vdi_fg: Option<String>,
+    /// Overrides the preset's `hop_bg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hop_bg: Option<String>,
+    /// Overrides the preset's `hop_fg`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hop_fg: Option<String>,
+    /// Overrides the preset's `bg_pattern` (CSS background-image value).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bg_pattern: Option<String>,
+    /// URL of a custom logo for the header; when set it replaces the site
+    /// title mark.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub logo_url: Option<String>,
 }
@@ -1264,6 +1329,13 @@ fn is_valid_theme_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
+/// Load all themes from disk, merged over the built-in presets.
+///
+/// Built-ins are always returned first, so a missing
+/// `<static_path>/themes/` directory is not an error. A disk `<name>.toml`
+/// with the same id as a built-in overrides it; new names are appended in
+/// filename order. Malformed or unreadable files are skipped with a
+/// warning.
 pub fn load_themes(static_path: &std::path::Path) -> Vec<(String, ThemeColors)> {
     // Seed with built-ins (always available, in their defined order).
     let mut themes: Vec<(String, ThemeColors)> = builtin_presets()
