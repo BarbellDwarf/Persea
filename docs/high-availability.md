@@ -4,24 +4,52 @@
 
 Persea runs as a single Rust/Axum binary with guacd as a separate C process. The architecture separates stateless request handling from stateful session management, making horizontal scaling feasible with the right configuration.
 
+## What the R101 spike proved (2026-08-12)
+
+A live local spike (see `wayfinder/v1.1.1/R101-ha-guacd-db-spike.md` for the
+full runbook) verified the current HA reality with two persea instances on a
+shared PostgreSQL backend:
+
+- **Works across instances today:** address book, users/auth (same API key
+  authenticates on both), audit, settings — all stored in the configured
+  backend (Postgres/MySQL/SQLite via `db_url`), immediately visible from any
+  instance, surviving crash-restart. A settings `PUT` on instance A is
+  visible on instance B and survives A being killed. A shared guacd serves
+  both instances; sessions run through it end-to-end (plain TCP and TLS).
+- **Does NOT work across instances (R110 scope, not current claims):**
+  - **Live sessions are per-process memory.** A session created on A is
+    invisible on B (`GET /api/sessions` returns `[]`; `GET /api/sessions/{id}`
+    → 404) and dies with its instance (SIGKILL demo).
+  - **WS tickets are per-instance** (in-memory `HashMap`, 30s TTL). A ticket
+    issued by A is rejected by B (HTTP 403 on the WS upgrade; B's own ticket
+    is accepted with 101).
+  - Cross-instance join/shadow/reconnect do not exist. Session affinity is
+    mandatory (below).
+- **Standalone guacd is fully supported and proven:** persea connects out to
+  `guacd_addr`, no startup ping (boots fine with guacd down; health reports
+  `guacd: down` / overall `degraded`; session creation fails cleanly with
+  502). Both plain-TCP and TLS (`[tls] guacd_cert_path`) variants verified
+  with real SSH sessions. The Docker image's embedded guacd cannot be
+  disabled — it just sits unused when `guacd_addr` points elsewhere.
+
 ## Component Analysis
 
 | Component | State | Where | HA Impact |
 |-----------|-------|-------|-----------|
 | HTTP server (persea) | Stateless per-request | In-memory | Safe to replicate |
-| Session manager | **Stateful** | In-memory (HashMap) | Requires session affinity |
-| Auth sessions | **Stateful** | Local SQLite (rusqlite) | Per-instance — not shared |
-| Address book | **Stateful** | Local SQLite (metadata) + optional Vault (credentials) | Metadata per-instance; only credentials shared via Vault |
-| Audit log | Stateless | SQLite | Per-instance (acceptable) |
-| Recordings | Stateless | Filesystem | Per-instance or shared NFS |
-| guacd | **Stateful per-connection** | TCP per-session | Can be pooled and shared |
+| Session manager | **Stateful** | In-memory (HashMap) | Requires session affinity; cross-instance sharing is R110 |
+| Address book, users, auth sessions, audit, settings | Shared | Configured backend (Postgres/MySQL/SQLite via `db_url`) | **Shared across instances** since R102 |
+| WS tickets | **Stateful** | Per-process in-memory (`WsTicketStore`) | DB-backed tickets are R110 |
+| Recordings | Stateless | Filesystem | Per-instance or shared NFS; rotation leader election is R110 |
+| guacd | **Stateful per-connection** | TCP per-session | Can be pooled and shared (proven in R101 spike) |
 
 > **Clustering status:** persea has **no active clustering**. There is no
 > shared session store, no leader election, and no cross-instance session
-> migration. Horizontal scaling works only with session affinity (below),
-> and anything that must be shared across instances (address book metadata,
-> auth sessions, audit log) is currently per-instance. Features that would
-> change this are roadmap items, not shipped behaviour.
+> migration. Shared *data* (address book, users, auth sessions, audit,
+> settings) is stored in the configured backend and is visible from every
+> instance. Shared *live session state* (registry, tickets, join/shadow/
+> reconnect) does not exist yet — it is R110's scope. Horizontal scaling
+> works only with session affinity (below).
 
 ## Session Affinity (Required)
 
@@ -56,39 +84,51 @@ For HA, option 2 is recommended. A single guacd handles ~100-500 concurrent sess
 - Acceptable for single-instance deployments
 - For HA: each instance needs its own SQLite (loses cross-instance address book)
 
-### MySQL/PostgreSQL (via SQLx) — roadmap, not implemented for data storage
-- The `DbPool` enum (`src/db_pool.rs`) can connect to PostgreSQL, MySQL, or
-  SQLite via `db_url`, but **no application data is stored there yet** — it
-  is currently only pinged by the `/api/health` deep check. Users, sessions,
-  audit log, and the address book all live in the per-instance rusqlite DB.
-- **Not implemented:** storing the address book (or any other data) in
-  MySQL/PostgreSQL so instances can share it. Do not configure `db_url`
-  expecting shared state today.
+### MySQL/PostgreSQL (via SQLx `db_url`) — real shared storage since R102
+- Since R102 the `DbPool` backend (PostgreSQL, MySQL, or SQLite via
+  `db_url`) **is the store**: users, auth sessions, the address book, audit
+  log, settings, and password history all live there, with per-backend
+  migrations run at startup. Any instance pointing at the same `db_url`
+  shares all of it (proven in the R101 spike: entry created on one instance
+  is immediately listable on another; settings and API keys survive
+  crash-restart).
+- **Still NOT shared (R110):** live sessions and WS tickets stay per-process.
+  `db_url` is a config-file/env setting only — there is no UI toggle, and it
+  must match across the fleet.
+- Without `db_url`, persea falls back to the local SQLite file (`db_path`),
+  which is per-instance by definition.
+
+### Live session state — R110 scope (not current claims)
+- Session registry, DB-backed WS tickets, cross-instance join/shadow/
+  reconnect, recordings-rotation leader election, and per-instance
+  filesystem paths (`instance_id`) are R110 enterprise-HA work. Until then,
+  treat live sessions as pinned to one instance (session affinity below).
 
 ### Vault (credentials only)
 - With `[storage] backend = "vault"`, connection **credentials** are stored
-  in Vault/OpenBao; folder and entry **metadata always stays in the local
-  DB** (see `src/api/address_book.rs`).
-- Multiple persea instances can share one Vault for credentials, but each
-  instance's address book tree (folders, entries, ACLs) is its own local
-  copy — changes do not propagate between instances.
-- Session data is still per-instance (in-memory + local DB).
+  in Vault/OpenBao; folder and entry **metadata lives in the configured
+  backend** (see `src/api/address_book.rs`) — so with `db_url` set, the
+  address book tree is shared across instances even in vault mode.
+- Multiple persea instances can share one Vault for credentials; with a
+  shared `db_url` the metadata is shared too.
+- Session data is still per-instance (in-memory; see "Live session state").
 
 ## Cloud Deployment Patterns
 
 > **Status:** the patterns below are illustrative reference architectures,
-> not officially tested or supported configurations. They assume the
-> roadmap items above (shared address book storage) exist. Today, a
-> multi-instance deployment shares only recordings (via NFS/EFS) and
-> credentials (via Vault); everything else is per-instance. The
-> "ElastiCache Redis (session tokens)" element is **not implemented** —
-> there is no Redis integration in persea.
+> not officially tested or supported configurations. Today a multi-instance
+> deployment shares: recordings (via NFS/EFS), credentials (via Vault), and
+> all app data (address book, users, audit, settings) via a shared
+> `db_url` backend (R102). Live sessions and WS tickets remain
+> per-instance — sticky sessions are required — until R110 lands the
+> shared session registry. The "ElastiCache Redis (session tokens)"
+> element is **not implemented** — there is no Redis integration in persea.
 
 ### AWS (ECS + ALB)
 ```
 ALB (sticky sessions) → ECS Service (persea containers, min 2)
     ↳ guacd ECS Service (min 2, TCP target group)
-    ↳ RDS MySQL/PostgreSQL (shared address book — roadmap)
+    ↳ RDS MySQL/PostgreSQL (shared data store — db_url, R102)
     ↳ EFS (shared recordings)
     ↳ ElastiCache Redis (session tokens — not implemented)
 ```
@@ -96,7 +136,7 @@ ALB (sticky sessions) → ECS Service (persea containers, min 2)
 ### Azure (Container Apps)
 ```
 Azure Container Apps (persea, min replicas, sticky sessions via affinity)
-    ↳ Azure Database for MySQL (shared address book — roadmap)
+    ↳ Azure Database for MySQL (shared data store — db_url, R102)
     ↳ Azure Files (shared recordings)
     ↳ Container Apps guacd instances (TCP scaling)
 ```
@@ -119,7 +159,8 @@ HAProxy (TCP + HTTP mode)
     ↳ persea-3 (container, port 8083)
     ↳ guacd-1 (container, port 4822)
     ↳ guacd-2 (container, port 4823)
-    ↳ Vault (shared credentials only — address book metadata stays per-instance)
+    ↳ Postgres/MySQL (shared data store via db_url, R102)
+    ↳ Vault (shared credentials, when [storage] backend = "vault")
     ↳ NFS mount (shared recordings)
 ```
 
@@ -135,7 +176,7 @@ Persea exposes `GET /api/health` (check `src/main.rs` for the route). Returns 20
 |----------|------------|------------|
 | Session count | In-memory per instance | Scale instances horizontally (session affinity) |
 | guacd connections | One child per session | Pool guacd instances |
-| SQLite write contention | Single-writer | Switch to MySQL/PostgreSQL for HA (roadmap) |
+| SQLite write contention | Single-writer | Use MySQL/PostgreSQL `db_url` for shared data (R102) |
 | Recordings disk | Per-instance storage | Shared NFS/EFS for cross-instance access |
 | WebSocket connections | Per-instance | Load balancer handles distribution |
 
@@ -146,10 +187,11 @@ Persea exposes `GET /api/health` (check `src/main.rs` for the route). Returns 20
 listen_addr = "0.0.0.0:8089"
 guacd_addr = "guacd-lb:4822"  # or individual guacd instances
 
-# NOTE: db_url (MySQL/PostgreSQL) is NOT used for address book storage yet —
-# it is only pinged by the health check. Address book metadata stays in the
-# per-instance SQLite DB. See "Database Options" above.
-# db_url = "mysql://persea:secret@mysql-host:3306/persea"
+# Shared data store (R102): users, address book, auth sessions, audit,
+# settings all live here and are shared by every instance with the same
+# db_url. Live sessions and WS tickets are still per-instance (R110) —
+# session affinity is required. Set the same db_url on every instance.
+db_url = "mysql://persea:secret@mysql-host:3306/persea"
 
 # Recordings on shared storage
 [recording]
