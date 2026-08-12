@@ -859,7 +859,7 @@ pub fn upsert_user(
         params![email, name, oidc_subject, default_role, groups_str],
     )?;
     conn.query_row(
-        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups
+        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id
          FROM users WHERE email = ?1",
         params![email],
         |row| {
@@ -873,6 +873,7 @@ pub fn upsert_user(
                 created_at: row.get(6)?,
                 last_login_at: row.get(7)?,
                 oidc_groups: row.get(8)?,
+                custom_role_id: row.get(9)?,
             })
         },
     )
@@ -5656,7 +5657,7 @@ async fn delete_user_sessions_pool(pool: &DbPool, user_id: i64) -> rusqlite::Res
 async fn validate_auth_session_pool(pool: &DbPool, token: String) -> Result<User, AuthError> {
     let token_hash = hash_key(&token);
     let sql = format!(
-        "SELECT u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups \
+        "SELECT u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, u.custom_role_id \
          FROM auth_sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.token_hash = {} AND s.expires_at > {}",
         ph1(pool),
