@@ -120,6 +120,46 @@
         /* ── Display ─────────────────────────────────────────── */
         #display { width: 100%; height: 100%; }
 
+        /* ── File browser panel (SSH SFTP) ───────────────────── */
+        #file-browser-panel {
+            display: none; position: fixed;
+            top: var(--toolbar-height); right: 0; bottom: 0;
+            width: min(340px, 85vw);
+            background: var(--surface); border-left: 1px solid var(--border);
+            z-index: 1500; font-family: system-ui, sans-serif; font-size: 13px;
+            flex-direction: column; color: var(--text);
+        }
+        #file-browser-panel.open { display: flex; }
+        .fb-header {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 10px; border-bottom: 1px solid var(--border);
+        }
+        .fb-title {
+            flex: 1; font-weight: 600; font-size: 11px;
+            text-transform: uppercase; letter-spacing: 0.06em;
+            color: var(--text-muted); overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+        }
+        #fb-path {
+            padding: 6px 12px; border-bottom: 1px solid var(--border);
+            color: var(--accent); font-family: monospace; font-size: 12px;
+            word-break: break-all; user-select: text;
+        }
+        #fb-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+        .fb-item {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 12px; cursor: pointer; color: var(--text);
+        }
+        .fb-item:hover { background: var(--input); }
+        .fb-item .fb-ico { width: 16px; height: 16px; fill: var(--text-dim); flex-shrink: 0; }
+        .fb-item.fb-dir .fb-ico { fill: var(--accent); }
+        .fb-item .fb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fb-empty { padding: 14px 12px; color: var(--text-dim); text-align: center; }
+        #fb-status {
+            padding: 6px 12px; border-top: 1px solid var(--border);
+            color: var(--text-dim); font-size: 12px; min-height: 28px;
+        }
+
         /* ── Status bar ──────────────────────────────────────── */
         #status {
             position: fixed; top: var(--toolbar-height); left: 0; right: 0;
@@ -247,6 +287,10 @@
                 <svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h12v2H5v-2z"/></svg>
                 <span>Upload</span>
             </button>
+            <button class="tb-btn" id="btn-files" title="Browse remote files (SSH SFTP)" aria-label="Browse remote files" style="display:none">
+                <svg viewBox="0 0 24 24"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg>
+                <span>Files</span>
+            </button>
             <input type="file" id="file-transfer-input" multiple style="display:none">
             <div id="file-transfer-status" style="display:none;position:fixed;bottom:60px;right:16px;background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 14px;font-size:12px;color:var(--text);z-index:1600;box-shadow:0 4px 12px rgba(0,0,0,0.4);max-width:280px;"></div>
             <div class="tb-settings-wrap">
@@ -286,6 +330,18 @@
                 <button class="pm-send" id="pm-send">Send</button>
             </div>
         </div>
+    </div>
+
+    <!-- ── File browser panel (SSH SFTP) ───────────────────── -->
+    <div id="file-browser-panel" role="dialog" aria-modal="true" aria-label="Remote files">
+        <div class="fb-header">
+            <span class="fb-title">Remote files</span>
+            <button type="button" class="tb-btn" id="fb-up" title="Go up one directory" aria-label="Go up one directory">Up</button>
+            <button type="button" class="tb-btn" id="fb-close" title="Close file browser" aria-label="Close file browser">Close</button>
+        </div>
+        <div id="fb-path">/</div>
+        <div id="fb-list" role="list"></div>
+        <div id="fb-status"></div>
     </div>
 
     <!-- ── Status ────────────────────────────────────────── -->
@@ -627,6 +683,12 @@
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 if (session && session.drive_enabled) { driveEnabled = true; document.getElementById('btn-file-transfer').style.display = ''; }
+                // The SSH SFTP file browser is only offered for SSH sessions
+                // with file transfer enabled (guacd sends the `filesystem`
+                // object then; RDP drive transfer stays as-is).
+                if (session && session.drive_enabled && (session.session_type || '').toLowerCase() === 'ssh') {
+                    document.getElementById('btn-files').style.display = '';
+                }
                 // Set protocol badge from session metadata
                 if (session && (session.session_type || session.protocol)) setProtocolBadge(session.session_type || session.protocol, session.address || session.address_book_folder || '');
                 else if (entryName) setProtocolBadge('SSH', entryName);
@@ -795,9 +857,134 @@
                 setTimeout(hideTransferStatus, 2000);
             });
 
-            // ── File system ──
+            // ── File system (SSH SFTP browser) ──
+            // guacd exposes the SFTP session as a `filesystem` object (only
+            // when SFTP is enabled). Directories are listed by requesting the
+            // path as an input stream: the response body is JSON mapping each
+            // entry's absolute-in-filesystem path to its mimetype (directories
+            // are 'application/vnd.glyptodon.guacamole.stream-index+json').
+            // Files are downloaded by requesting the path too — the body is
+            // the file content itself. All DOM is built with createElement/
+            // textContent (no innerHTML — filenames must never be markup).
             var filesystem = null;
+            var fbCurrentPath = '/';
+            var fbOpen = false;
             client.onfilesystem = function(object, name) { filesystem = object; };
+            var fbPanel = document.getElementById('file-browser-panel');
+            var fbListEl = document.getElementById('fb-list');
+            var fbPathEl = document.getElementById('fb-path');
+            var fbStatusEl = document.getElementById('fb-status');
+            var FB_STREAM_INDEX = 'application/vnd.glyptodon.guacamole.stream-index+json';
+            function fbBasename(path) {
+                var idx = path.lastIndexOf('/');
+                return idx >= 0 ? path.substring(idx + 1) : path;
+            }
+            function fbParent(path) {
+                if (path === '/' || path === '') return '/';
+                var idx = path.lastIndexOf('/');
+                return idx <= 0 ? '/' : path.substring(0, idx);
+            }
+            function fbSetStatus(text) { fbStatusEl.textContent = text || ''; }
+            function fbListDir(path) {
+                if (!filesystem) { fbSetStatus('No remote filesystem available.'); return; }
+                fbCurrentPath = path;
+                fbPathEl.textContent = path;
+                fbListEl.textContent = '';
+                document.getElementById('fb-up').disabled = (path === '/');
+                var pending = true;
+                var timeout = setTimeout(function() { if (pending) fbSetStatus('Listing timed out — no response from server.'); }, 15000);
+                fbSetStatus('Loading ' + path + '...');
+                filesystem.requestInputStream(path, function(inputStream, mimetype) {
+                    pending = false;
+                    clearTimeout(timeout);
+                    var reader = new Guacamole.JSONReader(inputStream);
+                    reader.onend = function() {
+                        fbSetStatus('');
+                        fbRenderEntries(reader.getJSON());
+                    };
+                });
+            }
+            function fbRenderEntries(entries) {
+                fbListEl.textContent = '';
+                if (!entries) {
+                    var err = document.createElement('div');
+                    err.className = 'fb-empty';
+                    err.textContent = 'Could not read this directory.';
+                    fbListEl.appendChild(err);
+                    return;
+                }
+                var names = [];
+                for (var name in entries) names.push(name);
+                names.sort(function(a, b) {
+                    var da = entries[a] === FB_STREAM_INDEX ? 0 : 1;
+                    var db = entries[b] === FB_STREAM_INDEX ? 0 : 1;
+                    if (da !== db) return da - db;
+                    return a < b ? -1 : (a > b ? 1 : 0);
+                });
+                if (names.length === 0) {
+                    var empty = document.createElement('div');
+                    empty.className = 'fb-empty';
+                    empty.textContent = 'This directory is empty.';
+                    fbListEl.appendChild(empty);
+                    return;
+                }
+                for (var i = 0; i < names.length; i++) {
+                    var path = names[i];
+                    var isDir = entries[path] === FB_STREAM_INDEX;
+                    var row = document.createElement('div');
+                    row.className = 'fb-item' + (isDir ? ' fb-dir' : '');
+                    row.setAttribute('role', 'listitem');
+                    var ico = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    ico.setAttribute('viewBox', '0 0 24 24');
+                    ico.setAttribute('class', 'fb-ico');
+                    var p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    p.setAttribute('d', isDir ? 'M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z' : 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z');
+                    ico.appendChild(p);
+                    row.appendChild(ico);
+                    var label = document.createElement('span');
+                    label.className = 'fb-name';
+                    label.textContent = fbBasename(path);
+                    row.appendChild(label);
+                    row.addEventListener('click', (function(p, isDir) {
+                        return function() { if (isDir) fbListDir(p); else fbDownload(p); };
+                    })(path, isDir));
+                    fbListEl.appendChild(row);
+                }
+            }
+            function fbDownload(path) {
+                if (!filesystem) return;
+                fbSetStatus('Downloading ' + fbBasename(path) + '...');
+                var pending = true;
+                var timeout = setTimeout(function() { if (pending) fbSetStatus('Download timed out — no response from server.'); }, 30000);
+                filesystem.requestInputStream(path, function(inputStream, mimetype) {
+                    pending = false;
+                    clearTimeout(timeout);
+                    var reader = new Guacamole.BlobReader(inputStream, mimetype);
+                    reader.onend = function() {
+                        var blob = reader.getBlob();
+                        fbSetStatus('Downloaded ' + fbBasename(path) + ' (' + formatBytes(blob.size) + ')');
+                        setTimeout(function() { if (fbOpen) fbSetStatus(''); }, 3000);
+                        var a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = fbBasename(path);
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                        setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
+                    };
+                });
+            }
+            document.getElementById('btn-files').addEventListener('click', function() {
+                if (!client || !window.__guac_client) return;
+                fbOpen = !fbOpen;
+                fbPanel.className = fbOpen ? 'open' : '';
+                if (fbOpen) fbListDir(fbCurrentPath);
+            });
+            document.getElementById('fb-close').addEventListener('click', function() {
+                fbOpen = false;
+                fbPanel.className = '';
+            });
+            document.getElementById('fb-up').addEventListener('click', function() {
+                if (fbCurrentPath !== '/') fbListDir(fbParent(fbCurrentPath));
+            });
             client.onfile = function(stream, mimetype, filename) {
                 var reader = new Guacamole.BlobReader(stream, mimetype);
                 reader.onend = function() {

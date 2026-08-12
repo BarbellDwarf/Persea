@@ -18,6 +18,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
@@ -33,6 +34,217 @@ enum ProxyResult {
     BrowserEnded(Option<String>),
     /// Session was cancelled externally.
     Cancelled,
+}
+
+/// Direction of a transfer instruction, used by the audit sniffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransferDirection {
+    BrowserToGuacd,
+    GuacdToBrowser,
+}
+
+/// Whether a tracked transfer is an upload (browser → remote) or a
+/// download (remote → browser).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransferKind {
+    Upload,
+    Download,
+}
+
+/// A file transfer in progress, tracked by its Guacamole stream index.
+#[derive(Debug, Clone)]
+struct PendingTransfer {
+    kind: TransferKind,
+    filename: String,
+    mimetype: String,
+    size: u64,
+}
+
+/// A transfer that completed or failed, ready to be written to the audit
+/// hash chain.
+#[derive(Debug, PartialEq)]
+struct TransferAuditEvent {
+    kind: TransferKind,
+    filename: String,
+    mimetype: String,
+    size: u64,
+    error: bool,
+}
+
+/// Byte length of a base64-encoded blob argument (exact for standard padded
+/// base64, which is what guacd and the JS client emit).
+fn base64_blob_len(data: &str) -> u64 {
+    let data = data.trim_end();
+    let mut len = data.len() as u64;
+    if len > 0 && data.ends_with('=') {
+        len -= 1;
+    }
+    if len > 0 && data.ends_with('=') {
+        len -= 1;
+    }
+    len * 3 / 4
+}
+
+/// Sniff one parsed instruction for file-transfer activity, updating the
+/// shared pending-transfer map and returning audit events to emit.
+///
+/// Mirrors the clipboard sniff: pure, unit-testable, and does not alter the
+/// forwarded stream in any way.
+///
+/// Browser → guacd: `file,<idx>,<mimetype>,<name>` opens an upload;
+/// `blob,<idx>,<b64>` carries its data; `end,<idx>` completes it. A failed
+/// upload is surfaced by guacd's `ack,<idx>,<msg>,<code>` (code != 0).
+///
+/// guacd → browser: `body,<obj>,<stream>,<mimetype>,<name>` delivers a
+/// requested stream — directory listings (stream-index mimetype) are not
+/// transfers, everything else is a download of `name`. `file,<idx>,<mimetype>,<name>`
+/// (RDP drive pushes, SSH terminal-triggered downloads) is a download too.
+/// Blobs accumulate the size; `end,<idx>` finalizes. A failed download is
+/// surfaced by the browser's `ack,<idx>,<msg>,<code>` (code != 0).
+fn sniff_transfer_instruction(
+    instr: &Instruction,
+    direction: TransferDirection,
+    pending: &mut HashMap<i64, PendingTransfer>,
+) -> Vec<TransferAuditEvent> {
+    let mut events = Vec::new();
+    let kind_matches = |p: &PendingTransfer| {
+        (p.kind == TransferKind::Upload) == (direction == TransferDirection::BrowserToGuacd)
+    };
+    match instr.opcode.as_str() {
+        "file" => {
+            // Uploads (browser → guacd) and pushed downloads (guacd →
+            // browser) both carry <idx>,<mimetype>,<filename>.
+            if instr.args.len() >= 3 {
+                if let Ok(idx) = instr.args[0].parse::<i64>() {
+                    if idx >= 0 {
+                        pending.insert(
+                            idx,
+                            PendingTransfer {
+                                kind: match direction {
+                                    TransferDirection::BrowserToGuacd => TransferKind::Upload,
+                                    TransferDirection::GuacdToBrowser => TransferKind::Download,
+                                },
+                                filename: instr.args[2].clone(),
+                                mimetype: instr.args[1].clone(),
+                                size: 0,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        "body" => {
+            // guacd responds to get requests with body instructions. The
+            // stream-index mimetype denotes a directory listing, not a
+            // transfer; anything else is a file download (name = path).
+            if direction == TransferDirection::GuacdToBrowser && instr.args.len() >= 4 {
+                if instr.args[2] != "application/vnd.glyptodon.guacamole.stream-index+json" {
+                    if let Ok(idx) = instr.args[1].parse::<i64>() {
+                        if idx >= 0 {
+                            let path = instr.args[3].clone();
+                            let filename = path.rsplit('/').next().unwrap_or(&path).to_string();
+                            pending.insert(
+                                idx,
+                                PendingTransfer {
+                                    kind: TransferKind::Download,
+                                    filename,
+                                    mimetype: instr.args[2].clone(),
+                                    size: 0,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        "blob" => {
+            if let Some(idx) = instr.args.first().and_then(|a| a.parse::<i64>().ok()) {
+                if let Some(p) = pending.get_mut(&idx) {
+                    if kind_matches(p) {
+                        if let Some(data) = instr.args.get(1) {
+                            p.size += base64_blob_len(data);
+                        }
+                    }
+                }
+            }
+        }
+        "end" => {
+            if let Some(idx) = instr.args.first().and_then(|a| a.parse::<i64>().ok()) {
+                if let Some(p) = pending.get(&idx) {
+                    if kind_matches(p) {
+                        if let Some(p) = pending.remove(&idx) {
+                            events.push(TransferAuditEvent {
+                                kind: p.kind,
+                                filename: p.filename,
+                                mimetype: p.mimetype,
+                                size: p.size,
+                                error: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        "ack" => {
+            // Acks for uploads come from guacd (guacd → browser); acks for
+            // downloads come from the browser (browser → guacd). A non-zero
+            // code fails the transfer.
+            if let Some(idx) = instr.args.first().and_then(|a| a.parse::<i64>().ok()) {
+                if let Some(p) = pending.get(&idx) {
+                    if (p.kind == TransferKind::Upload) == (direction == TransferDirection::GuacdToBrowser) {
+                        if instr.args.get(2).map(|s| s.as_str()).unwrap_or("0") != "0" {
+                            if let Some(p) = pending.remove(&idx) {
+                                events.push(TransferAuditEvent {
+                                    kind: p.kind,
+                                    filename: p.filename,
+                                    mimetype: p.mimetype,
+                                    size: p.size,
+                                    error: true,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    events
+}
+
+/// Write a transfer audit event into the hash-chain audit log. Runs the DB
+/// write on a blocking thread (rusqlite is synchronous). Silent on failure —
+/// audit logging must never take down the proxy.
+fn emit_transfer_audit(
+    database: Option<&Db>,
+    session_id: Uuid,
+    user: Option<&str>,
+    event: TransferAuditEvent,
+) {
+    let Some(db) = database else { return; };
+    let db = db.clone();
+    let sid = session_id.to_string();
+    let user = user.unwrap_or("unknown").to_string();
+    let event_type = match event.kind {
+        TransferKind::Upload => "session.file.upload",
+        TransferKind::Download => "session.file.download",
+    };
+    let outcome = if event.error { "error" } else { "success" };
+    let details = json!({
+        "filename": event.filename,
+        "mimetype": event.mimetype,
+        "size": event.size,
+    });
+    tokio::task::spawn_blocking(move || {
+        let _ = crate::audit::log_event(
+            &db,
+            &mut crate::audit::EventBuilder::new(event_type, outcome)
+                .user_id(&user)
+                .session_id(&sid)
+                .details(details)
+                .build(),
+        );
+    });
 }
 
 /// Outcome of the proxy session, including whether guacd sent a disconnect instruction.
@@ -447,6 +659,10 @@ async fn handle_ws(
 
     // Run the bidirectional proxy
     let start = Instant::now();
+    let session_user = manager
+        .get_session(session_id)
+        .await
+        .map(|info| info.created_by);
     let proxy_outcome = proxy_ws_guacd(
         session_id,
         ws,
@@ -454,6 +670,8 @@ async fn handle_ws(
         recording_file,
         cancel,
         manager.clone(),
+        database,
+        session_user,
     )
     .await;
     let elapsed = start.elapsed();
@@ -608,6 +826,8 @@ async fn proxy_ws_guacd(
     recording_file: Option<tokio::fs::File>,
     cancel: CancellationToken,
     manager: Arc<crate::session::SessionManager>,
+    database: Option<Db>,
+    session_user: Option<String>,
 ) -> ProxyOutcome {
     let (guacd_read, guacd_write) = tokio::io::split(guacd);
     let (ws_write, ws_read) = ws.split();
@@ -625,11 +845,20 @@ async fn proxy_ws_guacd(
     // (Apache webapp parity), without ever forwarding them to guacd.
     let ws_sink = Arc::new(tokio::sync::Mutex::new(ws_write));
 
+    // In-flight file transfers shared by both directions so uploads (tracked
+    // browser → guacd) can be failed by guacd's error acks (guacd → browser)
+    // and vice versa. Stream indices are connection-global, so the key space
+    // never collides.
+    let pending_transfers = Arc::new(tokio::sync::Mutex::new(HashMap::<i64, PendingTransfer>::new()));
+
     // guacd → browser (also tee to recording)
     let recording_clone = recording.clone();
     let sd_flag = server_disconnected.clone();
     let ws_sink_g = ws_sink.clone();
     let err_flag = guacd_error.clone();
+    let pending_g = pending_transfers.clone();
+    let db_g = database.clone();
+    let user_g = session_user.clone();
     let guacd_to_browser = tokio::spawn(async move {
         guacd_to_ws(
             session_id,
@@ -638,14 +867,30 @@ async fn proxy_ws_guacd(
             recording_clone,
             sd_flag,
             err_flag,
+            pending_g,
+            db_g,
+            user_g,
         )
         .await
     });
 
     // browser → guacd
     let ws_sink_b = ws_sink.clone();
+    let pending_b = pending_transfers.clone();
+    let db_b = database.clone();
+    let user_b = session_user.clone();
     let browser_to_guacd = tokio::spawn(async move {
-        ws_to_guacd(ws_read, guacd_write, ws_sink_b, session_id, manager).await
+        ws_to_guacd(
+            ws_read,
+            guacd_write,
+            ws_sink_b,
+            session_id,
+            manager,
+            pending_b,
+            db_b,
+            user_b,
+        )
+        .await
     });
 
     // Wait for either direction to finish, or cancellation
@@ -705,6 +950,9 @@ async fn guacd_to_ws(
     recording: Option<Arc<tokio::sync::Mutex<tokio::fs::File>>>,
     server_disconnected: Arc<std::sync::atomic::AtomicBool>,
     last_error: Arc<tokio::sync::Mutex<Option<String>>>,
+    pending_transfers: Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
+    database: Option<Db>,
+    session_user: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 65536];
     let mut carry = bytes::BytesMut::new();
@@ -756,21 +1004,50 @@ async fn guacd_to_ws(
         // message is used as the disconnect reason when the proxy ends.
         let mut parser = crate::protocol::InstructionParser::new();
         for parsed in parser.receive(&text) {
-            if let Ok(crate::protocol::Instruction { opcode, args }) = parsed {
-                if opcode == "error" {
+            if let Ok(instr) = parsed {
+                if instr.opcode == "error" {
                     // guacd encodes the error instruction as
                     // `error,<message>,<code>` (guac_protocol_send_error).
-                    let message = args
+                    let message = instr
+                        .args
                         .first()
                         .cloned()
                         .unwrap_or_else(|| "unknown error".to_string());
-                    let code = args.get(1).cloned().unwrap_or_default();
+                    let code = instr.args.get(1).cloned().unwrap_or_default();
                     tracing::warn!(
                         session_id = %session_id,
                         code = %code,
                         "guacd reported upstream error: {}", message
                     );
                     *last_error.lock().await = Some(message);
+                } else if instr.opcode == "filesystem" {
+                    // guacd exposed an SFTP session (SSH) or drive (RDP).
+                    // Availability alone is not a transfer, so this is logged
+                    // but not audited.
+                    tracing::info!(
+                        session_id = %session_id,
+                        name = instr.args.get(1).map(String::as_str).unwrap_or("?"),
+                        "guacd exposed a filesystem (SFTP or drive)"
+                    );
+                } else if matches!(
+                    instr.opcode.as_str(),
+                    "file" | "blob" | "ack" | "end" | "body"
+                ) {
+                    // Audit file-transfer activity (downloads delivered by
+                    // guacd, uploads failed by guacd's error acks).
+                    let mut pending = pending_transfers.lock().await;
+                    for event in sniff_transfer_instruction(
+                        &instr,
+                        TransferDirection::GuacdToBrowser,
+                        &mut pending,
+                    ) {
+                        emit_transfer_audit(
+                            database.as_ref(),
+                            session_id,
+                            session_user.as_deref(),
+                            event,
+                        );
+                    }
                 }
             }
         }
@@ -805,6 +1082,9 @@ async fn ws_to_guacd(
     ws_sink: WsSink,
     session_id: Uuid,
     manager: Arc<crate::session::SessionManager>,
+    pending_transfers: Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
+    database: Option<Db>,
+    session_user: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /// Maximum allowed WebSocket message size (64 MiB).
     const MAX_WS_MSG_SIZE: usize = 64 * 1024 * 1024;
@@ -842,6 +1122,40 @@ async fn ws_to_guacd(
                 if text.contains(".clipboard,") {
                     tracing::info!("browser sent clipboard instruction to guacd");
                 }
+
+                // Audit file-transfer activity (uploads browser → guacd, and
+                // downloads failed by the browser's error acks). Only parsed
+                // when the message might carry a transfer instruction.
+                if text.contains("file,")
+                    || text.contains("blob,")
+                    || text.contains("ack,")
+                    || text.contains("end,")
+                {
+                    let mut parser = crate::protocol::InstructionParser::new();
+                    for parsed in parser.receive(&text) {
+                        if let Ok(instr) = parsed {
+                            if matches!(
+                                instr.opcode.as_str(),
+                                "file" | "blob" | "ack" | "end"
+                            ) {
+                                let mut pending = pending_transfers.lock().await;
+                                for event in sniff_transfer_instruction(
+                                    &instr,
+                                    TransferDirection::BrowserToGuacd,
+                                    &mut pending,
+                                ) {
+                                    emit_transfer_audit(
+                                        database.as_ref(),
+                                        session_id,
+                                        session_user.as_deref(),
+                                        event,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Real client activity (ping echoes `continue`d above), so
                 // idle sessions are not reaped while the user is typing.
                 // Server keepalive pings never reach this point.
@@ -969,5 +1283,202 @@ mod tests {
             "https://console.example.com.attacker.io",
             "console.example.com"
         ));
+    }
+
+    #[test]
+    fn base64_blob_len_counts_decoded_bytes() {
+        assert_eq!(base64_blob_len("AAAAAA=="), 4); // 4 zero bytes
+        assert_eq!(base64_blob_len(""), 0);
+        assert_eq!(base64_blob_len("SGVsbG8="), 5); // "Hello"
+    }
+
+    #[test]
+    fn sniff_upload_instructions_produce_event_with_size() {
+        let mut pending = HashMap::new();
+        let file = Instruction::new(
+            "file",
+            vec![
+                "7".into(),
+                "application/octet-stream".into(),
+                "report.txt".into(),
+            ],
+        );
+        assert!(
+            sniff_transfer_instruction(&file, TransferDirection::BrowserToGuacd, &mut pending)
+                .is_empty()
+        );
+        assert_eq!(pending.len(), 1);
+
+        // "AAAAAA==" is 4 zero bytes
+        let blob = Instruction::new("blob", vec!["7".into(), "AAAAAA==".into()]);
+        assert!(
+            sniff_transfer_instruction(&blob, TransferDirection::BrowserToGuacd, &mut pending)
+                .is_empty()
+        );
+
+        let end = Instruction::new("end", vec!["7".into()]);
+        let events =
+            sniff_transfer_instruction(&end, TransferDirection::BrowserToGuacd, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Upload);
+        assert_eq!(events[0].filename, "report.txt");
+        assert_eq!(events[0].mimetype, "application/octet-stream");
+        assert_eq!(events[0].size, 4);
+        assert!(!events[0].error);
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn sniff_download_body_instructions_produce_event() {
+        let mut pending = HashMap::new();
+        let body = Instruction::new(
+            "body",
+            vec![
+                "0".into(),
+                "9".into(),
+                "application/octet-stream".into(),
+                "/home/user/file.zip".into(),
+            ],
+        );
+        assert!(
+            sniff_transfer_instruction(&body, TransferDirection::GuacdToBrowser, &mut pending)
+                .is_empty()
+        );
+        assert!(pending.contains_key(&9));
+
+        // Directory listings (stream-index mimetype) are not transfers.
+        let dir = Instruction::new(
+            "body",
+            vec![
+                "0".into(),
+                "10".into(),
+                "application/vnd.glyptodon.guacamole.stream-index+json".into(),
+                "/home/user".into(),
+            ],
+        );
+        assert!(
+            sniff_transfer_instruction(&dir, TransferDirection::GuacdToBrowser, &mut pending)
+                .is_empty()
+        );
+        assert!(!pending.contains_key(&10));
+
+        let blob = Instruction::new("blob", vec!["9".into(), "AAAAAA==".into()]);
+        sniff_transfer_instruction(&blob, TransferDirection::GuacdToBrowser, &mut pending);
+        let end = Instruction::new("end", vec!["9".into()]);
+        let events =
+            sniff_transfer_instruction(&end, TransferDirection::GuacdToBrowser, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Download);
+        assert_eq!(events[0].filename, "file.zip");
+        assert_eq!(events[0].size, 4);
+        assert!(!events[0].error);
+    }
+
+    #[test]
+    fn sniff_guacd_file_push_instruction_produces_download_event() {
+        // RDP drive pushes / SSH terminal-triggered downloads arrive as
+        // `file,<idx>,<mimetype>,<filename>` from guacd.
+        let mut pending = HashMap::new();
+        let file = Instruction::new(
+            "file",
+            vec![
+                "12".into(),
+                "application/octet-stream".into(),
+                "screenshot.png".into(),
+            ],
+        );
+        assert!(
+            sniff_transfer_instruction(&file, TransferDirection::GuacdToBrowser, &mut pending)
+                .is_empty()
+        );
+        let end = Instruction::new("end", vec!["12".into()]);
+        let events =
+            sniff_transfer_instruction(&end, TransferDirection::GuacdToBrowser, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Download);
+        assert_eq!(events[0].filename, "screenshot.png");
+        assert!(!events[0].error);
+    }
+
+    #[test]
+    fn sniff_upload_failed_by_guacd_ack() {
+        let mut pending = HashMap::new();
+        let file = Instruction::new(
+            "file",
+            vec![
+                "7".into(),
+                "application/octet-stream".into(),
+                "x.bin".into(),
+            ],
+        );
+        sniff_transfer_instruction(&file, TransferDirection::BrowserToGuacd, &mut pending);
+
+        // guacd rejects the upload stream with an error ack.
+        let ack = Instruction::new("ack", vec!["7".into(), "SFTP: Open failed".into(), "516".into()]);
+        let events = sniff_transfer_instruction(&ack, TransferDirection::GuacdToBrowser, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Upload);
+        assert!(events[0].error);
+        assert_eq!(events[0].filename, "x.bin");
+        assert!(pending.is_empty());
+
+        // Success acks produce no event and keep the transfer tracked.
+        let file2 = Instruction::new(
+            "file",
+            vec![
+                "8".into(),
+                "application/octet-stream".into(),
+                "y.bin".into(),
+            ],
+        );
+        sniff_transfer_instruction(&file2, TransferDirection::BrowserToGuacd, &mut pending);
+        let ok_ack = Instruction::new("ack", vec!["8".into(), "SFTP: OK".into(), "0".into()]);
+        assert!(
+            sniff_transfer_instruction(&ok_ack, TransferDirection::GuacdToBrowser, &mut pending)
+                .is_empty()
+        );
+        assert!(pending.contains_key(&8));
+    }
+
+    #[test]
+    fn sniff_download_failed_by_browser_ack() {
+        let mut pending = HashMap::new();
+        let body = Instruction::new(
+            "body",
+            vec![
+                "0".into(),
+                "9".into(),
+                "application/octet-stream".into(),
+                "/data/secret.db".into(),
+            ],
+        );
+        sniff_transfer_instruction(&body, TransferDirection::GuacdToBrowser, &mut pending);
+        // The browser aborts the download.
+        let ack = Instruction::new("ack", vec!["9".into(), "Client aborted".into(), "776".into()]);
+        let events =
+            sniff_transfer_instruction(&ack, TransferDirection::BrowserToGuacd, &mut pending);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, TransferKind::Download);
+        assert!(events[0].error);
+        assert_eq!(events[0].filename, "secret.db");
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn sniff_ignores_unrelated_and_wrong_direction_instructions() {
+        let mut pending = HashMap::new();
+        // `end` for an unknown stream.
+        let end = Instruction::new("end", vec!["77".into()]);
+        assert!(
+            sniff_transfer_instruction(&end, TransferDirection::GuacdToBrowser, &mut pending)
+                .is_empty()
+        );
+        // Unrelated opcodes.
+        let key = Instruction::new("key", vec!["1".into(), "113".into()]);
+        assert!(
+            sniff_transfer_instruction(&key, TransferDirection::BrowserToGuacd, &mut pending)
+                .is_empty()
+        );
+        assert!(pending.is_empty());
     }
 }
