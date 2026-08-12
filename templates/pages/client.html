@@ -229,6 +229,14 @@
                 <svg viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2z"/></svg>
                 Copy
             </button>
+            <button class="tb-btn" id="btn-win" title="Send the Windows/Meta key — click, then type the rest of the shortcut (e.g. Win+R)" aria-label="Send Windows key">
+                <svg viewBox="0 0 24 24"><path d="M3 3h8v8H3V3zm10 0h8v8h-8V3zM3 13h8v8H3v-8zm10 0h8v8h-8v-8z"/></svg>
+                Win
+            </button>
+            <button class="tb-btn" id="btn-cad" title="Send Ctrl+Alt+Del to the remote session" aria-label="Send Ctrl+Alt+Del">
+                <svg viewBox="0 0 24 24"><path d="M14.5 0a7.5 7.5 0 0 0-7.29 9.3L0 16.6V21h4v-3h3v-3h3l1.79-1.79A7.5 7.5 0 1 0 14.5 0zm0 4a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3z"/></svg>
+                Ctrl+Alt+Del
+            </button>
             <button class="tb-btn" id="btn-fullscreen" title="Toggle fullscreen (F11)" aria-label="Toggle fullscreen">
                 <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
             </button>
@@ -1026,6 +1034,50 @@
             keyboard.onkeyup = function(keysym) { client.sendKeyEvent(0, keysym); };
             window.addEventListener('blur', function() { keyboard.reset(); });
             document.addEventListener('visibilitychange', function() { if (document.hidden) keyboard.reset(); });
+
+            // ── Hotkey buttons (Win key, Ctrl+Alt+Del) ──
+            // OS-reserved keys (Win, Ctrl+Alt+Del) are swallowed by the OS
+            // before the browser ever sees them, so they are synthesized as
+            // keysyms through the existing sendKeyEvent plumbing. guacd
+            // translates keysyms for every protocol (SSH/RDP/VNC/SPICE).
+            var _winKeyHeld = false;
+            var _winReleaseTimer = null;
+            function winKeyRelease() {
+                if (!_winKeyHeld) return;
+                _winKeyHeld = false;
+                if (_winReleaseTimer) { clearTimeout(_winReleaseTimer); _winReleaseTimer = null; }
+                client.sendKeyEvent(0, 0xFFE7);
+            }
+            document.getElementById('btn-win').addEventListener('click', function() {
+                if (!client || !window.__guac_client) return;
+                // Clicking again (or the safety timer) releases a held Win.
+                if (_winKeyHeld) { winKeyRelease(); return; }
+                _winKeyHeld = true;
+                // Meta_L (0xFFE7) goes down now and stays held until the
+                // next typed key's keyup, so Win+R / Win+D etc. compose by
+                // clicking the button then typing the letter. A 3s safety
+                // timer guarantees the key can never stay stuck.
+                client.sendKeyEvent(1, 0xFFE7);
+                _winReleaseTimer = setTimeout(winKeyRelease, 3000);
+            });
+            // Release the held Win key once the user types the letter that
+            // completes the combo (keyup fires right after the letter is
+            // sent to the remote).
+            var _baseKeyup = keyboard.onkeyup;
+            keyboard.onkeyup = function(keysym) {
+                if (_winKeyHeld && keysym !== 0xFFE7) winKeyRelease();
+                _baseKeyup(keysym);
+            };
+            document.getElementById('btn-cad').addEventListener('click', function() {
+                if (!client || !window.__guac_client) return;
+                // Control_L + Alt_L + Delete, released in reverse order.
+                client.sendKeyEvent(1, 0xFFE3);
+                client.sendKeyEvent(1, 0xFFE9);
+                client.sendKeyEvent(1, 0xFFFF);
+                client.sendKeyEvent(0, 0xFFFF);
+                client.sendKeyEvent(0, 0xFFE9);
+                client.sendKeyEvent(0, 0xFFE3);
+            });
 
             // Mouse
             var mouse = new Guacamole.Mouse(client.getDisplay().getElement());
