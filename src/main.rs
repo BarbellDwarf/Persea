@@ -40,6 +40,7 @@ mod recording;
 mod role;
 mod session;
 mod settings_merge;
+mod slugify;
 mod templates;
 #[cfg(test)]
 mod testing;
@@ -1867,6 +1868,10 @@ async fn run_server(
         .route(
             "/api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect",
             post(api::ab_connect_entry),
+        )
+        .route(
+            "/api/addressbook/custom-fields",
+            get(api::ab_get_custom_fields),
         )
         .route("/api/ssh/probe-host-key", post(api::ssh_probe_host_key))
         // Jump host / tunnel management

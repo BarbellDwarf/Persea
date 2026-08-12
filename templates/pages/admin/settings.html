@@ -270,6 +270,22 @@
             </div>
         </div>
 
+        <!-- Connection Custom Fields -->
+        <div class="card">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                Connection Custom Fields
+            </h2>
+            <p class="text-xs text-[var(--text-muted)] mb-4">
+                Optional extra fields shown on connection entry forms (e.g. Environment, Owner, Cost Center).
+                Off by default — add a field below to enable them.
+            </p>
+            <div id="custom-fields-editor" class="space-y-3"></div>
+            <button type="button" id="add-custom-field"
+                    class="mt-3 btn btn-secondary btn-sm">+ Add Field</button>
+            <input type="hidden" name="custom_fields" id="custom_fields-hidden" value="[]">
+        </div>
+
         <!-- Save -->
         <div class="flex justify-end">
             <button type="submit"
@@ -349,6 +365,113 @@ document.getElementById('save-confirm-ok').addEventListener('click', function() 
     document.getElementById('save-confirm').classList.add('hidden');
 });
 
+// ── Connection custom fields editor ──
+// Definitions are kept in a JS array and serialized into the hidden
+// `custom_fields` form field (a JSON string), which the settings API
+// validates. All wiring is addEventListener — the page CSP blocks inline
+// handlers.
+var customFields = [];
+
+function syncCustomFields() {
+    document.getElementById('custom_fields-hidden').value = JSON.stringify(customFields);
+}
+
+function customFieldRow(field, index) {
+    var row = document.createElement('div');
+    row.className = 'p-3 rounded-lg border border-[var(--border)] bg-[var(--bg-card)]/50 space-y-2';
+
+    var nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.placeholder = 'Field name (e.g. Environment)';
+    nameInput.className = 'form-input';
+    nameInput.value = field.name || '';
+    nameInput.addEventListener('input', function() {
+        field.name = nameInput.value;
+        syncCustomFields();
+    });
+    row.appendChild(nameInput);
+
+    var typeRow = document.createElement('div');
+    typeRow.className = 'flex items-center gap-3';
+    var typeSelect = document.createElement('select');
+    typeSelect.className = 'form-input';
+    ['text', 'select'].forEach(function(t) {
+        var opt = document.createElement('option');
+        opt.value = t;
+        opt.textContent = t === 'text' ? 'Text' : 'Select';
+        if (field.type === t) opt.selected = true;
+        typeSelect.appendChild(opt);
+    });
+    typeSelect.addEventListener('change', function() {
+        field.type = typeSelect.value;
+        renderCustomFields();
+    });
+    typeRow.appendChild(typeSelect);
+
+    var requiredLabel = document.createElement('label');
+    requiredLabel.className = 'flex items-center gap-2 text-sm text-[var(--text-muted)]';
+    var requiredBox = document.createElement('input');
+    requiredBox.type = 'checkbox';
+    requiredBox.checked = !!field.required;
+    requiredBox.addEventListener('change', function() {
+        field.required = requiredBox.checked;
+        syncCustomFields();
+    });
+    requiredLabel.appendChild(requiredBox);
+    requiredLabel.appendChild(document.createTextNode('Required'));
+    typeRow.appendChild(requiredLabel);
+    row.appendChild(typeRow);
+
+    if (field.type === 'select') {
+        var optionsInput = document.createElement('input');
+        optionsInput.type = 'text';
+        optionsInput.placeholder = 'Comma-separated options (select fields)';
+        optionsInput.className = 'form-input';
+        optionsInput.value = (field.options || []).join(', ');
+        optionsInput.addEventListener('input', function() {
+            field.options = optionsInput.value.split(',').map(function(s) {
+                return s.trim();
+            }).filter(function(s) {
+                return s.length > 0;
+            });
+            syncCustomFields();
+        });
+        row.appendChild(optionsInput);
+    }
+
+    var removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'text-sm text-red-400 hover:text-red-300';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', function() {
+        customFields.splice(index, 1);
+        renderCustomFields();
+    });
+    row.appendChild(removeBtn);
+
+    return row;
+}
+
+function renderCustomFields() {
+    var editor = document.getElementById('custom-fields-editor');
+    editor.innerHTML = '';
+    customFields.forEach(function(field, index) {
+        editor.appendChild(customFieldRow(field, index));
+    });
+    syncCustomFields();
+}
+
+document.getElementById('add-custom-field').addEventListener('click', function() {
+    customFields.push({ name: '', type: 'text', options: [], required: false });
+    renderCustomFields();
+});
+
+// Re-serialize right before the request goes out so a fresh edit is never
+// submitted stale.
+document.getElementById('settings-form').addEventListener('htmx:configRequest', function() {
+    syncCustomFields();
+});
+
 (function() {
     fetch('/api/system/settings', { headers: apiHeaders(), credentials: 'same-origin' })
         .then(function(r) {
@@ -381,6 +504,17 @@ document.getElementById('save-confirm-ok').addEventListener('click', function() 
                     status.textContent = 'Configured';
                     status.className = 'px-2 py-0.5 text-xs rounded border bg-emerald-900/50 text-emerald-300 border-emerald-800';
                 }
+            }
+            if (Array.isArray(s.custom_fields)) {
+                customFields = s.custom_fields.map(function(f) {
+                    return {
+                        name: f.name || '',
+                        type: f.type === 'select' ? 'select' : 'text',
+                        options: Array.isArray(f.options) ? f.options : [],
+                        required: f.required === true
+                    };
+                });
+                renderCustomFields();
             }
         })
         .catch(function(e) {

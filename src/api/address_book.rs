@@ -7,6 +7,7 @@ use crate::session::{
     CreateSessionRequest, ProxmoxParams, RdpParams, SessionType, SpiceParams, SshParams, VdiParams,
     VncParams, WebParams,
 };
+use crate::slugify::slugify;
 use crate::vault::{AddressBookEntry, VaultError};
 use axum::{
     extract::{ConnectInfo, Path, State},
@@ -155,6 +156,12 @@ fn ab_entry_from_db(row: &db::AbEntry) -> AddressBookEntry {
             .get("description")
             .and_then(|v| v.as_str())
             .map(String::from),
+        custom_fields: protocol_config
+            .get("custom_fields")
+            .and_then(|v| {
+                serde_json::from_value::<std::collections::HashMap<String, String>>(v.clone())
+                    .ok()
+            }),
         jump_hosts: protocol_config
             .get("jump_hosts")
             .and_then(|v| serde_json::from_value::<Vec<crate::tunnel::JumpHost>>(v.clone()).ok()),
@@ -359,6 +366,10 @@ pub(crate) fn build_protocol_config(
     // per-protocol fields (no schema/migration needed).
     if let Some(ref v) = entry.description {
         config.insert("description".into(), json!(v));
+    }
+    // Custom field values (admin-defined fields, feature off by default).
+    if let Some(ref fields) = entry.custom_fields {
+        config.insert("custom_fields".into(), json!(fields));
     }
     // Jump hosts are part of the routing config: persist them so the DB row
     // round-trips them (they were silently dropped before).
@@ -700,6 +711,11 @@ pub struct CreateEntryRequest {
 pub struct UpdateEntryRequest {
     #[serde(default)]
     pub allowed_groups: Option<Vec<String>>,
+    /// Friendly name: updates `display_name` ONLY — the stored slug
+    /// identifier is immutable (it is the URL path, Vault key, RBAC id and
+    /// audit subject).
+    #[serde(default)]
+    pub name: Option<String>,
     #[serde(flatten)]
     pub entry: AddressBookEntry,
 }
@@ -1053,6 +1069,26 @@ pub async fn ab_list_entries(
     }
 
     Ok(Json(json!(entries)))
+}
+
+/// GET /api/addressbook/custom-fields — the admin-defined custom field
+/// definitions for connection entries. Operator+ (NOT admin-only): the
+/// connections page needs them for every user who can create or edit
+/// entries. Returns `[]` when the feature is off (nothing configured).
+pub async fn ab_get_custom_fields(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("operator") => {}
+        _ => return Err(AppError::Forbidden("operator role required".into())),
+    }
+    let db_clone = database.clone();
+    let stored =
+        tokio::task::spawn_blocking(move || super::settings::read_all_settings(&db_clone))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))??;
+    Ok(Json(super::settings::custom_fields_value(&stored)))
 }
 
 pub async fn ssh_probe_host_key(
@@ -1695,6 +1731,28 @@ pub async fn ab_create_entry(
     let vault_mode =
         vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await;
 
+    // ONE friendly name in, two things out: the slug becomes the stored
+    // identifier (URL path / Vault key / RBAC id / audit subject), and the
+    // friendly text becomes `display_name` (an explicit display_name from
+    // API clients, e.g. CSV import, is honored).
+    let friendly_name = req.name.trim().to_string();
+    let slug = slugify(&friendly_name);
+    if friendly_name.is_empty() {
+        return Err(AppError::Validation("entry name must not be empty".into()));
+    }
+    if slug.is_empty() {
+        return Err(AppError::Validation(format!(
+            "'{}' contains no usable characters — use at least one letter, digit, dot, underscore or dash",
+            friendly_name
+        )));
+    }
+    let display_name = req
+        .entry
+        .display_name
+        .clone()
+        .filter(|d| !d.trim().is_empty())
+        .unwrap_or_else(|| friendly_name.clone());
+
     // Metadata always lives in the DB.
     let folder_id = get_folder_id(&database, &scope, &folder)?;
 
@@ -1712,16 +1770,18 @@ pub async fn ab_create_entry(
         ));
     }
 
-    let config = build_protocol_config(&req.entry);
+    let mut entry = req.entry.clone();
+    entry.display_name = Some(display_name.clone());
+    let config = build_protocol_config(&entry);
     let entry_id = db::create_ab_entry(
         &database,
         folder_id,
-        &req.name,
-        req.entry.display_name.as_deref().unwrap_or(""),
-        &req.entry.session_type,
-        req.entry.hostname.as_deref().unwrap_or(""),
-        req.entry.port,
-        req.entry.username.as_deref().unwrap_or(""),
+        &slug,
+        &display_name,
+        &entry.session_type,
+        entry.hostname.as_deref().unwrap_or(""),
+        entry.port,
+        entry.username.as_deref().unwrap_or(""),
         &serde_json::to_string(&config).unwrap_or_else(|_| "{}".into()),
         &req.allowed_groups
             .as_ref()
@@ -1735,19 +1795,19 @@ pub async fn ab_create_entry(
             rusqlite::Error::SqliteFailure(ref f, _)
                 if f.code == ErrorCode::ConstraintViolation
         ) {
-            AppError::Conflict("an entry with this name already exists".into())
+            AppError::Conflict(format!(
+                "a connection '{slug}' already exists in this folder"
+            ))
         } else {
             AppError::Internal(e.to_string())
         }
     })?;
 
     if vault_mode {
-        // Credentials live in Vault: write the full entry (its metadata is
-        // ignored on read — only the credential fields are used).
-        if let Err(e) = vault
-            .put_entry(&scope, &folder, &req.name, &req.entry)
-            .await
-        {
+        // Credentials live in Vault: write the full entry keyed by the slug
+        // identifier. The friendly display name and custom field values
+        // round-trip through the vault copy.
+        if let Err(e) = vault.put_entry(&scope, &folder, &slug, &entry).await {
             // Roll back the DB row so the entry doesn't linger credential-less.
             let _ = db::delete_ab_entry(&database, entry_id);
             return Err(AppError::Vault(e.to_string()));
@@ -1756,7 +1816,7 @@ pub async fn ab_create_entry(
         // Credentials live in the DB: encrypt and store the provided fields.
         let encryption_key = resolve_encryption_key(storage_key.as_ref().map(|k| &k.0));
         if !encryption_key.is_empty() {
-            if let Some(ref password) = req.entry.password {
+            if let Some(ref password) = entry.password {
                 let encrypted = crate::crypto::encrypt_value(
                     &crate::crypto::EncryptionKey::from_hex(&encryption_key)
                         .map_err(|e| AppError::Internal(e.to_string()))?,
@@ -1765,7 +1825,7 @@ pub async fn ab_create_entry(
                 .map_err(|e| AppError::Internal(e.to_string()))?;
                 db::store_ab_credential(&database, entry_id, "password", &encrypted)?;
             }
-            if let Some(ref private_key) = req.entry.private_key {
+            if let Some(ref private_key) = entry.private_key {
                 let encrypted = crate::crypto::encrypt_value(
                     &crate::crypto::EncryptionKey::from_hex(&encryption_key)
                         .map_err(|e| AppError::Internal(e.to_string()))?,
@@ -1774,7 +1834,7 @@ pub async fn ab_create_entry(
                 .map_err(|e| AppError::Internal(e.to_string()))?;
                 db::store_ab_credential(&database, entry_id, "private_key", &encrypted)?;
             }
-            if let Some(ref secret) = req.entry.proxmox_token_secret {
+            if let Some(ref secret) = entry.proxmox_token_secret {
                 let encrypted = crate::crypto::encrypt_value(
                     &crate::crypto::EncryptionKey::from_hex(&encryption_key)
                         .map_err(|e| AppError::Internal(e.to_string()))?,
@@ -1783,7 +1843,7 @@ pub async fn ab_create_entry(
                 .map_err(|e| AppError::Internal(e.to_string()))?;
                 db::store_ab_credential(&database, entry_id, "proxmox_token_secret", &encrypted)?;
             }
-            if let Some(ref pw) = req.entry.container_password {
+            if let Some(ref pw) = entry.container_password {
                 let encrypted = crate::crypto::encrypt_value(
                     &crate::crypto::EncryptionKey::from_hex(&encryption_key)
                         .map_err(|e| AppError::Internal(e.to_string()))?,
@@ -1807,7 +1867,7 @@ pub async fn ab_create_entry(
         "create_entry",
         &scope,
         &folder,
-        Some(&req.name),
+        Some(&slug),
         &ip,
         Some(&details),
     )
@@ -1842,6 +1902,15 @@ pub async fn ab_update_entry(
     let vault_mode =
         vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await;
 
+    // A friendly `name` in the update payload updates display_name ONLY —
+    // the slug identifier is immutable (URL path / Vault key / RBAC id /
+    // audit subject all key off it). The trimmed friendly text is used for
+    // the vault copy merge and the DB row alike.
+    let mut payload = data.clone();
+    if let Some(name) = data.name.as_ref().filter(|n| !n.trim().is_empty()) {
+        payload.entry.display_name = Some(name.trim().to_string());
+    }
+
     let folder_rec = db::get_ab_folder(&database, &scope, &folder)
         .map_err(|e| AppError::NotFound(format!("folder not found: {}", e)))?;
     let entry_rec = db::get_ab_entry(&database, folder_rec.id, &entry)
@@ -1850,7 +1919,7 @@ pub async fn ab_update_entry(
     // Same guard as create: db mode without a key cannot store credentials.
     if !vault_mode
         && resolve_encryption_key(storage_key.as_ref().map(|k| &k.0)).is_empty()
-        && has_credential_fields(&data.entry)
+        && has_credential_fields(&payload.entry)
     {
         return Err(AppError::Validation(
             "no [storage].encryption_key / PERSEA_STORAGE_KEY configured —              credentials cannot be stored; set a key first"
@@ -1862,7 +1931,6 @@ pub async fn ab_update_entry(
         // Credentials live in Vault: merge the credential fields with the
         // existing vault copy (keeps credentials when the payload omits
         // them), then rewrite the copy.
-        let payload = data.clone();
         let merged = match vault.get_entry(&scope, &folder, &entry).await {
             Ok(existing) => {
                 let merged_jump_hosts = if let Some(ref new_hops) = payload.entry.jump_hosts {
@@ -1922,7 +1990,8 @@ pub async fn ab_update_entry(
         };
         // Preserve metadata the modal doesn't edit (same merge contract as
         // the DB path): fields omitted from the payload keep their vault
-        // values.
+        // values. Custom field values merge per key so edits that omit or
+        // partially update the map keep the rest.
         let merged = {
             let existing = vault.get_entry(&scope, &folder, &entry).await.ok();
             let mut full = merged.clone();
@@ -1936,6 +2005,17 @@ pub async fn ab_update_entry(
                 if full.display_name.is_none() {
                     full.display_name = existing.display_name.clone();
                 }
+                match (&full.custom_fields, &existing.custom_fields) {
+                    (Some(new_fields), Some(old_fields)) => {
+                        let mut merged_fields = old_fields.clone();
+                        for (k, v) in new_fields {
+                            merged_fields.insert(k.clone(), v.clone());
+                        }
+                        full.custom_fields = Some(merged_fields);
+                    }
+                    (None, Some(old_fields)) => full.custom_fields = Some(old_fields.clone()),
+                    _ => {}
+                }
             }
             full
         };
@@ -1947,7 +2027,7 @@ pub async fn ab_update_entry(
         if !encryption_key.is_empty() {
             // A field sent as an explicit empty string clears the stored
             // credential; `None` keeps it.
-            if let Some(ref password) = data.entry.password {
+            if let Some(ref password) = payload.entry.password {
                 upsert_or_clear_credential(
                     &database,
                     entry_rec.id,
@@ -1956,7 +2036,7 @@ pub async fn ab_update_entry(
                     &encryption_key,
                 )?;
             }
-            if let Some(ref private_key) = data.entry.private_key {
+            if let Some(ref private_key) = payload.entry.private_key {
                 upsert_or_clear_credential(
                     &database,
                     entry_rec.id,
@@ -1965,7 +2045,7 @@ pub async fn ab_update_entry(
                     &encryption_key,
                 )?;
             }
-            if let Some(ref secret) = data.entry.proxmox_token_secret {
+            if let Some(ref secret) = payload.entry.proxmox_token_secret {
                 upsert_or_clear_credential(
                     &database,
                     entry_rec.id,
@@ -1974,7 +2054,7 @@ pub async fn ab_update_entry(
                     &encryption_key,
                 )?;
             }
-            if let Some(ref pw) = data.entry.container_password {
+            if let Some(ref pw) = payload.entry.container_password {
                 upsert_or_clear_credential(
                     &database,
                     entry_rec.id,
@@ -1996,11 +2076,27 @@ pub async fn ab_update_entry(
             .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
         existing_config.as_object().cloned().unwrap_or_default()
     };
-    let payload_config = build_protocol_config(&data.entry);
+    let payload_config = build_protocol_config(&payload.entry);
     for (k, v) in payload_config {
-        merged_config.insert(k, v);
+        if k == "custom_fields" {
+            // Per-key merge: custom field values set by earlier edits
+            // survive a partial update of the map.
+            let stored_map = merged_config
+                .get("custom_fields")
+                .and_then(|v| v.as_object())
+                .cloned()
+                .unwrap_or_default();
+            let new_map = v.as_object().cloned().unwrap_or_default();
+            let mut out = stored_map;
+            for (fk, fv) in new_map {
+                out.insert(fk, fv);
+            }
+            merged_config.insert("custom_fields".into(), serde_json::Value::Object(out));
+        } else {
+            merged_config.insert(k, v);
+        }
     }
-    let allowed_groups = data
+    let allowed_groups = payload
         .allowed_groups
         .as_ref()
         .map(|g| g.join(","))
@@ -2008,19 +2104,19 @@ pub async fn ab_update_entry(
     db::update_ab_entry(
         &database,
         entry_rec.id,
-        data.entry.display_name.as_deref().unwrap_or(""),
-        &data.entry.session_type,
-        data.entry.hostname.as_deref().unwrap_or(""),
-        data.entry.port,
-        data.entry.username.as_deref().unwrap_or(""),
+        payload.entry.display_name.as_deref().unwrap_or(""),
+        &payload.entry.session_type,
+        payload.entry.hostname.as_deref().unwrap_or(""),
+        payload.entry.port,
+        payload.entry.username.as_deref().unwrap_or(""),
         &serde_json::to_string(&merged_config).unwrap_or_else(|_| "{}".into()),
         &allowed_groups,
     )
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let session_type = data.entry.session_type.clone();
+    let session_type = payload.entry.session_type.clone();
     let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
-    let credential_rotated = data.entry.password.is_some();
+    let credential_rotated = payload.entry.password.is_some();
     let details =
         json!({ "type": session_type, "credential_rotated": credential_rotated }).to_string();
     log_ab_event(
@@ -2579,5 +2675,595 @@ pub async fn quick_connect(
     match manager.create_session(create_req, admin_name).await {
         Ok(info) => Redirect::temporary(&format!("/client/{}", info.session_id)).into_response(),
         Err(e) => quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{
+        CredentialDefaultScope, DriveConfigured, OidcEnabled, SiteTitle, StorageBackend,
+        VaultBackends, VaultCell, VaultConfigured, VaultState,
+    };
+    use axum::body::Body;
+    use axum::http::Request;
+    use serde_json::{json, Value};
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    fn test_db() -> Db {
+        db::init_db(std::path::Path::new(":memory:")).expect("Failed to create test DB")
+    }
+
+    fn insert_test_admin(db: &Db, name: &str) -> String {
+        let key = format!("test-key-{}", name);
+        let key_hash = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(key.as_bytes());
+            hex::encode(hasher.finalize())
+        };
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO admins (name, api_key_hash) VALUES (?1, ?2)",
+            rusqlite::params![name, key_hash],
+        )
+        .unwrap();
+        key
+    }
+
+    fn insert_test_user(db: &Db, email: &str, name: &str, role: &str) {
+        let conn = db.lock().unwrap();
+        let _ = conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE users ADD COLUMN auth_source TEXT DEFAULT 'database'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE users ADD COLUMN oidc_groups TEXT DEFAULT ''",
+            [],
+        );
+        conn.execute(
+            "INSERT INTO users (email, name, role, disabled, created_at) VALUES (?1, ?2, ?3, 0, datetime('now'))",
+            rusqlite::params![email, name, role],
+        )
+        .unwrap();
+    }
+
+    fn test_vault_state() -> VaultState {
+        let cell: VaultCell = Arc::new(tokio::sync::RwLock::new(None));
+        Arc::new(VaultBackends {
+            default: cell.clone(),
+            shared: cell.clone(),
+            local: cell,
+        })
+    }
+
+    fn mock_vault_state(mock: Arc<crate::testing::MockVault>) -> VaultState {
+        let cell: VaultCell = Arc::new(tokio::sync::RwLock::new(Some(mock)));
+        Arc::new(VaultBackends {
+            default: cell.clone(),
+            shared: cell.clone(),
+            local: cell,
+        })
+    }
+
+    /// Minimal router for the entry create/update/list + custom-fields
+    /// handlers, mirroring the route shapes in `src/main.rs`.
+    fn build_router(db: Db, vault: VaultState, backend: Option<&str>) -> axum::Router {
+        use axum::routing::{get, post, put};
+        let api_routes = axum::Router::new()
+            .route(
+                "/api/addressbook/custom-fields",
+                get(super::ab_get_custom_fields),
+            )
+            .route(
+                "/api/addressbook/folders/{scope}/{folder}/entries",
+                get(super::ab_list_entries),
+            )
+            .route(
+                "/api/addressbook/folders/{scope}/{folder}/entries",
+                post(super::ab_create_entry),
+            )
+            .route(
+                "/api/addressbook/folders/{scope}/{folder}/entries/{entry}",
+                put(super::ab_update_entry),
+            )
+            .with_state(());
+        let mut api_routes = api_routes
+            .layer(axum::middleware::from_fn(crate::auth::require_auth))
+            .layer(Extension(db))
+            .layer(Extension(vault))
+            .layer(Extension(VaultConfigured(false)))
+            .layer(Extension(OidcEnabled(false)))
+            .layer(Extension(DriveConfigured(false)))
+            .layer(Extension(CredentialDefaultScope("local".into())))
+            .layer(Extension(SiteTitle("Test".into())));
+        if let Some(b) = backend {
+            api_routes = api_routes.layer(Extension(StorageBackend(b.into())));
+        }
+        api_routes
+    }
+
+    fn auth_req(method: &str, uri: &str, key: &str) -> Request<Body> {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {}", key))
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(test_addr()));
+        req
+    }
+
+    fn json_req(method: &str, uri: &str, key: &str, body: Value) -> Request<Body> {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("authorization", format!("Bearer {}", key))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(test_addr()));
+        req
+    }
+
+    fn session_req(method: &str, uri: &str, session: &str) -> Request<Body> {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("cookie", format!("persea_session={}", session))
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(test_addr()));
+        req
+    }
+
+    async fn body_json(response: axum::response::Response) -> Value {
+        serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_create_entry_slugifies_friendly_name() {
+        let db = test_db();
+        let key = insert_test_admin(&db, "admin");
+        db::create_ab_folder(&db, "shared", "Slugs", "", "", false).unwrap();
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Slugs/entries",
+                &key,
+                json!({"name": "Web Server 01", "type": "ssh", "hostname": "10.0.0.1"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let folder = db::get_ab_folder(&db, "shared", "Slugs").unwrap();
+        let entries = db::list_ab_entries(&db, folder.id).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].name, "web-server-01",
+            "stored identifier must be the slug"
+        );
+        assert_eq!(
+            entries[0].display_name, "Web Server 01",
+            "friendly name becomes display_name"
+        );
+
+        // List API surfaces the slug identifier + friendly display name.
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(auth_req(
+                "GET",
+                "/api/addressbook/folders/shared/Slugs/entries",
+                &key,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body[0]["name"], "web-server-01");
+        assert_eq!(body[0]["display_name"], "Web Server 01");
+    }
+
+    #[tokio::test]
+    async fn test_create_entry_explicit_display_name_honored() {
+        // CSV import compat: an explicit display_name wins over the
+        // friendly name.
+        let db = test_db();
+        let key = insert_test_admin(&db, "admin");
+        db::create_ab_folder(&db, "shared", "Exp", "", "", false).unwrap();
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Exp/entries",
+                &key,
+                json!({"name": "DB Server 01", "display_name": "Imported Label", "type": "ssh", "hostname": "10.0.0.2"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let folder = db::get_ab_folder(&db, "shared", "Exp").unwrap();
+        let entries = db::list_ab_entries(&db, folder.id).unwrap();
+        assert_eq!(entries[0].name, "db-server-01");
+        assert_eq!(entries[0].display_name, "Imported Label");
+    }
+
+    #[tokio::test]
+    async fn test_create_entry_duplicate_slug_conflict_names_identifier() {
+        let db = test_db();
+        let key = insert_test_admin(&db, "admin");
+        db::create_ab_folder(&db, "shared", "Dups", "", "", false).unwrap();
+        let first = build_router(db.clone(), test_vault_state(), None);
+        let response = first
+            .oneshot(json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Dups/entries",
+                &key,
+                json!({"name": "Web Server 01", "type": "ssh", "hostname": "10.0.0.1"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        let second = build_router(db.clone(), test_vault_state(), None);
+        let response = second
+            .oneshot(json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Dups/entries",
+                &key,
+                json!({"name": "web server 01", "type": "ssh", "hostname": "10.0.0.2"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = body_json(response).await;
+        let err = body["error"].as_str().unwrap_or("");
+        assert!(
+            err.contains("web-server-01"),
+            "409 must name the derived slug, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_entry_rejects_unusable_name() {
+        let db = test_db();
+        let key = insert_test_admin(&db, "admin");
+        db::create_ab_folder(&db, "shared", "Bad", "", "", false).unwrap();
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Bad/entries",
+                &key,
+                json!({"name": "!!!", "type": "ssh", "hostname": "10.0.0.1"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = body_json(response).await;
+        assert!(
+            body["error"].as_str().unwrap_or("").contains("no usable characters"),
+            "got: {}",
+            body
+        );
+    }
+
+    #[tokio::test]
+    async fn test_custom_fields_round_trip_db_mode_and_edit_merge() {
+        let db = test_db();
+        let key = insert_test_admin(&db, "admin");
+        db::create_ab_folder(&db, "shared", "CF", "", "", false).unwrap();
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "POST",
+                "/api/addressbook/folders/shared/CF/entries",
+                &key,
+                json!({
+                    "name": "Prod Web",
+                    "type": "ssh",
+                    "hostname": "10.0.0.3",
+                    "custom_fields": {"Environment": "Production", "Owner": "alice"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // List API returns the values.
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(auth_req("GET", "/api/addressbook/folders/shared/CF/entries", &key))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        assert_eq!(body[0]["custom_fields"]["Environment"], "Production");
+
+        // Edit with a friendly name but NO custom_fields: values survive and
+        // display_name changes while the slug stays.
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/folders/shared/CF/entries/prod-web",
+                &key,
+                json!({"name": "Prod Web Renamed", "type": "ssh", "hostname": "10.0.0.4"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(auth_req("GET", "/api/addressbook/folders/shared/CF/entries", &key))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        assert_eq!(
+            body[0]["custom_fields"]["Environment"], "Production",
+            "values must survive an edit that omits them"
+        );
+        assert_eq!(
+            body[0]["display_name"], "Prod Web Renamed",
+            "friendly name in update changes display_name"
+        );
+        assert_eq!(body[0]["name"], "prod-web", "slug identifier is immutable");
+
+        // Partial map edit merges per key.
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/folders/shared/CF/entries/prod-web",
+                &key,
+                json!({"type": "ssh", "hostname": "10.0.0.4", "custom_fields": {"Owner": "bob"}}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(auth_req("GET", "/api/addressbook/folders/shared/CF/entries", &key))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        let cf = &body[0]["custom_fields"];
+        assert_eq!(cf["Environment"], "Production");
+        assert_eq!(cf["Owner"], "bob");
+    }
+
+    #[tokio::test]
+    async fn test_custom_fields_round_trip_vault_mode() {
+        let db = test_db();
+        let key = insert_test_admin(&db, "admin");
+        db::create_ab_folder(&db, "shared", "CFV", "", "", false).unwrap();
+        let mock = Arc::new(crate::testing::MockVault::new());
+        let app = build_router(
+            db.clone(),
+            mock_vault_state(mock.clone()),
+            Some("vault"),
+        );
+        let response = app
+            .oneshot(json_req(
+                "POST",
+                "/api/addressbook/folders/shared/CFV/entries",
+                &key,
+                json!({
+                    "name": "Prod Web",
+                    "type": "ssh",
+                    "hostname": "10.0.0.3",
+                    "password": "secret",
+                    "custom_fields": {"Environment": "Production"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // The vault copy is keyed by the SLUG and round-trips custom fields
+        // + the friendly display name.
+        let vault_entry = mock
+            .get_entry("shared", "CFV", "prod-web")
+            .expect("vault copy must be keyed by the slug");
+        assert_eq!(
+            vault_entry
+                .custom_fields
+                .as_ref()
+                .and_then(|f| f.get("Environment"))
+                .map(String::as_str),
+            Some("Production"),
+            "vault copy must carry custom field values"
+        );
+        assert_eq!(vault_entry.password.as_deref(), Some("secret"));
+        assert_eq!(vault_entry.display_name.as_deref(), Some("Prod Web"));
+
+        // List API returns the values from the DB row.
+        let app = build_router(
+            db.clone(),
+            mock_vault_state(mock.clone()),
+            Some("vault"),
+        );
+        let response = app
+            .oneshot(auth_req("GET", "/api/addressbook/folders/shared/CFV/entries", &key))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        assert_eq!(body[0]["custom_fields"]["Environment"], "Production");
+        assert_eq!(body[0]["name"], "prod-web");
+        assert_eq!(body[0]["display_name"], "Prod Web");
+    }
+
+    #[tokio::test]
+    async fn test_custom_fields_vault_mode_edit_merge() {
+        let db = test_db();
+        let key = insert_test_admin(&db, "admin");
+        db::create_ab_folder(&db, "shared", "CFVM", "", "", false).unwrap();
+        let mock = Arc::new(crate::testing::MockVault::new());
+        let app = build_router(
+            db.clone(),
+            mock_vault_state(mock.clone()),
+            Some("vault"),
+        );
+        let response = app
+            .oneshot(json_req(
+                "POST",
+                "/api/addressbook/folders/shared/CFVM/entries",
+                &key,
+                json!({
+                    "name": "Prod Web",
+                    "type": "ssh",
+                    "hostname": "10.0.0.3",
+                    "password": "secret",
+                    "custom_fields": {"Environment": "Production"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Edit: partial custom_fields map + friendly name, password omitted.
+        let app = build_router(
+            db.clone(),
+            mock_vault_state(mock.clone()),
+            Some("vault"),
+        );
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/folders/shared/CFVM/entries/prod-web",
+                &key,
+                json!({
+                    "name": "Prod Web Renamed",
+                    "type": "ssh",
+                    "hostname": "10.0.0.4",
+                    "custom_fields": {"Owner": "bob"}
+                }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let vault_entry = mock
+            .get_entry("shared", "CFVM", "prod-web")
+            .expect("vault copy must still exist");
+        assert_eq!(
+            vault_entry.password.as_deref(),
+            Some("secret"),
+            "credentials must survive an edit that omits them"
+        );
+        assert_eq!(
+            vault_entry
+                .custom_fields
+                .as_ref()
+                .and_then(|f| f.get("Environment"))
+                .map(String::as_str),
+            Some("Production"),
+            "existing custom field values must survive a partial map edit"
+        );
+        assert_eq!(
+            vault_entry
+                .custom_fields
+                .as_ref()
+                .and_then(|f| f.get("Owner"))
+                .map(String::as_str),
+            Some("bob")
+        );
+        assert_eq!(
+            vault_entry.display_name.as_deref(),
+            Some("Prod Web Renamed"),
+            "friendly name in update changes the vault copy display_name"
+        );
+
+        // The DB row agrees with the vault copy.
+        let folder = db::get_ab_folder(&db, "shared", "CFVM").unwrap();
+        let entries = db::list_ab_entries(&db, folder.id).unwrap();
+        assert_eq!(entries[0].name, "prod-web");
+        assert_eq!(entries[0].display_name, "Prod Web Renamed");
+        let config: Value =
+            serde_json::from_str(&entries[0].protocol_config).unwrap();
+        assert_eq!(config["custom_fields"]["Environment"], "Production");
+        assert_eq!(config["custom_fields"]["Owner"], "bob");
+    }
+
+    #[tokio::test]
+    async fn test_custom_fields_endpoint_gates_and_values() {
+        let db = test_db();
+        // Seed definitions directly (PUT /api/system/settings is covered by
+        // the settings unit tests).
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO system_settings (key, value) VALUES ('custom_fields', ?1) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![r#"[{"name":"Environment","type":"select","options":["Test","Pilot","Production"]},{"name":"Owner","type":"text"}]"#],
+            )
+            .unwrap();
+        }
+
+        // Operator session can read the definitions.
+        insert_test_user(&db, "op@test.com", "Op", "operator");
+        let user = db::get_user_by_email(&db, "op@test.com").unwrap();
+        let session = db::create_auth_session(&db, user.id, 3600).unwrap();
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(session_req("GET", "/api/addressbook/custom-fields", &session))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body[0]["name"], "Environment");
+        assert_eq!(body[0]["type"], "select");
+        assert_eq!(body[0]["options"][2], "Production");
+        assert_eq!(body[1]["name"], "Owner");
+        assert_eq!(body[1]["type"], "text");
+
+        // Viewer is denied; unauthenticated is denied.
+        insert_test_user(&db, "view@test.com", "View", "viewer");
+        let user = db::get_user_by_email(&db, "view@test.com").unwrap();
+        let view_session = db::create_auth_session(&db, user.id, 3600).unwrap();
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/addressbook/custom-fields",
+                &view_session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // Admin API key works too.
+        let key = insert_test_admin(&db, "admin");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(auth_req("GET", "/api/addressbook/custom-fields", &key))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Empty by default: a fresh DB returns [].
+        let db2 = test_db();
+        insert_test_user(&db2, "op2@test.com", "Op2", "operator");
+        let user = db::get_user_by_email(&db2, "op2@test.com").unwrap();
+        let session = db::create_auth_session(&db2, user.id, 3600).unwrap();
+        let app = build_router(db2.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(session_req("GET", "/api/addressbook/custom-fields", &session))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        assert_eq!(body, json!([]), "feature is off by default");
     }
 }

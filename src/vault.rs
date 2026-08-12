@@ -90,6 +90,12 @@ pub struct AddressBookEntry {
     /// `protocol_config` JSON column — no schema change).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Per-entry values for admin-defined custom fields
+    /// (key = field name, value = submitted text/select value). Definitions
+    /// live in the `custom_fields` system setting; values are stored inside
+    /// `protocol_config.custom_fields` and round-trip through the vault copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_fields: Option<std::collections::HashMap<String, String>>,
     /// Override drive/file transfer setting for this entry.
     pub enable_drive: Option<bool>,
     /// NLA auth package: "kerberos", "ntlm", or empty (negotiate).
@@ -323,6 +329,9 @@ pub struct EntryInfo {
     /// Free-form description/notes for this entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Per-entry values for admin-defined custom fields.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_fields: Option<std::collections::HashMap<String, String>>,
     pub domain: Option<String>,
     pub security: Option<String>,
     pub ignore_cert: Option<bool>,
@@ -494,6 +503,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             created_at: None, // filled from the DB row by the handler
             updated_at: None,
             description: e.description.clone(),
+            custom_fields: e.custom_fields.clone(),
             domain: e.domain.clone(),
             security: e.security.clone(),
             ignore_cert: e.ignore_cert,
@@ -1876,6 +1886,30 @@ mod tests {
         assert!(msg.contains("failed to read client key"), "got: {}", msg);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_address_book_entry_custom_fields_round_trip() {
+        let mut entry = AddressBookEntry {
+            session_type: "ssh".into(),
+            ..Default::default()
+        };
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("Environment".to_string(), "Production".to_string());
+        entry.custom_fields = Some(fields);
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(
+            json.contains("custom_fields"),
+            "custom_fields must be serialized into the vault copy: {json}"
+        );
+        let back: AddressBookEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.custom_fields
+                .as_ref()
+                .and_then(|f| f.get("Environment"))
+                .map(String::as_str),
+            Some("Production")
+        );
     }
 
     #[test]
