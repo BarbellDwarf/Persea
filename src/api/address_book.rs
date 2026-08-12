@@ -667,58 +667,84 @@ fn check_entry_access_db(
     }
 }
 
+/// Body for `POST .../entries/{entry}/connect`: overrides applied on
+/// top of the stored entry before the session starts.
 #[derive(Deserialize)]
 pub struct ConnectRequest {
+    /// Display width override.
     #[serde(default)]
     pub width: Option<u32>,
+    /// Display height override.
     #[serde(default)]
     pub height: Option<u32>,
+    /// Display DPI override.
     #[serde(default)]
     pub dpi: Option<u32>,
+    /// Banner text shown in the client.
     #[serde(default)]
     pub banner: Option<String>,
+    /// Login username override; the stored one wins when absent.
     #[serde(default)]
     pub username: Option<String>,
+    /// Login password override; the stored one wins when absent.
     #[serde(default)]
     pub password: Option<String>,
+    /// RDP domain override.
     #[serde(default)]
     pub domain: Option<String>,
 }
 
+/// Body for `POST /api/ssh/probe-host-key`.
 #[derive(Deserialize)]
 pub struct ProbeHostKeyRequest {
+    /// Host to probe.
     pub hostname: String,
+    /// SSH port; defaults to 22.
     pub port: Option<u16>,
 }
 
+/// Body for `POST /api/addressbook/folders`.
 #[derive(Deserialize)]
 pub struct CreateFolderRequest {
+    /// Folder name; slash-separated paths nest folders.
     pub name: String,
+    /// Group names allowed to see the folder.
     pub allowed_groups: Vec<String>,
+    /// Free-text description.
     #[serde(default)]
     pub description: String,
+    /// Address-book scope: `shared` (default) or `instance`.
     #[serde(default = "default_scope")]
     pub scope: String,
+    /// Inherit the nearest ancestor ACL when the folder has none.
     #[serde(default)]
     pub inherit_from_parent: bool,
 }
 
+/// Body for `PUT /api/addressbook/folders/{scope}/{folder}`.
 #[derive(Deserialize)]
 pub struct UpdateFolderRequest {
+    /// Full replacement ACL; groups absent from this list lose access.
     pub allowed_groups: Vec<String>,
+    /// Free-text description.
     #[serde(default)]
     pub description: String,
+    /// Inherit the nearest ancestor ACL when the folder has none.
     #[serde(default)]
     pub inherit_from_parent: bool,
 }
 
+/// Body for `POST /api/addressbook/folders/{scope}/{folder}/entries`.
 #[derive(Deserialize)]
 pub struct CreateEntryRequest {
+    /// Friendly name; the stored slug identifier is `slugify(name)`.
     pub name: String,
     /// Comma-separated group names allowed to use this entry. Flattened
     /// siblings of `entry` are ignored by serde when absent.
     #[serde(default)]
     pub allowed_groups: Option<Vec<String>>,
+    /// Flattened connection fields (protocol, hostname, port,
+    /// credentials) from the `AddressBookEntry` shape.
     #[serde(flatten)]
     pub entry: AddressBookEntry,
 }
@@ -727,6 +753,7 @@ pub struct CreateEntryRequest {
 /// `allowed_groups` (serde keeps the wire format backward-compatible).
 #[derive(Deserialize, Clone)]
 pub struct UpdateEntryRequest {
+    /// Full replacement ACL; absent means keep the stored list.
     #[serde(default)]
     pub allowed_groups: Option<Vec<String>>,
     /// Friendly name: updates `display_name` ONLY — the stored slug
@@ -734,22 +761,35 @@ pub struct UpdateEntryRequest {
     /// audit subject).
     #[serde(default)]
     pub name: Option<String>,
+    /// Flattened connection fields from the `AddressBookEntry` shape.
     #[serde(flatten)]
     pub entry: AddressBookEntry,
 }
 
+/// Query parameters for `GET /api/connect`.
 #[derive(Deserialize)]
 pub struct QuickConnectQuery {
+    /// Ad-hoc session protocol (ssh, rdp, vnc, spice, web).
     pub protocol: Option<String>,
+    /// Ad-hoc target host.
     pub hostname: Option<String>,
+    /// Ad-hoc target port.
     pub port: Option<u16>,
+    /// Ad-hoc login username.
     pub username: Option<String>,
+    /// Web-session URL.
     pub url: Option<String>,
+    /// Display width.
     pub width: Option<u32>,
+    /// Display height.
     pub height: Option<u32>,
+    /// Display DPI.
     pub dpi: Option<u32>,
+    /// Address book scope, when connecting to a stored entry.
     pub scope: Option<String>,
+    /// Address book folder path, when connecting to a stored entry.
     pub folder: Option<String>,
+    /// Address book entry slug, when connecting to a stored entry.
     pub entry: Option<String>,
 }
 
@@ -849,6 +889,10 @@ fn folder_or_descendant_accessible_db(
     false
 }
 
+/// `GET /api/addressbook/folders`: list the top-level folders the
+/// caller can see. Requires operator or higher (or a custom role with
+/// the `read` permission). Admins see everything; others see folders
+/// matching their groups or an RBAC Read grant.
 pub async fn ab_list_folders(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -898,6 +942,9 @@ pub async fn ab_list_folders(
     Ok(Json(json!(visible)))
 }
 
+/// `GET /api/addressbook/folders/{scope}/{folder}/subfolders`: list
+/// the immediate children of `folder`. Requires operator or higher;
+/// `AppError::Forbidden` when the folder's ACL denies access.
 pub async fn ab_list_subfolders(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -966,6 +1013,9 @@ pub async fn ab_list_subfolders(
     Ok(Json(json!(subfolders)))
 }
 
+/// `GET /api/addressbook`: the whole visible tree, folders with
+/// their entries, for the connections page. Requires operator or
+/// higher; inaccessible folders are skipped, not rejected.
 pub async fn ab_list_all(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -1032,6 +1082,9 @@ pub async fn ab_list_all(
     ))
 }
 
+/// `GET /api/addressbook/search-index`: every visible entry with its
+/// scope and folder path, for client-side search. Requires operator or
+/// higher.
 pub async fn ab_search_index(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -1109,6 +1162,9 @@ pub async fn ab_search_index(
     Ok(Json(json!({"entries": emitted})))
 }
 
+/// `GET /api/addressbook/folders/{scope}/{folder}/entries`: list the
+/// entries in one folder. Requires operator or higher plus folder and
+/// entry access; `AppError::NotFound` for a missing folder.
 pub async fn ab_list_entries(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -1165,6 +1221,9 @@ pub async fn ab_get_custom_fields(
     Ok(Json(super::settings::custom_fields_value(&stored)))
 }
 
+/// `POST /api/ssh/probe-host-key`: fetch an SSH host key from a
+/// host and return it with its fingerprint and algorithm. Requires
+/// poweruser or higher; `AppError::Forbidden` for lower roles.
 pub async fn ssh_probe_host_key(
     identity: Option<Extension<AuthIdentity>>,
     axum::Json(body): axum::Json<ProbeHostKeyRequest>,
@@ -1195,6 +1254,12 @@ pub async fn ssh_probe_host_key(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `POST /api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect`:
+/// start a session from a stored entry, resolving credentials from the
+/// DB or Vault and applying the request's overrides. Requires operator
+/// or higher, plus folder and entry ACLs and the RBAC Connect grant.
+/// Returns the session info, or `AppError::Session` when guacd rejects
+/// the connection.
 pub async fn ab_connect_entry(
     State(manager): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -1544,6 +1609,9 @@ pub async fn ab_connect_entry(
     }
 }
 
+/// `POST /api/addressbook/folders`: create a folder with its ACL.
+/// Admin only, or a custom role with `create_connection_group`.
+/// Returns 201 on success, `AppError::Conflict` for a duplicate name.
 pub async fn ab_create_folder(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
@@ -1620,6 +1688,9 @@ pub async fn ab_create_folder(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `PUT /api/addressbook/folders/{scope}/{folder}`: replace a
+/// folder's description and ACL. Admin only; `AppError::Internal`
+/// when the folder is missing.
 pub async fn ab_update_folder(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
@@ -1677,6 +1748,9 @@ pub async fn ab_update_folder(
     Ok(Json(json!({"ok": true})))
 }
 
+/// `GET /api/addressbook/folders/{scope}/{folder}/config`: a
+/// folder's ACL config for the management UI. Admin only;
+/// `AppError::NotFound` when the folder is missing.
 pub async fn ab_get_folder_config(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -1712,6 +1786,10 @@ pub async fn ab_get_folder_config(
     }
 }
 
+/// `DELETE /api/addressbook/folders/{scope}/{folder}`: delete a
+/// folder, its subfolders, and its entries. Admin only, or a custom
+/// role with the Delete object permission on the folder. Returns the
+/// number of subfolders and entries removed.
 pub async fn ab_delete_folder(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
@@ -1812,6 +1890,11 @@ pub async fn ab_delete_folder(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `POST /api/addressbook/folders/{scope}/{folder}/entries`: create
+/// an entry; the slug identifier is `slugify(name)`. Admin only, or a
+/// custom role with `create_connection`. Returns 201, or
+/// `AppError::Validation` for unusable names and
+/// `AppError::Conflict` for duplicate slugs.
 pub async fn ab_create_entry(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
@@ -2000,6 +2083,9 @@ pub async fn ab_create_entry(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `PUT /api/addressbook/folders/{scope}/{folder}/entries/{entry}`:
+/// update an entry's fields, credentials, and ACL. Admin only, or a
+/// custom role with the Update object permission on the entry.
 pub async fn ab_update_entry(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
@@ -2283,6 +2369,10 @@ pub async fn ab_update_entry(
     Ok(Json(json!({"ok": true})))
 }
 
+/// `DELETE /api/addressbook/folders/{scope}/{folder}/entries/{entry}`:
+/// delete an entry and its stored credentials. Admin only, or a
+/// custom role with the Delete object permission on the entry.
+/// Returns 204 on success.
 pub async fn ab_delete_entry(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
@@ -2488,6 +2578,11 @@ h1{{color:#c00}}a{{color:#06c}}</style></head>
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `GET /api/connect`: quick-connect entry point that redirects to
+/// the client page. Accepts either address book coordinates (`scope`,
+/// `folder`, `entry`) or an ad-hoc spec (`protocol`, `hostname`, ...).
+/// Unauthenticated callers are redirected to the login page when OIDC
+/// is enabled; otherwise they get an HTML error page.
 pub async fn quick_connect(
     State(manager): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
