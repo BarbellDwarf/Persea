@@ -12,7 +12,7 @@ const PASSWORD = process.env.LOGIN_PASSWORD || 'AdminPass123!Secure';
 // fixture (not `page`) specifically so this makes zero requests with any
 // cookie jar — it isolates the routing/middleware behavior from the login
 // form's own JS.
-test.describe('Fresh-instance login routing (R15)', () => {
+test.describe('Fresh-instance login routing', () => {
   test('POST /auth/login is reachable with no prior session cookie', async ({ request }) => {
     // Real clients get a csrf_token cookie from any GET before they can POST
     // — fetch that the same way a fresh browser would, so this test isolates
