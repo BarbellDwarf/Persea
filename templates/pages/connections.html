@@ -2770,8 +2770,15 @@
     document.getElementById('filter-folder').addEventListener('change', runSearch);
     document.getElementById('filter-desc').addEventListener('input', debounce(runSearch, 250));
     document.getElementById('filter-clear').addEventListener('click', clearFilters);
-    document.getElementById('btn-vsphere-refresh').addEventListener('click', loadVSphere);
-    loadVSphere();
+    // The vSphere section is server-gated by features.vmware; the refresh
+    // button only exists when the section rendered, so wire it conditionally
+    // (an unconditional getElementById here crashed init when VMware was
+    // disabled, leaving the address book pane empty).
+    var vsphereRefresh = document.getElementById('btn-vsphere-refresh');
+    if (vsphereRefresh) {
+        vsphereRefresh.addEventListener('click', loadVSphere);
+        loadVSphere();
+    }
     loadCustomFields();
 
     // ── Recent sessions ──────────────────────────────────────────────
