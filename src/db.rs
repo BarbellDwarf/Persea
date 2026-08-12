@@ -120,6 +120,10 @@ pub struct User {
     pub name: String,
     pub oidc_subject: Option<String>,
     pub role: String,
+    /// Assigned custom role id (T05); NULL when the user only has a fixed
+    /// 4-tier role. Custom roles are additive on top of the role floor.
+    #[serde(default)]
+    pub custom_role_id: Option<String>,
     pub disabled: bool,
     pub created_at: String,
     pub last_login_at: Option<String>,
@@ -258,14 +262,15 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         );
 
         CREATE TABLE IF NOT EXISTS users (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            email         TEXT NOT NULL UNIQUE,
-            name          TEXT NOT NULL DEFAULT '',
-            oidc_subject  TEXT,
-            role          TEXT NOT NULL DEFAULT 'viewer',
-            disabled      INTEGER NOT NULL DEFAULT 0,
-            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-            last_login_at TEXT
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            email          TEXT NOT NULL UNIQUE,
+            name           TEXT NOT NULL DEFAULT '',
+            oidc_subject   TEXT,
+            role           TEXT NOT NULL DEFAULT 'viewer',
+            custom_role_id TEXT,
+            disabled       INTEGER NOT NULL DEFAULT 0,
+            created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+            last_login_at  TEXT
         );
 
         CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -401,6 +406,17 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         .is_ok();
     if !has_oidc_groups {
         conn.execute_batch("ALTER TABLE users ADD COLUMN oidc_groups TEXT NOT NULL DEFAULT ''")?;
+    }
+
+    // Migration: custom role assignment column (T05). The custom_roles
+    // tables themselves are created by rbac::migrate below; the FK is
+    // declared on the SQLx backends, while legacy SQLite (no
+    // PRAGMA foreign_keys) clears the reference explicitly on role delete.
+    let has_custom_role_id: bool = conn
+        .prepare("SELECT custom_role_id FROM users LIMIT 0")
+        .is_ok();
+    if !has_custom_role_id {
+        conn.execute_batch("ALTER TABLE users ADD COLUMN custom_role_id TEXT")?;
     }
 
     // Migration: auth_sessions token → token_hash (v1.0.0 security hardening)
@@ -893,7 +909,7 @@ pub fn get_user_by_email(db: &Db, email: &str) -> rusqlite::Result<User> {
     db_route!(db, get_user_by_email_pool, email.to_string());
     let conn = db.lock().unwrap();
     conn.query_row(
-        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups
+        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id
          FROM users WHERE email = ?1",
         params![email],
         |row| {
@@ -907,6 +923,7 @@ pub fn get_user_by_email(db: &Db, email: &str) -> rusqlite::Result<User> {
                 created_at: row.get(6)?,
                 last_login_at: row.get(7)?,
                 oidc_groups: row.get(8)?,
+                custom_role_id: row.get(9)?,
             })
         },
     )
@@ -1042,7 +1059,7 @@ pub fn validate_auth_session(db: &Db, token: &str) -> Result<User, AuthError> {
     let token_hash = hash_key(token);
     let conn = db.lock().unwrap();
     conn.query_row(
-        "SELECT u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups
+        "SELECT u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, u.custom_role_id
          FROM auth_sessions s
          JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?1 AND s.expires_at > datetime('now')",
@@ -1058,6 +1075,7 @@ pub fn validate_auth_session(db: &Db, token: &str) -> Result<User, AuthError> {
                 created_at: row.get(6)?,
                 last_login_at: row.get(7)?,
                 oidc_groups: row.get(8)?,
+                custom_role_id: row.get(9)?,
             })
         },
     )
@@ -1162,7 +1180,7 @@ pub fn list_users(db: &Db) -> rusqlite::Result<Vec<User>> {
     db_route!(db, list_users_pool);
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups
+        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id
          FROM users ORDER BY id",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -1176,6 +1194,7 @@ pub fn list_users(db: &Db) -> rusqlite::Result<Vec<User>> {
             created_at: row.get(6)?,
             last_login_at: row.get(7)?,
             oidc_groups: row.get(8)?,
+            custom_role_id: row.get(9)?,
         })
     })?;
     rows.collect()
@@ -1505,7 +1524,7 @@ pub fn validate_user_token(db: &Db, token: &str) -> Result<(User, UserApiToken),
         .prepare(
             "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at,
                     u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups,
-                    t.token_hash
+                    t.token_hash, u.custom_role_id
              FROM user_api_tokens t
              JOIN users u ON u.id = t.user_id",
         )
@@ -1533,6 +1552,7 @@ pub fn validate_user_token(db: &Db, token: &str) -> Result<(User, UserApiToken),
                 created_at: row.get(14)?,
                 last_login_at: row.get(15)?,
                 oidc_groups: row.get(16)?,
+                custom_role_id: row.get(18)?,
             };
             Ok((user, token_info, stored_hash))
         })
@@ -3546,6 +3566,7 @@ mod tests {
             email: "test@test.com".into(),
             name: "test".into(),
             role: "viewer".into(),
+            custom_role_id: None,
             disabled: false,
             oidc_groups: "admins,developers,ops".into(),
         };
@@ -3562,6 +3583,7 @@ mod tests {
             email: "test@test.com".into(),
             name: "test".into(),
             role: "viewer".into(),
+            custom_role_id: None,
             disabled: false,
             oidc_groups: String::new(),
         };
@@ -3578,6 +3600,7 @@ mod tests {
             email: "test@test.com".into(),
             name: "test".into(),
             role: "viewer".into(),
+            custom_role_id: None,
             disabled: false,
             oidc_groups: "solo-group".into(),
         };
@@ -4898,6 +4921,7 @@ macro_rules! user_row {
             created_at: $row.get(6),
             last_login_at: $row.get(7),
             oidc_groups: $row.get(8),
+            custom_role_id: $row.get(9),
         }
     };
 }
@@ -4964,13 +4988,13 @@ async fn upsert_user_pool(
 
     let rows = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups FROM users WHERE email = $1", &[Arg::Str(email)]).await
+            pg_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = $1", &[Arg::Str(email)]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups FROM users WHERE email = ?", &[Arg::Str(email)]).await
+            mysql_fetch(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = ?", &[Arg::Str(email)]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups FROM users WHERE email = ?", &[Arg::Str(email)]).await
+            sqlite_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = ?", &[Arg::Str(email)]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
@@ -5070,13 +5094,13 @@ async fn create_user_with_password_pool(
 async fn get_user_by_email_pool(pool: &DbPool, email: String) -> rusqlite::Result<User> {
     let row = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch_opt(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups FROM users WHERE email = $1", &[Arg::Str(email)]).await
+            pg_fetch_opt(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = $1", &[Arg::Str(email)]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch_opt(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups FROM users WHERE email = ?", &[Arg::Str(email)]).await
+            mysql_fetch_opt(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = ?", &[Arg::Str(email)]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch_opt(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups FROM users WHERE email = ?", &[Arg::Str(email)]).await
+            sqlite_fetch_opt(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = ?", &[Arg::Str(email)]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
@@ -5121,13 +5145,13 @@ async fn get_user_auth_source_pool(pool: &DbPool, email: String) -> rusqlite::Re
 async fn list_users_pool(pool: &DbPool) -> rusqlite::Result<Vec<User>> {
     let rows = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups FROM users ORDER BY id", &[]).await
+            pg_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users ORDER BY id", &[]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups FROM users ORDER BY id", &[]).await
+            mysql_fetch(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users ORDER BY id", &[]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups FROM users ORDER BY id", &[]).await
+            sqlite_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users ORDER BY id", &[]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
@@ -6074,11 +6098,11 @@ async fn validate_user_token_pool(
         pool,
         "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, \
                 u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, \
-                t.token_hash \
+                t.token_hash, u.custom_role_id \
          FROM user_api_tokens t JOIN users u ON u.id = t.user_id",
         "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, \
                 u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, \
-                t.token_hash \
+                t.token_hash, u.custom_role_id \
          FROM user_api_tokens t JOIN users u ON u.id = t.user_id"
     );
     let rows = match pool {
@@ -6117,6 +6141,7 @@ async fn validate_user_token_pool(
         created_at: row.get(14),
         last_login_at: row.get(15),
         oidc_groups: row.get(16),
+        custom_role_id: row.get(18),
     };
 
     if token_info.disabled {

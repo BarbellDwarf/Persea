@@ -143,6 +143,25 @@ pub fn migrate(db: &Db) -> rusqlite::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_rbac_perm_entity ON rbac_permissions(entity_id, entity_type);
         CREATE INDEX IF NOT EXISTS idx_rbac_perm_object ON rbac_permissions(object_type, object_id);
+
+        -- Custom roles (T05): named global permission bundles assignable to
+        -- users via users.custom_role_id. Legacy SQLite runs without
+        -- PRAGMA foreign_keys, so delete_custom_role clears the permission
+        -- rows and the users references explicitly.
+        CREATE TABLE IF NOT EXISTS custom_roles (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL UNIQUE,
+            description TEXT,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS custom_role_permissions (
+            role_id     TEXT NOT NULL REFERENCES custom_roles(id) ON DELETE CASCADE,
+            permission  TEXT NOT NULL,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(role_id, permission)
+        );
+        CREATE INDEX IF NOT EXISTS idx_custom_role_perms_role ON custom_role_permissions(role_id);
         ",
     )?;
     Ok(())
