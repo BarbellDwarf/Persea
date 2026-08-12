@@ -42,8 +42,11 @@ type PendingFlows =
 /// Shared OIDC state initialized once at startup.
 #[derive(Clone)]
 pub struct OidcState {
+    /// Discovered and configured OIDC client.
     pub client: OidcClient,
+    /// HTTP client used for discovery and token exchange.
     pub http_client: openidconnect::reqwest::Client,
+    /// The OIDC configuration this state was built from.
     pub config: OidcConfig,
     /// Auth session TTL in seconds.
     pub session_ttl_secs: u64,
@@ -54,7 +57,9 @@ pub struct OidcState {
 /// One named OIDC provider (DB-configured via the admin auth page, or the
 /// `[oidc]` config section) with its own client and pending-flow state.
 pub struct OidcProvider {
+    /// Provider name, used in the `?provider=` login parameter.
     pub name: String,
+    /// Client and pending-flow state for this provider.
     pub state: OidcState,
 }
 
@@ -62,6 +67,7 @@ pub struct OidcProvider {
 /// renders one button per provider and the state cookie
 /// carries the provider name so the callback resolves the right client.
 pub struct OidcRegistry {
+    /// All configured providers, in display order.
     pub providers: Vec<OidcProvider>,
 }
 
@@ -141,6 +147,7 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
 
 #[derive(Deserialize)]
 pub struct LoginParams {
+    /// Post-login redirect target; honored only when it is a same-origin path.
     pub next: Option<String>,
     /// OIDC provider name (multi-provider SSO). Defaults to the first
     /// configured provider when absent.
@@ -254,11 +261,16 @@ pub async fn login(
         .into_response()
 }
 
+/// Query parameters the IdP sends back on the callback.
 #[derive(Deserialize)]
 pub struct CallbackParams {
+    /// Authorization code to exchange for tokens.
     pub code: Option<String>,
+    /// CSRF state echoed back from the login step.
     pub state: Option<String>,
+    /// OAuth error code when the provider rejects the login.
     pub error: Option<String>,
+    /// Human-readable error description from the provider.
     pub error_description: Option<String>,
 }
 
