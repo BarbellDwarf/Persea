@@ -73,6 +73,7 @@ pub async fn create_jump_host(
     identity: Option<Extension<AuthIdentity>>,
     Json(input): Json<CreateJumpHost>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    require_tunnels_enabled(&db)?;
     require_admin(&identity)?;
     if input.name.is_empty() || input.hostname.is_empty() || input.username.is_empty() {
         return Err(AppError::Validation(
@@ -103,6 +104,7 @@ pub async fn update_jump_host(
     Path(id): Path<String>,
     Json(input): Json<UpdateJumpHost>,
 ) -> Result<StatusCode, AppError> {
+    require_tunnels_enabled(&db)?;
     require_admin(&identity)?;
     let updated = crate::db::update_jump_host(
         &db,
@@ -131,6 +133,7 @@ pub async fn delete_jump_host(
     identity: Option<Extension<AuthIdentity>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, AppError> {
+    require_tunnels_enabled(&db)?;
     require_admin(&identity)?;
     let deleted = crate::db::delete_jump_host(&db, &id).map_err(|e| {
         tracing::error!(error = %e, "failed to delete jump host");
@@ -175,8 +178,10 @@ pub async fn test_jump_host(
 
 pub async fn list_active_tunnels(
     State(_state): State<AppState>,
+    Extension(db): Extension<Db>,
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<Vec<serde_json::Value>>, AppError> {
+    require_tunnels_enabled(&db)?;
     require_admin(&identity)?;
     Ok(Json(vec![]))
 }

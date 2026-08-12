@@ -199,12 +199,22 @@ pub async fn admin_reports_page(
 }
 
 /// GET /admin/tunnels.html — admin SSH tunnels management page.
+/// Returns 404 (request-time) when the `enable_ssh_tunnels` admin toggle is
+/// off, so a disabled feature is indistinguishable from a missing page.
 pub async fn admin_tunnels_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
+    Extension(db): Extension<Db>,
 ) -> Response {
+    if !crate::settings_merge::read_toggle(&db, "enable_ssh_tunnels", true) {
+        return crate::templates::render_error_page(
+            axum::http::StatusCode::NOT_FOUND,
+            "The page you requested could not be found",
+            &nonce.0,
+        );
+    }
     let tmpl = AdminTunnelsTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
