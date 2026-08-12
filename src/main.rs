@@ -1312,12 +1312,9 @@ async fn run_server(
             }
             // R110: expired persisted WS tickets (cross-instance validation
             // rows) — no-op without a shared backend pool or the HA license.
-            if crate::license::global()
-                .is_some_and(|lm| lm.has_feature(crate::license::FEAT_HA))
-            {
-                let cutoff = crate::db::registry_ts(
-                    chrono::Utc::now() - chrono::Duration::minutes(5),
-                );
+            if crate::license::global().is_some_and(|lm| lm.has_feature(crate::license::FEAT_HA)) {
+                let cutoff =
+                    crate::db::registry_ts(chrono::Utc::now() - chrono::Duration::minutes(5));
                 match db::ws_ticket_cleanup_expired(&cleanup_db, &cutoff) {
                     Ok(n) if n > 0 => tracing::info!("Cleaned up {} expired WS tickets", n),
                     Err(e) => tracing::warn!("Failed to clean up WS tickets: {}", e),
@@ -2399,7 +2396,11 @@ async fn run_server(
 /// count/disk limits on that subset. Orphaned files (sessions whose registry
 /// rows were swept, or whose owner never wrote one) are never touched — a
 /// documented limitation (see docs/high-availability.md).
-fn rotate_owned(config: &crate::config::RecordingConfig, db: Option<&Db>, owner_instance: &str) -> usize {
+fn rotate_owned(
+    config: &crate::config::RecordingConfig,
+    db: Option<&Db>,
+    owner_instance: &str,
+) -> usize {
     let Some(db) = db else { return 0 };
     let owned: std::collections::HashSet<String> =
         crate::db::registry_list_owned(db, owner_instance)
@@ -2460,7 +2461,10 @@ fn rotate_owned(config: &crate::config::RecordingConfig, db: Option<&Db>, owner_
     }
 
     if deleted > 0 {
-        tracing::info!("Recording rotation (instance-owned): deleted {} files", deleted);
+        tracing::info!(
+            "Recording rotation (instance-owned): deleted {} files",
+            deleted
+        );
     }
     deleted
 }
@@ -2491,7 +2495,8 @@ fn delete_recording_file(path: &std::path::Path) {
 
 /// Build a TLS connector for the guacd connection, if `[tls] guacd_cert_path` is configured.
 /// This is independent of server HTTPS — you can use guacd TLS without cert_path/key_path.
-fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {    let cert_path = config.tls.as_ref()?.guacd_cert_path.as_ref()?;
+fn build_guacd_tls(config: &Config) -> Option<tokio_rustls::TlsConnector> {
+    let cert_path = config.tls.as_ref()?.guacd_cert_path.as_ref()?;
 
     let pem_data = std::fs::read(cert_path)
         .unwrap_or_else(|e| panic!("Failed to read guacd cert {}: {}", cert_path.display(), e));

@@ -87,7 +87,6 @@ impl SessionManager {
         }
     }
 
-
     pub fn new(config: Config, guacd_tls: Option<TlsConnector>) -> Self {
         // Ensure recording directory exists with restrictive permissions
         let recording_dir = config.effective_recording_path().into_owned();
@@ -198,10 +197,7 @@ impl SessionManager {
     /// the row lives on only so the owning instance can rotate the
     /// recording file; the stale sweep removes it within 24h.
     fn row_is_live(row: &crate::db::SessionRegistryRow) -> bool {
-        !matches!(
-            row.status.as_str(),
-            "completed" | "error" | "expired"
-        )
+        !matches!(row.status.as_str(), "completed" | "error" | "expired")
     }
 
     /// List all sessions: the local map plus (when enterprise HA is active)
@@ -218,10 +214,8 @@ impl SessionManager {
 
         if self.ha_enabled() {
             if let Some(ref db) = self.db {
-                let local_ids: std::collections::HashSet<String> = result
-                    .iter()
-                    .map(|s| s.session_id.to_string())
-                    .collect();
+                let local_ids: std::collections::HashSet<String> =
+                    result.iter().map(|s| s.session_id.to_string()).collect();
                 match crate::db::registry_list_sessions(db) {
                     Ok(rows) => {
                         for row in rows {
@@ -401,11 +395,9 @@ impl SessionManager {
                         return ShareTokenValidation::Invalid;
                     };
                     // Expiry check first (fail closed on unparseable values).
-                    let expires = chrono::NaiveDateTime::parse_from_str(
-                        &expires_at,
-                        "%Y-%m-%d %H:%M:%S",
-                    )
-                    .map(|ndt| ndt.and_utc());
+                    let expires =
+                        chrono::NaiveDateTime::parse_from_str(&expires_at, "%Y-%m-%d %H:%M:%S")
+                            .map(|ndt| ndt.and_utc());
                     match expires {
                         Ok(exp) if exp <= Utc::now() => return ShareTokenValidation::Invalid,
                         Err(_) => return ShareTokenValidation::Invalid,
@@ -417,9 +409,7 @@ impl SessionManager {
                     if hash.len() == provided_hex.len()
                         && hash.as_bytes().ct_eq(provided_hex.as_bytes()).into()
                     {
-                        return ShareTokenValidation::Shadow {
-                            issued_by,
-                        };
+                        return ShareTokenValidation::Shadow { issued_by };
                     }
                 }
             }
@@ -474,14 +464,14 @@ impl SessionManager {
         let Some(ref db) = self.db else { return 0 };
         let now = Utc::now();
         let pending_cutoff_secs = (self.config.session_pending_timeout_secs * 2).max(60);
-        let pending_cutoff = crate::db::registry_ts(
-            now - chrono::Duration::seconds(pending_cutoff_secs as i64),
-        );
-        let terminal_cutoff =
-            crate::db::registry_ts(now - chrono::Duration::hours(24));
+        let pending_cutoff =
+            crate::db::registry_ts(now - chrono::Duration::seconds(pending_cutoff_secs as i64));
+        let terminal_cutoff = crate::db::registry_ts(now - chrono::Duration::hours(24));
         let live_cutoff = if self.config.session_max_duration_secs > 0 {
             Some(crate::db::registry_ts(
-                now - chrono::Duration::seconds(self.config.session_max_duration_secs as i64 + 7200),
+                now - chrono::Duration::seconds(
+                    self.config.session_max_duration_secs as i64 + 7200,
+                ),
             ))
         } else {
             None

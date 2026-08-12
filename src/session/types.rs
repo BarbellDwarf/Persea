@@ -490,13 +490,12 @@ impl SessionInfo {
     /// what the registry recorded — no local state, no tokens.
     pub fn from_registry(row: &crate::db::SessionRegistryRow) -> Option<SessionInfo> {
         use chrono::NaiveDateTime;
-        let session_type: SessionType = serde_json::from_str(&format!(
-            "\"{}\"",
-            row.session_type.to_lowercase()
-        ))
-        .unwrap_or_default();
-        let status: SessionStatus = serde_json::from_str(&format!("\"{}\"", row.status.to_lowercase()))
-            .unwrap_or(SessionStatus::Error);
+        let session_type: SessionType =
+            serde_json::from_str(&format!("\"{}\"", row.session_type.to_lowercase()))
+                .unwrap_or_default();
+        let status: SessionStatus =
+            serde_json::from_str(&format!("\"{}\"", row.status.to_lowercase()))
+                .unwrap_or(SessionStatus::Error);
         let created_at = NaiveDateTime::parse_from_str(&row.created_at, "%Y-%m-%d %H:%M:%S")
             .ok()
             .map(|ndt| ndt.and_utc())

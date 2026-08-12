@@ -217,7 +217,12 @@ pub async fn ws_handler(
                 }
             }
             let fresh_ticket = ticket_store.forward(id).await;
-            let mut location = format!("{}/ws/{}?ticket={}", owner_base.trim_end_matches('/'), session_id, fresh_ticket);
+            let mut location = format!(
+                "{}/ws/{}?ticket={}",
+                owner_base.trim_end_matches('/'),
+                session_id,
+                fresh_ticket
+            );
             if !kept.is_empty() {
                 location.push('&');
                 location.push_str(&kept.join("&"));
