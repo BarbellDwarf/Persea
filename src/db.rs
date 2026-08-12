@@ -1329,9 +1329,13 @@ pub fn delete_user(db: &Db, email: &str) -> rusqlite::Result<bool> {
 /// A mapping from an OIDC group name to a role.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GroupRoleMapping {
+    /// Primary key.
     pub id: i64,
+    /// The OIDC group name being mapped.
     pub oidc_group: String,
+    /// Role granted to members of that group.
     pub role: String,
+    /// When the mapping was created (UTC).
     pub created_at: String,
 }
 
@@ -1956,19 +1960,33 @@ pub fn end_session_history(
 /// join, and shadow sessions it does not host.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SessionRegistryRow {
+    /// Session UUID, primary key of the registry table.
     pub session_id: String,
+    /// Instance id of the instance that hosts the session.
     pub owner_instance: String,
+    /// Base URL of that instance, used to route join and shadow requests back to it.
     pub owner_base_url: String,
+    /// Protocol type: `ssh`, `rdp`, `vnc`, `spice`, `web`, `vdi`, or `proxmox`.
     pub session_type: String,
+    /// Lifecycle status: `active`, `idle`, `disconnected`, `completed`, or `expired`.
     pub status: String,
+    /// Target host the session connects to.
     pub hostname: String,
+    /// Target username the session logs in as.
     pub username: String,
+    /// Email of the user who created the session.
     pub created_by: String,
+    /// When the session started (UTC).
     pub created_at: String,
+    /// Last reported activity (UTC); other instances use this to spot idle sessions.
     pub last_active_at: String,
+    /// Address-book entry the session came from, when it came from one.
     pub connection_id: String,
+    /// Hash of the active shadow token; `None` when no shadow is outstanding.
     pub shadow_token_hash: Option<String>,
+    /// Instance id that issued the shadow token.
     pub shadow_issued_by: Option<String>,
+    /// When the shadow token expires (UTC).
     pub shadow_expires_at: Option<String>,
 }
 
@@ -2725,11 +2743,17 @@ pub fn cleanup_session_history(db: &Db, retain_days: u32) -> rusqlite::Result<us
 /// TOTP secret record for a user.
 #[derive(Debug, Clone)]
 pub struct TotpSecret {
+    /// Owning user's `users.id`, primary key of the table.
     pub user_id: i64,
+    /// Shared secret, base32-encoded for the authenticator app.
     pub secret_b32: String,
+    /// HMAC algorithm the token uses: `SHA1`, `SHA256`, or `SHA512`.
     pub algorithm: String,
+    /// Token length in digits.
     pub digits: u8,
+    /// Token rotation period in seconds.
     pub period: u16,
+    /// Whether the user's TOTP factor is enforced.
     pub enabled: bool,
 }
 
@@ -2852,12 +2876,19 @@ pub fn resolve_role_from_groups(db: &Db, groups: &[String]) -> rusqlite::Result<
 /// Pending MFA record for a user mid-login.
 #[derive(Debug, Clone)]
 pub struct PendingMfa {
+    /// Owning user's `users.id`.
     pub user_id: i64,
+    /// Email for the MFA prompt.
     pub user_email: String,
+    /// Display name for the MFA prompt.
     pub user_name: String,
+    /// Role granted once MFA completes.
     pub user_role: String,
+    /// OIDC subject carried through the pending login, so the post-MFA upsert matches the right user.
     pub oidc_subject: Option<String>,
+    /// When the record was created (UTC).
     pub created_at: String,
+    /// When the record expires; lookups ignore expired rows.
     pub expires_at: String,
 }
 
@@ -2943,14 +2974,23 @@ pub fn cleanup_expired_pending_mfa(db: &Db) -> rusqlite::Result<usize> {
 /// Jump host record for API responses.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct JumpHostRecord {
+    /// Jump host UUID, primary key.
     pub id: String,
+    /// Display name.
     pub name: String,
+    /// Jump host address.
     pub hostname: String,
+    /// SSH port.
     pub port: u16,
+    /// SSH login user.
     pub username: String,
+    /// How the jump host authenticates: `key` or `password`.
     pub auth_method: String,
+    /// Path to the private key on the server, when `auth_method` is `key`.
     pub key_path: Option<String>,
+    /// When the record was created (UTC).
     pub created_at: String,
+    /// When the record was last updated, if ever.
     pub updated_at: Option<String>,
 }
 
@@ -3093,41 +3133,63 @@ pub fn delete_jump_host(db: &Db, id: &str) -> rusqlite::Result<bool> {
 /// DB record for an address book folder.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AbFolder {
+    /// Primary key.
     pub id: i64,
+    /// Address book the folder lives in: `shared` for the cross-instance book, other values scope it to one instance.
     pub scope: String,
+    /// Folder name, unique within its parent scope and path.
     pub name: String,
+    /// Human-readable description.
     pub description: String,
     /// Comma-separated group names allowed to use this folder (empty = open).
     pub allowed_groups: String,
     /// Whether subfolders inherit this folder's allowed_groups.
     pub inherit_from_parent: bool,
+    /// When the folder was created (UTC).
     pub created_at: String,
+    /// When the folder was last modified (UTC).
     pub updated_at: String,
 }
 
 /// DB record for an address book entry (metadata only, no credentials).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AbEntry {
+    /// Primary key.
     pub id: i64,
+    /// Parent folder's `address_book_folders.id`.
     pub folder_id: i64,
+    /// Entry name, unique within its folder.
     pub name: String,
+    /// Name shown in the UI; falls back to `name` when empty.
     pub display_name: String,
+    /// Connection protocol: `ssh`, `rdp`, `vnc`, `spice`, `web`, `vdi`, or `proxmox`.
     pub protocol: String,
+    /// Target host.
     pub hostname: String,
+    /// Target port; `None` uses the protocol default.
     pub port: Option<u16>,
+    /// Login username.
     pub username: String,
+    /// Protocol-specific parameters as JSON: custom fields, jump hosts, domain, and so on.
     pub protocol_config: String,
+    /// Comma-separated local group names allowed to connect; empty means open to everyone.
     pub allowed_groups: String,
+    /// When the entry was created (UTC).
     pub created_at: String,
+    /// When the entry was last modified (UTC).
     pub updated_at: String,
 }
 
 /// DB record for an encrypted credential.
 #[derive(Debug, Clone)]
 pub struct AbCredential {
+    /// Primary key.
     pub id: i64,
+    /// Owning entry's `address_book_entries.id`.
     pub entry_id: i64,
+    /// Credential kind: `password` or `private_key`.
     pub credential_type: String,
+    /// AES-256-GCM encrypted payload: `enc:v1:` plus base64 nonce, ciphertext, and tag.
     pub credential_data: String,
 }
 
