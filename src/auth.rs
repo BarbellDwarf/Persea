@@ -116,7 +116,7 @@ impl WsTicketStore {
                 let expires_at = crate::db::registry_ts(
                     chrono::Utc::now() + chrono::Duration::seconds(WS_TICKET_TTL_SECS as i64),
                 );
-                let _ = tokio::task::spawn_blocking(move || {
+                let res = tokio::task::spawn_blocking(move || {
                     crate::db::ws_ticket_insert(
                         &db,
                         &hash,
@@ -139,11 +139,13 @@ impl WsTicketStore {
     pub async fn consume(&self, ticket: &str) -> Option<AuthIdentity> {
         let identity = {
             let mut store = self.inner.lock().await;
-            let entry = store.remove(ticket)?;
-            if entry.created.elapsed().as_secs() <= WS_TICKET_TTL_SECS {
-                Some(entry.identity)
-            } else {
-                None
+            match store.remove(ticket) {
+                Some(entry) if entry.created.elapsed().as_secs() <= WS_TICKET_TTL_SECS => {
+                    Some(entry.identity)
+                }
+                // Missing (issued by another instance) or expired: fall
+                // through to the shared backend below.
+                _ => None,
             }
         };
         if identity.is_some() {
@@ -184,12 +186,10 @@ impl WsTicketStore {
                         crate::db::ws_ticket_delete(&db2, &hash2)
                     })
                     .await;
-                    let expires = chrono::NaiveDateTime::parse_from_str(
-                        &expires_at,
-                        "%Y-%m-%d %H:%M:%S",
-                    )
-                    .map(|ndt| ndt.and_utc())
-                    .unwrap_or(chrono::Utc::now() - chrono::Duration::seconds(1));
+                    let expires =
+                        chrono::NaiveDateTime::parse_from_str(&expires_at, "%Y-%m-%d %H:%M:%S")
+                            .map(|ndt| ndt.and_utc())
+                            .unwrap_or(chrono::Utc::now() - chrono::Duration::seconds(1));
                     if expires > chrono::Utc::now() {
                         return serde_json::from_str(&identity_json).ok();
                     }
