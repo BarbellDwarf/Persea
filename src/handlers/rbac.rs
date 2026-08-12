@@ -454,6 +454,7 @@ pub async fn create_custom_role(
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
+        let rid_audit = role_id.clone();
         let rname = req.name.clone();
         let rperms = req.permissions.clone();
         let _ = tokio::task::spawn_blocking(move || {
@@ -463,7 +464,7 @@ pub async fn create_custom_role(
                     .user_id(&admin_name)
                     .details(json!({
                         "action": "create_custom_role",
-                        "role_id": role_id,
+                        "role_id": rid_audit,
                         "name": rname,
                         "permissions": rperms,
                     }))
@@ -546,6 +547,7 @@ pub async fn update_custom_role(
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
+        let rid_audit = role_id.clone();
         let rname = name.clone();
         let rperms = permissions.clone();
         let _ = tokio::task::spawn_blocking(move || {
@@ -555,7 +557,7 @@ pub async fn update_custom_role(
                     .user_id(&admin_name)
                     .details(json!({
                         "action": "update_custom_role",
-                        "role_id": role_id,
+                        "role_id": rid_audit,
                         "name": rname,
                         "permissions": rperms,
                     }))
