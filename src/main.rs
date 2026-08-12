@@ -1691,6 +1691,11 @@ async fn run_server(
             "/api/sessions/{id}/thumbnail",
             put(api::put_session_thumbnail).get(api::get_session_thumbnail),
         )
+        .route("/api/sessions/{id}/drive-files", get(api::drive_list_files))
+        .route(
+            "/api/sessions/{id}/drive-files/{name}",
+            get(api::drive_download_file).delete(api::drive_delete_file),
+        )
         .route("/api/sessions/{id}/shadow", post(api::shadow_session))
         .route("/api/sessions/{id}/terminate", post(api::delete_session))
         .route(

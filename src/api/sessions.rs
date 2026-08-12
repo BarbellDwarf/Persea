@@ -701,3 +701,580 @@ pub async fn get_session_banner(
         None => Err(AppError::Session("session not found".into())),
     }
 }
+
+// ── RDP drive file browser ──
+
+/// Resolve a session's per-session RDP drive directory, mirroring
+/// `drive::create_session_dir` exactly (`<drive_path>/<session_id>`).
+/// Returns None for non-RDP sessions, sessions without drive enabled,
+/// and sessions whose drive dir has gone away.
+fn session_drive_dir(
+    manager: &AppState,
+    info: &crate::session::SessionInfo,
+) -> Option<std::path::PathBuf> {
+    if info.session_type != crate::session::SessionType::Rdp || !info.drive_enabled {
+        return None;
+    }
+    let cfg = crate::drive::drive_config_or_default(&manager.config().drive);
+    let dir = cfg.drive_path.join(info.session_id.to_string());
+    std::fs::canonicalize(&dir).ok()
+}
+
+/// Ownership gate plus drive dir resolution for the drive file
+/// endpoints: 404 when the session is unknown, 403 when the caller is
+/// neither the owner nor an admin, 404 when the session has no drive.
+async fn resolve_drive_session(
+    manager: &AppState,
+    id: Uuid,
+    identity: Option<&Extension<AuthIdentity>>,
+) -> Result<std::path::PathBuf, AppError> {
+    let Some(info) = manager.get_session(id).await else {
+        return Err(AppError::Session("session not found".into()));
+    };
+    let allowed = identity
+        .map(|Extension(id)| id.has_role("admin") || info.created_by == id.display_name())
+        .unwrap_or(false);
+    if !allowed {
+        return Err(AppError::Forbidden(
+            "you can only access the file transfer of your own sessions".into(),
+        ));
+    }
+    session_drive_dir(manager, &info)
+        .ok_or_else(|| AppError::NotFound("this session has no file-transfer drive".into()))
+}
+
+/// Basename-only validation for drive file names: no slashes, no
+/// backslashes, no NUL, and no `.`/`..` (rejects traversal).
+fn valid_drive_basename(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+}
+
+/// `GET /api/sessions/{id}/drive-files`: list the session's RDP drive
+/// directory (name, size, modified as RFC 3339). Owner or admin only;
+/// requires an RDP session with drive enabled.
+pub async fn drive_list_files(
+    State(manager): State<AppState>,
+    Path(id): Path<Uuid>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let dir = resolve_drive_session(&manager, id, identity.as_ref()).await?;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!(session_id = %id, error = %e, "Failed to read drive directory");
+            return Ok(Json(json!([])));
+        }
+    };
+    let mut files: Vec<serde_json::Value> = Vec::new();
+    for entry in entries.flatten() {
+        let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let modified = meta
+            .modified()
+            .map(|m| chrono::DateTime::<chrono::Utc>::from(m).to_rfc3339())
+            .unwrap_or_default();
+        files.push(json!({
+            "name": entry.file_name().to_string_lossy(),
+            "size": meta.len(),
+            "modified": modified,
+        }));
+    }
+    files.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    Ok(Json(json!(files)))
+}
+
+/// Percent-encode a file name for `filename*` (RFC 5987), keeping only
+/// RFC 3986 unreserved characters verbatim.
+fn rfc5987_encode(name: &str) -> String {
+    let mut out = String::new();
+    for b in name.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+/// ASCII fallback for `filename=` (RFC 6266): non-graphic bytes and
+/// quote/backslash become underscores.
+fn ascii_filename(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '"' && c != '\\' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "file".into()
+    } else {
+        cleaned
+    }
+}
+
+/// `GET /api/sessions/{id}/drive-files/{name}`: stream a file from the
+/// session's RDP drive as an attachment. Owner or admin only; the name
+/// must be a plain basename (no traversal). Symlinks that resolve
+/// outside the drive dir are refused.
+pub async fn drive_download_file(
+    State(manager): State<AppState>,
+    Path((id, name)): Path<(Uuid, String)>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> Result<axum::response::Response, AppError> {
+    let dir = resolve_drive_session(&manager, id, identity.as_ref()).await?;
+    if !valid_drive_basename(&name) {
+        return Err(AppError::Validation("invalid file name".into()));
+    }
+    let canonical = std::fs::canonicalize(dir.join(&name))
+        .map_err(|_| AppError::NotFound("file not found".into()))?;
+    if !canonical.starts_with(&dir) || !canonical.is_file() {
+        return Err(AppError::NotFound("file not found".into()));
+    }
+    let file = tokio::fs::File::open(&canonical)
+        .await
+        .map_err(|_| AppError::NotFound("file not found".into()))?;
+    let stream = tokio_util::io::ReaderStream::new(file);
+    let body = axum::body::Body::from_stream(stream);
+    Ok(axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/octet-stream")
+        .header(
+            axum::http::header::CONTENT_DISPOSITION,
+            format!(
+                "attachment; filename=\"{}\"; filename*=UTF-8''{}",
+                ascii_filename(&name),
+                rfc5987_encode(&name)
+            ),
+        )
+        .body(body)
+        .unwrap()
+        .into_response())
+}
+
+/// `DELETE /api/sessions/{id}/drive-files/{name}`: remove a file from
+/// the session's RDP drive. Owner or admin only; 204 on success, 404
+/// for missing files, 400 for invalid names.
+pub async fn drive_delete_file(
+    State(manager): State<AppState>,
+    Path((id, name)): Path<(Uuid, String)>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> Result<StatusCode, AppError> {
+    let dir = resolve_drive_session(&manager, id, identity.as_ref()).await?;
+    if !valid_drive_basename(&name) {
+        return Err(AppError::Validation("invalid file name".into()));
+    }
+    let canonical = std::fs::canonicalize(dir.join(&name))
+        .map_err(|_| AppError::NotFound("file not found".into()))?;
+    if !canonical.starts_with(&dir) {
+        return Err(AppError::NotFound("file not found".into()));
+    }
+    if canonical.is_dir() {
+        return Err(AppError::Validation("cannot delete a directory".into()));
+    }
+    tokio::fs::remove_file(&canonical)
+        .await
+        .map_err(|_| AppError::NotFound("file not found".into()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod drive_tests {
+    use super::*;
+    use crate::session::{Session, SessionManager, SessionStatus, SessionType};
+    use std::sync::Arc;
+    use tokio::sync::Mutex as AsyncMutex;
+
+    fn test_identity(name: &str, role: &str) -> AuthIdentity {
+        AuthIdentity::User {
+            email: format!("{}@example.com", name),
+            name: name.to_string(),
+            role: role.to_string(),
+            groups: Vec::new(),
+        }
+    }
+
+    /// Manager whose `[drive]` config points at a fresh temp dir, plus a
+    /// seeded RDP session with drive enabled. Returns (manager, session id,
+    /// drive dir).
+    async fn seeded_rdp_session() -> (Arc<SessionManager>, Uuid, std::path::PathBuf) {
+        let tmp = std::env::temp_dir().join(format!("persea-drive-api-test-{}", Uuid::new_v4()));
+        let mut config = crate::config::Config::default();
+        config.recording_path = Some(tmp.join("recordings"));
+        config.drive = Some(crate::config::DriveConfig {
+            enabled: true,
+            drive_path: tmp.join("drives"),
+            ..Default::default()
+        });
+        let manager: AppState = Arc::new(SessionManager::new(config, None));
+        let id = Uuid::new_v4();
+        let drive_cfg = crate::drive::drive_config_or_default(&manager.config().drive);
+        let drive_dir = crate::drive::create_session_dir(&drive_cfg, id).unwrap();
+        seed_session(
+            &manager,
+            id,
+            SessionType::Rdp,
+            true,
+            Some(drive_dir.clone()),
+            "alice",
+        )
+        .await;
+        (manager, id, drive_dir)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn seed_session(
+        manager: &SessionManager,
+        id: Uuid,
+        session_type: SessionType,
+        drive_enabled: bool,
+        drive_path: Option<std::path::PathBuf>,
+        created_by: &str,
+    ) {
+        let session = Session {
+            id,
+            session_type,
+            status: SessionStatus::Active,
+            created_at: chrono::Utc::now(),
+            hostname: "test-host".into(),
+            username: "alice".into(),
+            url: None,
+            banner: None,
+            guacd_stream: None,
+            connection_id: "conn-test".into(),
+            share_token: "owner-secret".into(),
+            width: 1024,
+            height: 768,
+            active_connections: 0,
+            created_by: created_by.to_string(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            browser_session: None,
+            deferred_params: None,
+            drive_path,
+            drive_enabled,
+            tunnels: Vec::new(),
+            container_id: None,
+            container_name: None,
+            recording_enabled: false,
+            address_book_entry: None,
+            address_book_folder: None,
+            entry_display_name: None,
+            max_recordings: None,
+            login_script_handle: None,
+            shadow_tokens: Vec::new(),
+            share_allowed: false,
+            fullscreen_on_connect: false,
+            autohide_side_tabs: false,
+            last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
+            source_ip: None,
+            user_id: Some(created_by.to_string()),
+        };
+        manager
+            .sessions
+            .write()
+            .await
+            .insert(id, Arc::new(AsyncMutex::new(session)));
+    }
+
+    fn write_test_file(dir: &std::path::Path, name: &str, content: &[u8]) {
+        std::fs::write(dir.join(name), content).unwrap();
+    }
+
+    #[tokio::test]
+    async fn drive_list_as_owner_returns_files() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "notes.txt", b"hello drive");
+        let res = drive_list_files(
+            State(manager),
+            Path(id),
+            Some(Extension(test_identity("alice", "viewer"))),
+        )
+        .await
+        .unwrap();
+        let files = res.0.as_array().unwrap();
+        assert_eq!(files.len(), 1, "unexpected listing: {}", res.0);
+        assert_eq!(files[0]["name"].as_str().unwrap(), "notes.txt");
+        assert_eq!(files[0]["size"].as_u64().unwrap(), 11);
+        assert!(files[0]["modified"].as_str().unwrap().contains('T'));
+    }
+
+    #[tokio::test]
+    async fn drive_list_as_admin_allowed() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "notes.txt", b"x");
+        let res = drive_list_files(
+            State(manager),
+            Path(id),
+            Some(Extension(test_identity("root", "admin"))),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn drive_list_as_non_owner_is_403() {
+        let (manager, id, _dir) = seeded_rdp_session().await;
+        let err = drive_list_files(
+            State(manager),
+            Path(id),
+            Some(Extension(test_identity("mallory", "viewer"))),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Forbidden(_)), "got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn drive_list_nonexistent_session_is_404() {
+        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let err = drive_list_files(
+            State(manager),
+            Path(Uuid::new_v4()),
+            Some(Extension(test_identity("alice", "viewer"))),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, AppError::Session(ref m) if m.contains("not found")),
+            "got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_list_ssh_sftp_session_has_no_drive() {
+        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let ssh_id = Uuid::new_v4();
+        seed_session(&manager, ssh_id, SessionType::Ssh, true, None, "alice").await;
+        let err = drive_list_files(
+            State(manager),
+            Path(ssh_id),
+            Some(Extension(test_identity("alice", "viewer"))),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)), "got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn drive_download_as_owner_streams_file() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "report.pdf", b"PDFDATA");
+        let res = drive_download_file(
+            State(manager),
+            Path((id, "report.pdf".into())),
+            Some(Extension(test_identity("alice", "viewer"))),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let cd = res
+            .headers()
+            .get(axum::http::header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(cd.starts_with("attachment;"), "got: {}", cd);
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"PDFDATA");
+    }
+
+    #[tokio::test]
+    async fn drive_download_utf8_filename_header() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "na\u{00ef}ve.txt", b"x");
+        let res = drive_download_file(
+            State(manager),
+            Path((id, "na\u{00ef}ve.txt".into())),
+            Some(Extension(test_identity("alice", "viewer"))),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let cd = res
+            .headers()
+            .get(axum::http::header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            cd.contains("filename*=UTF-8''na%C3%AFve.txt"),
+            "got: {}",
+            cd
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_download_as_non_owner_is_403() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "report.pdf", b"PDFDATA");
+        let err = drive_download_file(
+            State(manager),
+            Path((id, "report.pdf".into())),
+            Some(Extension(test_identity("mallory", "viewer"))),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Forbidden(_)), "got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn drive_download_nonexistent_session_is_404() {
+        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let err = drive_download_file(
+            State(manager),
+            Path((Uuid::new_v4(), "report.pdf".into())),
+            Some(Extension(test_identity("alice", "viewer"))),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, AppError::Session(ref m) if m.contains("not found")),
+            "got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_download_missing_file_is_404() {
+        let (manager, id, _dir) = seeded_rdp_session().await;
+        let err = drive_download_file(
+            State(manager),
+            Path((id, "ghost.txt".into())),
+            Some(Extension(test_identity("alice", "viewer"))),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)), "got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn drive_download_traversal_names_rejected() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "real.txt", b"x");
+        for name in ["../secrets", "a/b", "a\\b", "..", ".", ""] {
+            let err = drive_download_file(
+                State(manager.clone()),
+                Path((id, name.to_string())),
+                Some(Extension(test_identity("alice", "viewer"))),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(err, AppError::Validation(_)),
+                "name {:?} should 400, got {:?}",
+                name,
+                err
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn drive_delete_as_owner_removes_file() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "junk.bin", b"delete me");
+        let identity = test_identity("alice", "viewer");
+        assert_eq!(
+            drive_delete_file(
+                State(manager.clone()),
+                Path((id, "junk.bin".into())),
+                Some(Extension(identity.clone())),
+            )
+            .await
+            .unwrap(),
+            StatusCode::NO_CONTENT
+        );
+        assert!(!dir.join("junk.bin").exists());
+        let err = drive_delete_file(
+            State(manager),
+            Path((id, "junk.bin".into())),
+            Some(Extension(identity)),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)), "got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn drive_delete_as_non_owner_is_403() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "junk.bin", b"delete me");
+        let err = drive_delete_file(
+            State(manager),
+            Path((id, "junk.bin".into())),
+            Some(Extension(test_identity("mallory", "viewer"))),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Forbidden(_)), "got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn drive_delete_traversal_names_rejected() {
+        let (manager, id, _dir) = seeded_rdp_session().await;
+        for name in ["../secrets", "a/b", "..", ""] {
+            let err = drive_delete_file(
+                State(manager.clone()),
+                Path((id, name.to_string())),
+                Some(Extension(test_identity("alice", "viewer"))),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(err, AppError::Validation(_)),
+                "name {:?} should 400, got {:?}",
+                name,
+                err
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn drive_delete_nonexistent_session_is_404() {
+        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let err = drive_delete_file(
+            State(manager),
+            Path((Uuid::new_v4(), "junk.bin".into())),
+            Some(Extension(test_identity("alice", "viewer"))),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, AppError::Session(ref m) if m.contains("not found")),
+            "got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_endpoints_need_authentication() {
+        let (manager, id, _dir) = seeded_rdp_session().await;
+        let err = drive_list_files(State(manager.clone()), Path(id), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::Forbidden(_)), "got {:?}", err);
+        let err = drive_download_file(State(manager.clone()), Path((id, "x.txt".into())), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::Forbidden(_)), "got {:?}", err);
+        let err = drive_delete_file(State(manager), Path((id, "x.txt".into())), None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::Forbidden(_)), "got {:?}", err);
+    }
+}

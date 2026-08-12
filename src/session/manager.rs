@@ -15,7 +15,10 @@ use uuid::Uuid;
 
 /// Manages all active sessions.
 pub struct SessionManager {
-    pub(super) sessions: Arc<RwLock<HashMap<Uuid, Arc<Mutex<Session>>>>>,
+    /// Live sessions keyed by id. `pub(crate)` so API-layer tests can seed
+    /// sessions directly; production code only touches it via the session
+    /// module's methods.
+    pub(crate) sessions: Arc<RwLock<HashMap<Uuid, Arc<Mutex<Session>>>>>,
     pub(super) config: Config,
     pub(super) browser_manager: Arc<BrowserManager>,
     pub(super) guacd_tls: Option<TlsConnector>,

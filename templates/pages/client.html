@@ -162,6 +162,7 @@
         .fb-item .fb-ico { width: 16px; height: 16px; fill: var(--text-dim); flex-shrink: 0; }
         .fb-item.fb-dir .fb-ico { fill: var(--accent); }
         .fb-item .fb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .fb-item .fb-meta { margin-left: auto; flex-shrink: 0; color: var(--text-dim); font-size: 11px; }
         .fb-empty { padding: 14px 12px; color: var(--text-dim); text-align: center; }
         #fb-status {
             padding: 6px 12px; border-top: 1px solid var(--border);
@@ -422,6 +423,11 @@
         var protocol = '';
         var targetHost = '';
         var driveEnabled = false;
+        // Which file browser backend to use: 'ssh' (guacd SFTP filesystem
+        // object) or 'rdp' (persea's drive REST API). Set from the session
+        // info; defaults to 'ssh' so share links without metadata behave
+        // like before.
+        var fbMode = 'ssh';
 
         // ── CSRF: this page is standalone (no base.html), so patch fetch()
         // here to carry the X-CSRF-Token header on state-changing requests.
@@ -847,11 +853,15 @@
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 if (session && session.drive_enabled) { driveEnabled = true; document.getElementById('btn-file-transfer').style.display = ''; }
-                // The SSH SFTP file browser is only offered for SSH sessions
-                // with file transfer enabled (guacd sends the `filesystem`
-                // object then; RDP drive transfer stays as-is).
-                if (session && session.drive_enabled && (session.session_type || '').toLowerCase() === 'ssh') {
-                    document.getElementById('btn-files').style.display = '';
+                // The file browser is offered for SSH sessions (guacd SFTP
+                // filesystem object) and RDP sessions with drive redirection
+                // (listed via persea's drive API).
+                if (session && session.drive_enabled) {
+                    var fbType = (session.session_type || '').toLowerCase();
+                    if (fbType === 'ssh' || fbType === 'rdp') {
+                        fbMode = fbType;
+                        document.getElementById('btn-files').style.display = '';
+                    }
                 }
                 // Set protocol badge from session metadata
                 if (session && (session.session_type || session.protocol)) setProtocolBadge(session.session_type || session.protocol, session.address || session.address_book_folder || '');
@@ -1085,6 +1095,7 @@
             }
             function fbSetStatus(text) { fbStatusEl.textContent = text || ''; }
             function fbListDir(path) {
+                if (fbMode === 'rdp') { fbListDrive(); return; }
                 if (!filesystem) { fbSetStatus('No remote filesystem available.'); return; }
                 fbCurrentPath = path;
                 fbPathEl.textContent = path;
@@ -1151,6 +1162,7 @@
                 }
             }
             function fbDownload(path) {
+                if (fbMode === 'rdp') { fbDownloadDrive(fbBasename(path)); return; }
                 if (!filesystem) return;
                 fbSetStatus('Downloading ' + fbBasename(path) + '...');
                 var pending = true;
@@ -1170,6 +1182,89 @@
                         setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
                     };
                 });
+            }
+            // ── RDP drive browser (persea drive API) ──
+            // For RDP sessions the drive is a plain directory owned by
+            // persea; listing and downloads go through the REST API instead
+            // of the guacd filesystem object. Flat: the drive has no
+            // subdirectory navigation. All DOM is built with
+            // createElement/textContent (no innerHTML, same rule as the SSH
+            // browser).
+            function fbListDrive() {
+                fbCurrentPath = '/';
+                fbPathEl.textContent = 'Drive';
+                fbListEl.textContent = '';
+                document.getElementById('fb-up').disabled = true;
+                var pending = true;
+                var timeout = setTimeout(function() { if (pending) fbSetStatus('Listing timed out — no response from server.'); }, 15000);
+                fbSetStatus('Loading drive...');
+                var headers = {};
+                if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+                fetch('/api/sessions/' + sessionId + '/drive-files', { headers: headers, credentials: 'same-origin' })
+                    .then(function(res) {
+                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                        return res.json();
+                    })
+                    .then(function(entries) { pending = false; clearTimeout(timeout); fbRenderDrive(entries); })
+                    .catch(function() { pending = false; clearTimeout(timeout); fbSetStatus('Failed to load drive.'); });
+            }
+            function fbRenderDrive(entries) {
+                fbListEl.textContent = '';
+                if (!entries || !entries.length) {
+                    var empty = document.createElement('div');
+                    empty.className = 'fb-empty';
+                    empty.textContent = 'The drive is empty.';
+                    fbListEl.appendChild(empty);
+                    return;
+                }
+                var sorted = entries.slice().sort(function(a, b) {
+                    var an = a.name || '', bn = b.name || '';
+                    return an < bn ? -1 : (an > bn ? 1 : 0);
+                });
+                for (var i = 0; i < sorted.length; i++) {
+                    (function(entry) {
+                        var row = document.createElement('div');
+                        row.className = 'fb-item';
+                        row.setAttribute('role', 'listitem');
+                        var ico = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                        ico.setAttribute('viewBox', '0 0 24 24');
+                        ico.setAttribute('class', 'fb-ico');
+                        var p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                        p.setAttribute('d', 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm-1 7V3.5L18.5 9H13z');
+                        ico.appendChild(p);
+                        row.appendChild(ico);
+                        var label = document.createElement('span');
+                        label.className = 'fb-name';
+                        label.textContent = entry.name;
+                        row.appendChild(label);
+                        var meta = document.createElement('span');
+                        meta.className = 'fb-meta';
+                        meta.textContent = formatBytes(entry.size || 0);
+                        row.appendChild(meta);
+                        row.addEventListener('click', function() { fbDownload(entry.name); });
+                        fbListEl.appendChild(row);
+                    })(sorted[i]);
+                }
+            }
+            function fbDownloadDrive(name) {
+                fbSetStatus('Downloading ' + name + '...');
+                var headers = {};
+                if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+                fetch('/api/sessions/' + sessionId + '/drive-files/' + encodeURIComponent(name), { headers: headers, credentials: 'same-origin' })
+                    .then(function(res) {
+                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                        return res.blob();
+                    })
+                    .then(function(blob) {
+                        var a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob);
+                        a.download = name;
+                        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                        setTimeout(function() { URL.revokeObjectURL(a.href); }, 1000);
+                        fbSetStatus('Downloaded ' + name + ' (' + formatBytes(blob.size) + ')');
+                        setTimeout(function() { if (fbOpen) fbSetStatus(''); }, 3000);
+                    })
+                    .catch(function() { fbSetStatus('Download failed: ' + name); });
             }
             document.getElementById('btn-files').addEventListener('click', function() {
                 if (!client || !window.__guac_client) return;

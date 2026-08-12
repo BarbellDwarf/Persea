@@ -344,6 +344,10 @@ drive_path = "/opt/persea/drives"
 drive_name = "Shared Drive"
 ```
 
+Do not set `drive_name` to `Download`: guacd treats a drive named exactly
+`Download` as a magic auto-download folder that consumes and deletes files as
+soon as the remote writes them, which fights the drive file browser.
+
 For regulated environments, the same volume can be LUKS-encrypted with the key stored in Vault: `sudo /opt/persea/bin/drive-setup.sh` sets it up, details in [Integrations](integrations.md).
 
 ## Step 9 (optional): session recording
