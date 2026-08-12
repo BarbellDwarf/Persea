@@ -4112,10 +4112,15 @@ mod tests {
 /// A local group with usage counts.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct LocalGroup {
+    /// Primary key.
     pub id: i64,
+    /// Group name. Folder and entry `allowed_groups` reference groups by this name, so renaming breaks those references.
     pub name: String,
+    /// Human-readable description.
     pub description: String,
+    /// Whether the group came from a provider-group mapping rather than an admin.
     pub auto_provisioned: bool,
+    /// When the group was created (UTC).
     pub created_at: String,
     /// Number of auth-provider groups mapped to this local group.
     pub provider_group_count: i64,
@@ -4128,9 +4133,13 @@ pub struct LocalGroup {
 /// A mapping from an auth-provider group name to a local group.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProviderGroupMapping {
+    /// Primary key.
     pub id: i64,
+    /// The local group this mapping feeds.
     pub group_id: i64,
+    /// Auth-provider (OIDC or LDAP claim) group name.
     pub provider_group: String,
+    /// When the mapping was created (UTC).
     pub created_at: String,
 }
 
@@ -4454,12 +4463,20 @@ fn push_sqlite(args: &mut SqliteArguments, a: &Arg) {
 /// Every store reads only these column types, which implement `Decode` +
 /// `Type` for all three backends.
 pub enum RowProxy {
+    /// Row from the Postgres backend.
     Pg(PgRow),
+    /// Row from the MySQL backend.
     My(MySqlRow),
+    /// Row from the SQLite backend.
     Sqlite(SqliteRow),
 }
 
 impl RowProxy {
+    /// Read column `index` as `T`. Only types that implement `Decode` and
+    /// `Type` for all three backends work here, which covers what the store
+    /// functions read: `String`, `i64`, `bool`, and their `Option` forms.
+    /// Panics when the column is missing or does not convert, matching
+    /// `sqlx::Row::get`.
     pub fn get<'r, T>(&'r self, index: usize) -> T
     where
         T: Decode<'r, Postgres>
@@ -10352,6 +10369,11 @@ pub(crate) async fn providers_move_pool(
 
 // ── System settings (src/settings_merge.rs, src/api/settings.rs) ──────
 
+/// Read every system setting as `(key, value)` pairs, in table order.
+/// Backs the admin settings API and the settings overlay applied at
+/// startup. Returns an error when no SQLx pool is configured, and maps
+/// backend failures onto `rusqlite::Error` so callers can handle both
+/// store flavors uniformly.
 pub async fn settings_load_all_pool(pool: &DbPool) -> rusqlite::Result<Vec<(String, String)>> {
     let sql = qsql!(
         pool,
@@ -10376,6 +10398,9 @@ pub async fn settings_load_all_pool(pool: &DbPool) -> rusqlite::Result<Vec<(Stri
         .collect())
 }
 
+/// Upsert system settings, one statement per pair. A failure partway
+/// through leaves the earlier pairs applied, which the settings API
+/// tolerates. Returns an error when no SQLx pool is configured.
 pub async fn settings_put_pool(
     pool: &DbPool,
     entries: Vec<(String, String)>,
