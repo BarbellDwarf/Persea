@@ -35,6 +35,8 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    /// Build a manager with an attached database handle (session history,
+    /// registry, audit trail).
     pub fn new_with_db(config: Config, guacd_tls: Option<TlsConnector>, db: crate::db::Db) -> Self {
         let mut mgr = Self::new(config, guacd_tls);
         mgr.db = Some(db);
@@ -78,6 +80,9 @@ impl SessionManager {
         }
     }
 
+    /// Build a manager: creates the recording directory with restrictive
+    /// permissions, initializes the browser manager, and wires up the VDI
+    /// driver when enabled in config.
     pub fn new(config: Config, guacd_tls: Option<TlsConnector>) -> Self {
         // Ensure recording directory exists with restrictive permissions
         let recording_dir = config.effective_recording_path().into_owned();
@@ -883,6 +888,8 @@ impl SessionManager {
         to_remove.len()
     }
 
+    /// Directory where .guac recordings and thumbnails are stored,
+    /// resolved once at construction.
     pub fn recording_path(&self) -> &std::path::Path {
         &self.recording_dir
     }
@@ -937,10 +944,12 @@ impl SessionManager {
         false
     }
 
+    /// Configured maximum session lifetime in seconds (0 = unlimited).
     pub fn session_max_duration_secs(&self) -> u64 {
         self.config.session_max_duration_secs
     }
 
+    /// The resolved `[recording]` settings (rotation, max recordings).
     pub fn recording_config(&self) -> crate::config::RecordingConfig {
         self.config.recording_config()
     }
