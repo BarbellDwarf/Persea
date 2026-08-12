@@ -115,15 +115,21 @@ async fn redirect_to_mfa(
         .into_response()
 }
 
-/// GET / — login page (or redirect to connections if already authenticated).
+/// Query parameters for the login page.
 #[derive(serde::Deserialize)]
 pub struct LoginQueryParams {
+    /// Error code from a failed login redirect (`/?error=...`), rendered
+    /// as a message on the login card.
     #[serde(default)]
     pub error: Option<String>,
+    /// Reserved for post-login redirects; parsed but not consumed today.
     #[serde(default)]
     pub next: Option<String>,
 }
 
+/// GET / — login page, or a redirect to the connections page when a valid
+/// session cookie is already present. First run redirects to the setup
+/// wizard (no users exist yet).
 pub async fn login_page(
     State(state): State<crate::api::AppState>,
     _addr: ConnectInfo<SocketAddr>,
@@ -450,6 +456,9 @@ pub async fn login_submit(
 /// Query parameters for the MFA page.
 #[derive(serde::Deserialize)]
 pub struct MfaQueryParams {
+    /// Error code from the previous verification attempt, rendered as a
+    /// hint on the page (`expired`, `no_session`, `invalid_code`,
+    /// `account_locked`).
     pub error: Option<String>,
 }
 
@@ -552,6 +561,7 @@ pub async fn mfa_page(Query(params): Query<MfaQueryParams>) -> Response {
 /// MFA form data.
 #[derive(serde::Deserialize)]
 pub struct MfaFormData {
+    /// Six-digit TOTP code the user entered.
     pub code: String,
 }
 
@@ -703,9 +713,13 @@ pub async fn mfa_submit(
 
 // ── Form data ──────────────────────────────────────────────────────────────
 
+/// Form body of the password login form (POST /auth/login).
 #[derive(serde::Deserialize)]
 pub struct LoginFormData {
+    /// Account identifier, matched against the auth chain providers.
     pub username: String,
+    /// Plaintext password handed to the configured providers for
+    /// verification.
     pub password: String,
 }
 
@@ -889,10 +903,16 @@ pub async fn saml_acs(
     }
 }
 
+/// Form body of the SAML Assertion Consumer Service callback.
+///
+/// The IdP posts this to `/auth/saml/acs` after the assertion exchange.
 #[derive(serde::Deserialize)]
 #[allow(non_snake_case)]
 pub struct SamlAcsForm {
+    /// Base64-encoded SAMLResponse XML from the IdP.
     pub SAMLResponse: String,
+    /// RelayState echo, used as the post-login redirect target when it is
+    /// a safe relative path.
     #[serde(default)]
     pub RelayState: Option<String>,
 }
