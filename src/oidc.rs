@@ -145,6 +145,7 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
     })
 }
 
+/// Query parameters accepted by the login endpoint.
 #[derive(Deserialize)]
 pub struct LoginParams {
     /// Post-login redirect target; honored only when it is a same-origin path.

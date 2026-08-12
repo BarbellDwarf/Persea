@@ -15,15 +15,22 @@ use rusqlite::OptionalExtension;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SystemPermission {
+    /// Full system administration; bypasses the other checks.
     Administer,
+    /// Create ad-hoc sessions outside the address book.
     CreateSession,
+    /// Create and edit connections.
     CreateConnection,
+    /// Create connection groups.
     CreateConnectionGroup,
+    /// Create user groups.
     CreateUserGroup,
+    /// View audit logs and reports.
     Audit,
 }
 
 impl SystemPermission {
+    /// Snake-case string form used in storage and the API.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Administer => "administer",
@@ -35,6 +42,7 @@ impl SystemPermission {
         }
     }
 
+    /// Parse the snake-case string form; `None` for unknown names.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "administer" => Some(Self::Administer),
@@ -52,14 +60,20 @@ impl SystemPermission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectPermission {
+    /// See the connection's metadata.
     Read,
+    /// Open a session to the connection.
     Connect,
+    /// Modify the connection.
     Update,
+    /// Delete the connection.
     Delete,
+    /// Grant and revoke permissions on the connection.
     Administer,
 }
 
 impl ObjectPermission {
+    /// Snake-case string form used in storage and the API.
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Read => "read",
@@ -70,6 +84,7 @@ impl ObjectPermission {
         }
     }
 
+    /// Parse the snake-case string form; `None` for unknown names.
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "read" => Some(Self::Read),
@@ -86,7 +101,9 @@ impl ObjectPermission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntityType {
+    /// A direct grant to one user.
     User,
+    /// A grant inherited by all group members.
     Group,
 }
 
@@ -95,18 +112,26 @@ pub enum EntityType {
 /// A connection group (hierarchical container for connections).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ConnectionGroup {
+    /// UUID of the group.
     pub id: String,
+    /// Display name, unique among groups.
     pub name: String,
+    /// Parent group ID; `None` for top-level groups.
     pub parent_id: Option<String>,
+    /// Optional human-readable description.
     pub description: Option<String>,
+    /// Group scope, e.g. shared or a per-user scope.
     pub scope: String,
 }
 
 /// A permission entry listing who has what on a connection.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PermissionEntry {
+    /// ID of the user or group holding the grant.
     pub entity_id: String,
+    /// Whether the holder is a user or a group.
     pub entity_type: EntityType,
+    /// The granted permission.
     pub permission: ObjectPermission,
 }
 
@@ -495,10 +520,15 @@ pub fn list_connection_permissions(
 /// A named permission bundle assignable to a user.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CustomRole {
+    /// UUID of the role.
     pub id: String,
+    /// Display name, unique among roles.
     pub name: String,
+    /// Optional description shown in the admin UI.
     pub description: Option<String>,
+    /// Snake-case permission names in the bundle.
     pub permissions: Vec<String>,
+    /// Creation timestamp.
     pub created_at: String,
 }
 
