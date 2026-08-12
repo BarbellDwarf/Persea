@@ -28,6 +28,7 @@ fn test_router(db: Db) -> Router {
             "/api/addressbook/folders/{scope}/{folder}/entries",
             get(persea::api::address_book::ab_list_entries),
         )
+        .route("/api/users", get(persea::api::users::list_users))
         .layer(middleware::from_fn(persea::auth::require_auth))
         .layer(Extension(TrustedProxies(Vec::new())))
         .layer(Extension(db))
@@ -379,4 +380,136 @@ async fn admin_bypass_unchanged() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn unauthenticated_denied() {
+    let db = test_db();
+    let router = test_router(db.clone());
+    seed_entry(&db, "shared", "Root", "web01");
+
+    // No credentials at all: require_auth rejects before any handler runs.
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/addressbook/folders/shared/Root/entries")
+                .extension(fake_addr())
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn holder_cannot_reach_admin_endpoints() {
+    let db = test_db();
+    let router = test_router(db.clone());
+    create_user(&db, "bob@example.com");
+    let role_id = make_role(&db, "server-viewer", &["read", "connect"]);
+    persea::rbac::set_user_custom_role(&db, "bob@example.com", Some(&role_id)).unwrap();
+    let bob_token = user_token(&db, "bob@example.com");
+
+    // Roles CRUD is admin-only for bundle holders (verified structurally:
+    // every handler in src/handlers/rbac.rs opens with require_admin, the
+    // same gate the users endpoints use and exercise below).
+
+    // User management (list + role assignment) is admin-only; a holder
+    // cannot escalate by assigning itself a stronger role.
+    let resp = router
+        .clone()
+        .oneshot(api_get("/api/users", &bob_token))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "user list must be admin-only");
+
+    let resp = router
+        .oneshot(api_put(
+            "/api/users/bob@example.com/role",
+            &bob_token,
+            serde_json::json!({ "role": "admin" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "self role assignment must be denied"
+    );
+
+    // The assignment did not happen.
+    let user = db::get_user_by_email(&db, "bob@example.com").unwrap();
+    assert_eq!(user.role, "viewer");
+    let role = persea::rbac::user_custom_role(&db, user.id).unwrap();
+    assert!(role.is_some(), "custom role must be untouched");
+    assert_eq!(role.unwrap().name, "server-viewer");
+}
+
+#[test]
+fn unknown_permission_string_is_inert() {
+    // A permission string outside the validated vocabulary (e.g. inserted
+    // via the CLI) must never match a SystemPermission/ObjectPermission
+    // check — the equality match on as_str() makes it inert, and it does
+    // not leak any real permission.
+    let db = test_db();
+    create_user(&db, "dave@example.com");
+    let role_id = make_role(&db, "weird", &["read", "superadmin"]);
+    persea::rbac::set_user_custom_role(&db, "dave@example.com", Some(&role_id)).unwrap();
+    let uid = user_id(&db, "dave@example.com");
+
+    assert!(persea::rbac::user_has_custom_permission(&db, uid, "read").unwrap());
+    assert!(!persea::rbac::user_has_custom_permission(&db, uid, "superadmin").unwrap());
+    assert!(!persea::rbac::user_has_system_permission(
+        &db,
+        uid,
+        persea::rbac::SystemPermission::Administer
+    )
+    .unwrap());
+    assert!(!persea::rbac::user_has_object_permission(
+        &db,
+        uid,
+        "connection",
+        "shared/Root/web01",
+        ObjectPermission::Update
+    )
+    .unwrap());
+}
+
+#[test]
+fn system_permissions_flow_only_through_bundle() {
+    // `rbac_permissions` carries no system-permission rows by design; the
+    // custom bundle is the only carrier. A plain user with a per-connection
+    // grant must not gain any system permission.
+    let db = test_db();
+    create_user(&db, "erin@example.com");
+    let uid = user_id(&db, "erin@example.com");
+    persea::rbac::grant_connection_permission(
+        &db,
+        &format!("u:{uid}"),
+        "shared/Root/web01",
+        ObjectPermission::Administer,
+    )
+    .unwrap();
+    assert!(persea::rbac::user_has_object_permission(
+        &db,
+        uid,
+        "connection",
+        "shared/Root/web01",
+        ObjectPermission::Administer
+    )
+    .unwrap());
+    assert!(!persea::rbac::user_has_system_permission(
+        &db,
+        uid,
+        persea::rbac::SystemPermission::Administer
+    )
+    .unwrap());
+    assert!(!persea::rbac::user_has_system_permission(
+        &db,
+        uid,
+        persea::rbac::SystemPermission::CreateSession
+    )
+    .unwrap());
 }
