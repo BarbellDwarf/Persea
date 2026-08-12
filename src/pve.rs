@@ -34,7 +34,7 @@ pub struct PveSpiceConfig {
     pub host_subject: String,
 }
 
-/// VM type in PVE — determines which API sub-path to use.
+/// VM type in PVE; determines which API sub-path to use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PveVmType {
     /// A QEMU/KVM virtual machine.
