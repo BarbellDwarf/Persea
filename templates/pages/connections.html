@@ -426,7 +426,16 @@
             <div>
                 <label class="form-label" for="import-file">CSV file</label>
                 <input type="file" id="import-file" accept=".csv,text/csv" class="form-input">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Columns: name, protocol, hostname, port, username, password, folder, display_name, allowed_groups, description. Quoted fields with commas are supported.</p>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Columns: name, protocol, hostname, port, username, password, folder, allowed_groups, description, plus optional trailing columns for configured custom fields. Quoted fields with commas are supported.</p>
+            </div>
+            <div>
+                <label class="form-label" for="import-mode">Import mode</label>
+                <select id="import-mode" class="form-input">
+                    <option value="upsert" selected>Create + update (upsert)</option>
+                    <option value="create">Create only</option>
+                    <option value="update">Update only</option>
+                </select>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Create only skips identifiers that already exist. Create + update creates missing rows, updates changed ones, and skips identical ones. Update only edits existing entries and reports unknown rows as errors.</p>
             </div>
             <div>
                 <a href="/api/addressbook/import-template" class="text-sm text-emerald-400 hover:text-emerald-300">Download CSV template</a>
@@ -1904,7 +1913,8 @@
             var kdcUrl = document.getElementById('em-rdp-kdc-url').value.trim();
             if (kdcUrl) entry.kdc_url = kdcUrl;
         }
-        var ts = document.getElementById('em-proxmox-token-secret').value.trim();
+        var pveTsInp = document.getElementById('em-proxmox-token-secret');
+        var ts = pveTsInp ? pveTsInp.value.trim() : '';
         if (ts) entry.proxmox_token_secret = ts;
         var cp = document.getElementById('em-container-password').value;
         if (cp) entry.container_password = cp;
@@ -2122,9 +2132,11 @@
     }
 
     // ── Import CSV modal ─────────────────────────────────────────────
-    var importCsvHeaders = ['name', 'protocol', 'hostname', 'port', 'username', 'password', 'folder', 'display_name', 'allowed_groups', 'description'];
+    // Fixed columns in template order; trailing columns are custom fields.
+    var importCsvHeaders = ['name', 'protocol', 'hostname', 'port', 'username', 'password', 'folder', 'allowed_groups', 'description'];
     function openImportModal() {
         document.getElementById('import-file').value = '';
+        document.getElementById('import-mode').value = 'upsert';
         document.getElementById('import-error').textContent = '';
         document.getElementById('import-error').classList.add('hidden');
         document.getElementById('import-results').innerHTML = '';
@@ -2180,13 +2192,20 @@
                 errEl.classList.remove('hidden');
                 return;
             }
-            var header = rows[0].map(function(h) { return String(h).replace(/^\uFEFF/, '').trim().toLowerCase(); });
-            for (var h = 0; h < importCsvHeaders.length; h++) {
-                if (header[h] !== importCsvHeaders[h]) {
-                    errEl.textContent = 'Invalid header: expected ' + importCsvHeaders.join(',');
-                    errEl.classList.remove('hidden');
-                    return;
+            var rawHeader = rows[0].map(function(h) { return String(h).replace(/^\uFEFF/, '').trim(); });
+            var header = rawHeader.map(function(h) { return h.toLowerCase(); });
+            var headerOk = header.length >= importCsvHeaders.length;
+            for (var h = 0; headerOk && h < importCsvHeaders.length; h++) {
+                if (header[h] !== importCsvHeaders[h]) headerOk = false;
+            }
+            if (!headerOk) {
+                if (header.indexOf('display_name') !== -1) {
+                    errEl.textContent = 'This file uses the old template (display_name column). Download the new CSV template and re-export your data.';
+                } else {
+                    errEl.textContent = 'Invalid header: expected ' + importCsvHeaders.join(',') + ' followed by optional custom-field columns.';
                 }
+                errEl.classList.remove('hidden');
+                return;
             }
             var payload = [];
             var rowErrors = [];
@@ -2201,8 +2220,7 @@
                     username: (cols[4] || '').trim(),
                     password: cols[5] || '',
                     folder: (cols[6] || '').trim(),
-                    display_name: (cols[7] || '').trim(),
-                    description: (cols[9] || '').trim()
+                    description: (cols[8] || '').trim()
                 };
                 var portRaw = (cols[3] || '').trim();
                 if (portRaw !== '') {
@@ -2217,8 +2235,16 @@
                     rowErrors.push('Row ' + rowNo + ': name and protocol are required (skipped)');
                     continue;
                 }
-                var groups = (cols[8] || '').split(',').map(function(g) { return g.trim(); }).filter(function(g) { return g !== ''; });
+                var groups = (cols[7] || '').split(',').map(function(g) { return g.trim(); }).filter(function(g) { return g !== ''; });
                 if (groups.length) rowObj.allowed_groups = groups;
+                // Trailing columns map to custom fields; the server validates
+                // them against the configured definitions.
+                var customPairs = [];
+                for (var ch = importCsvHeaders.length; ch < cols.length; ch++) {
+                    var cfVal = (cols[ch] || '').trim();
+                    if (cfVal !== '') customPairs.push([rawHeader[ch], cfVal]);
+                }
+                if (customPairs.length) rowObj.custom_fields = customPairs;
                 payload.push(rowObj);
             }
             if (rowErrors.length) {
@@ -2231,6 +2257,7 @@
                 return;
             }
             var scope = document.getElementById('scope-filter').value || 'shared';
+            var mode = document.getElementById('import-mode').value;
             var btn = document.getElementById('import-submit');
             btn.disabled = true;
             btn.textContent = 'Importing\u2026';
@@ -2238,16 +2265,23 @@
                 method: 'POST',
                 headers: apiHeaders(),
                 credentials: 'same-origin',
-                body: JSON.stringify({ scope: scope, rows: payload })
+                body: JSON.stringify({ scope: scope, mode: mode, rows: payload })
             }).then(function(res) {
                 if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
                 return res.json().catch(function() { return {}; }).then(function(d) { return { ok: res.ok, data: d, status: res.status }; });
             }).then(function(res) {
                 if (!res.ok) throw new Error(res.data.error || 'Import failed (HTTP ' + res.status + ')');
                 var d = res.data;
-                var html = '<p style="margin:0">Imported <strong style="color:#34d399">' + escapeHtml(String(d.imported)) + '</strong>, skipped <strong>' + escapeHtml(String(d.skipped)) + '</strong>' + ((d.errors && d.errors.length) ? ', errors <strong style="color:#f87171">' + escapeHtml(String(d.errors.length)) + '</strong>' : '') + '.</p>';
+                var html = '<p style="margin:0">'
+                    + '<strong style="color:#34d399">' + escapeHtml(String(d.imported || 0)) + ' created</strong>'
+                    + ', <strong style="color:#60a5fa">' + escapeHtml(String(d.updated || 0)) + ' updated</strong>'
+                    + ', <strong>' + escapeHtml(String(d.unchanged || 0)) + ' unchanged</strong>'
+                    + ', <strong>' + escapeHtml(String(d.skipped || 0)) + ' skipped</strong>'
+                    + ((d.passwords_dropped) ? ', <strong style="color:#fbbf24">' + escapeHtml(String(d.passwords_dropped)) + ' passwords dropped (no storage key)</strong>' : '')
+                    + '.</p>';
                 if (d.errors && d.errors.length) {
-                    html += '<ul style="margin:8px 0 0;padding-left:18px;font-size:12px;color:#f87171">';
+                    html += '<p style="margin:6px 0 0;color:#f87171;font-size:12px"><strong>' + escapeHtml(String(d.errors.length)) + ' row error(s):</strong></p>';
+                    html += '<ul style="margin:6px 0 0;padding-left:18px;font-size:12px;color:#f87171;max-height:160px;overflow-y:auto">';
                     for (var i = 0; i < d.errors.length; i++) {
                         html += '<li>Row ' + escapeHtml(String(d.errors[i].row)) + ': ' + escapeHtml(d.errors[i].error || '') + '</li>';
                     }
@@ -2715,7 +2749,7 @@
                         + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(target) + '</div>'
                         + '</div>'
                         + '<span class="status-pill ' + sc + '">' + escapeHtml((s.status || 'unknown').toUpperCase()) + '</span>'
-                        + '<button class="btn btn-primary btn-sm" onclick="window.open(\'/client/' + encodeURIComponent(s.session_id) + '\',\'_blank\')" style="width:auto">Reconnect</button>'
+                        + '<button class="btn btn-primary btn-sm" data-session-id="' + escapeAttr(s.session_id) + '" style="width:auto">Reconnect</button>'
                         + '</div>';
                 }).join('');
             })
@@ -2723,6 +2757,14 @@
                 document.getElementById('recent-sessions').classList.add('hidden');
             });
     }
+    // Reconnect opens /client/{id} in a new tab. CSP-safe: the button only
+    // carries a data-session-id attribute; the click is handled here.
+    document.getElementById('recent-list').addEventListener('click', function(ev) {
+        var btn = ev.target.closest('[data-session-id]');
+        if (!btn) return;
+        var id = btn.getAttribute('data-session-id');
+        if (id) window.open('/client/' + encodeURIComponent(id), '_blank');
+    });
 
     // ── Address book init ────────────────────────────────────────────
     fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
