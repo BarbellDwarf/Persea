@@ -10,11 +10,11 @@
 CREATE TABLE IF NOT EXISTS admins (
     id            BIGINT AUTO_INCREMENT PRIMARY KEY,
     name          VARCHAR(255) NOT NULL UNIQUE,
-    api_key_hash  VARCHAR(64) NOT NULL,
+    api_key_hash  VARCHAR(128) NOT NULL,
     allowed_ips   TEXT,
     expires_at    TEXT,
     disabled      TINYINT(1) NOT NULL DEFAULT 0,
-    created_at    VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    created_at    VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     last_used_at  TEXT
 );
 CREATE INDEX idx_admin_api_key_hash ON admins(api_key_hash);
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
     oidc_subject  VARCHAR(512),
     `role`        VARCHAR(32) NOT NULL DEFAULT 'viewer',
     disabled      TINYINT(1) NOT NULL DEFAULT 0,
-    created_at    VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    created_at    VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     last_login_at TEXT,
     oidc_groups   TEXT NOT NULL DEFAULT (''),
     password_hash TEXT,
@@ -37,8 +37,8 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS auth_sessions (
     token_hash    VARCHAR(64) PRIMARY KEY,
     user_id       BIGINT NOT NULL,
-    created_at    VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
-    expires_at    VARCHAR(32) NOT NULL,
+    created_at    VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    expires_at    VARCHAR(64) NOT NULL,
     CONSTRAINT fk_auth_sessions_user FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
@@ -46,13 +46,13 @@ CREATE TABLE IF NOT EXISTS group_role_mappings (
     id         BIGINT AUTO_INCREMENT PRIMARY KEY,
     oidc_group VARCHAR(255) NOT NULL UNIQUE,
     `role`     VARCHAR(32) NOT NULL,
-    created_at VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
+    created_at VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
 );
 
 CREATE TABLE IF NOT EXISTS seen_groups (
     name       VARCHAR(255) PRIMARY KEY,
-    first_seen VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
-    last_seen  VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
+    first_seen VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    last_seen  VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
 );
 
 CREATE TABLE IF NOT EXISTS user_api_tokens (
@@ -63,7 +63,7 @@ CREATE TABLE IF NOT EXISTS user_api_tokens (
     max_role      VARCHAR(32),
     expires_at    TEXT,
     disabled      TINYINT(1) NOT NULL DEFAULT 0,
-    created_at    VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    created_at    VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     last_used_at  TEXT,
     UNIQUE KEY uq_token_user_name (user_id, name),
     CONSTRAINT fk_user_tokens_user FOREIGN KEY (user_id) REFERENCES users(id)
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS token_audit_log (
     action     VARCHAR(64) NOT NULL,
     ip_addr    VARCHAR(64),
     details    TEXT,
-    created_at VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
+    created_at VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
 );
 
 CREATE TABLE IF NOT EXISTS session_history (
@@ -92,8 +92,8 @@ CREATE TABLE IF NOT EXISTS session_history (
     address_book_entry  VARCHAR(512),
     address_book_folder VARCHAR(512),
     entry_display_name  VARCHAR(512),
-    started_at          VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
-    ended_at            VARCHAR(32),
+    started_at          VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    ended_at            VARCHAR(64),
     duration_secs       BIGINT,
     recording_file      VARCHAR(512),
     `status`            VARCHAR(16) NOT NULL DEFAULT 'active'
@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS addressbook_audit_log (
     entry_name  VARCHAR(512),
     ip_addr     VARCHAR(64),
     details     TEXT,
-    created_at  VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
+    created_at  VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
 );
 CREATE INDEX idx_ab_audit_created ON addressbook_audit_log(created_at);
 CREATE INDEX idx_ab_audit_user ON addressbook_audit_log(user_email);
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
     session_id      VARCHAR(64),
     prev_hash       VARCHAR(64) NOT NULL,
     event_hash      VARCHAR(64) NOT NULL,
-    created_at      VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
+    created_at      VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
 );
 CREATE INDEX idx_audit_timestamp ON audit_events(`timestamp`);
 CREATE INDEX idx_audit_user ON audit_events(user_id);
@@ -146,8 +146,8 @@ CREATE TABLE IF NOT EXISTS jump_hosts (
     username    VARCHAR(512) NOT NULL,
     auth_method VARCHAR(32) NOT NULL DEFAULT 'password',
     key_path    VARCHAR(512),
-    created_at  VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
-    updated_at  VARCHAR(32)
+    created_at  VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    updated_at  VARCHAR(64)
 );
 
 CREATE TABLE IF NOT EXISTS auth_pending_mfa (
@@ -157,8 +157,8 @@ CREATE TABLE IF NOT EXISTS auth_pending_mfa (
     user_name     VARCHAR(512) NOT NULL DEFAULT '',
     user_role     VARCHAR(32) NOT NULL DEFAULT 'viewer',
     oidc_subject  VARCHAR(512),
-    created_at    VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
-    expires_at    VARCHAR(32) NOT NULL,
+    created_at    VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    expires_at    VARCHAR(64) NOT NULL,
     CONSTRAINT fk_pending_mfa_user FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
@@ -169,7 +169,7 @@ CREATE TABLE IF NOT EXISTS totp_secrets (
     digits        BIGINT NOT NULL DEFAULT 6,
     period        BIGINT NOT NULL DEFAULT 30,
     enabled       TINYINT(1) NOT NULL DEFAULT 0,
-    created_at    VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    created_at    VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     CONSTRAINT fk_totp_user FOREIGN KEY (user_id) REFERENCES users(id)
 );
 
@@ -177,7 +177,7 @@ CREATE TABLE IF NOT EXISTS failed_login_attempts (
     id           BIGINT AUTO_INCREMENT PRIMARY KEY,
     username     VARCHAR(512) NOT NULL,
     ip_address   VARCHAR(64) NOT NULL,
-    attempted_at VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    attempted_at VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     success      TINYINT(1) NOT NULL DEFAULT 0
 );
 CREATE INDEX idx_failed_login_username ON failed_login_attempts(username);
@@ -187,7 +187,7 @@ CREATE TABLE IF NOT EXISTS user_preset_credentials (
     user_id      BIGINT PRIMARY KEY,
     username     VARCHAR(512) NOT NULL DEFAULT '',
     password_enc TEXT NOT NULL DEFAULT (''),
-    updated_at   VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    updated_at   VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     CONSTRAINT fk_preset_creds_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
@@ -207,14 +207,14 @@ CREATE TABLE IF NOT EXISTS rbac_groups (
     parent_id   VARCHAR(64),
     description TEXT,
     scope       VARCHAR(64) NOT NULL DEFAULT 'shared',
-    created_at  VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    created_at  VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     CONSTRAINT fk_rbac_parent FOREIGN KEY (parent_id) REFERENCES rbac_groups(id)
 );
 
 CREATE TABLE IF NOT EXISTS rbac_user_groups (
     user_id     BIGINT NOT NULL,
     group_id    VARCHAR(64) NOT NULL,
-    created_at  VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    created_at  VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     PRIMARY KEY (user_id, group_id),
     CONSTRAINT fk_rug_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     CONSTRAINT fk_rug_group FOREIGN KEY (group_id) REFERENCES rbac_groups(id) ON DELETE CASCADE
@@ -227,7 +227,7 @@ CREATE TABLE IF NOT EXISTS rbac_permissions (
     object_type   VARCHAR(32) NOT NULL,
     object_id     VARCHAR(255) NOT NULL,
     permission    VARCHAR(32) NOT NULL,
-    created_at    VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    created_at    VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     UNIQUE KEY uq_rbac_perm (entity_id, entity_type, object_type, object_id, permission)
 );
 CREATE INDEX idx_rbac_perm_entity ON rbac_permissions(entity_id, entity_type);
@@ -238,6 +238,6 @@ CREATE TABLE IF NOT EXISTS user_credentials (
     user_key    VARCHAR(255) NOT NULL,
     var_name    VARCHAR(255) NOT NULL,
     var_value   TEXT NOT NULL,
-    created_at  VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    created_at  VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     PRIMARY KEY (user_key, var_name)
 );

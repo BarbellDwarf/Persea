@@ -12,6 +12,9 @@ mod auth {
 mod db {
     pub use persea::db::*;
 }
+mod db_pool {
+    pub use persea::db_pool::*;
+}
 mod error {
     pub use persea::error::*;
 }

@@ -158,12 +158,15 @@ pub fn create_group(
     description: Option<&str>,
 ) -> rusqlite::Result<String> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| {
+        let __db_route_arg_0 = name.to_string();
+        let __db_route_arg_1 = parent_id.map(str::to_string);
+        let __db_route_arg_2 = description.map(str::to_string);
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
             crate::db::rbac_create_group_pool(
                 pool,
-                name.to_string(),
-                parent_id.map(str::to_string),
-                description.map(str::to_string),
+                __db_route_arg_0,
+                __db_route_arg_1,
+                __db_route_arg_2,
             )
         });
     }
@@ -180,8 +183,9 @@ pub fn create_group(
 /// Does not cascade — callers must re-parent or delete children first.
 pub fn delete_group(db: &Db, group_id: &str) -> rusqlite::Result<bool> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| {
-            crate::db::rbac_delete_group_pool(pool, group_id.to_string())
+        let __db_route_arg_0 = group_id.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_delete_group_pool(pool, __db_route_arg_0)
         });
     }
     let conn = db.lock().unwrap();
@@ -197,7 +201,9 @@ pub fn delete_group(db: &Db, group_id: &str) -> rusqlite::Result<bool> {
 /// List all connection groups.
 pub fn list_groups(db: &Db) -> rusqlite::Result<Vec<ConnectionGroup>> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| crate::db::rbac_list_groups_pool(pool));
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_list_groups_pool(pool)
+        });
     }
     let conn = db.lock().unwrap();
     let mut stmt = conn
@@ -219,8 +225,9 @@ pub fn list_groups(db: &Db) -> rusqlite::Result<Vec<ConnectionGroup>> {
 /// Add a user to a group. Idempotent (INSERT OR IGNORE).
 pub fn add_user_to_group(db: &Db, user_id: i64, group_id: &str) -> rusqlite::Result<()> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| {
-            crate::db::rbac_add_user_to_group_pool(pool, user_id, group_id.to_string())
+        let __db_route_arg_0 = group_id.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_add_user_to_group_pool(pool, user_id, __db_route_arg_0)
         });
     }
     let conn = db.lock().unwrap();
@@ -234,8 +241,9 @@ pub fn add_user_to_group(db: &Db, user_id: i64, group_id: &str) -> rusqlite::Res
 /// Remove a user from a group.
 pub fn remove_user_from_group(db: &Db, user_id: i64, group_id: &str) -> rusqlite::Result<()> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| {
-            crate::db::rbac_remove_user_from_group_pool(pool, user_id, group_id.to_string())
+        let __db_route_arg_0 = group_id.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_remove_user_from_group_pool(pool, user_id, __db_route_arg_0)
         });
     }
     let conn = db.lock().unwrap();
@@ -256,13 +264,16 @@ pub fn grant_connection_permission(
     permission: ObjectPermission,
 ) -> rusqlite::Result<()> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| {
+        let __db_route_arg_0 = entity_id.to_string();
+        let __db_route_arg_1 = connection_id.to_string();
+        let __db_route_arg_2 = permission.as_str().to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
             crate::db::rbac_grant_permission_pool(
                 pool,
-                entity_id.to_string(),
+                __db_route_arg_0,
                 "connection",
-                connection_id.to_string(),
-                permission.as_str().to_string(),
+                __db_route_arg_1,
+                __db_route_arg_2,
             )
         });
     }
@@ -285,13 +296,16 @@ pub fn revoke_connection_permission(
     permission: ObjectPermission,
 ) -> rusqlite::Result<bool> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| {
+        let __db_route_arg_0 = entity_id.to_string();
+        let __db_route_arg_1 = connection_id.to_string();
+        let __db_route_arg_2 = permission.as_str().to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
             crate::db::rbac_revoke_permission_pool(
                 pool,
-                entity_id.to_string(),
+                __db_route_arg_0,
                 "connection",
-                connection_id.to_string(),
-                permission.as_str().to_string(),
+                __db_route_arg_1,
+                __db_route_arg_2,
             )
         });
     }
@@ -313,13 +327,16 @@ pub fn grant_group_permission(
     permission: ObjectPermission,
 ) -> rusqlite::Result<()> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| {
+        let __db_route_arg_0 = entity_id.to_string();
+        let __db_route_arg_1 = group_id.to_string();
+        let __db_route_arg_2 = permission.as_str().to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
             crate::db::rbac_grant_permission_pool(
                 pool,
-                entity_id.to_string(),
+                __db_route_arg_0,
                 "connection_group",
-                group_id.to_string(),
-                permission.as_str().to_string(),
+                __db_route_arg_1,
+                __db_route_arg_2,
             )
         });
     }
@@ -347,12 +364,14 @@ pub fn check_connection_permission(
     permission: ObjectPermission,
 ) -> rusqlite::Result<bool> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| {
+        let __db_route_arg_0 = connection_id.to_string();
+        let __db_route_arg_1 = permission.as_str().to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
             crate::db::rbac_check_connection_permission_pool(
                 pool,
                 user_id,
-                connection_id.to_string(),
-                permission.as_str().to_string(),
+                __db_route_arg_0,
+                __db_route_arg_1,
             )
         });
     }
@@ -418,8 +437,9 @@ pub fn list_connection_permissions(
     connection_id: &str,
 ) -> rusqlite::Result<Vec<PermissionEntry>> {
     if crate::db::pool_active() {
-        return crate::db::pool_call(move |pool| {
-            crate::db::rbac_list_connection_permissions_pool(pool, connection_id.to_string())
+        let __db_route_arg_0 = connection_id.to_string();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::rbac_list_connection_permissions_pool(pool, __db_route_arg_0)
         });
     }
     let conn = db.lock().unwrap();

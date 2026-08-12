@@ -4,5 +4,5 @@
 CREATE TABLE IF NOT EXISTS system_settings (
     `key`       VARCHAR(64) PRIMARY KEY,
     value       TEXT NOT NULL,
-    updated_at  VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
+    updated_at  VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s'))
 );

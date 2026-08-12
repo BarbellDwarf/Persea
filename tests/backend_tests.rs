@@ -44,7 +44,8 @@ async fn mysql_backend_round_trip_and_persistence() {
 }
 
 macro_rules! check_rows_in_backend {
-    ($pool:expr, $users_q:expr, $folders_q:expr, $entries_q:expr, $email:expr, $folder:expr, $entry:expr, $site_title:expr) => {{
+    ($pool:expr, $users_q:expr, $folders_q:expr, $entries_q:expr, $email:expr, $folder:expr, $entry:expr, $site_title:expr, $settings_q:expr $(,)?) => {{
+        
         let row = sqlx::query($users_q)
             .bind(&$email)
             .bind(&$email)
@@ -58,7 +59,7 @@ macro_rules! check_rows_in_backend {
             $email
         );
 
-        let row = sqlx::query("SELECT value FROM system_settings WHERE key = 'site_title'")
+        let row = sqlx::query($settings_q)
             .fetch_one($pool)
             .await
             .unwrap();
@@ -236,6 +237,7 @@ async fn round_trips(
     entry_name: &str,
     site_title: &str,
 ) {
+    let csrf = fetch_csrf_token(client, base).await;
     let (status, body) = send_json(
         client,
         reqwest::Method::POST,
@@ -247,6 +249,7 @@ async fn round_trips(
             "role": "operator",
             "password": "backend-ci-passw0rd-2026",
         }),
+        Some(&csrf),
     )
     .await;
     assert_eq!(status, 201, "POST /api/users failed: {body}");
@@ -262,6 +265,7 @@ async fn round_trips(
         &format!("{base}/api/system/settings"),
         key,
         &json!({"site_title": site_title}),
+        Some(&csrf),
     )
     .await;
     assert_eq!(status, 200, "PUT /api/system/settings failed: {body}");
@@ -277,6 +281,7 @@ async fn round_trips(
         &format!("{base}/api/addressbook/folders"),
         key,
         &json!({"name": folder_name, "allowed_groups": []}),
+        Some(&csrf),
     )
     .await;
     assert!(
@@ -289,6 +294,7 @@ async fn round_trips(
         &format!("{base}/api/addressbook/folders/shared/{folder_name}/entries"),
         key,
         &json!({"name": entry_name, "type": "ssh", "hostname": "10.0.0.1"}),
+        Some(&csrf),
     )
     .await;
     assert!(
@@ -330,7 +336,8 @@ async fn assert_rows_in_backend(
                 email,
                 folder_name,
                 entry_name,
-                site_title
+                site_title,
+                "SELECT value FROM system_settings WHERE key = 'site_title'",
             );
         }
         "mysql" => {
@@ -345,7 +352,8 @@ async fn assert_rows_in_backend(
                 email,
                 folder_name,
                 entry_name,
-                site_title
+                site_title,
+                "SELECT value FROM system_settings WHERE `key` = 'site_title'",
             );
         }
         other => panic!("unexpected expected_backend: {other}"),
@@ -397,17 +405,43 @@ async fn send_json(
     url: &str,
     key: &str,
     body: &serde_json::Value,
+    csrf: Option<&str>,
 ) -> (reqwest::StatusCode, String) {
-    let resp = client
-        .request(method, url)
-        .bearer_auth(key)
-        .json(body)
-        .send()
+    let mut request = client.request(method, url).bearer_auth(key).json(body);
+    if let Some(tok) = csrf {
+        request = request.header("X-CSRF-Token", tok);
+        request = request.header("Cookie", format!("csrf_token={tok}"));
+    }
+    let resp = request.send()
         .await
         .unwrap_or_else(|e| panic!("request to {url} failed: {e}"));
     let status = resp.status();
     let text = resp.text().await.unwrap_or_default();
     (status, text)
+}
+
+/// Double-submit CSRF: GET the app root, capture the `csrf_token` cookie
+/// value, and echo it back as `X-CSRF-Token` on state-changing requests.
+async fn fetch_csrf_token(client: &reqwest::Client, base: &str) -> String {
+    let resp = client
+        .get(format!("{base}/"))
+        .send()
+        .await
+        .expect("GET / for CSRF token");
+    let set_cookie = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find(|c| c.starts_with("csrf_token="))
+        .unwrap_or_else(|| panic!("no csrf_token Set-Cookie in {:?}", resp.headers()));
+    set_cookie
+        .split(';')
+        .next()
+        .unwrap()
+        .strip_prefix("csrf_token=")
+        .unwrap()
+        .to_string()
 }
 
 async fn wait_healthy(client: &reqwest::Client, base: &str, app: &mut AppProc, log_path: &PathBuf) {

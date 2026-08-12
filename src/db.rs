@@ -1,6 +1,7 @@
 //! SQLite database layer for admin/API key management.
 
 use crate::audit::{compute_event_hash, AuditEvent, AuditFilters};
+use crate::db_pool::DbPool;
 use crate::providers_db::{DbProvider, MoveDirection};
 use crate::rbac::{ConnectionGroup, EntityType, ObjectPermission, PermissionEntry};
 use crate::role::role_level;
@@ -17,11 +18,74 @@ pub type Db = Arc<Mutex<Connection>>;
 /// Route a store call to the SQLx pool store when one is active (R102).
 /// Usage at the top of each store function:
 /// `db_route!(db, some_fn_pool, arg1, arg2.to_string());`
+/// Arguments are evaluated into an owned tuple BEFORE the 'static pool
+/// closure, so borrowed inputs (&str params) never leak into the worker
+/// thread's 'static future.
 macro_rules! db_route {
-    ($db:expr, $pool_fn:path, $($arg:expr),* $(,)?) => {
+    ($db:expr, $pool_fn:path $(, $arg:expr)* $(,)?) => {{
         if pool_store().is_some() {
-            return pool_call(move |pool| $pool_fn(pool, $($arg),*));
+            let _cap = ($($arg,)* ());
+            return pool_call(move |pool: &'static DbPool| {
+                db_route_dispatch!($pool_fn, pool, _cap $(, $arg)*)
+            });
         }
+    }};
+}
+
+/// Positional dispatch: expands the captured tuple back into call args.
+macro_rules! db_route_dispatch {
+    ($fn:path, $pool:ident, $cap:ident) => {
+        $fn($pool)
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr) => {
+        $fn($pool, $cap.0)
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr) => {
+        $fn($pool, $cap.0, $cap.1)
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr) => {
+        $fn($pool, $cap.0, $cap.1, $cap.2)
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr, $d:expr) => {
+        $fn($pool, $cap.0, $cap.1, $cap.2, $cap.3)
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr, $d:expr, $e:expr) => {
+        $fn($pool, $cap.0, $cap.1, $cap.2, $cap.3, $cap.4)
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr) => {
+        $fn($pool, $cap.0, $cap.1, $cap.2, $cap.3, $cap.4, $cap.5)
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr) => {
+        $fn(
+            $pool, $cap.0, $cap.1, $cap.2, $cap.3, $cap.4, $cap.5, $cap.6,
+        )
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr) => {
+        $fn(
+            $pool, $cap.0, $cap.1, $cap.2, $cap.3, $cap.4, $cap.5, $cap.6, $cap.7,
+        )
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr, $i:expr) => {
+        $fn(
+            $pool, $cap.0, $cap.1, $cap.2, $cap.3, $cap.4, $cap.5, $cap.6, $cap.7, $cap.8,
+        )
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr, $i:expr, $j:expr) => {
+        $fn(
+            $pool, $cap.0, $cap.1, $cap.2, $cap.3, $cap.4, $cap.5, $cap.6, $cap.7, $cap.8, $cap.9,
+        )
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr, $i:expr, $j:expr, $k:expr) => {
+        $fn(
+            $pool, $cap.0, $cap.1, $cap.2, $cap.3, $cap.4, $cap.5, $cap.6, $cap.7, $cap.8, $cap.9,
+            $cap.10,
+        )
+    };
+    ($fn:path, $pool:ident, $cap:ident, $a:expr, $b:expr, $c:expr, $d:expr, $e:expr, $f:expr, $g:expr, $h:expr, $i:expr, $j:expr, $k:expr, $l:expr) => {
+        $fn(
+            $pool, $cap.0, $cap.1, $cap.2, $cap.3, $cap.4, $cap.5, $cap.6, $cap.7, $cap.8, $cap.9,
+            $cap.10, $cap.11,
+        )
     };
 }
 
@@ -1930,15 +1994,13 @@ pub fn stream_session_history_csv(
     to: Option<&str>,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
     if pool_store().is_some() {
-        let rows = pool_call(move |pool| {
-            stream_session_history_csv_pool(
-                pool,
-                user.map(str::to_string),
-                entry.map(str::to_string),
-                session_type.map(str::to_string),
-                from.map(str::to_string),
-                to.map(str::to_string),
-            )
+        let user_s = user.map(str::to_string);
+        let entry_s = entry.map(str::to_string);
+        let session_type_s = session_type.map(str::to_string);
+        let from_s = from.map(str::to_string);
+        let to_s = to.map(str::to_string);
+        let rows = pool_call(move |pool: &'static DbPool| {
+            stream_session_history_csv_pool(pool, user_s, entry_s, session_type_s, from_s, to_s)
         })?;
         let mut count = 0usize;
         for (
@@ -3875,10 +3937,10 @@ pub fn delete_provider_group_mapping(db: &Db, mapping_id: i64) -> rusqlite::Resu
 // std channel, which is safe from any context.
 // ══════════════════════════════════════════════════════════════════════
 
-use sqlx::mysql::{MySqlArguments, MySqlPool, MySqlRow};
-use sqlx::postgres::{PgArguments, PgPool, PgRow};
-use sqlx::sqlite::{SqliteArguments, SqlitePool, SqliteRow};
-use sqlx::{Arguments as SqlxArguments, Row as SqlxRow};
+use sqlx::mysql::{MySql, MySqlArguments, MySqlPool, MySqlRow};
+use sqlx::postgres::{PgArguments, PgPool, PgRow, Postgres};
+use sqlx::sqlite::{Sqlite, SqliteArguments, SqlitePool, SqliteRow};
+use sqlx::{Arguments as SqlxArguments, Decode, Row as SqlxRow, Type};
 
 /// Backend-agnostic argument list for dynamically-built SQLx queries.
 #[derive(Clone, Debug)]
@@ -3910,7 +3972,7 @@ fn push_mysql(args: &mut MySqlArguments, a: &Arg) {
     }
 }
 
-fn push_sqlite(args: &mut SqliteArguments<'_>, a: &Arg) {
+fn push_sqlite(args: &mut SqliteArguments, a: &Arg) {
     match a {
         Arg::Str(v) => args.add(v).expect("encode sqlite str"),
         Arg::OptStr(v) => args.add(v.as_deref()).expect("encode sqlite opt str"),
@@ -3920,35 +3982,68 @@ fn push_sqlite(args: &mut SqliteArguments<'_>, a: &Arg) {
     }
 }
 
+/// A row from any backend, so store functions can map columns uniformly.
+/// Every store reads only these column types, which implement `Decode` +
+/// `Type` for all three backends.
+pub enum RowProxy {
+    Pg(PgRow),
+    My(MySqlRow),
+    Sqlite(SqliteRow),
+}
+
+impl RowProxy {
+    pub fn get<'r, T>(&'r self, index: usize) -> T
+    where
+        T: Decode<'r, Postgres>
+            + Type<Postgres>
+            + Decode<'r, MySql>
+            + Type<MySql>
+            + Decode<'r, Sqlite>
+            + Type<Sqlite>,
+    {
+        match self {
+            RowProxy::Pg(r) => r.get(index),
+            RowProxy::My(r) => r.get(index),
+            RowProxy::Sqlite(r) => r.get(index),
+        }
+    }
+}
+
 async fn pg_exec(pool: &PgPool, sql: &str, args: &[Arg]) -> Result<u64, sqlx::Error> {
     let mut a = PgArguments::default();
     for arg in args {
         push_pg(&mut a, arg);
     }
-    Ok(sqlx::query_with(sql, a)
+    Ok(sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
         .execute(pool)
         .await?
         .rows_affected())
 }
 
-async fn pg_fetch(pool: &PgPool, sql: &str, args: &[Arg]) -> Result<Vec<PgRow>, sqlx::Error> {
+async fn pg_fetch(pool: &PgPool, sql: &str, args: &[Arg]) -> Result<Vec<RowProxy>, sqlx::Error> {
     let mut a = PgArguments::default();
     for arg in args {
         push_pg(&mut a, arg);
     }
-    sqlx::query_with(sql, a).fetch_all(pool).await
+    sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+        .fetch_all(pool)
+        .await
+        .map(|rows| rows.into_iter().map(RowProxy::Pg).collect())
 }
 
 async fn pg_fetch_opt(
     pool: &PgPool,
     sql: &str,
     args: &[Arg],
-) -> Result<Option<PgRow>, sqlx::Error> {
+) -> Result<Option<RowProxy>, sqlx::Error> {
     let mut a = PgArguments::default();
     for arg in args {
         push_pg(&mut a, arg);
     }
-    sqlx::query_with(sql, a).fetch_optional(pool).await
+    sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+        .fetch_optional(pool)
+        .await
+        .map(|r| r.map(RowProxy::Pg))
 }
 
 async fn mysql_exec(pool: &MySqlPool, sql: &str, args: &[Arg]) -> Result<u64, sqlx::Error> {
@@ -3956,7 +4051,7 @@ async fn mysql_exec(pool: &MySqlPool, sql: &str, args: &[Arg]) -> Result<u64, sq
     for arg in args {
         push_mysql(&mut a, arg);
     }
-    Ok(sqlx::query_with(sql, a)
+    Ok(sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
         .execute(pool)
         .await?
         .rows_affected())
@@ -3966,24 +4061,30 @@ async fn mysql_fetch(
     pool: &MySqlPool,
     sql: &str,
     args: &[Arg],
-) -> Result<Vec<MySqlRow>, sqlx::Error> {
+) -> Result<Vec<RowProxy>, sqlx::Error> {
     let mut a = MySqlArguments::default();
     for arg in args {
         push_mysql(&mut a, arg);
     }
-    sqlx::query_with(sql, a).fetch_all(pool).await
+    sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+        .fetch_all(pool)
+        .await
+        .map(|rows| rows.into_iter().map(RowProxy::My).collect())
 }
 
 async fn mysql_fetch_opt(
     pool: &MySqlPool,
     sql: &str,
     args: &[Arg],
-) -> Result<Option<MySqlRow>, sqlx::Error> {
+) -> Result<Option<RowProxy>, sqlx::Error> {
     let mut a = MySqlArguments::default();
     for arg in args {
         push_mysql(&mut a, arg);
     }
-    sqlx::query_with(sql, a).fetch_optional(pool).await
+    sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+        .fetch_optional(pool)
+        .await
+        .map(|r| r.map(RowProxy::My))
 }
 
 async fn sqlite_exec(pool: &SqlitePool, sql: &str, args: &[Arg]) -> Result<u64, sqlx::Error> {
@@ -3991,7 +4092,7 @@ async fn sqlite_exec(pool: &SqlitePool, sql: &str, args: &[Arg]) -> Result<u64, 
     for arg in args {
         push_sqlite(&mut a, arg);
     }
-    Ok(sqlx::query_with(sql, a)
+    Ok(sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
         .execute(pool)
         .await?
         .rows_affected())
@@ -4001,27 +4102,32 @@ async fn sqlite_fetch(
     pool: &SqlitePool,
     sql: &str,
     args: &[Arg],
-) -> Result<Vec<SqliteRow>, sqlx::Error> {
+) -> Result<Vec<RowProxy>, sqlx::Error> {
     let mut a = SqliteArguments::default();
     for arg in args {
         push_sqlite(&mut a, arg);
     }
-    sqlx::query_with(sql, a).fetch_all(pool).await
+    sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+        .fetch_all(pool)
+        .await
+        .map(|rows| rows.into_iter().map(RowProxy::Sqlite).collect())
 }
 
 async fn sqlite_fetch_opt(
     pool: &SqlitePool,
     sql: &str,
     args: &[Arg],
-) -> Result<Option<SqliteRow>, sqlx::Error> {
+) -> Result<Option<RowProxy>, sqlx::Error> {
     let mut a = SqliteArguments::default();
     for arg in args {
         push_sqlite(&mut a, arg);
     }
-    sqlx::query_with(sql, a).fetch_optional(pool).await
+    sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+        .fetch_optional(pool)
+        .await
+        .map(|r| r.map(RowProxy::Sqlite))
 }
 
-/// Insert that returns the new row id.
 async fn exec_returning_id(pool: &DbPool, sql: &str, args: &[Arg]) -> Result<i64, sqlx::Error> {
     match pool {
         DbPool::Postgres(p) => {
@@ -4029,7 +4135,9 @@ async fn exec_returning_id(pool: &DbPool, sql: &str, args: &[Arg]) -> Result<i64
             for arg in args {
                 push_pg(&mut a, arg);
             }
-            let row = sqlx::query_with(sql, a).fetch_one(p).await?;
+            let row = sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+                .fetch_one(p)
+                .await?;
             Ok(row.get(0))
         }
         DbPool::MySQL(p) => {
@@ -4037,14 +4145,17 @@ async fn exec_returning_id(pool: &DbPool, sql: &str, args: &[Arg]) -> Result<i64
             for arg in args {
                 push_mysql(&mut a, arg);
             }
-            Ok(sqlx::query_with(sql, a).execute(p).await?.last_insert_id() as i64)
+            Ok(sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
+                .execute(p)
+                .await?
+                .last_insert_id() as i64)
         }
         DbPool::SQLite(p) => {
             let mut a = SqliteArguments::default();
             for arg in args {
                 push_sqlite(&mut a, arg);
             }
-            Ok(sqlx::query_with(sql, a)
+            Ok(sqlx::query_with(sqlx::AssertSqlSafe(sql), a)
                 .execute(p)
                 .await?
                 .last_insert_rowid())
@@ -4108,7 +4219,7 @@ impl StoreErr for AuthError {
 struct PoolJob {
     run: Box<
         dyn FnOnce(
-                &DbPool,
+                &'static DbPool,
             )
                 -> std::pin::Pin<Box<dyn std::future::Future<Output = PoolJobResult> + Send>>
             + Send,
@@ -4149,7 +4260,10 @@ pub fn active_pool() -> Option<&'static DbPool> {
 /// any thread context (async handlers, spawn_blocking, CLI) can await them.
 pub fn set_active_pool(pool: DbPool) -> Result<(), DbPool> {
     let (tx, rx) = std::sync::mpsc::channel::<PoolJob>();
-    let worker_pool = pool.clone();
+    // The pool lives for the process lifetime (installed once at startup);
+    // leaking a clone gives the worker a 'static handle so jobs can borrow
+    // it across the mpsc channel. The original is kept for POOL_STORE.
+    let leaked_pool: &'static DbPool = Box::leak(Box::new(pool.clone()));
     let worker = std::thread::Builder::new()
         .name("persea-db-worker".to_string())
         .spawn(move || {
@@ -4164,7 +4278,7 @@ pub fn set_active_pool(pool: DbPool) -> Result<(), DbPool> {
                 }
             };
             while let Ok(job) = rx.recv() {
-                let result = rt.block_on(async move { (job.run)(&worker_pool) });
+                let result = rt.block_on(async move { (job.run)(leaked_pool).await });
                 let _ = job.done.send(result);
             }
         });
@@ -4184,9 +4298,9 @@ pub fn set_active_pool(pool: DbPool) -> Result<(), DbPool> {
 /// Safe to call from any thread: async contexts, spawn_blocking threads,
 /// and the CLI. When no pool store is active this returns an error — store
 /// functions only call it after a positive `pool_store()` check.
-pub(crate) fn pool_call<F, Fut, T, E>(f: F) -> Result<T, E>
+pub fn pool_call<F, Fut, T, E>(f: F) -> Result<T, E>
 where
-    F: FnOnce(&DbPool) -> Fut + Send + 'static,
+    F: FnOnce(&'static DbPool) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = Result<T, E>> + Send + 'static,
     T: Send + 'static,
     E: StoreErr,
@@ -4197,11 +4311,11 @@ where
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let run: Box<
         dyn FnOnce(
-                &DbPool,
+                &'static DbPool,
             )
                 -> std::pin::Pin<Box<dyn std::future::Future<Output = PoolJobResult> + Send>>
             + Send,
-    > = Box::new(move |pool| {
+    > = Box::new(move |pool: &'static DbPool| {
         Box::pin(async move {
             match f(pool).await {
                 Ok(v) => Ok(Box::new(v) as PoolBoxed),
@@ -4243,20 +4357,20 @@ async fn pool_exec(pool: &DbPool, sql: &str, args: &[Arg]) -> Result<u64, sqlx::
 macro_rules! session_history_json_row {
     ($row:expr) => {
         serde_json::json!({
-            "session_id": $row.get::<String, _>(0),
-            "session_type": $row.get::<String, _>(1),
-            "hostname": $row.get::<String, _>(2),
-            "port": $row.get::<Option<i64>, _>(3),
-            "username": $row.get::<String, _>(4),
-            "created_by": $row.get::<String, _>(5),
-            "address_book_entry": $row.get::<Option<String>, _>(6),
-            "address_book_folder": $row.get::<Option<String>, _>(7),
-            "entry_display_name": $row.get::<Option<String>, _>(8),
-            "started_at": $row.get::<String, _>(9),
-            "ended_at": $row.get::<Option<String>, _>(10),
-            "duration_secs": $row.get::<Option<i64>, _>(11),
-            "recording_file": $row.get::<Option<String>, _>(12),
-            "status": $row.get::<String, _>(13),
+            "session_id": $row.get::<String>(0),
+            "session_type": $row.get::<String>(1),
+            "hostname": $row.get::<String>(2),
+            "port": $row.get::<Option<i64>>(3),
+            "username": $row.get::<String>(4),
+            "created_by": $row.get::<String>(5),
+            "address_book_entry": $row.get::<Option<String>>(6),
+            "address_book_folder": $row.get::<Option<String>>(7),
+            "entry_display_name": $row.get::<Option<String>>(8),
+            "started_at": $row.get::<String>(9),
+            "ended_at": $row.get::<Option<String>>(10),
+            "duration_secs": $row.get::<Option<i64>>(11),
+            "recording_file": $row.get::<Option<String>>(12),
+            "status": $row.get::<String>(13),
         })
     };
 }
@@ -4520,7 +4634,7 @@ async fn upsert_user_pool(
             Arg::Str(groups_str),
         ],
     };
-    pool_exec(pool, sql, &args).await.map_err(map_sqlx_err)?;
+    pool_exec(pool, &sql, &args).await.map_err(map_sqlx_err)?;
 
     let rows = match pool {
         DbPool::Postgres(p) => {
@@ -4617,7 +4731,7 @@ async fn create_user_with_password_pool(
         pool,
         qsql!(
             pool,
-            "INSERT INTO users (email, username, name, auth_source, password_hash, role, disabled, created_at) VALUES ($1, $1, $2, $3, $4, $5, 0, $6)",
+            "INSERT INTO users (email, username, name, auth_source, password_hash, role, disabled, created_at) VALUES ($1, $1, $2, $3, $4, $5, FALSE, $6)",
             "INSERT INTO users (email, username, name, auth_source, password_hash, `role`, disabled, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)"
         ),
         &args,
@@ -4674,7 +4788,7 @@ async fn get_user_auth_source_pool(pool: &DbPool, email: String) -> rusqlite::Re
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    row.map(|r| r.get::<String, _>(0))
+    row.map(|r| r.get::<String>(0))
         .ok_or(rusqlite::Error::QueryReturnedNoRows)
 }
 
@@ -4757,7 +4871,7 @@ async fn delete_user_pool(pool: &DbPool, email: String) -> rusqlite::Result<bool
             pg_fetch_opt(
                 p,
                 "SELECT id FROM users WHERE email = $1",
-                &[Arg::Str(email)],
+                &[Arg::Str(email.clone())],
             )
             .await
         }
@@ -4765,7 +4879,7 @@ async fn delete_user_pool(pool: &DbPool, email: String) -> rusqlite::Result<bool
             mysql_fetch_opt(
                 p,
                 "SELECT id FROM users WHERE email = ?",
-                &[Arg::Str(email)],
+                &[Arg::Str(email.clone())],
             )
             .await
         }
@@ -4773,7 +4887,7 @@ async fn delete_user_pool(pool: &DbPool, email: String) -> rusqlite::Result<bool
             sqlite_fetch_opt(
                 p,
                 "SELECT id FROM users WHERE email = ?",
-                &[Arg::Str(email)],
+                &[Arg::Str(email.clone())],
             )
             .await
         }
@@ -4783,7 +4897,7 @@ async fn delete_user_pool(pool: &DbPool, email: String) -> rusqlite::Result<bool
     let Some(row) = user_id else {
         return Ok(false);
     };
-    let uid = row.get::<i64, _>(0);
+    let uid = row.get::<i64>(0);
     let id_arg = [Arg::I64(uid)];
     for sql in [
         qsql!(
@@ -4871,7 +4985,8 @@ async fn upsert_user_preset_credentials_pool(
                  username = excluded.username, \
                  password_enc = excluded.password_enc, \
                  updated_at = datetime('now')"
-        ),
+        )
+        .to_string(),
     }
     .to_string();
     pool_exec(
@@ -5106,7 +5221,7 @@ async fn count_users_pool(pool: &DbPool) -> rusqlite::Result<i64> {
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(row.map(|r| r.get::<i64, _>(0)).unwrap_or(0))
+    Ok(row.map(|r| r.get::<i64>(0)).unwrap_or(0))
 }
 
 /// Count session history rows (admin system status).
@@ -5124,7 +5239,7 @@ async fn count_session_history_pool(pool: &DbPool) -> rusqlite::Result<i64> {
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(row.map(|r| r.get::<i64, _>(0)).unwrap_or(0))
+    Ok(row.map(|r| r.get::<i64>(0)).unwrap_or(0))
 }
 
 // ── Auth sessions ──────────────────────────────────────────────────────
@@ -5169,7 +5284,7 @@ async fn create_auth_session_pool(
             ],
         ),
     };
-    pool_exec(pool, sql, &args).await.map_err(map_sqlx_err)?;
+    pool_exec(pool, &sql, &args).await.map_err(map_sqlx_err)?;
     Ok(token)
 }
 
@@ -5198,9 +5313,9 @@ async fn validate_auth_session_pool(pool: &DbPool, token: String) -> Result<User
         ts_now(pool)
     );
     let row = match pool {
-        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &[Arg::Str(token_hash)]).await,
-        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &[Arg::Str(token_hash)]).await,
-        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &[Arg::Str(token_hash)]).await,
+        DbPool::Postgres(p) => pg_fetch_opt(p, &sql, &[Arg::Str(token_hash)]).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, &sql, &[Arg::Str(token_hash)]).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, &sql, &[Arg::Str(token_hash)]).await,
         DbPool::None => return Err(AuthError::InvalidSession),
     }
     .map_err(|_| AuthError::InvalidSession)?;
@@ -5330,13 +5445,13 @@ async fn count_recent_failures_pool(
         ),
     };
     let row = match pool {
-        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &args).await,
-        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &args).await,
-        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &args).await,
+        DbPool::Postgres(p) => pg_fetch_opt(p, &sql, &args).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, &sql, &args).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, &sql, &args).await,
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(row.map(|r| r.get::<i64, _>(0) as u32).unwrap_or(0))
+    Ok(row.map(|r| r.get::<i64>(0) as u32).unwrap_or(0))
 }
 
 // ── Group-to-role mappings ─────────────────────────────────────────────
@@ -5536,7 +5651,7 @@ async fn list_known_groups_pool(pool: &DbPool) -> rusqlite::Result<Vec<String>> 
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(rows.iter().map(|r| r.get::<String, _>(0)).collect())
+    Ok(rows.iter().map(|r| r.get::<String>(0)).collect())
 }
 
 // ── User API tokens ────────────────────────────────────────────────────
@@ -5619,7 +5734,7 @@ async fn list_all_user_tokens_pool(pool: &DbPool) -> rusqlite::Result<Vec<(UserA
     .map_err(map_sqlx_err)?;
     Ok(rows
         .iter()
-        .map(|row| (user_token_row!(row), row.get::<String, _>(8)))
+        .map(|row| (user_token_row!(row), row.get::<String>(8)))
         .collect())
 }
 
@@ -5855,7 +5970,7 @@ async fn cleanup_old_audit_log_pool(pool: &DbPool, retain_days: u32) -> rusqlite
             pool,
             "DELETE FROM token_audit_log WHERE created_at < to_char((now() at time zone 'utc') - make_interval(days => $1::int), 'YYYY-MM-DD HH24:MI:SS')",
             "DELETE FROM token_audit_log WHERE created_at < datetime('now', ?)"
-        ),
+        ).to_string(),
     }
     .to_string();
     let (sql, args) = match pool {
@@ -5873,7 +5988,7 @@ async fn cleanup_old_audit_log_pool(pool: &DbPool, retain_days: u32) -> rusqlite
             pool,
             "DELETE FROM addressbook_audit_log WHERE created_at < to_char((now() at time zone 'utc') - make_interval(days => $1::int), 'YYYY-MM-DD HH24:MI:SS')",
             "DELETE FROM addressbook_audit_log WHERE created_at < datetime('now', ?)"
-        ),
+        ).to_string(),
     }
     .to_string();
     let (sql2, args2) = match pool {
@@ -6294,19 +6409,19 @@ async fn stream_session_history_csv_pool(
         .iter()
         .map(|row| {
             (
-                row.get::<String, _>(0),
-                row.get::<String, _>(1),
-                row.get::<String, _>(2),
-                row.get::<Option<i64>, _>(3),
-                row.get::<String, _>(4),
-                row.get::<String, _>(5),
-                row.get::<String, _>(6),
-                row.get::<String, _>(7),
-                row.get::<String, _>(8),
-                row.get::<Option<String>, _>(9),
-                row.get::<Option<i64>, _>(10),
-                row.get::<String, _>(11),
-                row.get::<Option<String>, _>(12),
+                row.get::<String>(0),
+                row.get::<String>(1),
+                row.get::<String>(2),
+                row.get::<Option<i64>>(3),
+                row.get::<String>(4),
+                row.get::<String>(5),
+                row.get::<String>(6),
+                row.get::<String>(7),
+                row.get::<String>(8),
+                row.get::<Option<String>>(9),
+                row.get::<Option<i64>>(10),
+                row.get::<String>(11),
+                row.get::<Option<String>>(12),
             )
         })
         .collect())
@@ -6346,12 +6461,12 @@ async fn top_connections_pool(
         .iter()
         .map(|row| {
             serde_json::json!({
-                "name": row.get::<String, _>(0),
-                "address_book_entry": row.get::<Option<String>, _>(1),
-                "folder": row.get::<Option<String>, _>(2),
-                "session_type": row.get::<Option<String>, _>(3),
-                "session_count": row.get::<i64, _>(4),
-                "total_hours": row.get::<i64, _>(5) as f64 / 3600.0,
+                "name": row.get::<String>(0),
+                "address_book_entry": row.get::<Option<String>>(1),
+                "folder": row.get::<Option<String>>(2),
+                "session_type": row.get::<Option<String>>(3),
+                "session_count": row.get::<i64>(4),
+                "total_hours": row.get::<i64>(5) as f64 / 3600.0,
             })
         })
         .collect())
@@ -6375,10 +6490,10 @@ async fn top_users_pool(pool: &DbPool, limit: u32) -> rusqlite::Result<Vec<serde
         .iter()
         .map(|row| {
             serde_json::json!({
-                "user": row.get::<String, _>(0),
-                "session_count": row.get::<i64, _>(1),
-                "total_hours": row.get::<i64, _>(2) as f64 / 3600.0,
-                "last_session": row.get::<String, _>(3),
+                "user": row.get::<String>(0),
+                "session_count": row.get::<i64>(1),
+                "total_hours": row.get::<i64>(2) as f64 / 3600.0,
+                "last_session": row.get::<String>(3),
             })
         })
         .collect())
@@ -6392,7 +6507,7 @@ async fn session_summary_pool(pool: &DbPool) -> rusqlite::Result<serde_json::Val
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?
-    .map(|r| r.get::<i64, _>(0))
+    .map(|r| r.get::<i64>(0))
     .unwrap_or(0);
     let active_sessions = match pool {
         DbPool::Postgres(p) => {
@@ -6422,7 +6537,7 @@ async fn session_summary_pool(pool: &DbPool) -> rusqlite::Result<serde_json::Val
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?
-    .map(|r| r.get::<i64, _>(0))
+    .map(|r| r.get::<i64>(0))
     .unwrap_or(0);
     let total_users = match pool {
         DbPool::Postgres(p) => pg_fetch_opt(p, "SELECT COUNT(*) FROM users", &[]).await,
@@ -6431,7 +6546,7 @@ async fn session_summary_pool(pool: &DbPool) -> rusqlite::Result<serde_json::Val
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?
-    .map(|r| r.get::<i64, _>(0))
+    .map(|r| r.get::<i64>(0))
     .unwrap_or(0);
     let uptime_secs = crate::metrics::uptime_seconds();
     Ok(serde_json::json!({
@@ -6478,8 +6593,8 @@ async fn session_activity_by_hour_pool(
         .iter()
         .map(|row| {
             serde_json::json!({
-                "hour": row.get::<String, _>(0),
-                "count": row.get::<i64, _>(1),
+                "hour": row.get::<String>(0),
+                "count": row.get::<i64>(1),
             })
         })
         .collect())
@@ -6498,7 +6613,7 @@ async fn cleanup_session_history_pool(pool: &DbPool, retain_days: u32) -> rusqli
             pool,
             "DELETE FROM session_history WHERE started_at < to_char((now() at time zone 'utc') - make_interval(days => $1::int), 'YYYY-MM-DD HH24:MI:SS')",
             "DELETE FROM session_history WHERE started_at < datetime('now', ?)"
-        ),
+        ).to_string(),
     }
     .to_string();
     let (sql, args) = match pool {
@@ -6518,8 +6633,8 @@ macro_rules! totp_row {
             user_id: $row.get(0),
             secret_b32: $row.get(1),
             algorithm: $row.get(2),
-            digits: $row.get::<i64, _>(3) as u8,
-            period: $row.get::<i64, _>(4) as u16,
+            digits: $row.get::<i64>(3) as u8,
+            period: $row.get::<i64>(4) as u16,
             enabled: $row.get(5),
         }
     };
@@ -6647,7 +6762,7 @@ async fn user_totp_enabled_pool(pool: &DbPool, user_id: i64) -> rusqlite::Result
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(row.map(|r| r.get::<bool, _>(0)).unwrap_or(false))
+    Ok(row.map(|r| r.get::<bool>(0)).unwrap_or(false))
 }
 
 // ── Pending MFA ────────────────────────────────────────────────────────
@@ -6725,7 +6840,7 @@ async fn create_pending_mfa_pool(
             ],
         ),
     };
-    pool_exec(pool, sql, &args).await.map_err(map_sqlx_err)?;
+    pool_exec(pool, &sql, &args).await.map_err(map_sqlx_err)?;
     Ok(token)
 }
 
@@ -6741,9 +6856,9 @@ async fn get_pending_mfa_pool(
         ts_now(pool)
     );
     let row = match pool {
-        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &[Arg::Str(token_hash)]).await,
-        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &[Arg::Str(token_hash)]).await,
-        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &[Arg::Str(token_hash)]).await,
+        DbPool::Postgres(p) => pg_fetch_opt(p, &sql, &[Arg::Str(token_hash)]).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, &sql, &[Arg::Str(token_hash)]).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, &sql, &[Arg::Str(token_hash)]).await,
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
@@ -6788,7 +6903,7 @@ macro_rules! jump_host_row {
             id: $row.get(0),
             name: $row.get(1),
             hostname: $row.get(2),
-            port: $row.get::<i64, _>(3) as u16,
+            port: $row.get::<i64>(3) as u16,
             username: $row.get(4),
             auth_method: $row.get(5),
             key_path: $row.get(6),
@@ -6937,7 +7052,7 @@ macro_rules! ab_entry_row {
             display_name: $row.get(3),
             protocol: $row.get(4),
             hostname: $row.get(5),
-            port: $row.get::<Option<i64>, _>(6).map(|p| p as u16),
+            port: $row.get::<Option<i64>>(6).map(|p| p as u16),
             username: $row.get(7),
             protocol_config: $row.get(8),
             allowed_groups: $row.get(9),
@@ -7112,7 +7227,7 @@ async fn delete_ab_folder_pool(
     let Some(row) = folder_id else {
         return Ok(false);
     };
-    let fid = row.get::<i64, _>(0);
+    let fid = row.get::<i64>(0);
 
     let entry_ids: Vec<i64> = {
         let rows = match pool {
@@ -7143,7 +7258,7 @@ async fn delete_ab_folder_pool(
             DbPool::None => return Err(no_pool_err()),
         }
         .map_err(map_sqlx_err)?;
-        rows.iter().map(|r| r.get::<i64, _>(0)).collect()
+        rows.iter().map(|r| r.get::<i64>(0)).collect()
     };
     for id in &entry_ids {
         pool_exec(
@@ -7359,7 +7474,7 @@ async fn store_ab_credential_pool(
              VALUES (?, ?, ?) \
              ON CONFLICT (entry_id, credential_type) DO UPDATE SET \
              credential_data = excluded.credential_data, updated_at = datetime('now')"
-        ),
+        ).to_string(),
     }
     .to_string();
     pool_exec(
@@ -7473,7 +7588,7 @@ async fn folder_has_allowed_groups_pool(
     let Some(folder) = folder else {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     };
-    let fid = folder.get::<i64, _>(0);
+    let fid = folder.get::<i64>(0);
     let count = match pool {
         DbPool::Postgres(p) => {
             pg_fetch_opt(p, "SELECT COUNT(*) FROM address_book_entries WHERE folder_id = $1 AND allowed_groups != ''", &[Arg::I64(fid)]).await
@@ -7487,7 +7602,7 @@ async fn folder_has_allowed_groups_pool(
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(count.map(|r| r.get::<i64, _>(0) > 0).unwrap_or(false))
+    Ok(count.map(|r| r.get::<i64>(0) > 0).unwrap_or(false))
 }
 
 // ── Local groups + provider-group mappings ─────────────────────────────
@@ -7639,13 +7754,13 @@ async fn count_group_name_references_pool(
         }
     };
     let row = match pool {
-        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &args).await,
-        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &args).await,
-        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &args).await,
+        DbPool::Postgres(p) => pg_fetch_opt(p, &sql, &args).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, &sql, &args).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, &sql, &args).await,
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(row.map(|r| r.get::<i64, _>(0)).unwrap_or(0))
+    Ok(row.map(|r| r.get::<i64>(0)).unwrap_or(0))
 }
 
 async fn update_local_group_pool(
@@ -7904,7 +8019,9 @@ pub fn store_user_credentials(
             })
             .collect();
         let user_key = user_key.to_string();
-        return pool_call(move |pool| store_user_credentials_pool(pool, user_key, entries));
+        return pool_call(move |pool: &'static DbPool| {
+            store_user_credentials_pool(pool, user_key, entries)
+        });
     }
     let conn = db.lock().unwrap();
     conn.execute_batch(
@@ -7978,7 +8095,7 @@ async fn store_user_credentials_pool(
 // through `pool_call`/`pool_active` when the pool store is active.
 
 /// Whether the SQLx pool store is active (db_url configured at startup).
-pub(crate) fn pool_active() -> bool {
+pub fn pool_active() -> bool {
     pool_store().is_some()
 }
 
@@ -8277,13 +8394,13 @@ pub(crate) async fn rbac_check_connection_permission_pool(
         ),
     };
     let row = match pool {
-        DbPool::Postgres(p) => pg_fetch_opt(p, sql, &args).await,
-        DbPool::MySQL(p) => mysql_fetch_opt(p, sql, &args).await,
-        DbPool::SQLite(p) => sqlite_fetch_opt(p, sql, &args).await,
+        DbPool::Postgres(p) => pg_fetch_opt(p, &sql, &args).await,
+        DbPool::MySQL(p) => mysql_fetch_opt(p, &sql, &args).await,
+        DbPool::SQLite(p) => sqlite_fetch_opt(p, &sql, &args).await,
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(row.map(|r| r.get::<bool, _>(0)).unwrap_or(false))
+    Ok(row.map(|r| r.get::<bool>(0)).unwrap_or(false))
 }
 
 pub(crate) async fn rbac_list_connection_permissions_pool(
@@ -8325,7 +8442,7 @@ pub(crate) async fn rbac_list_connection_permissions_pool(
 
 pub(crate) async fn audit_log_event_pool(
     pool: &DbPool,
-    event: &mut AuditEvent,
+    mut event: AuditEvent,
 ) -> rusqlite::Result<i64> {
     let prev_hash: String = match pool {
         DbPool::Postgres(p) => {
@@ -8355,11 +8472,11 @@ pub(crate) async fn audit_log_event_pool(
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?
-    .map(|r| r.get::<String, _>(0))
+    .map(|r| r.get::<String>(0))
     .unwrap_or_else(|| "0".repeat(64));
 
     event.prev_hash = prev_hash;
-    event.event_hash = compute_event_hash(event);
+    event.event_hash = compute_event_hash(&event);
 
     let details_str = if event.details.is_null() {
         None
@@ -8446,7 +8563,7 @@ pub(crate) async fn audit_events_pool(
                 AuditEvent {
                     id,
                     event_type: row.get(1),
-                    timestamp: chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>(2))
+                    timestamp: chrono::DateTime::parse_from_rfc3339(&row.get::<String>(2))
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                         .unwrap_or_else(|_| chrono::Utc::now()),
                     user_id: row.get(3),
@@ -8470,7 +8587,7 @@ pub(crate) async fn audit_first_id_pool(pool: &DbPool) -> rusqlite::Result<Optio
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(row.and_then(|r| r.get::<Option<i64>, _>(0)))
+    Ok(row.and_then(|r| r.get::<Option<i64>>(0)))
 }
 
 /// Build the audit filter WHERE clause; returns (clause, args). Placeholder
@@ -8526,7 +8643,7 @@ macro_rules! audit_event_row {
         AuditEvent {
             id: $row.get(0),
             event_type: $row.get(1),
-            timestamp: chrono::DateTime::parse_from_rfc3339(&$row.get::<String, _>(2))
+            timestamp: chrono::DateTime::parse_from_rfc3339(&$row.get::<String>(2))
                 .map(|dt| dt.with_timezone(&chrono::Utc))
                 .unwrap_or_else(|_| chrono::Utc::now()),
             user_id: $row.get(3),
@@ -8579,7 +8696,7 @@ pub(crate) async fn audit_count_events_pool(
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(row.map(|r| r.get::<i64, _>(0) as u64).unwrap_or(0))
+    Ok(row.map(|r| r.get::<i64>(0) as u64).unwrap_or(0))
 }
 
 macro_rules! provider_row {
@@ -8590,7 +8707,7 @@ macro_rules! provider_row {
             provider_type: $row.get(2),
             enabled: $row.get(3),
             position: $row.get(4),
-            config: serde_json::from_str(&$row.get::<String, _>(5))
+            config: serde_json::from_str(&$row.get::<String>(5))
                 .unwrap_or_else(|_| serde_json::Value::Null),
             created_at: $row.get(6),
             updated_at: $row.get(7),
@@ -8820,7 +8937,7 @@ pub(crate) async fn providers_move_pool(
 
 // ── System settings (src/settings_merge.rs, src/api/settings.rs) ──────
 
-pub(crate) async fn settings_load_all_pool(
+pub async fn settings_load_all_pool(
     pool: &DbPool,
 ) -> rusqlite::Result<Vec<(String, String)>> {
     let sql = qsql!(
@@ -8842,11 +8959,11 @@ pub(crate) async fn settings_load_all_pool(
     .map_err(map_sqlx_err)?;
     Ok(rows
         .iter()
-        .map(|r| (r.get::<String, _>(0), r.get::<String, _>(1)))
+        .map(|r| (r.get::<String>(0), r.get::<String>(1)))
         .collect())
 }
 
-pub(crate) async fn settings_put_pool(
+pub async fn settings_put_pool(
     pool: &DbPool,
     entries: Vec<(String, String)>,
 ) -> rusqlite::Result<()> {

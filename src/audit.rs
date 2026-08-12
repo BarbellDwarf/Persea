@@ -163,8 +163,10 @@ pub fn compute_event_hash(event: &AuditEvent) -> String {
 /// event's database ID.
 pub fn log_event(db: &Db, event: &mut AuditEvent) -> rusqlite::Result<i64> {
     if crate::db::pool_active() {
-        let mut owned = event.clone();
-        return crate::db::pool_call(move |pool| crate::db::audit_log_event_pool(pool, &mut owned));
+        let owned = event.clone();
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::audit_log_event_pool(pool, owned)
+        });
     }
     let conn = db.lock().unwrap();
 
@@ -224,10 +226,14 @@ pub fn verify_chain(
     to: Option<&str>,
 ) -> rusqlite::Result<ChainVerification> {
     if crate::db::pool_active() {
-        let events = crate::db::pool_call(move |pool| {
-            crate::db::audit_events_pool(pool, from.map(str::to_string), to.map(str::to_string))
+        let from_s = from.map(str::to_string);
+        let to_s = to.map(str::to_string);
+        let events = crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::audit_events_pool(pool, from_s, to_s)
         })?;
-        let first_id = crate::db::pool_call(move |pool| crate::db::audit_first_id_pool(pool))?;
+        let first_id = crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::audit_first_id_pool(pool)
+        })?;
         return Ok(verify_events(events, first_id));
     }
     let conn = db.lock().unwrap();
@@ -400,7 +406,7 @@ pub fn list_events(
 ) -> rusqlite::Result<Vec<AuditEvent>> {
     if crate::db::pool_active() {
         let filters = filters.clone();
-        return crate::db::pool_call(move |pool| {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
             crate::db::audit_list_events_pool(pool, limit, offset, filters)
         });
     }
@@ -453,7 +459,9 @@ pub fn list_events(
 pub fn count_events(db: &Db, filters: &AuditFilters) -> rusqlite::Result<u64> {
     if crate::db::pool_active() {
         let filters = filters.clone();
-        return crate::db::pool_call(move |pool| crate::db::audit_count_events_pool(pool, filters));
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::audit_count_events_pool(pool, filters)
+        });
     }
     let conn = db.lock().unwrap();
     let (where_clause, param_values) = build_filter_clause(filters);

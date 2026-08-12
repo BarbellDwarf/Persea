@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS auth_providers (
     enabled    TINYINT(1) NOT NULL DEFAULT 1,
     position   BIGINT NOT NULL DEFAULT 0,
     config     TEXT NOT NULL,
-    created_at VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
-    updated_at VARCHAR(32) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    created_at VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
+    updated_at VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     UNIQUE KEY uq_auth_providers_name (name)
 );

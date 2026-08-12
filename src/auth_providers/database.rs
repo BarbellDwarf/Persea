@@ -64,11 +64,14 @@ impl AuthProvider for DatabaseProvider {
         // store so it works on the SQLx backends too (db_url set).
         let db = self.db.clone();
         let username_for_db = username.clone();
-        let result = tokio::task::spawn_blocking(move || {
+        let result = match tokio::task::spawn_blocking(move || {
             crate::db::get_user_login_info(&db, &username_for_db)
         })
         .await
-        .map_err(|e| AuthResult::Unavailable(format!("database error: {e}")))?;
+        {
+            Ok(r) => r,
+            Err(e) => return AuthResult::Unavailable(format!("database error: {e}")),
+        };
 
         let (id, email, name, role, disabled, password_hash) = match result {
             Ok(Some(r)) => r,
