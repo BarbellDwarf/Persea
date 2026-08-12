@@ -28,6 +28,18 @@ pub struct WsTicketStore(Arc<Mutex<HashMap<String, WsTicket>>>);
 
 const WS_TICKET_TTL_SECS: u64 = 30;
 
+/// R105: whether API-key authentication is permitted. Reads the
+/// `enable_api_keys` lockdown toggle from the DB; unset or unreadable →
+/// enabled, so existing deployments behave exactly as before.
+async fn api_keys_enabled(db: &Db) -> bool {
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::settings_merge::read_toggle(&db, "enable_api_keys", true)
+    })
+    .await
+    .unwrap_or(true)
+}
+
 impl Default for WsTicketStore {
     fn default() -> Self {
         Self(Arc::new(Mutex::new(HashMap::new())))
@@ -220,6 +232,17 @@ pub async fn require_auth(
         .map(|k| k.to_string());
 
     if let Some(key) = api_key {
+        // R105: the admin can lock down API-key auth entirely. Reject
+        // outright when disabled — a request presenting only an API key has
+        // no other way to authenticate (admin keys and user tokens alike).
+        if !api_keys_enabled(&db).await {
+            tracing::warn!(client_ip = %ip, "API key authentication rejected: enable_api_keys is disabled by an administrator");
+            return crate::error::AppError::error_response(
+                StatusCode::FORBIDDEN,
+                "API key authentication is disabled by an administrator",
+            );
+        }
+
         let validate_ip = Some(ip);
         let db_clone = db.clone();
         let key_clone = key.clone();
@@ -376,48 +399,57 @@ pub async fn optional_auth(
         .map(|k| k.to_string());
 
     if let Some(key) = api_key {
-        let db_clone = db.clone();
-        let key_clone = key.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            db::validate_api_key(&db_clone, &key_clone, Some(ip))
-        })
-        .await
-        .unwrap_or(Err(AuthError::InvalidKey));
+        // R105: when the admin locked down API-key auth, an API key is
+        // ignored here — optional auth passes through silently so a cookie
+        // or ticket on the same request can still authenticate it.
+        if !api_keys_enabled(&db).await {
+            tracing::debug!(client_ip = %ip, "Optional auth: API key ignored — enable_api_keys is disabled by an administrator");
+        } else {
+            let db_clone = db.clone();
+            let key_clone = key.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                db::validate_api_key(&db_clone, &key_clone, Some(ip))
+            })
+            .await
+            .unwrap_or(Err(AuthError::InvalidKey));
 
-        match result {
-            Ok(admin) => {
-                tracing::debug!(admin = %admin.name, "Optional auth: API key authenticated");
-                let mut request = request;
-                request
-                    .extensions_mut()
-                    .insert(AuthIdentity::ApiKey(admin.name));
-                return next.run(request).await;
-            }
-            Err(_) => {
-                // Not an admin key — try user API tokens before giving up.
-                let db_clone = db.clone();
-                let token_result =
-                    tokio::task::spawn_blocking(move || db::validate_user_token(&db_clone, &key))
-                        .await
-                        .unwrap_or(Err(AuthError::InvalidKey));
-
-                if let Ok((user, token_meta)) = token_result {
-                    let effective_role = compute_effective_role(&user.role, &token_meta.max_role);
-                    tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "Optional auth: user token authenticated");
-                    let groups = user.groups_vec();
+            match result {
+                Ok(admin) => {
+                    tracing::debug!(admin = %admin.name, "Optional auth: API key authenticated");
                     let mut request = request;
-                    request.extensions_mut().insert(AuthIdentity::User {
-                        email: user.email,
-                        name: user.name,
-                        role: effective_role,
-                        groups,
-                    });
+                    request
+                        .extensions_mut()
+                        .insert(AuthIdentity::ApiKey(admin.name));
                     return next.run(request).await;
                 }
-                tracing::warn!(client_ip = %ip, "Optional auth: invalid API key/token, continuing unauthenticated");
-                // Fall through to the other auth paths below rather than
-                // returning — a bad key shouldn't block a cookie/ticket
-                // that might still be present.
+                Err(_) => {
+                    // Not an admin key — try user API tokens before giving up.
+                    let db_clone = db.clone();
+                    let token_result = tokio::task::spawn_blocking(move || {
+                        db::validate_user_token(&db_clone, &key)
+                    })
+                    .await
+                    .unwrap_or(Err(AuthError::InvalidKey));
+
+                    if let Ok((user, token_meta)) = token_result {
+                        let effective_role =
+                            compute_effective_role(&user.role, &token_meta.max_role);
+                        tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "Optional auth: user token authenticated");
+                        let groups = user.groups_vec();
+                        let mut request = request;
+                        request.extensions_mut().insert(AuthIdentity::User {
+                            email: user.email,
+                            name: user.name,
+                            role: effective_role,
+                            groups,
+                        });
+                        return next.run(request).await;
+                    }
+                    tracing::warn!(client_ip = %ip, "Optional auth: invalid API key/token, continuing unauthenticated");
+                    // Fall through to the other auth paths below rather than
+                    // returning — a bad key shouldn't block a cookie/ticket
+                    // that might still be present.
+                }
             }
         }
     }
@@ -579,5 +611,35 @@ mod tests {
         assert!(viewer.has_role("viewer"));
         assert!(!viewer.has_role("operator"));
         assert!(!viewer.has_role("admin"));
+    }
+
+    #[tokio::test]
+    async fn api_key_gate_defaults_enabled_and_reads_db() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        // Unset toggle → enabled (existing deployments unaffected).
+        assert!(api_keys_enabled(&db).await);
+
+        // Stored "false" → API keys rejected. The first read created the
+        // system_settings table via load_db_settings.
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO system_settings (key, value) VALUES ('enable_api_keys', 'false')",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(!api_keys_enabled(&db).await);
+
+        // Flipped back to "true" → accepted again.
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "UPDATE system_settings SET value = 'true' WHERE key = 'enable_api_keys'",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(api_keys_enabled(&db).await);
     }
 }

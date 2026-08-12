@@ -65,6 +65,28 @@ impl SessionManager {
             ));
         }
 
+        // R105: admin lockdown toggles from the Settings page — a disabled
+        // protocol must not spawn sessions. The DB overlay is read once per
+        // creation attempt (live: flipping a toggle takes effect without a
+        // restart); unset or unreadable toggles default to enabled so
+        // existing deployments behave exactly as before.
+        let settings: Vec<(String, String)> = match &self.db {
+            Some(db) => {
+                let db = db.clone();
+                tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db))
+                    .await
+                    .unwrap_or_default()
+                    .unwrap_or_default()
+            }
+            None => Vec::new(),
+        };
+        let toggle = |key: &str| crate::settings_merge::toggle_enabled(&settings, key, true);
+        check_session_type_enabled(
+            req.session_type.clone(),
+            req.address_book_entry.as_deref(),
+            toggle,
+        )?;
+
         let session_id = Uuid::new_v4();
         // Protocol-specific params land in flattened sub-structs (see
         // CreateSessionRequest); bind them up-front for ergonomic access.
@@ -198,7 +220,8 @@ impl SessionManager {
                     (ssh.and_then(|s| s.private_key.clone()), None)
                 };
 
-                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
+                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive)
+                    && toggle("enable_file_transfer");
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
 
                 // SSH typescript recording (#159): per-connection opt-in
@@ -278,7 +301,8 @@ impl SessionManager {
                     "Creating new RDP session"
                 );
 
-                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive);
+                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive)
+                    && toggle("enable_file_transfer");
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
                 tracing::info!(
                     %session_id,
@@ -1086,9 +1110,13 @@ impl SessionManager {
             (Some(stream), connection_id, None)
         };
 
+        // R105: `enable_recordings` lockdown — when the admin switched
+        // recordings off, no session may record regardless of request or
+        // config (the toggle defaults to enabled when unset).
         let recording_enabled = req
             .enable_recording
-            .unwrap_or(self.config.recording_enabled());
+            .unwrap_or(self.config.recording_enabled())
+            && toggle("enable_recordings");
 
         // Spawn login script if configured (web sessions with CDP port)
         let login_script_handle = if let (Some(script), Some(bs)) = (
@@ -1430,6 +1458,61 @@ async fn check_allowed_network(
     )))
 }
 
+/// Which `enable_*` lockdown toggle gates a session type. `Vnc` has no
+/// toggle (the settings page offers none) and is never blocked here.
+fn protocol_toggle(session_type: SessionType) -> Option<&'static str> {
+    match session_type {
+        SessionType::Rdp => Some("enable_rdp"),
+        // The settings page has no `enable_ssh` toggle; SSH sessions are
+        // gated by the SSH-related lockdown switch (R105).
+        SessionType::Ssh => Some("enable_ssh_tunnels"),
+        SessionType::Spice => Some("enable_spice"),
+        SessionType::Proxmox => Some("enable_proxmox"),
+        SessionType::Web => Some("enable_web_sessions"),
+        SessionType::Vdi => Some("enable_vdi"),
+        SessionType::Vnc => None,
+    }
+}
+
+/// Human label for the disabled-protocol error message.
+fn protocol_label(session_type: SessionType) -> &'static str {
+    match session_type {
+        SessionType::Rdp => "RDP",
+        SessionType::Ssh => "SSH",
+        SessionType::Spice => "SPICE",
+        SessionType::Proxmox => "Proxmox VE",
+        SessionType::Web => "Web browser",
+        SessionType::Vdi => "VDI",
+        SessionType::Vnc => "VNC",
+    }
+}
+
+/// R105: enforce the admin lockdown toggles at session creation. Rejects
+/// with a clear error when the effective setting forbids the session type.
+/// VMware sessions are plain RDP/SSH/VNC sessions routed from the vSphere
+/// API with an `address_book_entry` of the form `vsphere/<vm name>`; they
+/// additionally require `enable_vmware`.
+fn check_session_type_enabled(
+    session_type: SessionType,
+    address_book_entry: Option<&str>,
+    toggle: impl Fn(&str) -> bool,
+) -> Result<(), SessionError> {
+    if let Some(key) = protocol_toggle(session_type) {
+        if !toggle(key) {
+            return Err(SessionError::ValidationError(format!(
+                "{} sessions are disabled by an administrator",
+                protocol_label(session_type)
+            )));
+        }
+    }
+    if address_book_entry.is_some_and(|e| e.starts_with("vsphere/")) && !toggle("enable_vmware") {
+        return Err(SessionError::ValidationError(
+            "VMware sessions are disabled by an administrator".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod auth_pkg_tests {
     use crate::config::Config;
@@ -1669,5 +1752,120 @@ mod tests {
         let creds = parse_autofill_credentials(Some(json), None, None).unwrap();
         assert_eq!(creds.len(), 1);
         assert_eq!(creds[0].0, "https://ok.com");
+    }
+
+    // ── R105: protocol lockdown toggles ──
+
+    const ALL_TYPES: [SessionType; 7] = [
+        SessionType::Ssh,
+        SessionType::Web,
+        SessionType::Rdp,
+        SessionType::Vnc,
+        SessionType::Vdi,
+        SessionType::Spice,
+        SessionType::Proxmox,
+    ];
+
+    fn only_off(disabled: &[&str]) -> impl Fn(&str) -> bool {
+        let disabled = disabled.to_vec();
+        move |k: &str| !disabled.contains(&k)
+    }
+
+    #[test]
+    fn all_protocols_allowed_when_toggles_unset() {
+        for st in ALL_TYPES {
+            assert!(
+                check_session_type_enabled(st, None, |_| true).is_ok(),
+                "{:?} should be allowed when everything is enabled",
+                st
+            );
+        }
+    }
+
+    #[test]
+    fn rdp_disabled_blocks_rdp_sessions() {
+        let err = check_session_type_enabled(SessionType::Rdp, None, only_off(&["enable_rdp"]))
+            .unwrap_err();
+        assert!(
+            format!("{}", err).contains("RDP is disabled by an administrator"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn ssh_disabled_blocks_ssh_sessions() {
+        let err =
+            check_session_type_enabled(SessionType::Ssh, None, only_off(&["enable_ssh_tunnels"]))
+                .unwrap_err();
+        assert!(
+            format!("{}", err).contains("SSH sessions are disabled by an administrator"),
+            "got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn spice_proxmox_web_vdi_each_gated_by_own_toggle() {
+        for (st, key, label) in [
+            (SessionType::Spice, "enable_spice", "SPICE"),
+            (SessionType::Proxmox, "enable_proxmox", "Proxmox VE"),
+            (SessionType::Web, "enable_web_sessions", "Web browser"),
+            (SessionType::Vdi, "enable_vdi", "VDI"),
+        ] {
+            let err = check_session_type_enabled(st, None, only_off(&[key])).unwrap_err();
+            assert!(
+                format!("{}", err).contains(&format!(
+                    "{} sessions are disabled by an administrator",
+                    label
+                )),
+                "got: {}",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn a_disabled_toggle_only_blocks_its_own_protocol() {
+        for st in ALL_TYPES {
+            if st == SessionType::Spice {
+                assert!(check_session_type_enabled(st, None, only_off(&["enable_spice"])).is_err());
+            } else {
+                assert!(
+                    check_session_type_enabled(st, None, only_off(&["enable_spice"])).is_ok(),
+                    "{:?} must not be affected by enable_spice",
+                    st
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vnc_has_no_toggle_and_is_never_blocked() {
+        assert!(check_session_type_enabled(SessionType::Vnc, None, |_| false).is_ok());
+    }
+
+    #[test]
+    fn vmware_entries_gated_by_enable_vmware() {
+        let err = check_session_type_enabled(
+            SessionType::Rdp,
+            Some("vsphere/webserver-01"),
+            only_off(&["enable_vmware"]),
+        )
+        .unwrap_err();
+        assert!(
+            format!("{}", err).contains("VMware sessions are disabled by an administrator"),
+            "got: {}",
+            err
+        );
+        assert!(
+            check_session_type_enabled(SessionType::Rdp, Some("vsphere/webserver-01"), |_| true)
+                .is_ok()
+        );
+        assert!(
+            check_session_type_enabled(SessionType::Rdp, Some("shared/folder/entry"), |_| false)
+                .is_ok(),
+            "non-vSphere entries must not be gated by enable_vmware"
+        );
     }
 }

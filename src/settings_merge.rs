@@ -4,8 +4,10 @@
 //! `system_settings` table. This module reads them at startup and overlays
 //! them onto the config-file values. Keys without a config equivalent (for
 //! example `session_idle_timeout_secs`, which has no `Config` field) are
-//! stored and returned by the API but have no runtime effect; keep this list
-//! in sync with `src/api/settings.rs`.
+//! stored and returned by the API but have no startup-config effect; the
+//! `enable_*` lockdown toggles are enforced at the point of use (session
+//! creation, auth middleware) via `toggle_enabled`/`read_toggle`. Keep this
+//! list in sync with `src/api/settings.rs`.
 
 use crate::db::Db;
 
@@ -46,6 +48,32 @@ pub fn load_db_settings(db: &Db) -> rusqlite::Result<Vec<(String, String)>> {
         .filter_map(|r| r.ok())
         .collect::<Vec<_>>();
     Ok(rows)
+}
+
+/// Effective `enable_*` lockdown toggle: the DB-persisted value when present,
+/// otherwise `default`. Only the literal strings "true"/"false" are honoured;
+/// anything else (or absent) falls back to `default`. The settings API only
+/// writes these two forms, so the fallback is purely defensive.
+pub fn toggle_enabled(settings: &[(String, String)], key: &str, default: bool) -> bool {
+    match settings
+        .iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+    {
+        Some("true") => true,
+        Some("false") => false,
+        _ => default,
+    }
+}
+
+/// Read a single `enable_*` toggle straight from the DB. Unset, unreadable,
+/// or a missing table → `default`. All toggles default to enabled so existing
+/// deployments behave exactly as before an admin flips a switch.
+pub fn read_toggle(db: &Db, key: &str, default: bool) -> bool {
+    match load_db_settings(db) {
+        Ok(settings) => toggle_enabled(&settings, key, default),
+        Err(_) => default,
+    }
 }
 
 /// Overlay DB settings onto a config in place. Unknown keys and values that
@@ -194,5 +222,29 @@ mod tests {
         apply_db_settings(&mut config, &settings);
         assert_eq!(config.listen_addr, original);
         assert_eq!(config.session_max_duration_secs, 28800);
+    }
+
+    #[test]
+    fn toggle_enabled_defaults_when_unset() {
+        assert!(toggle_enabled(&[], "enable_rdp", true));
+        assert!(!toggle_enabled(&[], "enable_rdp", false));
+    }
+
+    #[test]
+    fn toggle_enabled_honours_stored_true_false() {
+        let settings = vec![
+            ("enable_rdp".to_string(), "true".to_string()),
+            ("enable_spice".to_string(), "false".to_string()),
+        ];
+        assert!(toggle_enabled(&settings, "enable_rdp", true));
+        assert!(!toggle_enabled(&settings, "enable_spice", true));
+        assert!(toggle_enabled(&settings, "enable_rdp", false));
+    }
+
+    #[test]
+    fn toggle_enabled_falls_back_on_unexpected_value() {
+        let settings = vec![("enable_rdp".to_string(), "yes".to_string())];
+        assert!(toggle_enabled(&settings, "enable_rdp", true));
+        assert!(!toggle_enabled(&settings, "enable_rdp", false));
     }
 }
