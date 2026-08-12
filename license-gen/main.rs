@@ -145,18 +145,55 @@ fn gen_keypair(output: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to generate keypair: {e}"))?;
     key.set_comment("persea-license-key");
 
+    // `--output` may name the private key file directly or a directory to
+    // write into (the repo convention: `keys/` holds license_public_key).
+    let output_is_dir =
+        output.is_dir() || output.as_os_str().to_string_lossy().ends_with(['/', '\\']);
+    let private_path = if output_is_dir {
+        output.join(DEFAULT_KEY_PATH)
+    } else {
+        output.to_path_buf()
+    };
+
     let pem = key
         .to_openssh(ssh_key::LineEnding::LF)
         .map_err(|e| format!("failed to encode private key: {e}"))?;
-    write_private_key_file(output, pem.as_bytes())?;
+    write_private_key_file(&private_path, pem.as_bytes())?;
 
     let public = key
         .public_key()
         .to_openssh()
         .map_err(|e| format!("failed to encode public key: {e}"))?;
-    println!("{public}");
-    eprintln!("private key written to {} (mode 0600)", output.display());
-    eprintln!("embed the public key above in keys/license_public_key");
+
+    if output_is_dir {
+        // The repo embeds keys/license_public_key at build time, so write it
+        // next to the private key. Replacing an existing one invalidates
+        // every previously issued license, so say so loudly.
+        let public_path = output.join("license_public_key");
+        let replaced = public_path.exists();
+        std::fs::write(&public_path, format!("{public}\n"))
+            .map_err(|e| format!("failed to write {}: {e}", public_path.display()))?;
+        eprintln!(
+            "private key written to {} (mode 0600)",
+            private_path.display()
+        );
+        eprintln!("public key written to {}", public_path.display());
+        if replaced {
+            eprintln!(
+                "WARNING: {} already existed and was replaced. The server embeds this \
+                 file at build time, so persea must be rebuilt with the new key, and \
+                 every previously issued license key will stop verifying.",
+                public_path.display()
+            );
+        }
+    } else {
+        println!("{public}");
+        eprintln!(
+            "private key written to {} (mode 0600)",
+            private_path.display()
+        );
+        eprintln!("embed the public key above in keys/license_public_key");
+    }
     Ok(())
 }
 
@@ -278,7 +315,15 @@ fn open_private_key_file(path: &Path) -> Result<std::fs::File, String> {
         .create_new(true)
         .mode(0o600)
         .open(path)
-        .map_err(|e| format!("failed to create {}: {e}", path.display()))
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                format!(
+                    "{} already exists, refusing to overwrite it (use a fresh path)",
+                    path.display()
+                )
+            }
+            _ => format!("failed to create {}: {e}", path.display()),
+        })
 }
 
 #[cfg(not(unix))]
