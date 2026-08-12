@@ -46,10 +46,15 @@ impl RangeAllocator {
 
 /// Handles for the spawned Xvnc and Chromium processes.
 pub struct BrowserSession {
+    /// X display number allocated from the pool for this session.
     pub display: u32,
+    /// VNC port Xvnc listens on (`5900 + display`).
     pub vnc_port: u16,
+    /// Handle to the spawned Xvnc process.
     pub xvnc_child: Child,
+    /// Handle to the spawned Chromium process.
     pub chromium_child: Child,
+    /// Per-session Chromium profile directory, removed when the session ends.
     pub profile_dir: PathBuf,
     /// CDP port allocated for this session (if login script requested).
     pub cdp_port: Option<u16>,
@@ -67,6 +72,8 @@ pub struct BrowserManager {
 
 impl BrowserManager {
     #[allow(clippy::too_many_arguments)]
+    /// Create a manager with the given binary paths, display-number and
+    /// CDP port pools, and login script settings.
     pub fn new(
         xvnc_path: String,
         chromium_path: String,
@@ -690,10 +697,16 @@ async fn collect_stderr(child: &mut Child) -> String {
 #[derive(Debug)]
 #[must_use]
 pub enum BrowserError {
+    /// The X display number pool is exhausted.
     NoDisplayAvailable,
+    /// The CDP port pool is exhausted.
     NoCdpPortAvailable,
+    /// Xvnc failed to start or never opened its VNC port.
     XvncSpawn(String),
+    /// Chromium failed to spawn or exited immediately after launch.
     ChromiumSpawn(String),
+    /// The login script is missing, not executable, or escapes the scripts
+    /// directory.
     LoginScript(String),
 }
 
