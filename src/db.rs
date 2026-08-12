@@ -6597,7 +6597,13 @@ async fn registry_get_session_pool(
     pool: &DbPool,
     session_id: String,
 ) -> rusqlite::Result<Option<SessionRegistryRow>> {
-    let sql = format!("SELECT {REGISTRY_COLUMNS} FROM session_registry WHERE session_id = ?");
+    let sql = format!(
+        "SELECT {REGISTRY_COLUMNS} FROM session_registry WHERE session_id = {}",
+        match pool {
+            DbPool::Postgres(_) => "$1",
+            _ => "?",
+        }
+    );
     let row = match pool {
         DbPool::Postgres(p) => pg_fetch_opt(p, &sql, &[Arg::Str(session_id)]).await,
         DbPool::MySQL(p) => mysql_fetch_opt(p, &sql, &[Arg::Str(session_id)]).await,
