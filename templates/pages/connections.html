@@ -18,8 +18,14 @@
             </select>
             <input type="search" id="connections-search" placeholder="Search connections..."
                    class="form-input" style="width:260px" autocomplete="off">
-            <button id="btn-import" class="btn btn-secondary btn-sm admin-only" style="width:auto">Import CSV</button>
+            <button id="btn-filters" class="btn btn-secondary btn-sm" style="width:auto" aria-expanded="false">Filters</button>
             <button id="btn-new-folder" class="btn btn-primary btn-sm admin-only" style="width:auto">+ New Folder</button>
+            <div style="position:relative">
+                <button id="btn-overflow" class="btn btn-secondary btn-sm" style="width:auto" aria-label="More actions" aria-expanded="false">...</button>
+                <div id="overflow-menu" class="hidden" style="position:absolute;right:0;top:calc(100% + 4px);background:var(--bg-card);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.25);z-index:40;min-width:180px;padding:4px">
+                    <button id="btn-import" class="btn btn-secondary btn-sm admin-only" style="width:100%;justify-content:flex-start;background:transparent;border:none;padding:8px 10px">Import CSV</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -115,7 +121,7 @@
                         <span id="detail-protocol" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid"></span>
                     </div>
                     <div id="detail-host" style="font-size:13px;color:var(--text-secondary);margin-bottom:12px"></div>
-                    <div id="detail-description" class="hidden" style="margin-bottom:16px;padding:10px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-secondary);white-space:pre-wrap;word-break:break-word"></div>
+                    <div id="detail-description" class="hidden" style="margin-bottom:16px;padding:10px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word"></div>
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
                     <button id="detail-rotate-cred" class="btn btn-sm admin-only" style="width:100%;margin-bottom:16px;background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);display:none">
                         <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-8.243a.75.75 0 00.219-.53V3.253a.75.75 0 00-1.5 0V5.23l-.312-.312A7 7 0 003.398 8.073a.75.75 0 101.449.39A5.5 5.5 0 0114.5 5.648l.312.311h-2.433a.75.75 0 000 1.5h3.634a.75.75 0 00.53-.219z" clip-rule="evenodd"/></svg>
@@ -363,6 +369,35 @@
                     <label class="form-label" for="em-rdp-kdc-url">KDC URL</label>
                     <input type="text" id="em-rdp-kdc-url" class="form-input" placeholder="kdc.example.com" autocomplete="off">
                     <p class="text-xs text-[var(--text-muted)] mt-1">Your AD Kerberos KDC hostname — required when using the Kerberos authentication package.</p>
+                </div>
+                <div>
+                    <label class="form-label" for="em-enable-gfx">GFX pipeline (H.264)</label>
+                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                        <input type="checkbox" id="em-enable-gfx" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                        Enable GFX pipeline for smoother video on modern RDP servers
+                    </label>
+                </div>
+                <div>
+                    <label class="form-label" for="em-color-depth">Color depth</label>
+                    <select id="em-color-depth" class="form-input">
+                        <option value="">Default</option>
+                        <option value="8">8 bits</option>
+                        <option value="16">16 bits</option>
+                        <option value="24">24 bits</option>
+                        <option value="32">32 bits</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label" for="em-remote-app">RemoteApp program</label>
+                    <input type="text" id="em-remote-app" class="form-input" placeholder="mstsc.exe" autocomplete="off">
+                    <p class="text-xs text-[var(--text-muted)] mt-1">Launch a single remote program instead of the full desktop (RemoteApp).</p>
+                </div>
+                <div>
+                    <label class="form-label" for="em-prompt-creds">Prompt for credentials</label>
+                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                        <input type="checkbox" id="em-prompt-creds" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                        Ask the user for credentials at connect time instead of using stored ones
+                    </label>
                 </div>
             </div>
             {% if features.proxmox %}
@@ -714,6 +749,7 @@
                 folders.forEach(function(f) { expandedKeys.add(folderKey(f.scope, f.path)); });
                 populateFilterFolders();
                 document.getElementById('filter-bar').classList.toggle('hidden', folders.length === 0);
+                document.getElementById('btn-filters').classList.toggle('hidden', folders.length === 0);
                 if (folders.length === 0) {
                     if (isAdmin) {
                         document.getElementById('main-content').classList.add('hidden');
@@ -1067,7 +1103,22 @@
         document.getElementById('filter-desc').value = '';
         var cfs = document.querySelectorAll('#filter-custom-fields select[data-cf-filter]');
         for (var i = 0; i < cfs.length; i++) cfs[i].value = '';
+        updateFiltersBadge();
         runSearch();
+    }
+    function updateFiltersBadge() {
+        var btn = document.getElementById('btn-filters');
+        if (!btn) return;
+        var count = 0;
+        if (document.getElementById('filter-type').value) count++;
+        if (document.getElementById('filter-folder').value) count++;
+        if (document.getElementById('filter-desc').value.trim()) count++;
+        count += document.querySelectorAll('#filter-custom-fields select[data-cf-filter]').length
+            && Array.prototype.filter.call(
+                document.querySelectorAll('#filter-custom-fields select[data-cf-filter]'),
+                function(s) { return !!s.value; }
+            ).length || 0;
+        btn.textContent = count > 0 ? 'Filters (' + count + ')' : 'Filters';
     }
     function runSearch() {
         var input = document.getElementById('connections-search');
@@ -1124,6 +1175,7 @@
             return entryRowHtml(r.scope, r.path, r.folderName, r.entry);
         }).join('');
         wireEntryRows(container);
+        updateFiltersBadge();
     }
     function reloadSelectedEntries() {
         if (!selectedFolder) return;
@@ -1240,10 +1292,10 @@
         add('Username', e.username);
         add('Domain', e.domain);
         add('Security', e.security);
-        add('Auth package', e.auth_pkg);
-        add('KDC URL', e.kdc_url);
+        add('Authentication package', e.auth_pkg);
+        add('Kerberos KDC', e.kdc_url);
         addOn('Ignore TLS errors', e.ignore_cert);
-        add('Color depth', e.color_depth);
+        add('Color depth (bits)', e.color_depth);
         add('Monitors', e.max_monitors);
         add('Container user', e.container_username);
         add('Created', e.created_at);
@@ -1276,14 +1328,14 @@
         addOn('Drive', e.enable_drive);
         addOn('Prompt for credentials', e.prompt_credentials);
         add('Credential variables', e.credential_variables && e.credential_variables.length ? e.credential_variables.join(', ') : '');
-        addOn('GFX', e.enable_gfx);
+        addOn('Graphics acceleration (GFX)', e.enable_gfx);
         addOn('Desktop composition', e.enable_desktop_composition);
         addOn('Wallpaper', e.enable_wallpaper);
         addOn('Theming', e.enable_theming);
         addOn('Window drag', e.enable_full_window_drag);
         addOn('Lossless', e.force_lossless);
         addOn('H.264', e.enable_h264);
-        add('RemoteApp', e.remote_app);
+        add('RemoteApp program', e.remote_app);
         add('RemoteApp dir', e.remote_app_dir);
         add('RemoteApp args', e.remote_app_args);
         add('Container CPU', e.container_cpu_limit);
@@ -1751,7 +1803,7 @@
     }
     function clearEntryFields() {
         portAutoSet = false;
-        var ids = ['em-description', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain'];
+        var ids = ['em-description', 'em-hostname', 'em-port', 'em-username', 'em-password', 'em-private-key', 'em-proxmox-token-secret', 'em-container-password', 'em-url', 'em-container-image', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node', 'em-proxmox-token-id', 'em-rdp-kdc-url', 'em-rdp-domain', 'em-remote-app'];
         for (var i = 0; i < ids.length; i++) { var el = document.getElementById(ids[i]); if (el) el.value = ''; }
         var pwEl = document.getElementById('em-password');
         if (pwEl) pwEl.placeholder = '';
@@ -1761,6 +1813,9 @@
         if (tsEl) tsEl.placeholder = 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx';
         var cpEl = document.getElementById('em-container-password');
         if (cpEl) cpEl.placeholder = 'Leave blank to generate per-connect';
+        document.getElementById('em-enable-gfx').checked = false;
+        document.getElementById('em-color-depth').value = '';
+        document.getElementById('em-prompt-creds').checked = false;
         var secEl = document.getElementById('em-rdp-security');
         if (secEl) secEl.value = '';
         var pkgEl = document.getElementById('em-rdp-auth-pkg');
@@ -1847,6 +1902,10 @@
         document.getElementById('em-rdp-auth-pkg').value = selectedEntry.auth_pkg || '';
         document.getElementById('em-rdp-kdc-url').value = selectedEntry.kdc_url || '';
         document.getElementById('em-rdp-domain').value = selectedEntry.domain || '';
+        document.getElementById('em-enable-gfx').checked = !!selectedEntry.enable_gfx;
+        document.getElementById('em-color-depth').value = selectedEntry.color_depth ? String(selectedEntry.color_depth) : '';
+        document.getElementById('em-remote-app').value = selectedEntry.remote_app || '';
+        document.getElementById('em-prompt-creds').checked = !!selectedEntry.prompt_credentials;
         updateKdcField();
         updateIdentifierPreview();
         renderCustomFieldInputs(selectedEntry.custom_fields || {});
@@ -1967,6 +2026,12 @@
             if (rdpAuthPkg) entry.auth_pkg = rdpAuthPkg;
             var kdcUrl = document.getElementById('em-rdp-kdc-url').value.trim();
             if (kdcUrl) entry.kdc_url = kdcUrl;
+            entry.enable_gfx = document.getElementById('em-enable-gfx').checked;
+            var colorDepth = document.getElementById('em-color-depth').value;
+            if (colorDepth) entry.color_depth = parseInt(colorDepth, 10);
+            var remoteApp = document.getElementById('em-remote-app').value.trim();
+            if (remoteApp) entry.remote_app = remoteApp;
+            entry.prompt_credentials = document.getElementById('em-prompt-creds').checked;
         }
         var pveTsInp = document.getElementById('em-proxmox-token-secret');
         var ts = pveTsInp ? pveTsInp.value.trim() : '';
@@ -2658,7 +2723,27 @@
     document.getElementById('btn-new-entry').addEventListener('click', openNewEntry);
     document.getElementById('btn-edit-entry').addEventListener('click', openEditEntry);
     document.getElementById('btn-delete-entry').addEventListener('click', deleteEntry);
-    document.getElementById('btn-import').addEventListener('click', openImportModal);
+    document.getElementById('btn-import').addEventListener('click', function() {
+        document.getElementById('overflow-menu').classList.add('hidden');
+        document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
+        openImportModal();
+    });
+    document.getElementById('btn-filters').addEventListener('click', function() {
+        var bar = document.getElementById('filter-bar');
+        var open = bar.classList.toggle('hidden');
+        this.setAttribute('aria-expanded', String(!open));
+    });
+    document.getElementById('btn-overflow').addEventListener('click', function(e) {
+        e.stopPropagation();
+        var menu = document.getElementById('overflow-menu');
+        var open = menu.classList.toggle('hidden');
+        this.setAttribute('aria-expanded', String(!open));
+    });
+    document.addEventListener('click', function() {
+        var menu = document.getElementById('overflow-menu');
+        menu.classList.add('hidden');
+        document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
+    });
     document.getElementById('detail-rotate-cred').addEventListener('click', rotateCredential);
 
     document.getElementById('fm-cancel').addEventListener('click', function() { closeModal('folder-modal'); });
