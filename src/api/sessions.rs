@@ -241,7 +241,17 @@ pub async fn get_session(
                 return Err(AppError::Session("session not found".into()));
             }
             let info = redact_share_url(info, &identity);
-            Ok(Json(json!(info)))
+            let mut value = json!(info);
+            // The idle reaper ends sessions idle past this global timeout
+            // (0 = disabled). client.html reads it to warn the user ~60s
+            // before the reaper would fire. Config value, not per-session.
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert(
+                    "session_idle_timeout_secs".to_string(),
+                    json!(manager.config().session_idle_timeout_secs),
+                );
+            }
+            Ok(Json(value))
         }
         None => Err(AppError::Session("session not found".into())),
     }

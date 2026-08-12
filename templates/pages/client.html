@@ -178,6 +178,18 @@
         }
         #status.connected { opacity: 0; pointer-events: none; }
 
+        /* ── Toast (idle warning / first-visit hint) ─────────────── */
+        #toast {
+            position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 10px 18px; font-size: 13px;
+            font-family: system-ui, sans-serif; color: var(--text);
+            z-index: 2600; box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            max-width: min(480px, 90vw); text-align: center;
+            opacity: 0; pointer-events: none; transition: opacity 0.25s;
+        }
+        #toast.show { opacity: 1; }
+
         /* ── Overlays ────────────────────────────────────────── */
         #disconnected-overlay, #banner-overlay {
             display: none; position: fixed; inset: 0;
@@ -358,6 +370,9 @@
     <!-- ── Status ────────────────────────────────────────── -->
     <div id="status" aria-live="polite">Loading...</div>
 
+    <!-- ── Toast (idle warning / first-visit hint) ───────── -->
+    <div id="toast" role="status" aria-live="polite"></div>
+
     <!-- ── Overlays ──────────────────────────────────────── -->
     <div id="disconnected-overlay" role="dialog" aria-modal="true" aria-label="Session disconnected">
         <div class="overlay-box">
@@ -475,6 +490,65 @@
             setTimeout(function() { window.location.href = exitTarget; }, 100);
         }
 
+        // ── Toast ──
+        var toastEl = document.getElementById('toast');
+        var toastVisible = false;
+        var toastTimer = null;
+        function showToast(text) {
+            toastEl.textContent = text;
+            toastEl.classList.add('show');
+            toastVisible = true;
+            if (toastTimer) { clearTimeout(toastTimer); toastTimer = null; }
+        }
+        function hideToast() {
+            if (!toastVisible) return;
+            toastEl.classList.remove('show');
+            toastVisible = false;
+        }
+
+        // ── Idle warning ──
+        // The server reaps sessions idle past `session_idle_timeout_secs`
+        // (last activity = any input forwarded to the remote). Mirror that
+        // client-side: reset on every forwarded input, warn ~60s before the
+        // reaper would fire. No warning when the timeout is disabled (0).
+        var idleWarnTimer = null;
+        var idleWarnShown = false;
+        function scheduleIdleWarning() {
+            if (!sessionLive || sessionIdleTimeoutSecs <= 0) return;
+            if (idleWarnTimer) { clearTimeout(idleWarnTimer); idleWarnTimer = null; }
+            if (idleWarnShown) return;
+            var warnAtMs = (sessionIdleTimeoutSecs - 60) * 1000;
+            if (warnAtMs < 2000) return; // timeout too short to warn usefully
+            idleWarnTimer = setTimeout(function() {
+                idleWarnTimer = null;
+                idleWarnShown = true;
+                showToast('Session idle \u2014 will end in ~1 minute. Move your mouse to keep it alive.');
+            }, warnAtMs);
+        }
+        // Called ONLY when input actually reaches the remote (keyboard, mouse,
+        // hotkey synthesis, clipboard sends) — the same events that keep the
+        // server-side last_activity fresh.
+        function noteUserActivity() {
+            if (!sessionLive) return;
+            if (idleWarnShown) { idleWarnShown = false; hideToast(); }
+            scheduleIdleWarning();
+        }
+        function clearIdleTimers() {
+            if (idleWarnTimer) { clearTimeout(idleWarnTimer); idleWarnTimer = null; }
+            idleWarnShown = false;
+            hideToast();
+        }
+
+        // ── First-visit toolbar hint ──
+        // Shown once: the toolbar auto-hides and Ctrl+Alt+Shift toggles it.
+        var TOOLBAR_HINT_KEY = 'persea_toolbar_hint_shown';
+        if (!localStorage.getItem(TOOLBAR_HINT_KEY)) {
+            setTimeout(function() {
+                showToast('The toolbar auto-hides. Press Ctrl+Alt+Shift to toggle it.');
+                localStorage.setItem(TOOLBAR_HINT_KEY, '1');
+            }, 3000);
+        }
+
         // ── Settings state ──
         var cfgQuality = parseInt(localStorage.getItem('rg_quality') || '80', 10);
         var cfgAudio = localStorage.getItem('rg_audio') !== 'false';
@@ -581,7 +655,8 @@
             sessionLive = (state === 'live');
             setStatusDot(state);
             setFaviconLive(sessionLive);
-            if (!sessionLive && baseTitle) document.title = baseTitle;
+            if (sessionLive) { scheduleIdleWarning(); }
+            else { clearIdleTimers(); if (baseTitle) document.title = baseTitle; }
         }
 
         // ── Toolbar badge helpers ──
@@ -938,6 +1013,7 @@
             // ── Clipboard ──
             var remoteClipboard = '';
             function sendClipboardToRemote(text) {
+                noteUserActivity();
                 var stream = client.createClipboardStream('text/plain');
                 var writer = new Guacamole.StringWriter(stream);
                 for (var i = 0; i < text.length; i += 4096) writer.sendText(text.substring(i, i + 4096));
@@ -975,6 +1051,7 @@
                 client.sendKeyEvent(1, 0x63);
                 client.sendKeyEvent(0, 0x63);
                 client.sendKeyEvent(0, 0xFFE3);
+                noteUserActivity();
                 showTransferStatus('sent', 'Ctrl+C sent — remote selection will sync');
                 setTimeout(hideTransferStatus, 2000);
             });
@@ -1370,7 +1447,7 @@
                 if (_pasteIntercepted && (e.key === 'v' || e.key === 'V')) { e.stopPropagation(); e.preventDefault(); _pasteIntercepted = false; }
             }, true);
 
-            keyboard.onkeydown = function(keysym) { client.sendKeyEvent(1, keysym); };
+            keyboard.onkeydown = function(keysym) { noteUserActivity(); client.sendKeyEvent(1, keysym); };
             keyboard.onkeyup = function(keysym) { client.sendKeyEvent(0, keysym); };
             window.addEventListener('blur', function() { keyboard.reset(); });
             document.addEventListener('visibilitychange', function() { if (document.hidden) keyboard.reset(); });
@@ -1398,6 +1475,7 @@
                 // clicking the button then typing the letter. A 3s safety
                 // timer guarantees the key can never stay stuck.
                 client.sendKeyEvent(1, 0xFFE7);
+                noteUserActivity();
                 _winReleaseTimer = setTimeout(winKeyRelease, 3000);
             });
             // Release the held Win key once the user types the letter that
@@ -1417,11 +1495,12 @@
                 client.sendKeyEvent(0, 0xFFFF);
                 client.sendKeyEvent(0, 0xFFE9);
                 client.sendKeyEvent(0, 0xFFE3);
+                noteUserActivity();
             });
 
             // Mouse
             var mouse = new Guacamole.Mouse(client.getDisplay().getElement());
-            mouse.onEach(['mousedown', 'mousemove', 'mouseup'], function(e) { client.sendMouseState(e.state, true); });
+            mouse.onEach(['mousedown', 'mousemove', 'mouseup'], function(e) { noteUserActivity(); client.sendMouseState(e.state, true); });
 
             // ── Scale display ──
             var _scaleDisplay = null;
