@@ -23,8 +23,18 @@ struct WsTicket {
 }
 
 /// Thread-safe store of pending WebSocket tickets.
+///
+/// Enterprise HA (R110): when a shared backend pool is active AND the FEAT_HA
+/// license grants it, every ticket is also persisted (SHA-256 hash only) to
+/// the `ws_tickets` table so any instance can validate a ticket issued by
+/// another. The in-memory map remains the fast path; a miss falls through to
+/// the DB. Without the license/pool the store is purely in-memory — the
+/// legacy single-instance behavior, unchanged.
 #[derive(Clone)]
-pub struct WsTicketStore(Arc<Mutex<HashMap<String, WsTicket>>>);
+pub struct WsTicketStore {
+    inner: Arc<Mutex<HashMap<String, WsTicket>>>,
+    db: Option<Db>,
+}
 
 const WS_TICKET_TTL_SECS: u64 = 30;
 
@@ -40,46 +50,168 @@ async fn api_keys_enabled(db: &Db) -> bool {
     .unwrap_or(true)
 }
 
-impl Default for WsTicketStore {
-    fn default() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::new())))
-    }
+/// Marker extension: the request's identity was derived from a consumed
+/// WebSocket ticket (not a cookie/API key). Lets the WS handler trust the
+/// ticket as the anti-CSWSh credential and skip the Origin/Host match for
+/// cross-instance redirects (R110) — tickets are minted only by
+/// authenticated callers, are single-use, and expire in 30s.
+#[derive(Clone)]
+pub struct TicketAuthenticated;
+
+/// Whether ticket persistence is active right now (license + shared pool).
+fn ws_ticket_persist_enabled() -> bool {
+    crate::db::active_pool().is_some()
+        && crate::license::global().is_some_and(|lm| lm.has_feature(crate::license::FEAT_HA))
+}
+
+fn ticket_hash(ticket: &str) -> String {
+    use sha2::{Digest, Sha256};
+    hex::encode(Sha256::digest(ticket.as_bytes()))
 }
 
 impl WsTicketStore {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            db: None,
+        }
+    }
+
+    /// Create a store that persists tickets to the shared backend when the
+    /// HA license is active (see `ws_ticket_persist_enabled`).
+    pub fn new_with_db(db: Option<Db>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+            db,
+        }
     }
 
     /// Create a ticket for the given identity. Returns the ticket string.
     pub async fn create(&self, identity: AuthIdentity) -> String {
         let ticket = format!("wst_{}", uuid::Uuid::new_v4().as_simple());
-        let mut store = self.0.lock().await;
+        let issued_by = identity.display_name().to_string();
+        let identity_json = serde_json::to_string(&identity).ok();
+        {
+            let mut store = self.inner.lock().await;
 
-        // Prune expired tickets while we have the lock
-        let cutoff = Instant::now() - std::time::Duration::from_secs(WS_TICKET_TTL_SECS);
-        store.retain(|_, t| t.created > cutoff);
+            // Prune expired tickets while we have the lock
+            let cutoff = Instant::now() - std::time::Duration::from_secs(WS_TICKET_TTL_SECS);
+            store.retain(|_, t| t.created > cutoff);
 
-        store.insert(
-            ticket.clone(),
-            WsTicket {
-                identity,
-                created: Instant::now(),
-            },
-        );
+            store.insert(
+                ticket.clone(),
+                WsTicket {
+                    identity,
+                    created: Instant::now(),
+                },
+            );
+        }
+
+        // Persist for cross-instance validation (best effort — a failed
+        // write degrades to the local-only store, never blocks the ticket).
+        if ws_ticket_persist_enabled() {
+            if let (Some(ref db), Some(identity_json)) = (self.db.clone(), identity_json) {
+                let db = db.clone();
+                let hash = ticket_hash(&ticket);
+                let expires_at = crate::db::registry_ts(
+                    chrono::Utc::now() + chrono::Duration::seconds(WS_TICKET_TTL_SECS as i64),
+                );
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::db::ws_ticket_insert(
+                        &db,
+                        &hash,
+                        &identity_json,
+                        None,
+                        &issued_by,
+                        &expires_at,
+                    )
+                })
+                .await;
+            }
+        }
         ticket
     }
 
     /// Consume a ticket, returning the identity if valid and not expired.
-    /// Single-use: the ticket is removed on consumption.
+    /// Single-use: the ticket is removed on consumption — from the local
+    /// map (fast path) and, for HA, from the shared backend so a ticket
+    /// consumed on one instance cannot be replayed on another.
     pub async fn consume(&self, ticket: &str) -> Option<AuthIdentity> {
-        let mut store = self.0.lock().await;
-        let entry = store.remove(ticket)?;
-        if entry.created.elapsed().as_secs() <= WS_TICKET_TTL_SECS {
-            Some(entry.identity)
-        } else {
-            None
+        let identity = {
+            let mut store = self.inner.lock().await;
+            let entry = store.remove(ticket)?;
+            if entry.created.elapsed().as_secs() <= WS_TICKET_TTL_SECS {
+                Some(entry.identity)
+            } else {
+                None
+            }
+        };
+        if identity.is_some() {
+            // Also delete the persisted copy (if any) so the ticket is
+            // single-use across the fleet.
+            if ws_ticket_persist_enabled() {
+                if let Some(ref db) = self.db {
+                    let db = db.clone();
+                    let hash = ticket_hash(ticket);
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::db::ws_ticket_delete(&db, &hash)
+                    })
+                    .await;
+                }
+            }
+            return identity;
         }
+
+        // Local miss: fall through to the shared backend — this is how a
+        // ticket issued by another instance validates here.
+        if ws_ticket_persist_enabled() {
+            if let Some(ref db) = self.db {
+                let db = db.clone();
+                let hash = ticket_hash(ticket);
+                let row = tokio::task::spawn_blocking({
+                    let db = db.clone();
+                    let hash = hash.clone();
+                    move || crate::db::ws_ticket_get(&db, &hash)
+                })
+                .await
+                .ok()
+                .and_then(|r| r.ok());
+                if let Some(Some((identity_json, expires_at))) = row {
+                    // Single-use: consume the persisted row.
+                    let db2 = db.clone();
+                    let hash2 = hash.clone();
+                    let _ = tokio::task::spawn_blocking(move || {
+                        crate::db::ws_ticket_delete(&db2, &hash2)
+                    })
+                    .await;
+                    let expires = chrono::NaiveDateTime::parse_from_str(
+                        &expires_at,
+                        "%Y-%m-%d %H:%M:%S",
+                    )
+                    .map(|ndt| ndt.and_utc())
+                    .unwrap_or(chrono::Utc::now() - chrono::Duration::seconds(1));
+                    if expires > chrono::Utc::now() {
+                        return serde_json::from_str(&identity_json).ok();
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Re-issue a ticket for a forwarded cross-instance connection (R110):
+    /// the raw ticket was already consumed by this instance's auth
+    /// middleware, so before redirecting the browser to the owning instance
+    /// a fresh persisted ticket is minted for the same identity. Returns
+    /// the new ticket string.
+    pub async fn forward(&self, identity: AuthIdentity) -> String {
+        self.create(identity).await
+    }
+}
+
+impl Default for WsTicketStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -88,7 +220,7 @@ impl WsTicketStore {
 pub struct TrustedProxies(pub Vec<String>);
 
 /// Identity of the authenticated caller.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum AuthIdentity {
     /// API key admin — always full admin access.
     ApiKey(String),
@@ -473,6 +605,10 @@ pub async fn optional_auth(
                 tracing::debug!("Optional auth: WebSocket ticket consumed");
                 let mut request = request;
                 request.extensions_mut().insert(identity);
+                // R110: the ticket is the anti-CSWSh credential for this
+                // request — the WS handler may skip the Origin/Host match
+                // (needed for cross-instance join redirects).
+                request.extensions_mut().insert(TicketAuthenticated);
                 return next.run(request).await;
             }
             // Invalid/expired ticket — fall through to other auth methods

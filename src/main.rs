@@ -1310,6 +1310,18 @@ async fn run_server(
                 Err(e) => tracing::warn!("Failed to clean up session history: {}", e),
                 _ => {}
             }
+            // R110: expired persisted WS tickets (cross-instance validation
+            // rows) — no-op without a shared backend pool.
+            {
+                let cutoff = crate::db::registry_ts(
+                    chrono::Utc::now() - chrono::Duration::minutes(5),
+                );
+                match db::ws_ticket_cleanup_expired(&cleanup_db, &cutoff) {
+                    Ok(n) if n > 0 => tracing::info!("Cleaned up {} expired WS tickets", n),
+                    Err(e) => tracing::warn!("Failed to clean up WS tickets: {}", e),
+                    _ => {}
+                }
+            }
         }
     });
 
@@ -1608,8 +1620,11 @@ async fn run_server(
         tracing::info!("API rate limiting enabled");
     }
 
-    // WebSocket ticket store (single-use tokens to keep API keys out of WS URLs)
-    let ws_ticket_store = auth::WsTicketStore::new();
+    // WebSocket ticket store (single-use tokens to keep API keys out of WS URLs).
+    // R110: with the DB handle, tickets are also persisted to the shared
+    // backend when the HA license is active, so any instance can validate
+    // tickets issued by another.
+    let ws_ticket_store = auth::WsTicketStore::new_with_db(Some(database.clone()));
 
     // Session creation route (rate-limited only when enabled)
     let mut session_create_route = Router::new()
