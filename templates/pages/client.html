@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ site_title }} - Session</title>
+    <!-- Favicon: plain leaf; swapped to the live variant (/favicon-live.svg)
+         while the session is active, back to plain on end. -->
+    <link rel="icon" type="image/svg+xml" id="persea-favicon" href="/favicon.svg">
     <style>
         :root {
             --primary: #e94560; --primary-hover: #c73652;
@@ -60,6 +63,11 @@
 
         .tb-info { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .tb-duration { color: var(--text-dim); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+        .tb-name { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 200px; }
+        .tb-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: #6b7280; }
+        .tb-dot.dot-live { background: #34d399; box-shadow: 0 0 6px rgba(52, 211, 153, 0.7); }
+        .tb-dot.dot-warn { background: #fbbf24; box-shadow: 0 0 6px rgba(251, 191, 36, 0.6); }
+        .tb-dot.dot-ended { background: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.6); }
 
         /* Toolbar buttons */
         .tb-btn {
@@ -202,6 +210,7 @@
             .tb-btn span:not(.tb-badge) { display: none; }
             .tb-badge { font-size: 10px; padding: 1px 6px; }
             .tb-info { font-size: 11px; max-width: 120px; }
+            .tb-name { font-size: 11px; max-width: 110px; }
             .tb-duration { font-size: 11px; }
             #paste-modal { width: min(340px, 95vw); }
             #paste-textarea { font-size: 16px; } /* prevent iOS zoom */
@@ -256,7 +265,9 @@
     <!-- ── Toolbar ──────────────────────────────────────── -->
     <div id="toolbar" role="navigation" aria-label="Session toolbar">
         <div class="tb-left">
+            <span id="tb-dot" class="tb-dot" title="Session status"></span>
             <span id="tb-badge" class="tb-badge badge-ssh">SSH</span>
+            <span id="tb-name" class="tb-name"></span>
             <span id="tb-host" class="tb-info"></span>
             <span id="tb-duration" class="tb-duration">00:00:00</span>
         </div>
@@ -385,6 +396,11 @@
         var entryName = urlParams.get('name');
         var relaunchInfo = null;
         var entryDisplayName = '';
+        var sessionIdleTimeoutSecs = 0;
+        var sessionReconnectable = false;
+        var sessionLive = false;
+        var baseTitle = null;
+        var exitInProgress = false;
         var wantFullscreen = false;
         var wantAutohideTabs = false;
         var protocol = '';
@@ -500,16 +516,41 @@
             if (toolbarHideTimer) { clearTimeout(toolbarHideTimer); toolbarHideTimer = null; }
         });
 
-        // ── Duration timer ──
+        // ── Duration timer + live tab title ──
+        // While live, the tab title reads `entry — HH:MM:SS — ●` and is
+        // refreshed every tick; on end the plain entry title is restored.
         var durationEl = document.getElementById('tb-duration');
         function updateDuration() {
             var elapsed = Math.floor((Date.now() - connectStartTime) / 1000);
             var h = Math.floor(elapsed / 3600);
             var m = Math.floor((elapsed % 3600) / 60);
             var s = elapsed % 60;
-            durationEl.textContent = (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+            var t = (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+            if (sessionLive) {
+                durationEl.textContent = t;
+                if (baseTitle) document.title = baseTitle + ' \u2014 ' + t + ' \u2014 \u25CF';
+            }
         }
         setInterval(updateDuration, 1000);
+
+        // ── Favicon + toolbar status dot ──
+        // Favicon: plain leaf by default, live variant (pulsing green dot)
+        // while the session is active. Dot: green live / amber disconnected
+        // or reconnecting / red ended.
+        var faviconEl = document.getElementById('persea-favicon');
+        function setFaviconLive(live) {
+            if (faviconEl) faviconEl.setAttribute('href', live ? '/favicon-live.svg' : '/favicon.svg');
+        }
+        var statusDotEl = document.getElementById('tb-dot');
+        function setStatusDot(state) {
+            statusDotEl.className = 'tb-dot dot-' + state;
+        }
+        function setLiveState(state) {
+            sessionLive = (state === 'live');
+            setStatusDot(state);
+            setFaviconLive(sessionLive);
+            if (!sessionLive && baseTitle) document.title = baseTitle;
+        }
 
         // ── Toolbar badge helpers ──
         function setProtocolBadge(proto, host) {
@@ -634,7 +675,8 @@
         // ── Theme / site title ──
         fetch('/api/auth/status').then(function(r){return r.json()}).then(function(d){
             var siteTitle = d.site_title || 'persea';
-            document.title = entryName ? (entryName + ' \u2014 ' + siteTitle) : (siteTitle + ' - Session');
+            baseTitle = entryDisplayName || entryName || (siteTitle + ' - Session');
+            document.title = baseTitle;
             if (typeof initTheme === 'function') initTheme(d.theme);
         });
 
@@ -679,7 +721,18 @@
                 if (session && session.address_book_entry) {
                     relaunchInfo = { entry_key: session.address_book_entry, folder: session.address_book_folder || '', display_name: session.entry_display_name || '' };
                 }
-                if (session && session.entry_display_name) entryDisplayName = session.entry_display_name;
+                if (session && session.entry_display_name) {
+                    entryDisplayName = session.entry_display_name;
+                    document.getElementById('tb-name').textContent = entryDisplayName;
+                    baseTitle = entryDisplayName;
+                    if (!sessionLive) document.title = baseTitle;
+                }
+                sessionIdleTimeoutSecs = parseInt(session.session_idle_timeout_secs, 10) || 0;
+                // Deferred/ephemeral-key sessions are the only reconnectable
+                // ones — and the ONLY sessions that carry a banner (the
+                // ephemeral-key prompt). Banner presence is the client-side
+                // marker used to gate the Reconnect buttons.
+                sessionReconnectable = !!(session && session.banner);
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
                 if (session && session.drive_enabled) { driveEnabled = true; document.getElementById('btn-file-transfer').style.display = ''; }
@@ -692,6 +745,7 @@
                 // Set protocol badge from session metadata
                 if (session && (session.session_type || session.protocol)) setProtocolBadge(session.session_type || session.protocol, session.address || session.address_book_folder || '');
                 else if (entryName) setProtocolBadge('SSH', entryName);
+                if (!entryDisplayName && entryName) document.getElementById('tb-name').textContent = entryName;
                 return showBanner(session.banner);
             })
             .then(function() { startGuacamole(); })
@@ -1081,13 +1135,14 @@
 
             client.onstatechange = function(state) {
                 switch (state) {
-                    case Guacamole.Client.State.CONNECTING: statusEl.textContent = 'Connecting...'; statusEl.className = ''; break;
-                    case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; break;
+                    case Guacamole.Client.State.CONNECTING: statusEl.textContent = 'Connecting...'; statusEl.className = ''; setLiveState('down'); break;
+                    case Guacamole.Client.State.WAITING: statusEl.textContent = 'Waiting for server...'; statusEl.className = ''; setLiveState('down'); break;
                     case Guacamole.Client.State.CONNECTED:
                         everConnected = true;
                         statusEl.textContent = 'Connected'; statusEl.className = 'connected';
                         reconnectAttempts = 0;
                         connectStartTime = Date.now();
+                        setLiveState('live');
                         updateDuration();
                         (function() {
                             var fitToWindow = function() { scaleDisplay(); client.sendSize(window.innerWidth, window.innerHeight); };
@@ -1111,10 +1166,12 @@
                         break;
                     case Guacamole.Client.State.DISCONNECTING:
                         statusEl.textContent = 'Disconnecting...'; statusEl.className = '';
+                        setLiveState('down');
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; captureThumbnail(); }
                         break;
                     case Guacamole.Client.State.DISCONNECTED:
                         statusEl.textContent = 'Disconnected'; statusEl.className = '';
+                        setLiveState('down');
                         if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                         if (userDisconnected) {
                             document.getElementById('disconnected-title').textContent = 'Session Ended';
@@ -1130,6 +1187,7 @@
                 lastSessionError = (status && status.message) ? status.message : null;
                 statusEl.textContent = 'Error: ' + (status.message || 'Unknown error');
                 statusEl.className = '';
+                setLiveState('ended');
                 if (_thumbInterval) { clearInterval(_thumbInterval); _thumbInterval = null; }
                 document.getElementById('disconnected-title').textContent = 'Connection Error';
                 document.getElementById('disconnected-message').textContent = status.message || 'An error occurred.';
