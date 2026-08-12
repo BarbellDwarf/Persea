@@ -555,6 +555,21 @@
 
 <script nonce="{{ csp_nonce }}">
 (function() {
+    // ── Session open preference ──────────────────────────────────────
+    // Per-user preference (account profile page), stored in localStorage:
+    // `tab` (default) | `window` | `same`. Applied by every connect path
+    // (entry connect buttons, recent reconnect, sessions-page join/share).
+    function getOpenMode() {
+        var m = localStorage.getItem('persea_session_open');
+        return (m === 'window' || m === 'same') ? m : 'tab';
+    }
+    function openSessionUrl(url) {
+        var mode = getOpenMode();
+        if (mode === 'same') { window.location.href = url; return true; }
+        var features = (mode === 'window') ? 'width=1280,height=800' : undefined;
+        return !!window.open(url, '_blank', features);
+    }
+
     var protoClasses = {
         ssh:'proto-ssh',rdp:'proto-rdp',vnc:'proto-vnc',
         spice:'proto-spice',vmware:'proto-vmware',web:'proto-web',
@@ -1148,7 +1163,7 @@
                     var e = findByName(list, entry);
                     var displayName = e ? (e.display_name || '') : '';
                     if (displayName) url += '?name=' + encodeURIComponent(displayName);
-                    if (!window.open(url, '_blank') && err) {
+                    if (!openSessionUrl(url) && err) {
                         // Popup blocked — the session was created but never
                         // joined; tell the user instead of silently leaving a
                         // dangling pending session.
@@ -2796,13 +2811,14 @@
                 document.getElementById('recent-sessions').classList.add('hidden');
             });
     }
-    // Reconnect opens /client/{id} in a new tab. CSP-safe: the button only
-    // carries a data-session-id attribute; the click is handled here.
+    // Reconnect opens /client/{id} honouring the session open preference.
+    // CSP-safe: the button only carries a data-session-id attribute; the
+    // click is handled here.
     document.getElementById('recent-list').addEventListener('click', function(ev) {
         var btn = ev.target.closest('[data-session-id]');
         if (!btn) return;
         var id = btn.getAttribute('data-session-id');
-        if (id) window.open('/client/' + encodeURIComponent(id), '_blank');
+        if (id) openSessionUrl('/client/' + encodeURIComponent(id));
     });
 
     // ── Address book init ────────────────────────────────────────────
