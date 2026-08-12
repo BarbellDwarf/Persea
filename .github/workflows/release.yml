@@ -11,8 +11,8 @@ permissions:
   actions: write
 
 env:
-  GUACD_REPO: https://github.com/apache/guacamole-server.git
-  GUACD_COMMIT: de97609007c088b5e6afd827eff5e9076013a247
+  GUACD_REPO: https://github.com/BarbellDwarf/persea-guacamole-server.git
+  GUACD_COMMIT: d9218fe1
 
 jobs:
   # ---------------------------------------------------------------------------
