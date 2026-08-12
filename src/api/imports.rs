@@ -102,26 +102,39 @@ where
 
 /// One connection row from the import request body.
 #[derive(Debug, Clone, Deserialize)]
+/// One connection row from the import request body.
+///
+/// Passwords are stored encrypted when a storage key is configured;
+/// without one they are dropped and counted in the response.
 pub struct ImportRow {
     /// Friendly name; the stored identifier is `slugify(name)`.
     pub name: String,
+    /// Connection protocol: ssh, rdp, vnc, spice, web, vdi, proxmox.
     pub protocol: String,
+    /// Target host; required unless the protocol is `web`.
     #[serde(default)]
     pub hostname: String,
+    /// Target port; defaults per protocol when absent.
     #[serde(default)]
     pub port: Option<u16>,
+    /// Login username.
     #[serde(default)]
     pub username: String,
+    /// Login password. Empty cells request no credential change on
+    /// existing entries.
     #[serde(default)]
     pub password: String,
+    /// Destination folder path; missing levels are created.
     #[serde(default)]
     pub folder: String,
     /// Optional explicit display name (JSON API compat). CSV imports always
     /// leave this empty — the `name` column IS the friendly name.
     #[serde(default)]
     pub display_name: String,
+    /// Group names allowed to use the entry.
     #[serde(default)]
     pub allowed_groups: Vec<String>,
+    /// Free-text description stored in `protocol_config`.
     #[serde(default)]
     pub description: String,
     /// Custom field values (field name → value), same shape as the
@@ -142,14 +155,21 @@ fn fuzzy_key(name: &str) -> String {
 }
 
 #[derive(Debug, Deserialize)]
+/// Body of `POST /api/addressbook/import` (JSON path).
+///
+/// Raw `text/csv` bodies are also accepted; for those the scope always
+/// defaults to `shared` and the mode travels in the query string.
 pub struct ImportRequest {
+    /// Address-book scope to import into (`shared` default, `instance`).
     #[serde(default = "default_scope")]
     pub scope: String,
     /// Import mode: `create` (legacy — skip existing), `upsert` (default —
     /// create missing, update changed, skip identical), `update` (only
     /// existing rows; missing rows become errors).
+    /// Import mode override; falls back to the `?mode=` query param.
     #[serde(default)]
     pub mode: Option<String>,
+    /// Connection rows to import.
     pub rows: Vec<ImportRow>,
 }
 
@@ -157,6 +177,7 @@ pub struct ImportRequest {
 /// mode travels in the query string for that path.
 #[derive(Debug, Deserialize)]
 pub struct ModeQuery {
+    /// Import mode for raw-CSV bodies: create, upsert (default), update.
     #[serde(default = "default_mode")]
     pub mode: String,
 }
