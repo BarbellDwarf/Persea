@@ -19,6 +19,7 @@ use tower::{Layer, Service};
 
 use crate::auth::TrustedProxies;
 
+/// Name of the CSRF double-submit token cookie.
 pub const CSRF_COOKIE: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 32;
 
@@ -160,6 +161,7 @@ fn is_state_changing(method: &Method) -> bool {
     )
 }
 
+/// Tower layer that wraps a service with the CSRF double-submit check.
 #[derive(Clone)]
 pub struct CsrfLayer;
 
@@ -171,6 +173,8 @@ impl<S> Layer<S> for CsrfLayer {
     }
 }
 
+/// Tower service enforcing the CSRF double-submit check on
+/// state-changing requests.
 #[derive(Clone)]
 pub struct CsrfService<S> {
     inner: S,

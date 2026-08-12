@@ -44,12 +44,16 @@ impl EncryptionKey {
 #[derive(Debug, thiserror::Error)]
 #[must_use]
 pub enum CryptoError {
+    /// The key is not valid hex, or is not 32 bytes long.
     #[error("invalid encryption key: {0}")]
     InvalidKey(String),
+    /// The value lacks the `enc:v1:` prefix or is too short to decrypt.
     #[error("ciphertext format invalid: {0}")]
     InvalidCiphertext(String),
+    /// AES-256-GCM encryption failed.
     #[error("encryption failed: {0}")]
     EncryptionFailed(String),
+    /// Decryption failed, including authentication-tag mismatches.
     #[error("decryption failed: {0}")]
     DecryptionFailed(String),
 }
