@@ -1857,6 +1857,13 @@ pub async fn ab_create_entry(
             friendly_name
         )));
     }
+    if slug.len() > 64 {
+        return Err(AppError::Validation(format!(
+            "'{}' is too long — the connection identifier may be at most 64 characters (got {})",
+            friendly_name,
+            slug.len()
+        )));
+    }
     let display_name = req
         .entry
         .display_name

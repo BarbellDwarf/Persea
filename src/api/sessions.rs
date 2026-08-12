@@ -43,25 +43,32 @@ pub async fn create_session(
         .map(|id| id.display_name().to_string())
         .unwrap_or_else(|| "unknown".into());
 
-    if let Some(ref id) = identity {
-        if !id.has_role("poweruser") {
-            // Custom role holders with the global `create_session` system
-            // permission may start ad-hoc sessions from any role floor.
-            let allowed = manager
-                .db()
-                .map(|db| {
-                    rbac::identity_has_system_permission(
-                        db,
-                        id,
-                        rbac::SystemPermission::CreateSession,
-                    )
-                })
-                .unwrap_or(false);
-            if !allowed {
-                return Err(AppError::Forbidden(
-                    "insufficient permissions — poweruser role required for ad-hoc sessions".into(),
-                ));
-            }
+    // Fail closed: every authenticated caller (cookie session, user token,
+    // admin key) must clear the role gate. `require_auth` blocks anonymous
+    // requests at the router, but the gate must not silently pass when the
+    // identity is absent (T09 audit).
+    let Some(ref id) = identity else {
+        return Err(AppError::Forbidden(
+            "authentication required to create a session".into(),
+        ));
+    };
+    if !id.has_role("poweruser") {
+        // Custom role holders with the global `create_session` system
+        // permission may start ad-hoc sessions from any role floor.
+        let allowed = manager
+            .db()
+            .map(|db| {
+                rbac::identity_has_system_permission(
+                    db,
+                    id,
+                    rbac::SystemPermission::CreateSession,
+                )
+            })
+            .unwrap_or(false);
+        if !allowed {
+            return Err(AppError::Forbidden(
+                "insufficient permissions — poweruser role required for ad-hoc sessions".into(),
+            ));
         }
     }
 

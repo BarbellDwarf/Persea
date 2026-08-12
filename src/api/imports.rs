@@ -454,6 +454,21 @@ fn ensure_folder(db: &Db, scope: &str, path: &str) -> Result<i64, AppError> {
     let mut current = String::new();
     let mut leaf_id: Option<i64> = None;
     for segment in path.split('/').filter(|s| !s.is_empty()) {
+        // Segment sanity (T09 audit): `..`/`.` segments would land in the
+        // DB as-is (URL path segments, RBAC connection ids, Vault keys) and
+        // control characters are never legitimate folder names. Vault mode
+        // already rejects these at entry-write time; this keeps DB mode
+        // consistent instead of silently storing traversal-shaped names.
+        if segment == "." || segment == ".." {
+            return Err(AppError::Validation(format!(
+                "invalid folder path '{path}': '.' and '..' segments are not allowed"
+            )));
+        }
+        if segment.chars().any(|c| c.is_control()) {
+            return Err(AppError::Validation(format!(
+                "invalid folder path '{path}': control characters are not allowed"
+            )));
+        }
         if !current.is_empty() {
             current.push('/');
         }
@@ -621,6 +636,14 @@ pub async fn import_csv(
             errors.push(json!({"row": row_index, "error": format!(
                 "'{}' contains no usable characters for the entry identifier — use at least one letter, digit, dot, underscore or dash",
                 friendly_name
+            )}));
+            continue;
+        }
+        if slug.len() > 64 {
+            errors.push(json!({"row": row_index, "error": format!(
+                "'{}' is too long — the connection identifier may be at most 64 characters (got {})",
+                friendly_name,
+                slug.len()
             )}));
             continue;
         }
