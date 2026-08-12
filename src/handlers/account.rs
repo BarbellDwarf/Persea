@@ -16,10 +16,21 @@ use crate::CspNonce;
 /// hashes. The new hash is recorded into the reuse history.
 #[derive(Deserialize)]
 pub struct ChangePasswordRequest {
+    /// The user's current password, verified against the stored hash
+    /// before any change is made.
     pub current_password: String,
+    /// The replacement password, checked against the policy minimum
+    /// length and the reuse history before hashing.
     pub new_password: String,
 }
 
+/// Change the signed-in user's password (POST /api/me/password).
+///
+/// Verifies the current password, applies the policy minimum length and
+/// reuse-history checks, then stores the new Argon2id hash. Returns
+/// `Validation` when the current password is wrong or the policy rejects
+/// the new one, `Forbidden` when no user session is present, and
+/// `Internal` when hashing or the database fails.
 pub async fn change_password(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
