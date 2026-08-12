@@ -209,14 +209,23 @@ fn render_app_page(page_template: &str, context: &impl Serialize) -> Response {
 /// the proxmox field block behind it gate on these flags (batch-2 work).
 #[derive(Serialize, Clone, Debug)]
 pub struct FeatureFlags {
+    /// RDP connection type available in the UI (`enable_rdp`).
     pub rdp: bool,
+    /// Jump-host and SSH tunnel management UI (`enable_ssh_tunnels`).
     pub ssh_tunnels: bool,
+    /// Browser-based web sessions (`enable_web_sessions`).
     pub web_sessions: bool,
+    /// VDI desktop container sessions (`enable_vdi`).
     pub vdi: bool,
+    /// SPICE connection type available in the UI (`enable_spice`).
     pub spice: bool,
+    /// Proxmox VE connection type (`enable_proxmox`).
     pub proxmox: bool,
+    /// VMware connection type (`enable_vmware`).
     pub vmware: bool,
+    /// Recordings page and playback (`enable_recordings`).
     pub recordings: bool,
+    /// API key creation from the account page (`enable_api_keys`).
     pub api_keys: bool,
 }
 
@@ -292,16 +301,23 @@ fn request_features() -> FeatureFlags {
 /// Login page template context.
 #[derive(Serialize)]
 pub struct LoginTemplate {
+    /// Site title shown on the login card and in the browser tab.
     pub site_title: String,
+    /// Branding logo URL; empty renders the default placeholder.
     pub logo_url: String,
+    /// Whether an OIDC provider is configured, which shows the SSO button.
     pub oidc_enabled: bool,
+    /// Whether SAML is configured, which shows the SAML SSO button.
     pub saml_enabled: bool,
+    /// Label on the OIDC SSO button.
     pub oidc_button_text: String,
+    /// Label on the SAML SSO button.
     pub saml_button_text: String,
     /// One entry per configured OIDC provider (multi-provider SSO).
     pub oidc_providers: Vec<String>,
     /// Error message from a failed login redirect (`/?error=...`).
     pub error: Option<String>,
+    /// CSP nonce for the inline scripts on the login page.
     pub csp_nonce: String,
 }
 
@@ -315,10 +331,17 @@ impl IntoResponse for LoginTemplate {
 /// The inner page template is specified at render time (via `extends`).
 #[derive(Serialize)]
 pub struct AppLayoutTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -332,10 +355,17 @@ impl AppLayoutTemplate {
 /// Connections page template context.
 #[derive(Serialize)]
 pub struct ConnectionsPageTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -348,10 +378,17 @@ impl IntoResponse for ConnectionsPageTemplate {
 /// Sessions page template context.
 #[derive(Serialize)]
 pub struct SessionsPageTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -366,10 +403,17 @@ impl IntoResponse for SessionsPageTemplate {
 /// Admin users page template context.
 #[derive(Serialize)]
 pub struct AdminUsersTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -382,10 +426,17 @@ impl IntoResponse for AdminUsersTemplate {
 /// Admin auth providers page template context.
 #[derive(Serialize)]
 pub struct AdminAuthTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -398,10 +449,17 @@ impl IntoResponse for AdminAuthTemplate {
 /// Admin groups page template context.
 #[derive(Serialize)]
 pub struct AdminGroupsTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -414,10 +472,17 @@ impl IntoResponse for AdminGroupsTemplate {
 /// Admin custom roles page template context (T05/T06).
 #[derive(Serialize)]
 pub struct AdminRolesTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -430,10 +495,17 @@ impl IntoResponse for AdminRolesTemplate {
 /// Admin audit log page template context.
 #[derive(Serialize)]
 pub struct AdminAuditTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -446,10 +518,17 @@ impl IntoResponse for AdminAuditTemplate {
 /// Admin settings page template context.
 #[derive(Serialize)]
 pub struct AdminSettingsTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -462,10 +541,17 @@ impl IntoResponse for AdminSettingsTemplate {
 /// Admin reports page template context.
 #[derive(Serialize)]
 pub struct AdminReportsTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -478,10 +564,17 @@ impl IntoResponse for AdminReportsTemplate {
 /// Admin tunnels page template context.
 #[derive(Serialize)]
 pub struct AdminTunnelsTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -494,10 +587,17 @@ impl IntoResponse for AdminTunnelsTemplate {
 /// Admin branding page template context.
 #[derive(Serialize)]
 pub struct AdminBrandingTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -510,7 +610,9 @@ impl IntoResponse for AdminBrandingTemplate {
 /// Client (remote desktop) page template context.
 #[derive(Serialize)]
 pub struct ClientTemplate {
+    /// Site title shown in the client page header.
     pub site_title: String,
+    /// CSP nonce for the Guacamole client's inline scripts.
     pub csp_nonce: String,
 }
 
@@ -523,10 +625,17 @@ impl IntoResponse for ClientTemplate {
 /// Recordings page template context.
 #[derive(Serialize)]
 pub struct RecordingsPageTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -539,10 +648,17 @@ impl IntoResponse for RecordingsPageTemplate {
 /// Profile page template context.
 #[derive(Serialize)]
 pub struct ProfileTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -555,10 +671,17 @@ impl IntoResponse for ProfileTemplate {
 /// Account tokens page template context.
 #[derive(Serialize)]
 pub struct AccountTokensTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -571,10 +694,17 @@ impl IntoResponse for AccountTokensTemplate {
 /// Account TOTP page template context.
 #[derive(Serialize)]
 pub struct AccountTotpTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -587,10 +717,17 @@ impl IntoResponse for AccountTotpTemplate {
 /// Docs page template context.
 #[derive(Serialize)]
 pub struct DocsTemplate {
+    /// Site title shown in the page header and browser tab.
     pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
     pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
     pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
     pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
 }
 
@@ -603,9 +740,13 @@ impl IntoResponse for DocsTemplate {
 /// Styled error page template context.
 #[derive(Serialize)]
 pub struct ErrorPageTemplate {
+    /// HTTP status the response carries, also surfaced on the page.
     pub status_code: u16,
+    /// Short page heading, usually the status canonical reason.
     pub title: String,
+    /// Explanation shown under the heading.
     pub message: String,
+    /// CSP nonce for inline scripts on the error page.
     pub csp_nonce: String,
 }
 
@@ -631,14 +772,23 @@ pub fn render_error_page(status: StatusCode, message: &str, csp_nonce: &str) -> 
     .into_response()
 }
 
-// Re-export old name for backward compatibility
+/// Backward-compatible alias for [`LoginTemplate`] under its old name.
 pub type LoginPageTemplate = LoginTemplate;
 
+/// First-run setup wizard template context.
+///
+/// Rendered by `setup_page` with a clean form, and re-rendered with
+/// `error` set when the submitted form fails validation so the entered
+/// values stay visible.
 #[derive(serde::Serialize)]
 pub struct SetupTemplate {
+    /// Site title shown on the wizard.
     pub site_title: String,
+    /// Validation or backend error to display; None renders a clean form.
     pub error: Option<String>,
+    /// Listen address prefilled from detected machine IPs.
     pub listen_addr: String,
+    /// SQLite database path used when no managed backend URL is entered.
     pub db_path: String,
     /// Optional managed-backend URL (Postgres/MySQL/...) entered in the
     /// wizard; empty means the legacy SQLite file at `db_path`.
@@ -647,11 +797,17 @@ pub struct SetupTemplate {
     /// when a SQLx pool is installed (db_url configured); None = legacy
     /// SQLite file mode.
     pub backend: Option<String>,
+    /// guacd run mode, "embedded" or "external".
     pub guacd_mode: String,
+    /// guacd TCP address used in external mode.
     pub guacd_addr: String,
+    /// Path to the guacd binary used in embedded mode.
     pub guacd_path: String,
+    /// Email address of the admin account the wizard creates.
     pub admin_email: String,
+    /// Display name of the admin account.
     pub admin_name: String,
+    /// CSP nonce for inline scripts on the setup page.
     pub csp_nonce: String,
 }
 
