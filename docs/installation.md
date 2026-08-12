@@ -1,234 +1,131 @@
 # Installation
 
-> **Audience:** anyone installing persea for the first time (Debian package, Docker, bare-metal, dev builds).
-> **Next:** [Deployment Guide](deployment-guide.md) for the production architecture, or [Configuration](configuration.md) for config reference.
+This guide covers getting persea running for the first time: system requirements, the three install options (Debian package, bare-metal script, Docker), the first-run setup wizard, and how to verify everything actually works.
 
-> **Target platform**: persea is built and tested against **Debian 13
-> (Trixie)**. The pre-built `.deb` package and `install.sh` script
-> assume FreeRDP 3.15+ (Debian 13's `freerdp3-dev`). Other Linux
-> distributions should use the Docker image (Option C) to avoid the
-> FreeRDP ABI issue. See [Other Linux distributions](#other-linux-distributions).
+If you are planning a larger production rollout, continue with the [Deployment Guide](deployment-guide.md) after installation.
 
-## Option A: Debian package (recommended)
+## What you need
 
-Pre-built `.deb` packages are available from the [releases page](https://github.com/BarbellDwarf/persea/releases) for Debian 13 (Trixie) and compatible distributions.
+- **A Linux server.** persea is built and tested against **Debian 13 (Trixie)**. The prebuilt package and install script are for Debian 13; on other distributions use the Docker image (see [Other Linux distributions](#other-linux-distributions)).
+- **Root access** on that server.
+- **A machine you can reach it from**, with a modern browser (Chrome, Edge, Firefox, Safari).
+
+persea itself is modest; a small server with 2–4 GB of RAM is fine for testing and light use. Keep in mind that every simultaneous RDP session costs roughly 150 MB of RAM in guacd, and web browser sessions each need their own Xvnc virtual display and Chromium instance.
+
+Two programs run on the server: **persea** (the web server) and **guacd** (the protocol daemon that actually speaks SSH/RDP/VNC to your target machines). Both install options below set both up for you.
+
+## Option A: Debian package (recommended on Debian 13)
+
+Prebuilt `.deb` packages are published on the [releases page](https://github.com/BarbellDwarf/persea/releases). On your server:
 
 ```bash
 sudo apt install ./persea_*.deb
 ```
 
-Using `apt install` (not `dpkg -i`) resolves all runtime dependencies.
+Using `apt install` (rather than `dpkg -i`) pulls in all the runtime dependencies automatically. The package installs persea and guacd to `/opt/persea` and creates two systemd services: `persea` (the web server) and `persea-guacd` (the protocol daemon).
 
-The package installs to `/opt/persea` and creates systemd services for both guacd and persea.
-
-### Post-install
-
-1. **Start the services:**
+Start everything:
 
 ```bash
 sudo systemctl enable --now persea
 ```
 
-This starts both `persea-guacd` (the protocol daemon) and `persea` (the web proxy).
+This starts both services. Then open `https://your-server:8089` in a browser and complete the setup wizard (see [The setup wizard](#the-setup-wizard) below). The server generates a self-signed TLS certificate during install, so the browser will show a certificate warning — click through it. The certificate is set up so login works anyway; this is handled automatically.
 
-2. **Complete the setup wizard** — open `https://your-server:8089` and follow
-   `/setup`, which provisions the first admin user (email + password) and
-   applies initial feature toggles. Log in with those credentials.
-
-3. **Configure**, edit `/opt/persea/config.toml` as needed (see [Configuration](configuration.md)).
-
-4. **Choose a storage backend for connections (default: local DB):**
-
-The connections page is persea's primary user-facing feature. It stores SSH, RDP, VNC, web session, and VDI entries in the local database with AES-256-GCM encrypted credentials by default (`[storage] backend = "db"` — no Vault required), or in [HashiCorp Vault](https://www.vaultproject.io/) / [OpenBao](https://openbao.org/) KV v2 (`backend = "vault"`). The DB backend works out of the box; only switch to Vault if you need credentials stored outside the database.
-
-For a Vault-backed install the fastest path is the bundled quickstart helper, which auto-detects vault or bao and provisions everything:
-
-```bash
-# Against an existing Vault or OpenBao:
-export VAULT_ADDR=https://vault.example.com:8200
-export VAULT_TOKEN=hvs.xxxxxxxx
-./contrib/vault-quickstart.sh
-
-# Or install Vault locally on this box with on-disk auto-unseal:
-sudo ./contrib/vault-quickstart.sh --local
-```
-
-See [Vault / OpenBao Connections](integrations.md#vault--openbao-connections) for the manual walkthrough, mTLS, multi-instance setup, and the security caveat for `--local` mode.
-
-6. **(Optional) Set up encrypted drive storage:**
-
-```bash
-sudo /opt/persea/bin/drive-setup.sh
-```
-
-See [Drive / File Transfer](integrations.md#drive--file-transfer--luks-encryption) for details.
-
-7. **(Optional) Enable VDI desktop containers:**
-
-If you want to use VDI sessions (ephemeral Docker desktop containers), install Docker and grant persea access:
-
-```bash
-# Install Docker (if not already installed)
-curl -fsSL https://get.docker.com | sh
-
-# Allow persea to manage containers
-sudo usermod -aG docker persea
-sudo systemctl restart persea
-```
-
-Then add a `[vdi]` section to your config, see [VDI Desktop Containers](vdi.md) for full setup.
-
-## Verification
-
-After installation, verify everything works:
-
-1. **Check services are running:**
-   ```bash
-   sudo systemctl status persea persea-guacd
-   ```
-
-2. **Test the health endpoint:**
-   ```bash
-   curl -k https://localhost:8089/api/health
-   # Should return: {"status":"ok"}
-   ```
-
-3. **Check for errors in logs:**
-   ```bash
-   journalctl -u persea -n 20 --no-pager
-   journalctl -u persea-guacd -n 20 --no-pager
-   ```
-
-4. **Create the first admin via the setup wizard** (if not done during install):
-   open `https://your-server:8089` and follow `/setup`. For automation/API
-   access, create an admin API key instead:
-   ```bash
-   sudo -u persea /opt/persea/bin/persea add-admin --name admin
-   ```
-
-5. **Open the web interface** at `https://your-server:8089` and log in with the setup-wizard admin credentials (or the API key as `Authorization: Bearer` for the API).
-
-6. **Test an SSH session**, create an ad-hoc SSH session to `localhost` or another machine on your network.
+Configuration lives in `/opt/persea/config.toml`. Secrets that should not sit in the config file (for example the Vault secret ID or the OIDC client secret) go in `/opt/persea/env`, which the service reads at start.
 
 ## Option B: Bare-metal install script
 
-For fresh Debian 13 systems, the install script builds everything from source:
+For fresh Debian 13 systems, `install.sh` builds everything from source:
 
 ```bash
 sudo ./install.sh
 ```
 
-This performs the following steps:
+The script:
 
-1. Installs system packages (build tools, Xvnc, Chromium, cryptsetup, etc.)
-2. Installs the Rust toolchain (if not present)
-3. Clones and builds guacd from [guacamole-server](https://github.com/apache/guacamole-server) source, applying patches
-4. Builds persea with `cargo build --release`
-5. Creates the `persea` system user (home: `/home/persea`)
-6. Generates a self-signed TLS certificate
-7. Installs binaries, static files, and config to `/opt/persea`
-8. Sets up systemd services
+1. Installs system packages (build tools, Xvnc, Chromium, cryptsetup, and the libraries guacd needs).
+2. Installs the Rust toolchain if missing.
+3. Downloads guacamole-server, applies the FreeRDP 3 patches this project ships in `patches/`, and builds guacd.
+4. Builds persea (`cargo build --release`).
+5. Creates a `persea` system user.
+6. Generates a self-signed TLS certificate.
+7. Installs binaries, web files, and a starter config to `/opt/persea`.
+8. Sets up the two systemd services (`persea` and `persea-guacd`).
 
-### Install flags
+Useful flags:
 
-| Flag | Description |
-|------|-------------|
-| `--no-tls` | Skip TLS certificate generation, listen on HTTP port 8089 |
-| `--hostname=FQDN` | Hostname for the TLS certificate (default: system hostname) |
+| Flag | What it does |
+|------|--------------|
+| `--no-tls` | Skip TLS certificate generation; the server listens on plain HTTP port 8089 |
+| `--hostname=FQDN` | Hostname embedded in the TLS certificate (default: the system hostname) |
 | `--deps-only` | Only install system packages, then exit |
-| `--no-deps` | Skip apt package installation |
+| `--no-deps` | Skip the apt package installation (you already have the packages) |
 
-### Installed layout
+After it finishes, the layout under `/opt/persea` is:
 
 ```
-/opt/persea/
-  bin/persea           # Main binary
-  bin/drive-setup.sh     # LUKS drive setup script
-  sbin/guacd             # Guacamole protocol daemon
-  lib/                   # guacd shared libraries
-  static/                # Web UI files
-  tls/                   # TLS certificates
-  data/                  # SQLite database
-  recordings/            # Session recordings
-  config.toml            # Configuration file
-  env                    # Environment variables (VAULT_SECRET_ID, etc.)
+bin/persea          the web server binary
+bin/drive-setup.sh  optional encrypted file-transfer setup script
+sbin/guacd          the protocol daemon
+lib/                guacd's shared libraries
+static/             web UI files
+tls/                TLS certificates
+data/               SQLite database
+recordings/         session recordings
+config.toml         configuration file
+env                 environment variables for secrets
 ```
 
-### Systemd services
-
-| Service | Description |
-|---------|-------------|
-| `persea-guacd` | guacd protocol daemon (TLS, loopback only) |
-| `persea` | persea web proxy (depends on guacd) |
-
-Both services run as the `persea` user and restart on failure.
-
-The `persea` service loads environment variables from `/opt/persea/env` via systemd's `EnvironmentFile` directive. Use this for secrets like `VAULT_SECRET_ID` and `OIDC_CLIENT_SECRET`.
+Start with `sudo systemctl enable --now persea`, then open the web interface at `https://your-server` (the script's default config listens on port 443) — or `http://your-server:8089` if you installed with `--no-tls`. Follow the setup wizard from there.
 
 ## Option C: Docker
 
-Pre-built images are published to the GitHub Container Registry:
+The Docker image bundles persea, guacd, FreeRDP, and all dependencies in one artifact, so it runs on any distribution with a recent Docker daemon. This is the recommended option on anything other than Debian 13.
 
 ```bash
 docker pull ghcr.io/barbelldwarf/persea:latest
-docker run -d -p 8089:8089 ghcr.io/barbelldwarf/persea:latest
+docker run -d -p 8089:8089 \
+  -v persea-data:/opt/persea/data \
+  -v persea-recordings:/opt/persea/recordings \
+  -v persea-tls:/opt/persea/tls \
+  ghcr.io/barbelldwarf/persea:latest
 ```
 
-To build from source instead:
+Or build the image from source:
 
 ```bash
 docker build -t persea .
 docker run -d -p 8089:8089 persea
 ```
 
-The Docker image:
-- Uses a multi-stage build (Debian 13 trixie-slim runtime)
-- Builds guacd from source with patches applied
-- Generates a self-signed TLS certificate on first start (entrypoint, into `/opt/persea/tls`)
-- Enables TLS between persea and guacd by default
-- Serves HTTPS on port 8089 with the self-signed cert (put a reverse proxy in front for a trusted certificate)
+What the image does on first start:
 
-### First run — setup wizard
+- Generates a self-signed TLS certificate (kept in the `persea-tls` volume so it survives container upgrades — **keep that volume**, otherwise the certificate changes on every recreate and browsers warn again).
+- Starts guacd inside the container (TLS on loopback port 4822), then persea.
+- Serves HTTPS on port 8089 with the self-signed cert. For production, put a reverse proxy with a real certificate in front, or mount your own certificate over `/opt/persea/tls/cert.pem` and `key.pem`.
+- Writes an admin API key to `/opt/persea/data/admin-key.txt` for automation. You can still create a human admin account through the setup wizard — the two are independent.
 
-On first start (when no database exists), persea redirects to the **setup wizard**
-at `https://your-server:8089/setup`, which provisions the first admin user
-(email, display name, password) and applies initial feature toggles.
+### Customising the configuration
 
-After setup, log in with the admin credentials. The entrypoint also creates an
-admin API key named `docker-admin` on first start and writes it to
-`/opt/persea/data/admin-key.txt` (owner-read only) — useful for API automation
-before you have a web login. Additional API keys are created separately when
-needed:
-
-```bash
-docker exec persea /opt/persea/bin/persea \
-    --config /opt/persea/config.toml add-admin --name my-admin
-```
-
-The printed key (`rgu_...`) is shown only once — save it immediately.
-
-### Customizing the configuration
-
-To persist config changes across container restarts, bind-mount a local `config.toml` into the container:
-
-1. **Copy the default config** from the image:
+To keep a custom `config.toml` across container restarts, bind-mount it:
 
 ```bash
 docker run --rm --entrypoint cat ghcr.io/barbelldwarf/persea:latest /opt/persea/config.toml.default > config.toml
 ```
 
-2. **Edit** `config.toml` as needed (see [Configuration](configuration.md)):
+Edit `config.toml` as needed (see [Configuration](configuration.md)), then mount it:
 
-```toml
-# Example: allow SSH to private networks
-ssh_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+```bash
+docker run -d -p 8089:8089 \
+  -v "$PWD/config.toml:/opt/persea/config.toml" \
+  -v persea-data:/opt/persea/data \
+  -v persea-recordings:/opt/persea/recordings \
+  -v persea-tls:/opt/persea/tls \
+  ghcr.io/barbelldwarf/persea:latest
 ```
 
-3. **Mount it** in your Docker Compose file or `docker run` command (see below).
-
-If no config file is mounted, the container uses a built-in default on first start.
-
-### Docker Compose example
+A Docker Compose equivalent:
 
 ```yaml
 services:
@@ -250,15 +147,14 @@ volumes:
   persea-tls:
 ```
 
-> **Keep the TLS volume.** `persea-tls` holds the certificate the entrypoint generates on first start. Without it, every `docker compose down && up` (or image upgrade) regenerates the self-signed cert, changing the fingerprint and re-triggering browser warnings. Mount your own cert for production; when persea self-generates one it also sets `secure_cookies = false` in the config so the session cookie works over the untrusted HTTPS connection.
+Logs are visible with `docker logs persea` (the container name from `docker ps`).
 
-### Sharing guacd with Apache Guacamole
+### Using an existing guacd
 
-If you already run Apache Guacamole with its own guacd container, persea can share it. Override the entrypoint to skip the built-in guacd and point to the existing one:
+If you already run Apache Guacamole's guacd container, persea can share it instead of running its own. Override the entrypoint so persea starts directly, and point `guacd_addr` at the existing guacd:
 
 ```yaml
 services:
-  # Your existing guacd (from Apache Guacamole)
   guacd:
     image: guacamole/guacd:latest
     # ... your existing guacd config ...
@@ -274,178 +170,78 @@ services:
       - persea-data:/opt/persea/data
       - persea-recordings:/opt/persea/recordings
       - persea-tls:/opt/persea/tls
-    environment:
-      - RUST_LOG=info
-    # Must be on the same Docker network as guacd
     networks:
-      - guac-network
+      - guac-network   # same Docker network as guacd
 ```
 
-In your `config.toml`, set `guacd_addr` to the guacd container's hostname:
+In `config.toml`:
 
 ```toml
 guacd_addr = "guacd:4822"
 ```
 
-Both Apache Guacamole and persea will use the same guacd daemon. They can share recordings, but each maintains its own session state and user database.
+Both applications can share the same guacd. Recordings are shared too, but each keeps its own users and session history.
 
-## Option D: RPM package (build from source)
+## The setup wizard
 
-Pre-built RPM packages are not currently provided. An RPM spec file (`persea.spec`) and build script (`build-rpm.sh`) are included for Red Hat / Fedora / Rocky Linux based systems. You will need FreeRDP 3.x development headers installed.
+The first time you open the web interface (before any user account exists), persea redirects to the setup wizard at `/setup` on your persea address — `https://your-server:8089/setup` for the package and Docker installs, `https://your-server/setup` for the install script's default config. It asks for everything persea needs to create the first admin account and write a starter config. Fill it in like this:
 
-```bash
-# Install build dependencies (example for Rocky/RHEL 9)
-sudo dnf install -y epel-release
-sudo dnf config-manager --set-enabled crb
-sudo dnf install -y gcc gcc-c++ make git autoconf automake libtool \
-    freerdp-devel cairo-devel libjpeg-turbo-devel libpng-devel libwebp-devel \
-    libssh2-devel openssl-devel libvncserver-devel pango-devel \
-    pulseaudio-libs-devel rpm-build
+**Server**
+- **Listen Address** — where the web server should listen. It is pre-filled with the machine's address, usually `0.0.0.0:8089` (all interfaces, port 8089). Behind a reverse proxy, `127.0.0.1:8089` is safer — the proxy is the only thing that talks to persea directly.
+- **Database Path** — where the SQLite database file will live (default `/opt/persea/data/persea.db`). This is the file that holds users, connections, session history, and settings. Back it up.
+- **Database URL (optional)** — leave empty to use the SQLite file above. To store everything in a managed database instead, enter a `postgres://`, `mysql://`, or `sqlite://` URL here. persea connects, creates the tables, and puts the admin account straight into that database; the URL is written into the config for every later start. If the server was already started with `db_url` configured, this field is pre-filled and cannot be changed here — edit the config file instead.
 
-# Build the RPM
-bash build-rpm.sh
-sudo rpm -i persea-*.rpm
-```
+**guacd**
+- **Mode** — *Embedded* means guacd runs on this same machine (the Debian package and install script set it up as the `persea-guacd` service; in Docker it starts automatically). *External* means you run guacd elsewhere — then fill in its **guacd Address** (default `127.0.0.1:4822`). For *Embedded*, leave the **guacd Binary Path** at its detected value (usually `/usr/sbin/guacd`). Either way, what matters is that guacd is actually running and reachable at the address in the config — persea never starts it on its own.
 
-RPM builds are untested. Contributions and feedback are welcome.
+**Admin Account**
+- **Email** — the admin's login name (for example `admin@example.com`).
+- **Display Name** — the name shown in the interface.
+- **Password** — at least 8 characters, and at least the password-policy minimum (15 characters by default). Pick something long; this is the master account.
 
-## Option E: Development
+**Features** — tick the optional features you plan to use: Proxmox VE, VMware vSphere, Session Recording, SSH Tunnels, Web Browser Sessions, and VDI Containers. Recording, tunnels, and Proxmox are ticked by default and need no further setup. The VMware checkbox writes a commented-out configuration template for you. The others are switched on by adding their configuration sections to `config.toml` (see the [Deployment Guide](deployment-guide.md) and the [Configuration reference](configuration.md)).
 
-```bash
-# Clone guacamole-server alongside persea
-git clone https://github.com/apache/guacamole-server.git ../guacamole-server
+Press **Complete Setup**. persea creates the admin account, writes the config file, and sends you to the login page. If you entered a Database URL, restart the service once afterwards (`sudo systemctl restart persea`) so the running server matches the config file.
 
-# Install build deps, build guacd, build + run persea
-./dev.sh deps
-./dev.sh build-guacd
-./dev.sh start
-```
+## Verifying it works
 
-For development with TLS:
+1. **Check the services are up** (bare metal):
 
-```bash
-./dev.sh generate-cert
+   ```bash
+   sudo systemctl status persea persea-guacd
+   ```
 
-cat > config.local.toml <<EOF
-[tls]
-cert_path = "cert.pem"
-key_path = "key.pem"
-guacd_cert_path = "cert.pem"
-EOF
+   (Docker: `docker ps` and check the container is running.)
 
-./dev.sh start
-```
+2. **Ask the health endpoint.** It answers without logging in:
+
+   ```bash
+   curl -k https://localhost:8089/api/health
+   ```
+
+   (For an install-script default config, use `https://localhost/api/health` — it listens on 443.) A healthy server replies `{"status":"ok"}`. Logged-in operators get a deeper report (guacd, database, disk) — see [Troubleshooting](troubleshooting.md).
+
+3. **Open the web interface** at the address persea listens on — `https://your-server:8089` (package and Docker installs) or `https://your-server` (install script without `--no-tls`). You should see the login page — or the setup wizard, if you haven't completed it yet.
+
+4. **Log in** with the admin email and password from the wizard.
+
+5. **Create a connection.** Go to the **Connections** page and click to add a new entry. Pick a type you can test against — for example SSH to `localhost` or to another machine on your network — and fill in the host, port (22 for SSH), username, and a password or key.
+
+6. **Connect.** Click the connect button on the entry. A terminal or desktop should appear in the browser. That is the whole loop working: browser → persea → guacd → target.
+
+If any step fails, start with the [Troubleshooting](troubleshooting.md) guide — it covers the login page, failing logins, and sessions that won't start.
 
 ## Other Linux distributions
 
-persea is built and tested against Debian 13 (Trixie). On other Linux
-distributions the FreeRDP ABI is typically different, and the prebuilt
-`.deb` will fail at runtime even if it installs cleanly. The most common
-symptom is RDP sessions working visually but drive redirection and audio
-failing with messages in the guacd log like:
+persea is built and tested on Debian 13. On other distributions the system FreeRDP version usually differs from the one the package was built against, and RDP sessions fail in odd ways even though the package installs cleanly (file transfer and audio channels silently fail with errors in the guacd log).
 
-```
-Cannot create static channel "rdpdr": failed to load "guac-common-svc" plugin for FreeRDP.
-Cannot create static channel "rdpsnd": failed to load "guac-common-svc" plugin for FreeRDP.
-```
+**Use the Docker image** (Option C above) on Ubuntu, RHEL/Rocky/Alma, Arch, and anything else. The image bundles its own guacd and FreeRDP, so there is nothing to clash.
 
-That is FreeRDP's plugin loader silently failing symbol resolution
-against a different FreeRDP version than what guacd was compiled against.
+Building from source on Ubuntu 24.04 is possible but unsupported: Ubuntu ships FreeRDP 3.5, older than the patches in this repo target (FreeRDP 3.15+ as shipped by Debian 13). If you try it, build guacamole-server against the system FreeRDP without the patches (the bugs the patches fix are not present in 3.5.x). Expect no CI coverage or prebuilt packages for this path; issues are generally answered with a pointer to the Docker image.
 
-### Recommended: Docker (Option C above)
+## Optional extras after install
 
-The Docker image bundles guacd, FreeRDP, and all dependencies as a single
-artifact and runs cleanly on any host that can run a recent Docker
-daemon. This is the supported path for Ubuntu, RHEL/Rocky/Alma, Arch,
-and any other non-Debian-13 distribution.
-
-```bash
-docker pull ghcr.io/barbelldwarf/persea:latest
-```
-
-See [Option C: Docker](#option-c-docker) above for the full setup.
-
-### Untested: building from source on Ubuntu 24.04 LTS
-
-If you need a bare-metal install on Ubuntu 24.04, you can build
-locally, but be aware that **Ubuntu 24.04 ships FreeRDP 3.5.1**, which
-is older than what the `patches/` directory targets (FreeRDP 3.15+ as
-shipped by Debian 13). The patches will fail to apply or apply against
-the wrong lines.
-
-Two options:
-
-**Option 1: skip the patches and build against system FreeRDP 3.5.**
-
-```bash
-# Build deps
-sudo apt-get install -y \
-    git build-essential autoconf automake libtool pkg-config cmake \
-    libcairo2-dev libjpeg-dev libpng-dev libwebp-dev libssh2-1-dev \
-    libssl-dev libvncserver-dev libpango1.0-dev libpulse-dev \
-    libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
-    libtelnet-dev libwebsockets-dev freerdp3-dev uuid-dev \
-    chromium-browser tigervnc-standalone-server cryptsetup \
-    curl ca-certificates
-
-# Rust toolchain (1.80+ required for cfg_select support in libsqlite3-sys)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-
-# Build guacd against system FreeRDP 3.5 (skip the 3.15+ patches)
-git clone https://github.com/BarbellDwarf/persea.git
-git clone https://github.com/apache/guacamole-server.git
-cd guacamole-server
-git checkout de97609007c088b5e6afd827eff5e9076013a247   # same pin persea uses
-autoreconf -fi
-./configure --prefix=/opt/persea --with-rdp
-make -j"$(nproc)"
-sudo make install
-
-# Build persea
-cd ../persea
-cargo build --release
-bash build-deb.sh
-sudo dpkg -i ../persea_*_amd64.deb
-```
-
-Drive redirection, audio, and clipboard should work. The 3.15-specific
-bugs the patches address are not present in 3.5.x, so the unpatched
-build is fine for that vintage of FreeRDP.
-
-**Option 2: install FreeRDP 3.15+ from a third-party source** (e.g. a
-PPA or build from source) and then run `install.sh` normally. Out of
-scope for this guide.
-
-Both paths are **untested**: no CI runs against Ubuntu 24.04 and no
-`.deb`s are shipped for it. Ubuntu issues will be triaged as
-best-effort and generally closed with a pointer to the Docker image.
-If you run persea on Ubuntu (successfully or otherwise), reports via
-GitHub issues help inform whether a CI target gets added.
-
-### Other distributions
-
-For RPM-based distros see [Option D: RPM package (build from source)](#option-d-rpm-package-build-from-source).
-For everything else, the Docker image is the path of least resistance.
-
-## System dependencies
-
-For bare-metal installs, persea requires:
-
-- **Rust toolchain** (1.80+)
-- **guacd** (built from guacamole-server source)
-- **Xvnc** (tigervnc-standalone-server) for web browser sessions
-- **Chromium** for web browser sessions
-- **cryptsetup** for LUKS encrypted drive storage
-- **Build libraries** for guacd: libcairo2, libjpeg, libpng, libwebp, libssh2, libssl, libvncserver, libpango, libpulse, ffmpeg, freerdp3
-
-See `install.sh` for the full package list.
-
-## guacamole-server patches
-
-guacd requires patches to build and run correctly with FreeRDP 3.15+ as shipped in Debian 13. These patches are in the `patches/` directory and are applied by all build scripts.
-
-The patches fix:
-1. **Autoconf `-Werror` vs deprecated FreeRDP headers**, FreeRDP 3.15 deprecates `codecs_free()`, breaking compile tests
-2. **Deprecated function pointer API**, replaces `->input->MouseEvent()` etc. with safe FreeRDP 3.x functions
-3. **NULL pointer dereference**, FreeRDP 3.x fires PubSub events before `guac_rdp_disp` is allocated
-4. **Struct layout mismatch**, channel source files missing `config.h` see wrong field offsets when SSH support is enabled
+- **Encrypted file-transfer storage** — `sudo /opt/persea/bin/drive-setup.sh` sets up a LUKS-encrypted volume for RDP drive redirection. See [Integrations](integrations.md).
+- **VDI desktop containers** — install Docker and add the `persea` user to the `docker` group, then enable `[vdi]` in the config. See [VDI Desktop Containers](vdi.md).
+- **Vault-backed connections** — by default connection credentials are stored encrypted in the database. To store them in HashiCorp Vault or OpenBao instead, run `./contrib/vault-quickstart.sh` (or follow the manual steps in [Integrations](integrations.md)).
+- **Production hardening** — reverse proxy with a real certificate, sign-in via OIDC/SAML/LDAP, and the rest of the checklist: see the [Deployment Guide](deployment-guide.md).
