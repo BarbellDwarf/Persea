@@ -837,7 +837,7 @@
                     baseTitle = entryDisplayName;
                     if (!sessionLive) document.title = baseTitle;
                 }
-                sessionIdleTimeoutSecs = parseInt(session.session_idle_timeout_secs, 10) || 0;
+                sessionIdleTimeoutSecs = parseInt((session && session.session_idle_timeout_secs) || 0, 10) || 0;
                 // Deferred/ephemeral-key sessions are the only reconnectable
                 // ones — and the ONLY sessions that carry a banner (the
                 // ephemeral-key prompt). Banner presence is the client-side
