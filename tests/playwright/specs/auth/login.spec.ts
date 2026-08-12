@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:8089';
 const USERNAME = process.env.LOGIN_USERNAME || 'admin@local.test';
-const PASSWORD = process.env.LOGIN_PASSWORD || 'AdminPass123!';
+const PASSWORD = process.env.LOGIN_PASSWORD || 'AdminPass123!Secure';
 
 // Regression test for wayfinder R15: on a fresh instance / brand-new client
 // (no session cookie at all), `/auth/login` must be reachable WITHOUT first

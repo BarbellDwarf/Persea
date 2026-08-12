@@ -65,7 +65,7 @@ test.describe('Sessions page', () => {
     await page.context().clearCookies();
     await page.reload();
     await page.fill('#username', process.env.LOGIN_USERNAME || 'admin@local.test');
-    await page.fill('#password', process.env.LOGIN_PASSWORD || 'AdminPass123!');
+    await page.fill('#password', process.env.LOGIN_PASSWORD || 'AdminPass123!Secure');
     await page.click('#login-submit');
     await page.waitForURL(/connections\.html|sessions\.html/, { timeout: 10_000 });
     await page.goto('/sessions.html');
