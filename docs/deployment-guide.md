@@ -232,6 +232,15 @@ sudo bash setup-xrdp-gfx.sh --desktop mate
 
 `--desktop` picks the desktop environment (`mate` is recommended — lightweight and Windows-like; other options: `xfce`, `kde`, `gnome`, `none`). The script runs `--diagnose` for post-setup troubleshooting. Then, on the connection entry in persea, tick **Enable Graphics Pipeline (GFX)** and **H.264 Passthrough**. Full details and manual tuning are in [RDP Video Performance](rdp-video-performance.md).
 
+**What happens when a session ends.** Ending a session — tab close, the toolbar **Disconnect**/**Log Out** buttons, admin termination, or an idle/max-duration reap — actively closes the guacd connection, and each protocol reacts differently:
+
+- **SSH** — the connection is torn down and the remote shell is terminated.
+- **RDP** — the RDP connection is closed, but the Windows user session is **not** logged off. Windows leaves it in the **Disconnected** state: the user stays logged in, desktop apps keep running, and the session keeps consuming a Remote Desktop license. (guacd's RDP plugin has no logoff-on-disconnect.)
+- **VNC / SPICE** — the connection closes; whether the remote desktop keeps running depends on the VNC/SPICE server. persea-managed sessions are always cleaned up: web browser sessions (Xvnc + Chromium) are killed by persea on session end, and VDI containers are stopped when the session ends.
+- **Windows target:** to end disconnected Windows sessions automatically, set the Group Policy **Set time limit for disconnected sessions** — `Computer Configuration → Administrative Templates → Windows Components → Remote Desktop Services → Remote Desktop Session Host → Session Time Limits` — and set it low (e.g. 1–5 minutes). This is the supported way to end abandoned RDP sessions.
+
+> **Future work:** true Windows logoff on disconnect would require a guacd fork change (RDP logoff-on-disconnect) or an out-of-band `shutdown /l` against the target — neither is implemented today.
+
 ## Step 5: Sign-in
 
 ### OIDC single sign-on (recommended)
