@@ -69,6 +69,7 @@ pub mod slugify;
 pub mod templates;
 #[cfg(test)]
 pub mod testing;
+pub mod thumbnails;
 pub mod totp;
 pub mod tunnel;
 pub mod vault;

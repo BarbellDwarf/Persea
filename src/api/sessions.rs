@@ -732,10 +732,19 @@ async fn resolve_drive_session(
     id: Uuid,
     identity: Option<&Extension<AuthIdentity>>,
 ) -> Result<std::path::PathBuf, AppError> {
+    // Fail closed BEFORE any session-existence check: an unauthenticated
+    // caller gets 403 whether or not the session exists (no existence
+    // oracle), and a non-owner gets 403 for a known session.
+    if identity.is_none() {
+        return Err(AppError::Forbidden(
+            "you can only access the file transfer of your own sessions".into(),
+        ));
+    }
     let Some(info) = manager.get_session(id).await else {
         return Err(AppError::Session("session not found".into()));
     };
     let allowed = identity
+        .as_ref()
         .map(|Extension(id)| id.has_role("admin") || info.created_by == id.display_name())
         .unwrap_or(false);
     if !allowed {
@@ -1438,6 +1447,7 @@ mod drive_tests {
             axum::body::Body::from(payload),
         )
         .await
+        .map(|(code, json)| (code, json.0))
     }
 
     #[tokio::test]

@@ -43,6 +43,7 @@ mod slugify;
 mod templates;
 #[cfg(test)]
 mod testing;
+mod thumbnails;
 mod totp;
 mod tunnel;
 mod vault;
@@ -1576,6 +1577,9 @@ async fn run_server(
         });
     }
 
+    // Spawn orphaned thumbnail cleanup (30-min sweep)
+    thumbnails::spawn_thumbnail_cleanup(manager.clone());
+
     // Spawn VDI container reaper (cleans up idle containers)
     if let Some(ref vdi_cfg) = manager.config().vdi {
         if vdi_cfg.enabled {
@@ -1720,8 +1724,13 @@ async fn run_server(
         .route("/api/sessions/{id}/drive-files", get(api::drive_list_files))
         .route(
             "/api/sessions/{id}/drive-files/{name}",
-            get(api::drive_download_file).delete(api::drive_delete_file),
+            get(api::drive_download_file)
+                .delete(api::drive_delete_file)
+                .put(api::drive_upload_file)
+                .layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024 * 1024)),
         )
+        .route("/api/sessions/events", get(api::events::session_events))
+        .route("/api/desktop/confirm", post(api::pairing::confirm_pairing))
         .route("/api/sessions/{id}/shadow", post(api::shadow_session))
         .route("/api/sessions/{id}/terminate", post(api::delete_session))
         .route(
@@ -2235,6 +2244,18 @@ async fn run_server(
     }
 
     app = app.merge(logout_route);
+
+    // Desktop device pairing — anonymous creation/status polling (no CSRF:
+    // no session to bind; low-privilege: a code only mints a token for the
+    // logged-in user who confirms it on the account page).
+    let pairing_anon_routes = Router::new()
+        .route("/api/desktop/pair", post(api::pairing::create_pairing))
+        .route(
+            "/api/desktop/pair/status",
+            get(api::pairing::pairing_status),
+        )
+        .layer(Extension(database.clone()));
+    app = app.merge(pairing_anon_routes);
 
     // Add shared layers
     // Server HTTPS requires both cert_path and key_path in [tls]

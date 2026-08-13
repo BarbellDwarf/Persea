@@ -59,7 +59,7 @@ fn put_upload(
         .method("PUT")
         .uri(format!("/api/sessions/{id}/drive-files/{name}"));
     if let Some(id) = identity {
-        builder = builder.extension(Extension(id));
+        builder = builder.extension(id);
     }
     if let Some(c) = cookie {
         builder = builder.header(header::COOKIE, c);

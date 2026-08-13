@@ -365,7 +365,6 @@ pub type VaultState = Arc<VaultBackends>;
 
 pub use address_book::*;
 pub use admin::*;
-pub use pairing::*;
 pub use reports::*;
 pub use sessions::*;
 pub use tokens::*;

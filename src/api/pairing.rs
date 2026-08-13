@@ -25,7 +25,6 @@ use crate::error::AppError;
 use axum::{
     extract::{ConnectInfo, Query},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
     Extension, Json,
 };
 use rand::RngExt;
@@ -113,7 +112,9 @@ pub struct WindowLimiter {
 }
 
 impl WindowLimiter {
-    pub const fn new(window: Duration, max: usize) -> Self {
+    /// Build a sliding-window limiter: at most `max` hits per `window`
+    /// per key. Not `const` because the hit map allocates.
+    pub fn new(window: Duration, max: usize) -> Self {
         Self {
             window,
             max,
@@ -141,10 +142,15 @@ impl WindowLimiter {
     }
 }
 
-static PAIR_CREATE_LIMIT: WindowLimiter =
-    WindowLimiter::new(Duration::from_secs(60), PAIR_CREATE_PER_MIN);
-static PAIR_STATUS_LIMIT: WindowLimiter =
-    WindowLimiter::new(Duration::from_secs(60), PAIR_STATUS_PER_MIN);
+fn pair_create_limiter() -> &'static WindowLimiter {
+    static LIMITER: std::sync::OnceLock<WindowLimiter> = std::sync::OnceLock::new();
+    LIMITER.get_or_init(|| WindowLimiter::new(Duration::from_secs(60), PAIR_CREATE_PER_MIN))
+}
+
+fn pair_status_limiter() -> &'static WindowLimiter {
+    static LIMITER: std::sync::OnceLock<WindowLimiter> = std::sync::OnceLock::new();
+    LIMITER.get_or_init(|| WindowLimiter::new(Duration::from_secs(60), PAIR_STATUS_PER_MIN))
+}
 
 // ── Code helpers ────────────────────────────────────────────────────────
 
@@ -214,14 +220,15 @@ fn db_ts(dt: chrono::DateTime<chrono::Utc>) -> String {
 fn is_expired(expires_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
     match chrono::NaiveDateTime::parse_from_str(expires_at, "%Y-%m-%d %H:%M:%S") {
         Ok(ndt) => {
-            let dt = chrono::DateTime::from_naive_utc_and_offset(ndt, chrono::Utc);
+            let dt: chrono::DateTime<chrono::Utc> =
+                chrono::DateTime::from_naive_utc_and_offset(ndt, chrono::Utc);
             dt <= now
         }
         Err(_) => true,
     }
 }
 
-fn db_err(e: sqlx::Error) -> AppError {
+fn db_err(e: &sqlx::Error) -> AppError {
     AppError::Internal(format!("database error: {e}"))
 }
 
@@ -285,7 +292,8 @@ pub async fn insert_pairing(
         Ok(())
     })
     .await
-    .map_err(AppError::from)??
+    .map_err(AppError::from)??;
+    Ok(())
 }
 
 /// Look up a pairing record by code hash.
@@ -294,25 +302,27 @@ pub async fn lookup_pairing(db: &Db, code_hash: String) -> Result<Option<Pairing
         return pool_lookup_pairing(pool, &code_hash).await;
     }
     let db = db.clone();
-    tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<PairingRow>> {
-        ensure_pairing_table(&db)?;
-        let conn = db.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT user_id, hostname, expires_at, consumed_at
+    let result: rusqlite::Result<Option<PairingRow>> =
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<PairingRow>> {
+            ensure_pairing_table(&db)?;
+            let conn = db.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT user_id, hostname, expires_at, consumed_at
              FROM desktop_pairings WHERE code_hash = ?1",
-        )?;
-        let mut rows = stmt.query_map(rusqlite::params![code_hash], |row| {
-            Ok(PairingRow {
-                user_id: row.get(0)?,
-                hostname: row.get(1)?,
-                expires_at: row.get(2)?,
-                consumed_at: row.get(3)?,
-            })
-        })?;
-        rows.next().transpose()
-    })
-    .await
-    .map_err(AppError::from)??
+            )?;
+            let mut rows = stmt.query_map(rusqlite::params![code_hash], |row| {
+                Ok(PairingRow {
+                    user_id: row.get(0)?,
+                    hostname: row.get(1)?,
+                    expires_at: row.get(2)?,
+                    consumed_at: row.get(3)?,
+                })
+            })?;
+            rows.next().transpose()
+        })
+        .await
+        .map_err(AppError::from)?;
+    result.map_err(AppError::from)
 }
 
 /// Bind a pending pairing to the confirming user. Returns `false` when the
@@ -329,18 +339,20 @@ pub async fn bind_pairing(
         return pool_bind_pairing(pool, &code_hash, user_id, &now_db).await;
     }
     let db = db.clone();
-    tokio::task::spawn_blocking(move || -> rusqlite::Result<bool> {
-        ensure_pairing_table(&db)?;
-        let conn = db.lock().unwrap();
-        let n = conn.execute(
-            "UPDATE desktop_pairings SET user_id = ?1
+    let result: rusqlite::Result<bool> =
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<bool> {
+            ensure_pairing_table(&db)?;
+            let conn = db.lock().unwrap();
+            let n = conn.execute(
+                "UPDATE desktop_pairings SET user_id = ?1
              WHERE code_hash = ?2 AND user_id IS NULL AND consumed_at IS NULL AND expires_at > ?3",
-            rusqlite::params![user_id, code_hash, now_db],
-        )?;
-        Ok(n > 0)
-    })
-    .await
-    .map_err(AppError::from)??
+                rusqlite::params![user_id, code_hash, now_db],
+            )?;
+            Ok(n > 0)
+        })
+        .await
+        .map_err(AppError::from)?;
+    result.map_err(AppError::from)
 }
 
 /// Claim an approved pairing so the token plaintext is handed out exactly
@@ -350,7 +362,8 @@ pub async fn claim_pairing(db: &Db, code_hash: String, now_db: String) -> Result
         return pool_claim_pairing(pool, &code_hash, &now_db).await;
     }
     let db = db.clone();
-    tokio::task::spawn_blocking(move || -> rusqlite::Result<bool> {
+    let result: rusqlite::Result<bool> =
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<bool> {
         ensure_pairing_table(&db)?;
         let conn = db.lock().unwrap();
         let n = conn.execute(
@@ -361,7 +374,8 @@ pub async fn claim_pairing(db: &Db, code_hash: String, now_db: String) -> Result
         Ok(n > 0)
     })
     .await
-    .map_err(AppError::from)??
+    .map_err(AppError::from)?;
+    result.map_err(AppError::from)
 }
 
 /// Delete the caller's token(s) with the given name. Used to replace a
@@ -372,16 +386,18 @@ pub async fn revoke_tokens_named(db: &Db, user_id: i64, name: String) -> Result<
         return pool_revoke_tokens_named(pool, user_id, &name).await;
     }
     let db = db.clone();
-    tokio::task::spawn_blocking(move || -> rusqlite::Result<usize> {
-        let conn = db.lock().unwrap();
-        let n = conn.execute(
-            "DELETE FROM user_api_tokens WHERE user_id = ?1 AND name = ?2",
-            rusqlite::params![user_id, name],
-        )?;
-        Ok(n)
-    })
-    .await
-    .map_err(AppError::from)??
+    let result: rusqlite::Result<usize> =
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<usize> {
+            let conn = db.lock().unwrap();
+            let n = conn.execute(
+                "DELETE FROM user_api_tokens WHERE user_id = ?1 AND name = ?2",
+                rusqlite::params![user_id, name],
+            )?;
+            Ok(n)
+        })
+        .await
+        .map_err(AppError::from)?;
+    result.map_err(AppError::from)
 }
 
 /// Fetch a user's email and role by id.
@@ -393,16 +409,18 @@ pub async fn user_identity_by_id(
         return pool_user_identity_by_id(pool, user_id).await;
     }
     let db = db.clone();
-    tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<(String, String)>> {
-        let conn = db.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT email, role FROM users WHERE id = ?1")?;
-        let mut rows = stmt.query_map(rusqlite::params![user_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        rows.next().transpose()
-    })
-    .await
-    .map_err(AppError::from)??
+    let result: rusqlite::Result<Option<(String, String)>> =
+        tokio::task::spawn_blocking(move || -> rusqlite::Result<Option<(String, String)>> {
+            let conn = db.lock().unwrap();
+            let mut stmt = conn.prepare("SELECT email, role FROM users WHERE id = ?1")?;
+            let mut rows = stmt.query_map(rusqlite::params![user_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.next().transpose()
+        })
+        .await
+        .map_err(AppError::from)?;
+    result.map_err(AppError::from)
 }
 
 // ── SQLx pool storage ───────────────────────────────────────────────────
@@ -443,7 +461,7 @@ async fn pool_insert_pairing(
         .map(|r| r.rows_affected()),
         DbPool::None => return Err(no_pool_err()),
     };
-    if n.map_err(db_err)? == 0 {
+    if n.map_err(|e| db_err(&e))? == 0 {
         return Err(AppError::Internal("failed to insert pairing record".into()));
     }
     Ok(())
@@ -508,7 +526,7 @@ async fn pool_lookup_pairing(
         }),
         DbPool::None => return Err(no_pool_err()),
     };
-    let row = row.map_err(db_err)?;
+    let row = row.map_err(|e| db_err(&e))?;
     Ok(
         row.map(|(user_id, hostname, expires_at, consumed_at)| PairingRow {
             user_id,
@@ -564,7 +582,7 @@ async fn pool_bind_pairing(
         }
         DbPool::None => return Err(no_pool_err()),
     };
-    let n = n.map_err(db_err)?;
+    let n = n.map_err(|e| db_err(&e))?;
     Ok(n > 0)
 }
 
@@ -611,7 +629,7 @@ async fn pool_claim_pairing(
         }
         DbPool::None => return Err(no_pool_err()),
     };
-    let n = n.map_err(db_err)?;
+    let n = n.map_err(|e| db_err(&e))?;
     Ok(n > 0)
 }
 
@@ -647,7 +665,7 @@ async fn pool_revoke_tokens_named(
         }
         DbPool::None => return Err(no_pool_err()),
     };
-    let n = n.map_err(db_err)?;
+    let n = n.map_err(|e| db_err(&e))?;
     Ok(n as usize)
 }
 
@@ -674,7 +692,7 @@ async fn pool_user_identity_by_id(
             .map(|opt| opt.map(|r| (r.get::<String, _>(0), r.get::<String, _>(1)))),
         DbPool::None => return Err(no_pool_err()),
     };
-    row.map_err(db_err)
+    row.map_err(|e| db_err(&e))
 }
 
 // ── Handlers ────────────────────────────────────────────────────────────
@@ -691,7 +709,7 @@ pub async fn create_pairing(
 ) -> Result<Json<serde_json::Value>, PairingError> {
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let ip = client_ip(&headers, addr.ip(), &proxies);
-    if !PAIR_CREATE_LIMIT.allow(&ip.to_string()) {
+    if !pair_create_limiter().allow(&ip.to_string()) {
         return Err(PairingError::RateLimited);
     }
     let hostname = body
@@ -792,7 +810,7 @@ pub async fn pairing_status(
         return Err(AppError::NotFound("pairing code not found".into()).into());
     }
     let code_hash = sha256_hex(&code);
-    if !PAIR_STATUS_LIMIT.allow(&code_hash) {
+    if !pair_status_limiter().allow(&code_hash) {
         return Err(PairingError::RateLimited);
     }
     let now = chrono::Utc::now();
@@ -845,9 +863,11 @@ async fn mint_paired_token(
         .await?
         .ok_or_else(|| AppError::NotFound("user not found".into()))?;
 
+    let name_for_token = name.clone();
+    let role_for_token = role.clone();
     let db = database.clone();
     let result = tokio::task::spawn_blocking(move || {
-        db::create_user_token(&db, user_id, &name, Some(&role), None)
+        db::create_user_token(&db, user_id, &name_for_token, Some(&role_for_token), None)
     })
     .await
     .map_err(AppError::from)?
@@ -923,7 +943,7 @@ mod tests {
     fn sanitize_hostname_drops_unsafe_chars_and_truncates() {
         assert_eq!(sanitize_hostname("dev-box:2"), "dev-box:2");
         assert_eq!(sanitize_hostname("a<b>\"c\\d`e"), "abcde");
-        assert_eq!(sanitize_hostname("abc".repeat(30)).len(), HOSTNAME_MAX_LEN);
+        assert_eq!(sanitize_hostname(&"abc".repeat(30)).len(), HOSTNAME_MAX_LEN);
     }
 
     #[test]

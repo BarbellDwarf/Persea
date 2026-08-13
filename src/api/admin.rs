@@ -321,9 +321,13 @@ pub async fn system_status(
 /// contains the feature; the v1.2.0 ticket dispatcher flips them as the
 /// tickets land (S02 → session_events, S03 → drive_upload, S04 →
 /// desktop_pairing, S07 → desktop_bridge).
+/// S03 landed: the drive upload endpoint is compiled in.
 pub const COMPILED_DRIVE_UPLOAD: bool = true;
+/// S02 landed: the SSE session-event feed is compiled in.
 pub const COMPILED_SESSION_EVENTS: bool = true;
+/// S04 landed: the device-pairing flow is compiled in.
 pub const COMPILED_DESKTOP_PAIRING: bool = true;
+/// S07 landed: the Tauri IPC bridge + CSP schemes are compiled in.
 pub const COMPILED_DESKTOP_BRIDGE: bool = true;
 
 /// `system_settings` keys backing the admin-gated desktop capabilities
@@ -394,8 +398,11 @@ async fn load_capability_settings(database: Option<Extension<Db>>) -> Vec<(Strin
             let db_clone = db.clone();
             tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db_clone))
                 .await
-                .unwrap_or_default()
-                .unwrap_or_default()
+                .unwrap_or(Ok(Vec::new()))
+                .unwrap_or_else(|e| {
+                    tracing::warn!("failed to load capability settings: {e}");
+                    Vec::new()
+                })
         }
         None => Vec::new(),
     }

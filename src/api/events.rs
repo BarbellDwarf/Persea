@@ -19,7 +19,7 @@ use super::AppState;
 use crate::auth::AuthIdentity;
 use crate::error::AppError;
 use crate::session::{SessionEvent, SessionManager};
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -159,10 +159,8 @@ pub async fn produce_events(
             let mut last = since;
             for event in manager.replay_events(since).1 {
                 last = event.id;
-                if show_all || event.created_by == owner {
-                    if tx.send(event).await.is_err() {
-                        return;
-                    }
+                if (show_all || event.created_by == owner) && tx.send(event).await.is_err() {
+                    return;
                 }
             }
             last
@@ -180,10 +178,10 @@ pub async fn produce_events(
                 }
                 for event in manager.replay_events(last_seen).1 {
                     last_seen = event.id;
-                    if show_all || event.created_by == owner {
-                        if tx.send(event).await.is_err() {
-                            return;
-                        }
+                    if (show_all || event.created_by == owner)
+                        && tx.send(event).await.is_err()
+                    {
+                        return;
                     }
                 }
             }

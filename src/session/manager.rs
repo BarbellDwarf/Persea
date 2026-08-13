@@ -55,6 +55,10 @@ pub struct SessionManager {
 pub(super) struct SessionEventBus {
     log: std::sync::Mutex<EventLog>,
     tx: watch::Sender<u64>,
+    /// Held so the channel stays open when no subscriber is connected:
+    /// `watch` closes (and drops sends) when the last receiver is gone,
+    /// which would lose the cursor value between subscribers.
+    _rx: watch::Receiver<u64>,
 }
 
 /// Retained event window state.
@@ -68,12 +72,14 @@ const SESSION_EVENT_LOG_CAP: usize = 500;
 
 impl SessionEventBus {
     fn new() -> Self {
+        let (tx, rx) = watch::channel(0);
         Self {
             log: std::sync::Mutex::new(EventLog {
                 events: VecDeque::new(),
                 next_id: 1,
             }),
-            tx: watch::channel(0).0,
+            tx,
+            _rx: rx,
         }
     }
 

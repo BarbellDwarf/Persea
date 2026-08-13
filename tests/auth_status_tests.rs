@@ -37,7 +37,10 @@ fn test_router(db: Option<Db>) -> Router {
         .layer(Extension(DriveConfigured(false)))
         .layer(Extension(ThemeData {
             admin_preset: "dark".into(),
-            admin_colors: ThemeColors::default(),
+            admin_colors: persea::config::builtin_presets()
+                .first()
+                .map(|(_, c)| c.clone())
+                .expect("builtin presets exist"),
             logo_url: Some("/uploads/logo/logo.png".into()),
             presets: HashMap::new(),
         }));
@@ -93,10 +96,11 @@ async fn anonymous_request_returns_200_with_version_and_capabilities() {
     assert_eq!(status, StatusCode::OK);
 
     let version = body["version"].as_str().unwrap();
-    let version_re = regex::Regex::new(r"^\d+\.\d+\.\d+$").unwrap();
+    let parts: Vec<&str> = version.split('.').collect();
+    assert_eq!(parts.len(), 3, "version {version:?} must be x.y.z");
     assert!(
-        version_re.is_match(version),
-        "version {version:?} must be x.y.z with no git hash"
+        parts.iter().all(|p| p.parse::<u32>().is_ok()),
+        "version {version:?} must be numeric x.y.z with no git hash"
     );
 
     let caps = body["capabilities"].as_object().unwrap();

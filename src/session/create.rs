@@ -19,7 +19,7 @@ const TMUX_DETACH_WRAPPER: &str = "tmux attach-session -d 2>/dev/null || tmux ne
 impl SessionManager {
     /// Create a new session: connect to guacd, perform handshake, return session info.
     pub async fn create_session(
-        &self,
+        self: &std::sync::Arc<Self>,
         req: CreateSessionRequest,
         created_by: String,
     ) -> Result<SessionInfo, SessionError> {
@@ -1204,6 +1204,7 @@ impl SessionManager {
         };
 
         let info = session.info();
+        self.publish_session_started(&session);
         let session = tokio::sync::Mutex::new(session);
 
         self.sessions
@@ -1286,6 +1287,7 @@ impl SessionManager {
         // (the store functions no-op without a shared backend pool).
         let registry_db = self.db.clone();
         let registry_ha = self.ha_enabled();
+        let publisher = std::sync::Arc::clone(self);
         tokio::spawn(async move {
             time::sleep(time::Duration::from_secs(timeout_secs)).await;
             let mut was_pending = false;
@@ -1296,6 +1298,7 @@ impl SessionManager {
                     if session.status == SessionStatus::Pending {
                         tracing::warn!(session_id = %session_id, "Session expired (no browser connected)");
                         session.status = SessionStatus::Expired;
+                        publisher.publish_transition(&SessionStatus::Pending, &session);
                         was_pending = true;
                         session.guacd_stream = None;
                         super::cleanup_browser(
