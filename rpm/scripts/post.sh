@@ -9,7 +9,7 @@ chown -R persea:persea /opt/persea/recordings
 
 # Generate a self-signed TLS certificate if none exists
 if [ ! -f /opt/persea/tls/cert.pem ] || [ ! -f /opt/persea/tls/key.pem ]; then
-    CERT_HOSTNAME=$(hostname -f 2>/dev/null || hostname)
+    CERT_HOSTNAME=$(hostname -f 2>/dev/null || hostname 2>/dev/null || cat /proc/sys/kernel/hostname)
     echo "Generating self-signed TLS certificate for ${CERT_HOSTNAME}..."
     /opt/persea/bin/persea generate-cert \
         --hostname "$CERT_HOSTNAME" \
