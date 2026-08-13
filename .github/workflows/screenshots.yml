@@ -2,7 +2,7 @@ name: Screenshots
 
 # Regenerates the canonical web-UI screenshots (docs/screenshots/*.png) from
 # a seeded test instance and, on manual runs, opens a PR when the output
-# differs from the committed baselines (wayfinder/v1.2.0/S18).
+# differs from the committed baselines.
 #
 # Manual regen: Actions → Screenshots → Run workflow → a PR with the new
 # images appears if anything changed.
@@ -188,7 +188,7 @@ jobs:
           commit-message: "chore(screenshots): regenerate canonical web UI screenshots"
           title: "chore(screenshots): refresh canonical web UI screenshots"
           body: |
-            Regenerated from the seeded test instance (wayfinder/v1.2.0/S18).
+            Regenerated from the seeded test instance.
 
             Changes detected in `docs/screenshots/` - the committed baselines no
             longer match a fresh capture. Review the diff; if the UI change was

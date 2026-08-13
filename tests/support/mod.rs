@@ -5,7 +5,7 @@
 //! against a port chosen with the old bind-then-release trick, which
 //! raced with other test binaries running in parallel: another binary
 //! could grab the port between release and persea's bind, persea exited
-//! EADDRINUSE, and the boot failed (wayfinder/v1.2.0/S21).
+//! EADDRINUSE, and the boot failed.
 //!
 //! [`boot_persea`] closes that race two ways:
 //! 1. The port is RESERVED with a held `TcpListener` for the whole

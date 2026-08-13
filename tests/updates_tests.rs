@@ -1,5 +1,5 @@
 //! Integration tests for the server version update alert
-//! (wayfinder/v1.2.0/S16): the check task's fetch/parse/compare pipeline,
+//!: the check task's fetch/parse/compare pipeline,
 //! the `GET /api/auth/status` extension, and the admin banner gating.
 
 use axum::http::{Request, StatusCode};

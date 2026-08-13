@@ -1,4 +1,4 @@
-//! Security + performance hardening integration tests (wayfinder/v1.2.0/S12).
+//! Security + performance hardening integration tests.
 //!
 //! Covers, against a live persea binary with a mock guacd:
 //! - S02: Proxmox session URLs are network-validated (169.254.169.254

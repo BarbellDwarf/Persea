@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(guard.active_connections, 0);
     }
 
-    // ── Background-task regression guards (wayfinder/v1.2.0/S22) ─────────
+    // ── Background-task regression guards ─────────
     //
     // The session reaper and the login-script task are the two
     // background-task shapes owned by this module. The S22 investigation
