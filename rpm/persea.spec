@@ -28,6 +28,10 @@
 
 %{!?persea_version:%global persea_version 0.0.0}
 %global _prefix /opt/persea
+# guacd's libraries carry an RPATH of /opt/persea/lib (the bundled libdir,
+# outside the /usr/lib* tree that the check allows). The same layout ships in
+# the Debian package; the RPATH is intentional and harmless here.
+%global __brp_check_rpaths %{nil}
 
 Name:           persea
 Version:        %{persea_version}
