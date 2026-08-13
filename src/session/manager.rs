@@ -5,10 +5,10 @@ use crate::guacd;
 use crate::guacd::GuacdStream;
 use chrono::{DateTime, Utc};
 use rand::RngExt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 use tokio_rustls::TlsConnector;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -35,6 +35,66 @@ pub struct SessionManager {
     pub(super) recording_dir: std::path::PathBuf,
     /// Notified when `shutdown` flips to `true` so background tasks can exit.
     pub(super) shutdown_notify: Arc<tokio::sync::Notify>,
+    /// Session lifecycle event feed (S02): bounded retained log + watch
+    /// broadcast backing `GET /api/sessions/events` (SSE + replay).
+    pub(super) event_bus: SessionEventBus,
+    /// Per-user cap on live SSE event streams (at most one per identity).
+    pub(super) sse_subscribers: std::sync::Mutex<HashSet<String>>,
+    /// When each session entered a terminal state (completed/error/
+    /// expired). Attached to `SessionInfo.ended_at` by list/get and
+    /// pruned when the session leaves the map.
+    pub(super) ended_at: std::sync::Mutex<HashMap<Uuid, DateTime<Utc>>>,
+}
+
+/// Bounded retained log + watch broadcast backing the session event feed.
+///
+/// The log is the source of truth: replay filters it by cursor, and SSE
+/// subscribers re-read it on every watch change, so no event is missed or
+/// delivered twice even when a publish races a subscriber's read. The
+/// watch value (the latest event id) is only a change notification.
+pub(super) struct SessionEventBus {
+    log: std::sync::Mutex<EventLog>,
+    tx: watch::Sender<u64>,
+}
+
+/// Retained event window state.
+struct EventLog {
+    events: VecDeque<SessionEvent>,
+    next_id: u64,
+}
+
+/// Maximum number of lifecycle events retained for replay / SSE resume.
+const SESSION_EVENT_LOG_CAP: usize = 500;
+
+impl SessionEventBus {
+    fn new() -> Self {
+        Self {
+            log: std::sync::Mutex::new(EventLog {
+                events: VecDeque::new(),
+                next_id: 1,
+            }),
+            tx: watch::channel(0).0,
+        }
+    }
+
+    /// Append an event, assign its monotonic cursor, and notify
+    /// subscribers. The log is appended before the watch value is bumped,
+    /// so a reader that sees the new id always finds the event.
+    fn publish(&self, mut event: SessionEvent) {
+        let id = {
+            let mut log = self.log.lock().unwrap();
+            event.id = log.next_id;
+            log.next_id += 1;
+            log.events.push_back(event);
+            while log.events.len() > SESSION_EVENT_LOG_CAP {
+                log.events.pop_front();
+            }
+            log.next_id - 1
+        };
+        // No subscribers is not an error: the log keeps the event for
+        // later replay.
+        let _ = self.tx.send(id);
+    }
 }
 
 impl SessionManager {
@@ -125,6 +185,9 @@ impl SessionManager {
             shutdown: Arc::new(AtomicBool::new(false)),
             recording_dir,
             shutdown_notify: Arc::new(tokio::sync::Notify::new()),
+            event_bus: SessionEventBus::new(),
+            sse_subscribers: std::sync::Mutex::new(HashSet::new()),
+            ended_at: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -207,7 +270,9 @@ impl SessionManager {
         let mut result = Vec::new();
         for session in sessions.values() {
             let session = session.lock().await;
-            result.push(session.info());
+            let mut info = session.info();
+            info.ended_at = self.ended_at.lock().unwrap().get(&info.session_id).copied();
+            result.push(info);
         }
         drop(sessions);
 
@@ -246,7 +311,9 @@ impl SessionManager {
             let sessions = self.sessions.read().await;
             if let Some(session) = sessions.get(&id) {
                 let session = session.lock().await;
-                return Some(session.info());
+                let mut info = session.info();
+                info.ended_at = self.ended_at.lock().unwrap().get(&id).copied();
+                return Some(info);
             }
         }
         if self.ha_enabled() {
@@ -272,6 +339,7 @@ impl SessionManager {
         if session.status != SessionStatus::Pending {
             return None;
         }
+        let old_status = session.status.clone();
 
         // If this is a deferred connection, connect to guacd now
         if let Some(params) = session.deferred_params.take() {
@@ -295,6 +363,7 @@ impl SessionManager {
                 Err(e) => {
                     tracing::error!(session_id = %id, error = %e, "Deferred guacd connection failed");
                     session.status = SessionStatus::Error;
+                    self.publish_transition(&old_status, &session);
                     return None;
                 }
             }
@@ -303,6 +372,7 @@ impl SessionManager {
         let stream = session.guacd_stream.take()?;
         let cancel = session.cancel.clone();
         session.status = SessionStatus::Active;
+        self.publish_transition(&old_status, &session);
         session.active_connections += 1;
         crate::metrics::session_active_inc();
         tracing::info!(session_id = %id, "Session now active (owner connected)");
@@ -561,7 +631,9 @@ impl SessionManager {
             if session.status == SessionStatus::Active
                 || session.status == SessionStatus::Disconnected
             {
+                let old_status = session.status.clone();
                 session.status = SessionStatus::Completed;
+                self.publish_transition(&old_status, &session);
                 did_transition = true;
                 crate::metrics::session_active_dec();
                 let (c, r) = super::drive_cleanup_settings(&self.config.drive);
@@ -583,7 +655,9 @@ impl SessionManager {
         if let Some(session) = sessions.get(&id) {
             let mut session = session.lock().await;
             if session.status == SessionStatus::Active {
+                let old_status = session.status.clone();
                 session.status = SessionStatus::Disconnected;
+                self.publish_transition(&old_status, &session);
                 did_transition = true;
                 session.guacd_stream = None;
                 crate::metrics::session_active_dec();
@@ -607,6 +681,7 @@ impl SessionManager {
         if session.status != SessionStatus::Disconnected {
             return None;
         }
+        let old_status = session.status.clone();
 
         if let Some(params) = session.deferred_params.take() {
             tracing::info!(session_id = %id, "Re-establishing deferred guacd connection for reconnect");
@@ -624,6 +699,7 @@ impl SessionManager {
                 Err(e) => {
                     tracing::error!(session_id = %id, error = %e, "Reconnect: deferred guacd connection failed");
                     session.status = SessionStatus::Error;
+                    self.publish_transition(&old_status, &session);
                     return None;
                 }
             }
@@ -632,6 +708,7 @@ impl SessionManager {
         let stream = session.guacd_stream.take()?;
         let cancel = session.cancel.clone();
         session.status = SessionStatus::Active;
+        self.publish_transition(&old_status, &session);
         session.active_connections += 1;
         crate::metrics::session_active_inc();
         tracing::info!(session_id = %id, "Session reconnected (owner)");
@@ -647,14 +724,18 @@ impl SessionManager {
         let sessions = self.sessions.read().await;
         if let Some(session) = sessions.get(&id) {
             let mut session = session.lock().await;
-            if session.status == SessionStatus::Active {
-                crate::metrics::session_active_dec();
+            if session.status != SessionStatus::Error {
+                let old_status = session.status.clone();
+                if old_status == SessionStatus::Active {
+                    crate::metrics::session_active_dec();
+                }
+                session.status = SessionStatus::Error;
+                self.publish_transition(&old_status, &session);
+                did_transition = true;
+                session.guacd_stream = None;
+                let (c, r) = super::drive_cleanup_settings(&self.config.drive);
+                super::cleanup_browser(&self.browser_manager, &mut session, c, r).await;
             }
-            session.status = SessionStatus::Error;
-            did_transition = true;
-            session.guacd_stream = None;
-            let (c, r) = super::drive_cleanup_settings(&self.config.drive);
-            super::cleanup_browser(&self.browser_manager, &mut session, c, r).await;
         }
         drop(sessions);
         if did_transition {
@@ -766,17 +847,22 @@ impl SessionManager {
         let mut sessions = self.sessions.write().await;
         if let Some(session) = sessions.remove(&id) {
             let mut session = session.lock().await;
-            if session.status == SessionStatus::Active {
+            let old_status = session.status.clone();
+            if old_status == SessionStatus::Active {
                 crate::metrics::session_active_dec();
             }
             session.cancel.cancel();
             session.status = SessionStatus::Completed;
+            self.publish_transition(&old_status, &session);
             session.guacd_stream = None;
             let (c, r) = super::drive_cleanup_settings(&self.config.drive);
             super::cleanup_browser(&self.browser_manager, &mut session, c, r).await;
             tracing::info!(session_id = %id, "Session terminated by API");
             drop(session);
             drop(sessions);
+            // The session is gone from the map — drop its terminal
+            // timestamp entry (the event feed already carried the event).
+            self.ended_at.lock().unwrap().remove(&id);
             // Keep the registry row in a terminal state so the owning
             // instance's recording rotation can still attribute the file;
             // the stale sweep removes the row within 24h.
@@ -882,6 +968,8 @@ impl SessionManager {
             let mut sessions = self.sessions.write().await;
             for id in &to_remove {
                 sessions.remove(id);
+                // The terminal timestamp entry dies with the session.
+                self.ended_at.lock().unwrap().remove(id);
                 // The registry row intentionally stays (terminal
                 // state) so recording rotation can still attribute the
                 // file — the stale sweep removes it within 24h.
@@ -966,6 +1054,100 @@ impl SessionManager {
             let session = session.lock().await;
             session.touch_activity();
         }
+    }
+
+    // ── Session event feed (S02) ──────────────────────────────────────────
+
+    /// Subscribe to session lifecycle events. The watch value is the
+    /// latest event cursor; the retained log (see `replay_events`) is the
+    /// authoritative source of events.
+    pub fn subscribe_events(&self) -> watch::Receiver<u64> {
+        self.event_bus.tx.subscribe()
+    }
+
+    /// Replay retained lifecycle events with id > `since`, plus the
+    /// latest cursor. Both come from the same locked log that publishes
+    /// to, so an SSE subscriber that reads events and then awaits its
+    /// watch receiver picks up anything published after the read on the
+    /// next change — no loss, no duplication.
+    pub fn replay_events(&self, since: u64) -> (u64, Vec<SessionEvent>) {
+        let log = self.event_bus.log.lock().unwrap();
+        let cursor = log.next_id.saturating_sub(1);
+        let events = log
+            .events
+            .iter()
+            .filter(|e| e.id > since)
+            .cloned()
+            .collect();
+        (cursor, events)
+    }
+
+    /// Claim one of the per-user live-stream slots for `identity`.
+    /// Returns false when the slot is already taken (at most one
+    /// concurrent SSE stream per user).
+    pub fn try_claim_sse_subscription(&self, identity: &str) -> bool {
+        self.sse_subscribers
+            .lock()
+            .unwrap()
+            .insert(identity.to_string())
+    }
+
+    /// Release a claimed live-stream slot (stream ended / client gone).
+    pub fn release_sse_subscription(&self, identity: &str) {
+        self.sse_subscribers.lock().unwrap().remove(identity);
+    }
+
+    /// Publish the `session_started` event for a newly created session.
+    /// Called by the session creation path (create.rs) after the session
+    /// lands in the map.
+    pub fn publish_session_started(&self, session: &Session) {
+        self.publish_event(SessionEventKind::SessionStarted, session);
+    }
+
+    /// Publish one lifecycle event for a session; the bus assigns the
+    /// cursor id.
+    fn publish_event(&self, kind: SessionEventKind, session: &Session) {
+        let event = SessionEvent {
+            id: 0,
+            event: kind,
+            session_id: session.id,
+            session_type: session.session_type.clone(),
+            status: session.status.clone(),
+            created_by: session.created_by.clone(),
+            timestamp: Utc::now(),
+        };
+        self.event_bus.publish(event);
+    }
+
+    /// Publish a status transition: exactly one event per real transition,
+    /// nothing when the status did not change (duplicate notify). Terminal
+    /// statuses publish `session_ended` and record `ended_at`; everything
+    /// else publishes `status_changed`.
+    fn publish_transition(&self, old: &SessionStatus, session: &Session) {
+        if old == &session.status {
+            return;
+        }
+        if session.status.is_terminal() {
+            self.ended_at.lock().unwrap().insert(session.id, Utc::now());
+        }
+        let kind = if session.status.is_terminal() {
+            SessionEventKind::SessionEnded
+        } else {
+            SessionEventKind::StatusChanged
+        };
+        self.publish_event(kind, session);
+    }
+
+    /// Test seam: insert a session directly into the manager's map so
+    /// integration tests can drive lifecycle transitions without a guacd
+    /// connection. Production code uses `create_session`.
+    pub async fn seed_session_for_testing(&self, session: Session) -> Uuid {
+        let id = session.id;
+        self.sessions
+            .write()
+            .await
+            .insert(id, Arc::new(Mutex::new(session)));
+        id
     }
 
     /// Return session IDs whose last_activity is older than `idle_timeout_secs`

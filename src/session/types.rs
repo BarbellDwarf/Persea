@@ -290,6 +290,17 @@ pub enum SessionStatus {
     Disconnected,
 }
 
+impl SessionStatus {
+    /// True for terminal states (completed/error/expired): the session can
+    /// no longer be joined or resumed.
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            SessionStatus::Completed | SessionStatus::Error | SessionStatus::Expired
+        )
+    }
+}
+
 /// Public session info returned by the API.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionInfo {
@@ -301,6 +312,14 @@ pub struct SessionInfo {
     pub status: SessionStatus,
     /// When the session was created.
     pub created_at: DateTime<Utc>,
+    /// Last real activity (WebSocket traffic or thumbnail uploads); absent
+    /// when the session never saw activity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_activity: Option<DateTime<Utc>>,
+    /// When the session entered a terminal state (completed/error/expired);
+    /// absent while the session is still live.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<DateTime<Utc>>,
     /// Path to the client page for this session.
     pub client_url: String,
     /// Share URL, present when sharing is allowed; omitted otherwise.
@@ -360,6 +379,50 @@ pub struct SessionInfo {
     /// instance (seen via the shared registry, not the local map).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remote: bool,
+}
+
+/// Kind of a session lifecycle event on the event feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionEventKind {
+    /// A session was created (status `pending`).
+    SessionStarted,
+    /// A live session changed status (e.g. pending → active,
+    /// active → disconnected).
+    StatusChanged,
+    /// A session entered a terminal state (completed/error/expired).
+    SessionEnded,
+}
+
+impl SessionEventKind {
+    /// The SSE `event:` field value.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionEventKind::SessionStarted => "session_started",
+            SessionEventKind::StatusChanged => "status_changed",
+            SessionEventKind::SessionEnded => "session_ended",
+        }
+    }
+}
+
+/// One session lifecycle event on the `GET /api/sessions/events` feed.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionEvent {
+    /// Monotonic cursor, unique per manager lifetime. Clients replay with
+    /// `?since=<id>` and resume SSE with `Last-Event-ID: <id>`.
+    pub id: u64,
+    /// Event kind: `session_started`, `status_changed`, or `session_ended`.
+    pub event: SessionEventKind,
+    /// The session that changed.
+    pub session_id: Uuid,
+    /// Protocol family of the session.
+    pub session_type: SessionType,
+    /// Status after the transition.
+    pub status: SessionStatus,
+    /// Identity of the user who created the session.
+    pub created_by: String,
+    /// When the event was published.
+    pub timestamp: DateTime<Utc>,
 }
 
 /// Internal session state including the guacd connection.
@@ -542,6 +605,15 @@ impl Session {
             session_type: self.session_type.clone(),
             status: self.status.clone(),
             created_at: self.created_at,
+            last_activity: {
+                let secs = self.last_activity_secs();
+                if secs > 0 {
+                    chrono::DateTime::from_timestamp(secs, 0)
+                } else {
+                    None
+                }
+            },
+            ended_at: None, // attached by the manager from its terminal-state registry
             client_url: format!("/client/{}", self.id),
             share_url: if self.share_allowed {
                 Some(format!("/client/{}?token={}", self.id, self.share_token))
@@ -591,6 +663,8 @@ impl SessionInfo {
             session_type,
             status,
             created_at,
+            last_activity: None,
+            ended_at: None,
             client_url: format!("/client/{}", id),
             share_url: None,
             ws_url: format!("/ws/{}", id),

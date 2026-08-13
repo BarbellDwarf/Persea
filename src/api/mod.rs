@@ -2,8 +2,10 @@
 
 pub mod address_book;
 pub mod admin;
+pub mod events;
 pub mod groups;
 pub mod imports;
+pub mod pairing;
 pub mod providers;
 pub mod reports;
 pub mod sessions;
@@ -363,6 +365,7 @@ pub type VaultState = Arc<VaultBackends>;
 
 pub use address_book::*;
 pub use admin::*;
+pub use pairing::*;
 pub use reports::*;
 pub use sessions::*;
 pub use tokens::*;
