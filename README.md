@@ -217,6 +217,10 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 
 [OpenCode](https://opencode.ai) and the OpenCode Go subscription made this project possible. An AI coding agent that just works, a subscription that is worth every cent, and isn't that many cents either. If you are a dev who needs solid pricing for AI coding agents, this is the way to go. They are not a sponsor by the way, just love the product and the ethos.
 
+## Support
+
+persea is a hobby project, funded by its community. If persea saves you time, consider sponsoring it on [Open Collective](https://opencollective.com/persea): contributions pay for CI infrastructure, cross-platform build and signing certificates, test machines, and development time.
+
 ## License
 
 persea is free software under the [Apache License 2.0](LICENSE). Use it, modify it, sell it: it is a hobby project, everything is included, nothing is gated.
