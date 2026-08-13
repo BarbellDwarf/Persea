@@ -426,6 +426,33 @@ The security-relevant toggles (protocol lockdown, desktop shell, file transfer, 
 
 ![Admin settings page](screenshots/admin-settings.png)
 
+### Per-protocol session defaults
+
+Admin → Settings → Session → **Session defaults** lets you change the connection parameters that apply when a connection entry or an ad-hoc session does not specify its own value. Precedence at session creation:
+
+1. Entry/request value (an address-book entry with its own width, security mode, etc. always wins)
+2. Global default (stored in `system_settings`, set on this page)
+3. Built-in code default (the hardcoded values persea shipped with)
+
+Changing a default affects **new sessions only**; running sessions are untouched. Out of the box every global default equals the built-in code default, so an existing deployment behaves exactly as before until an admin changes something.
+
+| Setting | Default | What it controls |
+|---------|---------|------------------|
+| `default_rdp_width` | `1920` | Default RDP display width in pixels |
+| `default_rdp_height` | `1080` | Default RDP display height in pixels |
+| `default_rdp_dpi` | `96` | Default RDP display density |
+| `default_rdp_security` | `any` | Default RDP security layer: `any`, `rdp`, `tls`, or `nla` |
+| `default_rdp_h264` | `true` | H.264 passthrough on by default |
+| `default_rdp_gfx` | `true` | Graphics Pipeline Extension on by default |
+| `default_rdp_drive` | `false` | Mount the RDP drive by default (when unset, the `[drive]` config section governs) |
+| `default_ssh_width` | `1920` | Default SSH terminal width in columns |
+| `default_ssh_height` | `1080` | Default SSH terminal height in rows |
+| `default_vnc_color_depth` | `24` | Default VNC color depth in bits per pixel |
+| `default_vnc_disable_copy` | `false` | Block clipboard copy (remote desktop → client) by default |
+| `default_vnc_disable_paste` | `false` | Block clipboard paste (client → remote desktop) by default |
+
+The keys are stored in the `system_settings` table like every other admin setting, so they survive restarts and are covered by the same backups as the rest of the database.
+
 ## A note on the audit log
 
 The audit log chains every event into the previous one with a hash, so any change to old entries is detectable. That makes it **tamper-evident, not tamper-proof**: someone with database write access could rewrite the chain from a point of tampering onward. There is no external signature or timestamp authority.

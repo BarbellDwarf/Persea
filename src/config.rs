@@ -3,6 +3,37 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Canonical per-protocol session defaults (admin Settings → Session →
+/// Session defaults).
+///
+/// These are the hardcoded values the session creation path used before
+/// per-protocol global defaults existed, so an unset key changes nothing.
+/// The settings API (`src/api/settings.rs`) seeds the admin page from this
+/// table and the session creation path (`src/session/create.rs`) falls
+/// back to it when a key is unset. Precedence at session creation:
+/// entry/request value > stored global default > this code default.
+///
+/// Values are the canonical string forms the settings API persists:
+/// "true"/"false" for booleans, plain numbers, or the raw string for
+/// enums (RDP security).
+pub const PROTOCOL_DEFAULT_KEYS: &[(&str, &str)] = &[
+    // RDP
+    ("default_rdp_width", "1920"),
+    ("default_rdp_height", "1080"),
+    ("default_rdp_dpi", "96"),
+    ("default_rdp_security", "any"),
+    ("default_rdp_h264", "true"),
+    ("default_rdp_gfx", "true"),
+    ("default_rdp_drive", "false"),
+    // SSH
+    ("default_ssh_width", "1920"),
+    ("default_ssh_height", "1080"),
+    // VNC
+    ("default_vnc_color_depth", "24"),
+    ("default_vnc_disable_copy", "false"),
+    ("default_vnc_disable_paste", "false"),
+];
+
 /// TLS settings for the HTTPS listener and the guacd connection (`[tls]`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct TlsConfig {

@@ -180,6 +180,135 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Session defaults: per-protocol global defaults applied when
+                 an entry or ad-hoc request does not specify its own value.
+                 Precedence: entry > global default > built-in code default. -->
+            <div class="card">
+                <h2 class="settings-card-header">
+                    <svg class="w-5 h-5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9h8m-8 4h8m-8 4h4M3 3h18v18H3V3z"/></svg>
+                    Session Defaults
+                </h2>
+                <p class="text-xs text-[var(--text-muted)] mb-4">
+                    Applied when a connection entry or ad-hoc session does not specify its own value.
+                    Entry settings win; these are the fallback. Changes affect new sessions only.
+                </p>
+
+                <div class="space-y-5">
+                    <!-- RDP -->
+                    <div>
+                        <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">RDP</h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="form-label">Width (pixels)</label>
+                                <input type="number" name="default_rdp_width" value="1920" class="form-input">
+                            </div>
+                            <div>
+                                <label class="form-label">Height (pixels)</label>
+                                <input type="number" name="default_rdp_height" value="1080" class="form-input">
+                            </div>
+                            <div>
+                                <label class="form-label">DPI</label>
+                                <input type="number" name="default_rdp_dpi" value="96" class="form-input">
+                            </div>
+                            <div>
+                                <label class="form-label">Security Mode</label>
+                                <select name="default_rdp_security" class="form-input">
+                                    <option value="any">any</option>
+                                    <option value="rdp">rdp</option>
+                                    <option value="tls">tls</option>
+                                    <option value="nla">nla</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">H.264</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Hardware video passthrough</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="default_rdp_h264" checked>
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="default_rdp_h264" id="default_rdp_h264-hidden" value="false">
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">GFX Pipeline</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Graphics Pipeline Extension</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="default_rdp_gfx" checked>
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="default_rdp_gfx" id="default_rdp_gfx-hidden" value="false">
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Drive / File Transfer</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Mount the RDP drive by default</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="default_rdp_drive">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="default_rdp_drive" id="default_rdp_drive-hidden" value="false">
+                        </div>
+                    </div>
+
+                    <!-- SSH -->
+                    <div>
+                        <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">SSH</h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="form-label">Terminal Width (columns)</label>
+                                <input type="number" name="default_ssh_width" value="1920" class="form-input">
+                            </div>
+                            <div>
+                                <label class="form-label">Terminal Height (rows)</label>
+                                <input type="number" name="default_ssh_height" value="1080" class="form-input">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- VNC -->
+                    <div>
+                        <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">VNC</h3>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="form-label">Color Depth (bits per pixel)</label>
+                                <input type="number" name="default_vnc_color_depth" value="24" class="form-input">
+                            </div>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                    <div>
+                                        <span class="text-sm text-[var(--text-primary)]">Clipboard Copy</span>
+                                        <p class="text-xs text-[var(--text-muted)]">Remote desktop to client</p>
+                                    </div>
+                                    <div class="toggle-switch">
+                                        <input type="checkbox" id="default_vnc_disable_copy">
+                                        <span class="toggle-slider"></span>
+                                    </div>
+                                </label>
+                                <input type="hidden" name="default_vnc_disable_copy" id="default_vnc_disable_copy-hidden" value="false">
+                                <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                    <div>
+                                        <span class="text-sm text-[var(--text-primary)]">Clipboard Paste</span>
+                                        <p class="text-xs text-[var(--text-muted)]">Client to remote desktop</p>
+                                    </div>
+                                    <div class="toggle-switch">
+                                        <input type="checkbox" id="default_vnc_disable_paste">
+                                        <span class="toggle-slider"></span>
+                                    </div>
+                                </label>
+                                <input type="hidden" name="default_vnc_disable_paste" id="default_vnc_disable_paste-hidden" value="false">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </section>
 
         <!-- Features (protocol toggles + Desktop) -->
@@ -515,7 +644,9 @@ var toggleBoxes = [
     'enable_recordings', 'enable_web_sessions', 'enable_spice',
     'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_file_transfer',
     'desktop_kiosk', 'desktop_transfers', 'desktop_pairing',
-    'vault_enabled', 'db_only_mode'
+    'vault_enabled', 'db_only_mode',
+    'default_rdp_h264', 'default_rdp_gfx', 'default_rdp_drive',
+    'default_vnc_disable_copy', 'default_vnc_disable_paste'
 ];
 
 // CSP-safe wiring: the page's CSP (script-src nonce, no unsafe-inline)
@@ -742,7 +873,10 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
             var fields = [
                 'listen_addr', 'guacd_addr', 'tls_cert_path', 'tls_key_path',
                 'session_max_duration_secs',
-                'max_concurrent_sessions', 'session_history_retention_days'
+                'max_concurrent_sessions', 'session_history_retention_days',
+                'default_rdp_width', 'default_rdp_height', 'default_rdp_dpi',
+                'default_ssh_width', 'default_ssh_height',
+                'default_vnc_color_depth'
             ];
             fields.forEach(function(name) {
                 var el = document.querySelector('input[name="' + name + '"]');
@@ -750,6 +884,10 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
                     el.value = String(s[name]);
                 }
             });
+            var sel = document.querySelector('select[name="default_rdp_security"]');
+            if (sel && s.default_rdp_security) {
+                sel.value = s.default_rdp_security;
+            }
             var boxes = toggleBoxes;
             boxes.forEach(function(name) {
                 var box = document.getElementById(name);

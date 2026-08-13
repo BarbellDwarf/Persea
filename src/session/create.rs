@@ -16,6 +16,85 @@ use tokio::time;
 /// by an abrupt disconnect), or create a fresh session if none exists.
 const TMUX_DETACH_WRAPPER: &str = "tmux attach-session -d 2>/dev/null || tmux new-session";
 
+/// Effective per-protocol global defaults for one session creation (admin
+/// Settings → Session → Session defaults). Precedence: the request/entry
+/// value wins, then the stored global default (system_settings), then this
+/// struct's code defaults — the hardcoded values the create path used
+/// before the feature existed. Read once per create from the DB settings
+/// overlay loaded at the top of `create_session`, so a settings change
+/// affects new sessions only.
+struct ProtocolDefaults {
+    width: u32,
+    height: u32,
+    dpi: u32,
+    rdp_security: Option<String>,
+    rdp_h264: bool,
+    rdp_gfx: bool,
+    rdp_drive: Option<bool>,
+    vnc_color_depth: Option<u8>,
+    vnc_disable_copy: bool,
+    vnc_disable_paste: bool,
+}
+
+impl ProtocolDefaults {
+    fn from_settings(session_type: &SessionType, settings: &[(String, String)]) -> Self {
+        let stored_u32 = |key: &str, code: u32| {
+            settings
+                .iter()
+                .find(|(k, _)| k == key)
+                .and_then(|(_, v)| v.parse::<u32>().ok())
+                .unwrap_or(code)
+        };
+        let stored_bool = |key: &str| match settings
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+        {
+            Some("true") => Some(true),
+            Some("false") => Some(false),
+            _ => None,
+        };
+        let stored_str = |key: &str| {
+            settings
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        let (width, height) = match session_type {
+            SessionType::Ssh => (
+                stored_u32("default_ssh_width", 1920),
+                stored_u32("default_ssh_height", 1080),
+            ),
+            SessionType::Rdp => (
+                stored_u32("default_rdp_width", 1920),
+                stored_u32("default_rdp_height", 1080),
+            ),
+            _ => (1920, 1080),
+        };
+        Self {
+            width,
+            height,
+            dpi: match session_type {
+                SessionType::Rdp => stored_u32("default_rdp_dpi", 96),
+                _ => 96,
+            },
+            rdp_security: stored_str("default_rdp_security")
+                .filter(|s| matches!(s.as_str(), "any" | "rdp" | "tls" | "nla")),
+            rdp_h264: stored_bool("default_rdp_h264").unwrap_or(true),
+            rdp_gfx: stored_bool("default_rdp_gfx").unwrap_or(true),
+            rdp_drive: stored_bool("default_rdp_drive"),
+            vnc_color_depth: settings
+                .iter()
+                .find(|(k, _)| k == "default_vnc_color_depth")
+                .and_then(|(_, v)| v.parse::<u8>().ok()),
+            vnc_disable_copy: stored_bool("default_vnc_disable_copy").unwrap_or(false),
+            vnc_disable_paste: stored_bool("default_vnc_disable_paste").unwrap_or(false),
+        }
+    }
+}
+
 impl SessionManager {
     /// Create a new session: connect to guacd, perform handshake, return session info.
     pub async fn create_session(
@@ -87,6 +166,13 @@ impl SessionManager {
         let toggle = |key: &str| crate::settings_merge::toggle_enabled(&settings, key, true);
         check_session_type_enabled(&req.session_type, req.address_book_entry.as_deref(), toggle)?;
 
+        // Effective per-protocol global defaults (admin Settings → Session
+        // → Session defaults). Precedence: the request/entry value wins,
+        // then the stored global default, then the code defaults inside
+        // `ProtocolDefaults`. Read once per create — a settings change
+        // affects new sessions only, never existing ones.
+        let defaults = ProtocolDefaults::from_settings(&req.session_type, &settings);
+
         let session_id = Uuid::new_v4();
         // V09: connection reason, trimmed and normalized before any of
         // `req`'s fields are moved into the session literal below.
@@ -105,9 +191,9 @@ impl SessionManager {
         let vdi_params = req.vdi.as_ref();
         let spice = req.spice.as_ref();
         let proxmox = req.proxmox.as_ref();
-        let raw_width = req.width.unwrap_or(1920);
-        let raw_height = req.height.unwrap_or(1080);
-        let raw_dpi = req.dpi.unwrap_or(96);
+        let raw_width = req.width.unwrap_or(defaults.width);
+        let raw_height = req.height.unwrap_or(defaults.height);
+        let raw_dpi = req.dpi.unwrap_or(defaults.dpi);
         let width = raw_width.clamp(640, 8192);
         let height = raw_height.clamp(480, 8192);
         let dpi = raw_dpi.clamp(16, 384);
@@ -309,8 +395,13 @@ impl SessionManager {
                     "Creating new RDP session"
                 );
 
-                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive)
-                    && toggle("enable_file_transfer");
+                // RDP drive: request/entry override wins, then the global
+                // default_rdp_drive setting, then the [drive] config
+                // section (drive on only when configured and enabled).
+                let drive_enabled = drive::is_drive_enabled(
+                    &self.config.drive,
+                    req.enable_drive.or(defaults.rdp_drive),
+                ) && toggle("enable_file_transfer");
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
                 tracing::info!(
                     %session_id,
@@ -335,7 +426,12 @@ impl SessionManager {
                 };
 
                 let rdp_ignore_cert = req.ignore_cert.unwrap_or(false);
-                let rdp_security = rdp.and_then(|s| s.security.clone());
+                // RDP security: request/entry value wins, else the global
+                // default_rdp_security setting; unset passes None through
+                // (guacd falls back to "any").
+                let rdp_security = rdp
+                    .and_then(|s| s.security.clone())
+                    .or_else(|| defaults.rdp_security.clone());
                 let rdp_enable_drive = session_drive_path.is_some();
                 tracing::info!(
                     %session_id,
@@ -376,7 +472,7 @@ impl SessionManager {
                     remote_app_args: rdp.and_then(|s| s.remote_app_args.clone()),
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
-                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(true),
+                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(defaults.rdp_gfx),
                     enable_desktop_composition: rdp
                         .and_then(|s| s.enable_desktop_composition)
                         .unwrap_or(false),
@@ -386,7 +482,7 @@ impl SessionManager {
                         .and_then(|s| s.enable_full_window_drag)
                         .unwrap_or(false),
                     force_lossless: rdp.and_then(|s| s.force_lossless).unwrap_or(false),
-                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(true),
+                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(defaults.rdp_h264),
                     secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                 }));
                 (
@@ -425,12 +521,12 @@ impl SessionManager {
                     hostname: hostname.clone(),
                     port,
                     password: req.password.clone(),
-                    color_depth: vnc.and_then(|s| s.color_depth),
+                    color_depth: vnc.and_then(|s| s.color_depth).or(defaults.vnc_color_depth),
                     width,
                     height,
                     dpi,
-                    disable_copy: req.disable_copy.unwrap_or(false),
-                    disable_paste: req.disable_paste.unwrap_or(false),
+                    disable_copy: req.disable_copy.unwrap_or(defaults.vnc_disable_copy),
+                    disable_paste: req.disable_paste.unwrap_or(defaults.vnc_disable_paste),
                 });
                 (
                     params, hostname, username, None, None, None, None, None, None,
@@ -1753,6 +1849,122 @@ mod tests {
     fn typescript_name_unknown_token_left_literal() {
         let got = expand_typescript_name("pre-{bogus}-{user}", "x", "h", "c", &ts_id(), ts_when());
         assert_eq!(got, "pre-{bogus}-x");
+    }
+
+    // ── Per-protocol global defaults ──
+
+    fn stored(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+        rows.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn protocol_defaults_unset_settings_match_code_defaults() {
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &[]);
+        assert_eq!((d.width, d.height, d.dpi), (1920, 1080, 96));
+        assert_eq!(d.rdp_security, None);
+        assert!(d.rdp_h264, "H.264 must default on");
+        assert!(d.rdp_gfx, "GFX must default on");
+        assert_eq!(d.rdp_drive, None);
+        assert_eq!(d.vnc_color_depth, None);
+        assert!(!d.vnc_disable_copy);
+        assert!(!d.vnc_disable_paste);
+    }
+
+    #[test]
+    fn protocol_defaults_apply_per_protocol_settings() {
+        let settings = stored(&[
+            ("default_rdp_width", "1280"),
+            ("default_rdp_height", "800"),
+            ("default_rdp_dpi", "120"),
+            ("default_rdp_security", "nla"),
+            ("default_rdp_h264", "false"),
+            ("default_rdp_gfx", "false"),
+            ("default_rdp_drive", "true"),
+            ("default_ssh_width", "200"),
+            ("default_ssh_height", "60"),
+            ("default_vnc_color_depth", "16"),
+            ("default_vnc_disable_copy", "true"),
+            ("default_vnc_disable_paste", "true"),
+        ]);
+        let rdp = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!((rdp.width, rdp.height, rdp.dpi), (1280, 800, 120));
+        assert_eq!(rdp.rdp_security.as_deref(), Some("nla"));
+        assert!(!rdp.rdp_h264);
+        assert!(!rdp.rdp_gfx);
+        assert_eq!(rdp.rdp_drive, Some(true));
+        assert_eq!(
+            rdp.vnc_color_depth,
+            Some(16),
+            "all groups are populated; only the session's protocol branch reads its own"
+        );
+
+        let ssh = ProtocolDefaults::from_settings(&SessionType::Ssh, &settings);
+        assert_eq!(
+            (ssh.width, ssh.height),
+            (200, 60),
+            "SSH width must come from default_ssh_width, not default_rdp_width"
+        );
+        assert_eq!(ssh.dpi, 96, "SSH has no per-protocol DPI setting");
+        assert!(
+            !ssh.rdp_h264,
+            "the RDP H.264 default still populates the struct; only the RDP branch reads it"
+        );
+
+        let vnc = ProtocolDefaults::from_settings(&SessionType::Vnc, &settings);
+        assert_eq!(vnc.vnc_color_depth, Some(16));
+        assert!(vnc.vnc_disable_copy);
+        assert!(vnc.vnc_disable_paste);
+        assert_eq!(
+            (vnc.width, vnc.height),
+            (1920, 1080),
+            "VNC has no per-protocol resolution settings"
+        );
+    }
+
+    #[test]
+    fn protocol_defaults_other_types_stay_on_code_defaults() {
+        for st in [
+            SessionType::Web,
+            SessionType::Spice,
+            SessionType::Vdi,
+            SessionType::Proxmox,
+        ] {
+            let d = ProtocolDefaults::from_settings(&st, &[]);
+            assert_eq!((d.width, d.height, d.dpi), (1920, 1080, 96));
+            assert!(d.rdp_h264);
+            assert!(d.rdp_gfx);
+        }
+    }
+
+    #[test]
+    fn protocol_defaults_garbage_stored_values_fall_back() {
+        let settings = stored(&[
+            ("default_rdp_width", "wide"),
+            ("default_rdp_h264", "maybe"),
+            ("default_rdp_security", ""),
+            ("default_rdp_drive", "yes"),
+            ("default_vnc_color_depth", "deep"),
+        ]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.width, 1920);
+        assert!(d.rdp_h264);
+        assert_eq!(d.rdp_security, None);
+        assert_eq!(d.rdp_drive, None);
+        assert_eq!(d.vnc_color_depth, None);
+    }
+
+    #[test]
+    fn protocol_defaults_unknown_security_mode_falls_back() {
+        // A manually-edited DB value outside the accepted modes must not
+        // reach guacd: fall back to the pass-through code default.
+        let settings = stored(&[("default_rdp_security", "ssl3")]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.rdp_security, None);
+        let settings = stored(&[("default_rdp_security", "tls")]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.rdp_security.as_deref(), Some("tls"));
     }
 
     #[tokio::test]
