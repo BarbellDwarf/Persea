@@ -143,6 +143,9 @@ test.describe('Canonical screenshots', () => {
     // assert on the section labels instead (exact text — the description
     // paragraphs contain the same words).
     const desktop = page.locator('.card', { hasText: 'Desktop' });
+    // Settings are tabbed — the Features tab (Desktop toggles) is
+    // hidden until selected.
+    await page.locator('#tab-features').click();
     await expect(desktop.getByText('Kiosk Mode', { exact: true })).toBeVisible();
     await expect(desktop.getByText('File Transfers', { exact: true })).toBeVisible();
     await expect(desktop.getByText('Device Pairing', { exact: true })).toBeVisible();
