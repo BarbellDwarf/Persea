@@ -233,10 +233,10 @@ install -m 755 rpm/scripts/post.sh %{buildroot}%{_libexecdir}/persea/post.sh
 install -m 755 rpm/scripts/postun.sh %{buildroot}%{_libexecdir}/persea/postun.sh
 
 %pre
-/usr/libexec/persea/pre.sh
+%{_libexecdir}/persea/pre.sh
 
 %post
-/usr/libexec/persea/post.sh || exit $?
+%{_libexecdir}/persea/post.sh || exit $?
 %systemd_post persea.service persea-guacd.service
 
 %preun
@@ -244,7 +244,7 @@ install -m 755 rpm/scripts/postun.sh %{buildroot}%{_libexecdir}/persea/postun.sh
 
 %postun
 if [ "$1" -eq 0 ]; then
-    /usr/libexec/persea/postun.sh "$1"
+    %{_libexecdir}/persea/postun.sh "$1"
 fi
 %systemd_postun_with_restart persea.service persea-guacd.service
 
