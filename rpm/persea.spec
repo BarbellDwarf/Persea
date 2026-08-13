@@ -228,9 +228,7 @@ install -m 644 rpm/persea-guacd.service %{buildroot}%{_unitdir}/persea-guacd.ser
 
 # SELinux policy module + install/remove scriptlets
 install -m 644 persea.pp %{buildroot}/usr/share/selinux/targeted/persea.pp
-install -m 755 rpm/scripts/pre.sh %{buildroot}%{_libexecdir}/persea/pre.sh
 install -m 755 rpm/scripts/post.sh %{buildroot}%{_libexecdir}/persea/post.sh
-install -m 755 rpm/scripts/postun.sh %{buildroot}%{_libexecdir}/persea/postun.sh
 
 %pre
 # Mirrors debian/preinst (Chromium's crashpad needs a real home directory).
@@ -282,7 +280,5 @@ fi
 %{_unitdir}/persea.service
 %{_unitdir}/persea-guacd.service
 %{_sysconfdir}/ld.so.conf.d/persea.conf
-%{_libexecdir}/persea/pre.sh
 %{_libexecdir}/persea/post.sh
-%{_libexecdir}/persea/postun.sh
 /usr/share/selinux/targeted/persea.pp
