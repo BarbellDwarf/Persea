@@ -519,4 +519,82 @@ mod tests {
         let guard = sessions.get(&id).unwrap().lock().await;
         assert_eq!(guard.active_connections, 0);
     }
+
+    // ── Background-task regression guards (wayfinder/v1.2.0/S22) ─────────
+    //
+    // The session reaper and the login-script task are the two
+    // background-task shapes owned by this module. The S22 investigation
+    // traced the "JoinHandle polled after completion" panics observed in
+    // S20-era test runs to a JoinHandle being awaited after a select!
+    // already consumed it (the WebSocket proxy teardown, fixed in 00a7a33);
+    // every other background handle in the server is detached, stored only
+    // for abort, or awaited exactly once. These tests pin the two patterns
+    // that live here so a regression cannot reintroduce a double poll.
+
+    #[tokio::test]
+    async fn reaper_two_full_cycles_reap_without_panic() {
+        // The main.rs session reaper runs `reap_expired_sessions` +
+        // `reap_idle_sessions` + `registry_sweep_stale` on every interval
+        // tick. Two full cycles over seeded sessions must reap exactly once
+        // per session — no panic, no double-processing — which is what a
+        // detached task would otherwise hide in stderr.
+        let mgr = new_manager_for_tests();
+        // Old enough to exceed the default 8h max duration.
+        let mut expired = seed_test_session("owner");
+        expired.created_at = Utc::now() - chrono::Duration::hours(10);
+        // Fresh enough for max duration, but idle past the default 30min.
+        let mut idle = seed_test_session("owner");
+        idle.last_activity = std::sync::atomic::AtomicI64::new(
+            (Utc::now() - chrono::Duration::hours(1)).timestamp(),
+        );
+        let expired_id = insert_session(&mgr, expired).await;
+        let idle_id = insert_session(&mgr, idle).await;
+
+        for cycle in 0..2 {
+            let expired_reaped = mgr.reap_expired_sessions().await;
+            let idle_reaped = mgr.reap_idle_sessions().await;
+            let _ = mgr.registry_sweep_stale();
+            if cycle == 0 {
+                assert_eq!(expired_reaped, 1);
+                assert_eq!(idle_reaped, 1);
+            } else {
+                assert_eq!(expired_reaped + idle_reaped, 0);
+            }
+        }
+        let sessions = mgr.sessions.read().await;
+        assert!(!sessions.contains_key(&expired_id));
+        assert!(!sessions.contains_key(&idle_id));
+    }
+
+    #[tokio::test]
+    async fn cleanup_takes_login_script_handle_exactly_once() {
+        // The login-script JoinHandle stored on a session must be taken on
+        // the first cleanup pass — a second cleanup sees `None` instead of
+        // aborting (or, worse, awaiting) the same handle twice.
+        let mgr = new_manager_for_tests();
+        let mut session = seed_test_session("owner");
+        let id = session.id;
+        session.login_script_handle =
+            Some(tokio::spawn(async { std::future::pending::<()>().await }));
+        insert_session(&mgr, session).await;
+
+        let (cleanup_on_close, retention_secs) = super::drive_cleanup_settings(&mgr.config.drive);
+        for _ in 0..2 {
+            let sessions = mgr.sessions.read().await;
+            let mut session = sessions.get(&id).unwrap().lock().await;
+            super::cleanup_browser(
+                &mgr.browser_manager,
+                &mut session,
+                cleanup_on_close,
+                retention_secs,
+            )
+            .await;
+            assert!(
+                session.login_script_handle.is_none(),
+                "login script handle must be taken after the first cleanup pass"
+            );
+            drop(session);
+            drop(sessions);
+        }
+    }
 }
