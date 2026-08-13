@@ -40,11 +40,13 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install guacd (distro build, SSH support) and demo sshd
+      - name: Install guacd (official image, SSH support) and demo sshd
         run: |
           sudo apt-get update
-          sudo apt-get install -y guacamole-server openssh-server
-          sudo systemctl start guacd
+          sudo apt-get install -y openssh-server
+          # guacamole-server is not packaged for Ubuntu 24.04 (noble) — the
+          # official guacd image is the supported CI path.
+          docker run -d --name persea-guacd -p 4822:4822 guacamole/guacd:1.5.5
           for i in $(seq 1 30); do
             if bash -c 'echo > /dev/tcp/127.0.0.1/4822' 2>/dev/null; then
               echo "guacd ready after ${i}s"
