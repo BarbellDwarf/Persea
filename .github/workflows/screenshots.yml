@@ -185,6 +185,7 @@ jobs:
       # PRs do not re-trigger workflows, so this cannot loop.
       - name: Open regeneration PR
         if: github.event_name == 'workflow_dispatch' && steps.diff-check.outputs.changed == 'true'
+        continue-on-error: true
         uses: peter-evans/create-pull-request@v7
         with:
           add-paths: docs/screenshots
@@ -199,9 +200,14 @@ jobs:
             longer match a fresh capture. Review the diff; if the UI change was
             intentional, merge to update the docs.
 
-      # PR runs: warn, don't fail - the check stays green (non-blocking).
+      # PR runs: warn, don't fail — the check stays green (non-blocking).
       - name: Warn about baseline drift
         if: github.event_name == 'pull_request' && steps.diff-check.outputs.changed == 'true'
         continue-on-error: true
         run: |
           echo "::warning::Screenshots differ from the committed baselines. Run the Screenshots workflow (workflow_dispatch) to regenerate and open a PR with the new images."
+        # Note: PR creation from workflow_dispatch requires the repo setting
+        # "Allow GitHub Actions to create and approve pull requests"
+        # (Settings → Actions → General → Workflow permissions). Without
+        # it, the regen PR step fails (branch still pushed, diff still
+        # available); the step is non-fatal either way.
