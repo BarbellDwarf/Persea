@@ -32,6 +32,14 @@
 # outside the /usr/lib* tree that the check allows). The same layout ships in
 # the Debian package; the RPATH is intentional and harmless here.
 %global __brp_check_rpaths %{nil}
+# Overriding _prefix drags _libdir along to /opt/persea/lib64; the FreeRDP
+# plugin dir and its %files entry must point at the real system libdir.
+%global _libdir /usr/lib64
+# No debuginfo/debugsource subpackages: find-debuginfo mishandles the
+# /opt/persea layout and its .debug files leak into the main package (fails
+# the unpackaged-files check). The .deb build ships no separate debug
+# package either.
+%global debug_package %{nil}
 
 Name:           persea
 Version:        %{persea_version}
@@ -141,7 +149,7 @@ cargo build --release
 
 # ── guacd (C) — pinned fork tarball, same repo/commit as the Ubuntu build ──
 git clone --depth 1 --branch persea-1.6.1-freerdp3 \
-    https://github.com/BarbellDwarf/persea-guacamole-server.git guacamole-server
+    https://github.com/persea-grove/persea-guacamole-server.git guacamole-server
 git -C guacamole-server checkout d9218fe1
 ( cd guacamole-server && autoreconf -fi )
 mkdir guacd-build
@@ -189,9 +197,19 @@ install -m 755 scripts/drive-setup.sh %{buildroot}%{_prefix}/bin/drive-setup.sh
 # guacd binary and libraries
 make -C guacd-build DESTDIR=%{buildroot} install
 
+# make install also ships dev headers, man pages, and the guacclip helper;
+# this package deliberately ships none of them (guacenc/guaclog are disabled
+# at configure time, guacclip only makes sense with them, and the man pages
+# describe the old guacd.conf layout, not the packaged config.toml).
+rm -rf %{buildroot}%{_prefix}/include
+rm -rf %{buildroot}%{_prefix}/share/man
+rm -f %{buildroot}%{_prefix}/bin/guacclip
+
 # FreeRDP 3 plugins (RDPDR/RDPSND channels: drive redirection, audio,
-# printing) install under the guacd prefix — move them next to the system
-# FreeRDP libraries so freerdp finds them at runtime.
+# printing). guacd's make install already places them next to the system
+# FreeRDP libraries (pkg-config freerdp plugin dir) so freerdp finds them at
+# runtime; the copy below is a fallback if a future guacd version installs
+# them under the guacd prefix instead.
 cp -a %{buildroot}%{_prefix}/lib/freerdp3/*.so* %{buildroot}%{_libdir}/freerdp3/ 2>/dev/null || true
 rm -rf %{buildroot}%{_prefix}/lib/freerdp3
 
