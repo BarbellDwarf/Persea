@@ -242,6 +242,9 @@ impl SessionManager {
         let rdp = req.rdp.as_ref();
         let vnc = req.vnc.as_ref();
         let web = req.web.as_ref();
+        // On Windows the Vdi arm returns at the guard, so this binding is
+        // unused there — the feature stays compiled (runtime guard).
+        #[allow(unused_variables)]
         let vdi_params = req.vdi.as_ref();
         let spice = req.spice.as_ref();
         let proxmox = req.proxmox.as_ref();
@@ -924,13 +927,26 @@ impl SessionManager {
                 )
             }
             SessionType::Vdi => {
+                // Runtime feature guard (not compile-out): VDI needs Docker
+                // container management, unsupported on Windows. Fails with a
+                // clear error instead of a confusing "driver not initialized".
+                #[cfg(windows)]
+                {
+                    return Err(SessionError::VdiError(
+                        "VDI (Docker containers) is not supported on Windows — \
+                         run persea on Linux for VDI desktops"
+                            .into(),
+                    ));
+                }
+                // On Windows the guard above returns, so the rest of the arm
+                // is unreachable — by design (runtime guard, not compile-out).
+                #[allow(unreachable_code)]
                 let vdi_cfg = self
                     .config
                     .vdi
                     .as_ref()
                     .filter(|v| v.enabled)
                     .ok_or_else(|| SessionError::VdiError("VDI feature is not enabled".into()))?;
-
                 let vdi = self
                     .vdi_driver
                     .as_ref()

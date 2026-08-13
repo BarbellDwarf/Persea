@@ -198,6 +198,22 @@ impl SessionManager {
     }
 
     fn init_vdi_driver(config: &Config) -> Option<Arc<dyn crate::vdi::VdiDriver>> {
+        // Runtime feature guard (not compile-out): Docker-desktop VDI is
+        // deliberately unsupported on Windows — the driver is never
+        // initialised and VDI session creation fails with a clear error.
+        #[cfg(windows)]
+        {
+            if config.vdi.as_ref().map(|v| v.enabled).unwrap_or(false) {
+                tracing::warn!(
+                    "VDI (Docker containers) is not supported on Windows — \
+                     VDI desktops will be unavailable; run persea on Linux for VDI"
+                );
+            }
+            return None;
+        }
+        // On Windows the guard above returns, so the rest of the function is
+        // unreachable — by design (runtime guard, not compile-out).
+        #[allow(unreachable_code)]
         let vdi_cfg = config.vdi.as_ref()?;
         if !vdi_cfg.enabled {
             return None;

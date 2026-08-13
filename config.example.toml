@@ -5,6 +5,13 @@
 #
 # Usage:
 #   persea --config config.toml serve
+#
+# ─── Windows ─────────────────────────────────────────────────────────────────
+# The installer (`persea-setup.exe`) runs `persea --init`, which generates a
+# starter config at %ProgramData%\persea\config.toml and a self-signed TLS
+# certificate in %ProgramData%\persea\tls. The service picks that config up
+# automatically. Use forward slashes or escaped backslashes ("C:\\persea\...")
+# in path values: plain backslashes are invalid TOML escapes.
 
 # ─── Server ───────────────────────────────────────────────────────────────────
 

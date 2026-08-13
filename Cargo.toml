@@ -140,6 +140,13 @@ argon2 = "0.5"
 zeroize = "1"
 dns-lookup = "2"
 
+[target.'cfg(windows)'.dependencies]
+# Native Windows service support (install/uninstall/run under the SCM)
+windows-service = "0.8"
+# Disk-space probe for recording rotation (GetDiskFreeSpaceExW); the
+# windows-sys version windows-service already locks.
+windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+
 [dev-dependencies]
 proptest = "1"
 # Already in the dependency tree via axum's ws feature (locked at 0.29.0) —

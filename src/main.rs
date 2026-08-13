@@ -51,6 +51,8 @@ mod vault;
 mod vdi;
 mod vsphere;
 mod websocket;
+#[cfg(windows)]
+mod windows_service;
 
 use crate::api::{
     AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, OidcProviderNames,
@@ -87,6 +89,26 @@ struct Cli {
     /// Log output format. Overrides the RUST_LOG_FORMAT env var.
     #[arg(long, value_enum, default_value_t = LogFormat::Text)]
     log_format: LogFormat,
+
+    /// Bootstrap a first-run install: create the data layout
+    /// (%ProgramData%\persea on Windows, /opt/persea elsewhere), generate a
+    /// self-signed TLS certificate, and write a starter config. Exits
+    /// without starting the server.
+    #[arg(long)]
+    init: bool,
+
+    /// Windows: register persea as a native service with the Service Control
+    /// Manager. Run as Administrator; the service runs as LocalSystem with
+    /// data in %ProgramData%\persea.
+    #[cfg(windows)]
+    #[arg(long)]
+    install_service: bool,
+
+    /// Windows: stop (if running) and unregister the persea service.
+    /// Run as Administrator.
+    #[cfg(windows)]
+    #[arg(long)]
+    uninstall_service: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -281,6 +303,35 @@ async fn main() {
 
     let cli = Cli::parse();
 
+    if cli.init {
+        cmd_init();
+        return;
+    }
+
+    #[cfg(windows)]
+    {
+        if cli.install_service {
+            match crate::windows_service::install_service() {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("FATAL: failed to install service: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        if cli.uninstall_service {
+            match crate::windows_service::uninstall_service() {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("FATAL: failed to uninstall service: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+    }
+
     // Load config
     let mut config = Config::load(cli.config.as_deref());
 
@@ -431,6 +482,39 @@ async fn main() {
                     "Running without TLS — credentials and session tokens travel unencrypted. \
                      Use [tls] or a reverse proxy for production."
                 );
+            }
+            // Windows: when started by the SCM, dispatch to the service
+            // control dispatcher (blocks until the service stops, running
+            // the server on its own runtime). In a console session the
+            // dispatcher fails immediately with
+            // ERROR_FAILED_SERVICE_CONTROLLER_CONNECT (1063) — fall through
+            // to a normal foreground run.
+            #[cfg(windows)]
+            {
+                let service_fut = run_server(
+                    config.clone(),
+                    database.clone(),
+                    log_format,
+                    settings_baseline.clone(),
+                );
+                match crate::windows_service::dispatch(service_fut) {
+                    Ok(()) => return,
+                    Err(crate::windows_service::ServiceError::Winapi(ioe))
+                        if ioe.raw_os_error()
+                            == Some(
+                                crate::windows_service::ERROR_FAILED_SERVICE_CONTROLLER_CONNECT
+                                    as i32,
+                            ) =>
+                    {
+                        tracing::info!(
+                            "Not running as a Windows service — starting in the foreground"
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("FATAL: failed to run as a Windows service: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
             run_server(config, database, log_format, settings_baseline).await
         }
@@ -666,7 +750,14 @@ fn cmd_rotate_key(database: &Db, name: &str) {
     }
 }
 
-fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
+/// Generate a self-signed certificate (rcgen — no openssl) and write
+/// cert.pem/key.pem into `out_dir`. localhost and 127.0.0.1 are always in
+/// the SANs. Returns the written paths.
+fn write_self_signed_cert(
+    hostname: &str,
+    out_dir: &std::path::Path,
+    extra_sans: &[String],
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     use rcgen::{generate_simple_self_signed, CertifiedKey};
 
     let mut sans = vec![
@@ -680,14 +771,160 @@ fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
         }
     }
 
-    let CertifiedKey { cert, signing_key } =
-        generate_simple_self_signed(sans.clone()).expect("Failed to generate certificate");
+    let CertifiedKey { cert, signing_key } = generate_simple_self_signed(sans)
+        .map_err(|e| format!("certificate generation failed: {}", e))?;
 
-    let cert_path = std::path::Path::new(out_dir).join("cert.pem");
-    let key_path = std::path::Path::new(out_dir).join("key.pem");
+    let cert_path = out_dir.join("cert.pem");
+    let key_path = out_dir.join("key.pem");
 
-    std::fs::write(&cert_path, cert.pem()).expect("Failed to write cert.pem");
-    std::fs::write(&key_path, signing_key.serialize_pem()).expect("Failed to write key.pem");
+    std::fs::write(&cert_path, cert.pem())
+        .map_err(|e| format!("failed to write cert.pem: {}", e))?;
+    std::fs::write(&key_path, signing_key.serialize_pem())
+        .map_err(|e| format!("failed to write key.pem: {}", e))?;
+
+    Ok((cert_path, key_path))
+}
+
+/// Data root for `--init`: `%ProgramData%\persea` on Windows, `/opt/persea`
+/// elsewhere (mirroring install.sh's layout).
+fn init_data_root() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        crate::windows_service::program_data_dir()
+    }
+    #[cfg(not(windows))]
+    {
+        std::path::PathBuf::from("/opt/persea")
+    }
+}
+
+/// `--init`: first-run bootstrap. Creates the data layout (db, recordings,
+/// tls), generates a self-signed certificate, and writes a starter config —
+/// the Windows analogue of install.sh's setup_tls() and the RHEL %post
+/// scriptlet. Idempotent: existing certs and configs are never overwritten.
+fn cmd_init() {
+    let root = init_data_root();
+    let tls_dir = root.join("tls");
+    let db_dir = root.join("db");
+    let recordings_dir = root.join("recordings");
+
+    for dir in [&root, &tls_dir, &db_dir, &recordings_dir] {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("FATAL: --init failed to create {}: {}", dir.display(), e);
+            std::process::exit(1);
+        }
+    }
+
+    // Self-signed cert (rcgen; no openssl), mirroring install.sh — the
+    // corresponding secure_cookies = false is written with the config below.
+    let cert_path = tls_dir.join("cert.pem");
+    let key_path = tls_dir.join("key.pem");
+    if cert_path.exists() && key_path.exists() {
+        println!(
+            "TLS certificate already exists at {} (not overwritten)",
+            tls_dir.display()
+        );
+    } else {
+        let hostname = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "persea".to_string());
+        match write_self_signed_cert(&hostname, &tls_dir, &[]) {
+            Ok(_) => println!(
+                "Generated self-signed TLS certificate for '{}' in {}",
+                hostname,
+                tls_dir.display()
+            ),
+            Err(e) => {
+                eprintln!(
+                    "FATAL: --init failed to generate the TLS certificate: {}",
+                    e
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Starter config. Never clobber an existing one.
+    let config_path = root.join("config.toml");
+    if config_path.exists() {
+        println!(
+            "Config already exists at {} (not overwritten)",
+            config_path.display()
+        );
+        return;
+    }
+
+    // Forward slashes keep the TOML valid on Windows without escaping.
+    let fmt = |p: &std::path::Path| p.to_string_lossy().replace('\\', "/");
+    let config = format!(
+        "# persea — starter configuration (generated by `persea --init`)\n\
+         #\n\
+         # The bundled certificate is self-signed: browsers block Secure\n\
+         # cookies over invalid certs, so `secure_cookies = false` is set.\n\
+         # For production, replace cert.pem/key.pem with real certificates\n\
+         # and remove the secure_cookies line.\n\
+         #\n\
+         # guacd: Windows has no native guacd — point guacd_addr at a remote\n\
+         # host, WSL2, or Docker Desktop instance (the guacd image is\n\
+         # ghcr.io/barbelldwarf/persea:latest, run with -p 4822:4822).\n\n\
+         listen_addr = \"127.0.0.1:8089\"\n\
+         guacd_addr = \"127.0.0.1:4822\"\n\
+         static_path = \"{}\"\n\
+         db_path = \"{}\"\n\n\
+         [recording]\n\
+         path = \"{}\"\n\n\
+         [tls]\n\
+         cert_path = \"{}\"\n\
+         key_path = \"{}\"\n\
+         guacd_cert_path = \"{}\"\n\
+         secure_cookies = false  # self-signed cert — browsers block Secure cookies\n",
+        fmt(&root.join("static")),
+        fmt(&db_dir.join("persea.db")),
+        fmt(&recordings_dir),
+        fmt(&cert_path),
+        fmt(&key_path),
+        fmt(&cert_path),
+    );
+    if let Err(e) = std::fs::write(&config_path, &config) {
+        eprintln!(
+            "FATAL: --init failed to write {}: {}",
+            config_path.display(),
+            e
+        );
+        std::process::exit(1);
+    }
+    println!("Wrote starter config: {}", config_path.display());
+    println!();
+    println!(
+        "Start the server with: persea --config {}",
+        fmt(&config_path)
+    );
+    #[cfg(windows)]
+    {
+        println!("Or install it as a Windows service with: persea --install-service");
+    }
+    println!("Replace cert.pem/key.pem and remove `secure_cookies = false` for production.");
+}
+
+fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
+    let dir = std::path::Path::new(out_dir);
+    let (cert_path, key_path) = match write_self_signed_cert(hostname, dir, extra_sans) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let mut sans = vec![
+        hostname.to_string(),
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+    ];
+    for san in extra_sans {
+        if !sans.contains(san) {
+            sans.push(san.clone());
+        }
+    }
 
     println!("Generated self-signed certificate:");
     println!("  Certificate: {}", cert_path.display());
@@ -1138,6 +1375,12 @@ async fn run_server(
     // Initialize drive / LUKS if configured (and Vault is already available)
     if let Some(ref drive_config) = config.drive {
         if drive_config.enabled {
+            #[cfg(windows)]
+            if drive::luks_configured(drive_config) {
+                tracing::warn!(
+                    "[drive] LUKS is not supported on Windows — the volume will not be mounted"
+                );
+            }
             // Mount LUKS volume if configured and Vault is available now
             if drive::luks_configured(drive_config) {
                 let vc = default_cell.read().await;
@@ -2392,7 +2635,12 @@ async fn run_server(
                 }
             });
         }
+        #[cfg(unix)]
         tracing::info!("TLS hot-reload via SIGHUP enabled");
+        #[cfg(windows)]
+        tracing::info!(
+            "TLS hot-reload is not available on Windows — restart the service to reload the certificate"
+        );
 
         let std_listener =
             std::net::TcpListener::bind(&listen_addr).expect("Failed to bind listener");
@@ -2425,7 +2673,18 @@ async fn run_server(
                     _ = sigterm.recv() => tracing::info!("SIGTERM received, starting graceful shutdown"),
                 }
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                // Under the SCM ctrl-c never fires — the service control
+                // handler sets the stop flag instead.
+                tokio::select! {
+                    _ = ctrl_c => tracing::info!("SIGINT received, starting graceful shutdown"),
+                    _ = crate::windows_service::wait_for_stop() => {
+                        tracing::info!("Service stop requested, starting graceful shutdown")
+                    }
+                }
+            }
+            #[cfg(all(not(unix), not(windows)))]
             {
                 ctrl_c.await.expect("Failed to listen for ctrl-c");
                 tracing::info!("Shutdown signal received");
@@ -2480,7 +2739,18 @@ async fn run_server(
                     _ = sigterm.recv() => tracing::info!("SIGTERM received, starting graceful shutdown"),
                 }
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                // Under the SCM ctrl-c never fires — the service control
+                // handler sets the stop flag instead.
+                tokio::select! {
+                    _ = ctrl_c => tracing::info!("SIGINT received, starting graceful shutdown"),
+                    _ = crate::windows_service::wait_for_stop() => {
+                        tracing::info!("Service stop requested, starting graceful shutdown")
+                    }
+                }
+            }
+            #[cfg(all(not(unix), not(windows)))]
             {
                 ctrl_c.await.expect("Failed to listen for ctrl-c");
                 tracing::info!("Shutdown signal received");

@@ -38,28 +38,59 @@ pub struct RecordingMeta {
 /// Get the disk usage percentage for the filesystem containing `path`.
 /// Returns 0.0–100.0, or an error if the syscall fails.
 pub fn disk_usage_percent(path: &Path) -> std::io::Result<f64> {
-    use std::ffi::CString;
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
 
-    let c_path = CString::new(path.to_string_lossy().as_bytes())
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        let c_path = CString::new(path.to_string_lossy().as_bytes())
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
 
-    // SAFETY: statvfs(2) reads filesystem metadata for the given path.
-    // The path is a valid C string (CString), and stat is stack-allocated
-    // and zeroed before the call. The function returns 0 on success or
-    // sets errno on failure — we check the return value and propagate errors.
-    unsafe {
-        let mut stat: libc::statvfs = std::mem::zeroed();
-        if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+        // SAFETY: statvfs(2) reads filesystem metadata for the given path.
+        // The path is a valid C string (CString), and stat is stack-allocated
+        // and zeroed before the call. The function returns 0 on success or
+        // sets errno on failure — we check the return value and propagate errors.
+        unsafe {
+            let mut stat: libc::statvfs = std::mem::zeroed();
+            if libc::statvfs(c_path.as_ptr(), &mut stat) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+
+            let total = stat.f_blocks as f64;
+            if total == 0.0 {
+                return Ok(0.0);
+            }
+            let free = stat.f_bfree as f64;
+            let used = total - free;
+            Ok((used / total) * 100.0)
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+        let wide: Vec<u16> = OsStr::new(path).encode_wide().chain(Some(0)).collect();
+        let mut free_bytes_to_caller: u64 = 0;
+        let mut total_bytes: u64 = 0;
+        let mut free_bytes: u64 = 0;
+        // SAFETY: wide is NUL-terminated; the three output pointers point to
+        // valid u64 slots. The function returns nonzero on success.
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_bytes_to_caller,
+                &mut total_bytes,
+                &mut free_bytes,
+            )
+        };
+        if ok == 0 {
             return Err(std::io::Error::last_os_error());
         }
-
-        let total = stat.f_blocks as f64;
-        if total == 0.0 {
+        if total_bytes == 0 {
             return Ok(0.0);
         }
-        let free = stat.f_bfree as f64;
-        let used = total - free;
-        Ok((used / total) * 100.0)
+        Ok(((total_bytes - free_bytes) as f64 / total_bytes as f64) * 100.0)
     }
 }
 

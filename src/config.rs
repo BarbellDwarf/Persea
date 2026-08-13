@@ -1581,6 +1581,20 @@ fn default_recording_path() -> PathBuf {
     PathBuf::from("./recordings")
 }
 
+/// On Windows, the installer's `--init` bootstrap places the config in
+/// `%ProgramData%\persea\config.toml`. `cfg!()` keeps this function
+/// compilable on every target; on non-Windows it always returns `None`.
+fn windows_default_config_path() -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let base = std::env::var("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(r"C:\ProgramData"));
+    let p = base.join("persea").join("config.toml");
+    p.exists().then(|| p.to_string_lossy().into_owned())
+}
+
 fn default_static_path() -> PathBuf {
     PathBuf::from("./static")
 }
@@ -1948,6 +1962,11 @@ impl Config {
             (Some(p.to_string()), true)
         } else if std::path::Path::new("/opt/persea/config.toml").exists() {
             (Some("/opt/persea/config.toml".to_string()), true)
+        } else if let Some(p) = windows_default_config_path() {
+            // Windows: `persea --init` (run by the NSIS installer) drops the
+            // starter config in %ProgramData%\persea — pick it up with the
+            // same "present means required" semantics as /opt/persea.
+            (Some(p), true)
         } else {
             (None, false)
         };

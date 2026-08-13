@@ -238,53 +238,62 @@ pub struct AddressbookAuditEntry {
 /// unprivileged `persea` user) can't write to — surfacing later as
 /// "attempt to write a readonly database" on the first OIDC login.
 fn repair_db_ownership(path: &Path) {
-    use std::os::unix::fs::MetadataExt;
+    // Unix-only: Windows has no root/chown semantics (the service runs as
+    // LocalSystem and manages its own ACLs).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
 
-    // Only act when running as root — otherwise chown(2) would fail anyway.
-    // SAFETY: geteuid is always safe, takes no args.
-    if unsafe { libc::geteuid() } != 0 {
-        return;
-    }
-
-    let Some(parent) = path.parent() else { return };
-    let Ok(parent_meta) = std::fs::metadata(parent) else {
-        return;
-    };
-    let target_uid = parent_meta.uid();
-    let target_gid = parent_meta.gid();
-    if target_uid == 0 && target_gid == 0 {
-        return;
-    }
-
-    let stem = path.as_os_str().to_os_string();
-    let mut wal = stem.clone();
-    wal.push("-wal");
-    let mut shm = stem.clone();
-    shm.push("-shm");
-
-    for candidate in [path.as_os_str(), wal.as_os_str(), shm.as_os_str()] {
-        let p = Path::new(candidate);
-        let Ok(meta) = std::fs::metadata(p) else {
-            continue;
-        };
-        if meta.uid() == target_uid && meta.gid() == target_gid {
-            continue;
+        // Only act when running as root — otherwise chown(2) would fail anyway.
+        // SAFETY: geteuid is always safe, takes no args.
+        if unsafe { libc::geteuid() } != 0 {
+            return;
         }
-        let c_path = match std::ffi::CString::new(candidate.as_encoded_bytes()) {
-            Ok(s) => s,
-            Err(_) => continue,
+
+        let Some(parent) = path.parent() else { return };
+        let Ok(parent_meta) = std::fs::metadata(parent) else {
+            return;
         };
-        // SAFETY: c_path is a valid NUL-terminated C string pointing to an existing file.
-        let rc = unsafe { libc::chown(c_path.as_ptr(), target_uid, target_gid) };
-        if rc != 0 {
-            eprintln!(
-                "warning: failed to chown {} to {}:{}: {}",
-                p.display(),
-                target_uid,
-                target_gid,
-                std::io::Error::last_os_error()
-            );
+        let target_uid = parent_meta.uid();
+        let target_gid = parent_meta.gid();
+        if target_uid == 0 && target_gid == 0 {
+            return;
         }
+
+        let stem = path.as_os_str().to_os_string();
+        let mut wal = stem.clone();
+        wal.push("-wal");
+        let mut shm = stem.clone();
+        shm.push("-shm");
+
+        for candidate in [path.as_os_str(), wal.as_os_str(), shm.as_os_str()] {
+            let p = Path::new(candidate);
+            let Ok(meta) = std::fs::metadata(p) else {
+                continue;
+            };
+            if meta.uid() == target_uid && meta.gid() == target_gid {
+                continue;
+            }
+            let c_path = match std::ffi::CString::new(candidate.as_encoded_bytes()) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            // SAFETY: c_path is a valid NUL-terminated C string pointing to an existing file.
+            let rc = unsafe { libc::chown(c_path.as_ptr(), target_uid, target_gid) };
+            if rc != 0 {
+                eprintln!(
+                    "warning: failed to chown {} to {}:{}: {}",
+                    p.display(),
+                    target_uid,
+                    target_gid,
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
     }
 }
 
