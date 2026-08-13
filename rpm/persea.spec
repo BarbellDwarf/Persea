@@ -233,7 +233,10 @@ install -m 755 rpm/scripts/post.sh %{buildroot}%{_libexecdir}/persea/post.sh
 install -m 755 rpm/scripts/postun.sh %{buildroot}%{_libexecdir}/persea/postun.sh
 
 %pre
-%{_libexecdir}/persea/pre.sh
+# Mirrors debian/preinst (Chromium's crashpad needs a real home directory).
+if ! getent passwd persea >/dev/null 2>&1; then
+    useradd -r -m -d /home/persea -s /sbin/nologin -c "persea service account" persea
+fi
 
 %post
 %{_libexecdir}/persea/post.sh || exit $?
