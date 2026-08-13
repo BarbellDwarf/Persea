@@ -270,6 +270,51 @@
             </div>
         </div>
 
+        <!-- Desktop -->
+        <div class="card">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
+                <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0V12a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 12V5.25"/></svg>
+                Desktop
+            </h2>
+            <div class="space-y-3">
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">Kiosk Mode</span>
+                        <p class="text-xs text-[var(--text-muted)]">Allow the desktop app to launch in locked-down kiosk mode</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="desktop_kiosk">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="desktop_kiosk" id="desktop_kiosk-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">File Transfers</span>
+                        <p class="text-xs text-[var(--text-muted)]">Allow file transfers to and from the desktop app</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="desktop_transfers">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="desktop_transfers" id="desktop_transfers-hidden" value="false">
+
+                <label class="flex items-center justify-between p-3 bg-[var(--bg-card)]/50 rounded-lg">
+                    <div>
+                        <span class="text-sm text-[var(--text-primary)]">Device Pairing</span>
+                        <p class="text-xs text-[var(--text-muted)]">Allow pairing desktop devices with user accounts</p>
+                    </div>
+                    <div class="toggle-switch">
+                        <input type="checkbox" id="desktop_pairing">
+                        <span class="toggle-slider"></span>
+                    </div>
+                </label>
+                <input type="hidden" name="desktop_pairing" id="desktop_pairing-hidden" value="false">
+            </div>
+        </div>
+
         <!-- Connection Custom Fields -->
         <div class="card">
             <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4 flex items-center gap-2">
@@ -347,6 +392,7 @@ var toggleBoxes = [
     'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
     'enable_recordings', 'enable_web_sessions', 'enable_spice',
     'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_file_transfer',
+    'desktop_kiosk', 'desktop_transfers', 'desktop_pairing',
     'vault_enabled', 'db_only_mode'
 ];
 

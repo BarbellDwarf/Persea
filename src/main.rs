@@ -2192,8 +2192,6 @@ async fn run_server(
             "/admin/branding.html",
             get(handlers::pages::admin_branding_page),
         )
-        .route("/docs.html", get(handlers::account::docs_page))
-        .route("/docs", get(handlers::account::docs_page))
         .merge(gated_tunnels_page)
         .merge(gated_recordings_page)
         .merge(gated_tokens_pages)
@@ -2202,7 +2200,19 @@ async fn run_server(
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));
 
-    let html_routes = protected_html_routes;
+    // Public HTML page routes (U03): documentation only. `/`, `/setup`, and
+    // the login pages live in `auth_pages`/`setup_routes`; every other HTML
+    // page is behind `require_auth` above. The docs page renders without an
+    // identity; the sidebar it embeds gates on `features_context` like the
+    // authenticated pages (all-enabled defaults when the DB overlay is
+    // unreadable, which matches the no-cookie visitor's read-only view).
+    let public_html_routes = Router::new()
+        .route("/docs.html", get(handlers::account::docs_page))
+        .route("/docs", get(handlers::account::docs_page))
+        .layer(middleware::from_fn(features_context))
+        .layer(Extension(database.clone()));
+
+    let html_routes = protected_html_routes.merge(public_html_routes);
 
     // Build full router (all Router<()> at this point)
     let mut app: Router<()> = Router::new()

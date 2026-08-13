@@ -41,6 +41,9 @@ const SETTING_KEYS: &[&str] = &[
     "enable_vmware",
     "enable_vdi",
     "enable_file_transfer",
+    "desktop_kiosk",
+    "desktop_transfers",
+    "desktop_pairing",
     "vault_enabled",
     "db_only_mode",
     "site_title",
@@ -80,6 +83,9 @@ const BOOL_KEYS: &[&str] = &[
     "enable_vmware",
     "enable_vdi",
     "enable_file_transfer",
+    "desktop_kiosk",
+    "desktop_transfers",
+    "desktop_pairing",
     "vault_enabled",
     "db_only_mode",
 ];
@@ -129,6 +135,13 @@ fn default_value(key: &str) -> Value {
         // must report true too or the admin checkbox lies about the gate.
         "enable_file_transfer" => json!(true),
         "enable_browser_sessions" => json!(true),
+        // S09 "Desktop" section toggles. All default ON: the S05 capability
+        // probe (auth_status) reads an unset desktop_* toggle as enabled
+        // (settings_merge::toggle_enabled(..., true)), so the Settings API
+        // must agree or the admin checkboxes lie about the gates.
+        "desktop_kiosk" => json!(true),
+        "desktop_transfers" => json!(true),
+        "desktop_pairing" => json!(true),
         "vault_enabled" => json!(false),
         "db_only_mode" => json!(true),
         "site_title" => json!("persea"),
