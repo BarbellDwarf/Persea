@@ -99,6 +99,12 @@ pub fn ensure_base_dir(config: &DriveConfig) -> Result<(), DriveError> {
 ///
 /// The path is canonicalized so that guacd (which runs as a separate process
 /// with a different working directory) resolves it correctly.
+///
+/// When downloads are enabled, a `Download` subdirectory is created eagerly.
+/// Guacd's RDPDR layer only creates `\Download` lazily, when the drive root is
+/// opened through RDPDR; a client that writes straight to `\Download\<file>`
+/// in a fresh session (whose drive dir starts empty) would otherwise hit
+/// ENOENT for every open.
 pub fn create_session_dir(config: &DriveConfig, session_id: Uuid) -> Result<PathBuf, DriveError> {
     let dir = config.drive_path.join(session_id.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| {
@@ -111,6 +117,20 @@ pub fn create_session_dir(config: &DriveConfig, session_id: Uuid) -> Result<Path
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750));
+    }
+    if config.allow_download {
+        let download_dir = dir.join("Download");
+        std::fs::create_dir_all(&download_dir).map_err(|e| {
+            DriveError::Io(format!(
+                "failed to create session drive Download directory {:?}: {}",
+                download_dir, e
+            ))
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&download_dir, std::fs::Permissions::from_mode(0o750));
+        }
     }
     // Canonicalize to absolute path — guacd runs as a separate systemd service
     // with a different WorkingDirectory, so relative paths won't resolve correctly.
@@ -425,6 +445,53 @@ mod tests {
     fn luks_configured_neither() {
         let config = DriveConfig::default();
         assert!(!luks_configured(&config));
+    }
+
+    #[test]
+    fn create_session_dir_creates_download_folder_when_downloads_allowed() {
+        let tmp =
+            std::env::temp_dir().join(format!("persea-drive-download-test-{}", Uuid::new_v4()));
+        let config = DriveConfig {
+            enabled: true,
+            drive_path: tmp.clone(),
+            allow_download: true,
+            ..Default::default()
+        };
+        let dir = create_session_dir(&config, Uuid::new_v4()).unwrap();
+        assert!(dir.join("Download").is_dir());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn create_session_dir_skips_download_folder_when_downloads_disabled() {
+        let tmp =
+            std::env::temp_dir().join(format!("persea-drive-nodownload-test-{}", Uuid::new_v4()));
+        let config = DriveConfig {
+            enabled: true,
+            drive_path: tmp.clone(),
+            allow_download: false,
+            ..Default::default()
+        };
+        let dir = create_session_dir(&config, Uuid::new_v4()).unwrap();
+        assert!(!dir.join("Download").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn create_session_dir_idempotent() {
+        let tmp = std::env::temp_dir().join(format!("persea-drive-idem-test-{}", Uuid::new_v4()));
+        let config = DriveConfig {
+            enabled: true,
+            drive_path: tmp.clone(),
+            allow_download: true,
+            ..Default::default()
+        };
+        let id = Uuid::new_v4();
+        let first = create_session_dir(&config, id).unwrap();
+        let second = create_session_dir(&config, id).unwrap();
+        assert_eq!(first, second);
+        assert!(first.join("Download").is_dir());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
