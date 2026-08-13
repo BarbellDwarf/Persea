@@ -284,6 +284,7 @@ username = "administrator@vsphere.local"
 - **Never leave uncommitted work**: commit or `WIP:` before stopping.
 - **Commit messages**: Conventional Commits (`fix:`, `feat:`, `docs:`, `style:`, `test:`).
 - **Push after commit**: the branch is shared.
+- **Never issue two edits to the same file in one parallel tool batch**: same-file edits race and silently clobber each other (both report success, one is lost). Verify with a re-read or grep after any same-file edit pair. (Hit twice in the v1.2.0 planning, 2026-08-12.)
 
 ### Verification
 
