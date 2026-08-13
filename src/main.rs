@@ -1714,6 +1714,7 @@ async fn run_server(
     // API routes that require authentication
     let mut api_routes = Router::new()
         .route("/api/sessions", get(api::list_sessions))
+        .route("/api/sessions/recent", get(api::recent_connections))
         .route("/api/sessions/{id}", get(api::get_session))
         .route("/api/sessions/{id}", delete(api::delete_session))
         .route("/api/vdi/containers", get(api::list_vdi_containers))
