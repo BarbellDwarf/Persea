@@ -1581,6 +1581,12 @@ async fn run_server(
     // Spawn orphaned thumbnail cleanup (30-min sweep)
     thumbnails::spawn_thumbnail_cleanup(manager.clone());
 
+    // Version update alert (S16): periodic GitHub Releases check; the
+    // UpdateState extension feeds /api/auth/status (latest_version +
+    // update_available) and the admin banner.
+    let update_state =
+        updates::spawn_update_checker(manager.config().updates.clone().unwrap_or_default());
+
     // Spawn VDI container reaper (cleans up idle containers)
     if let Some(ref vdi_cfg) = manager.config().vdi {
         if vdi_cfg.enabled {
@@ -2305,7 +2311,8 @@ async fn run_server(
         .layer(Extension(theme_data))
         .layer(Extension(trusted_proxies))
         .layer(Extension(branded_pages))
-        .layer(Extension(db_pool));
+        .layer(Extension(db_pool))
+        .layer(Extension(update_state));
 
     let scheme = if server_tls.is_some() {
         "https"

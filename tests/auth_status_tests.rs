@@ -9,8 +9,7 @@ use persea::api::admin::{
     COMPILED_SESSION_EVENTS,
 };
 use persea::api::{DriveConfigured, OidcEnabled, SiteTitle, ThemeData};
-use persea::config::ThemeColors;
-use persea::db::{self, Db};
+use persea::config::builtin_presets;use persea::db::{self, Db};
 use serde_json::Value;
 use std::collections::HashMap;
 use tower::ServiceExt;
