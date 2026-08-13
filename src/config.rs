@@ -2344,6 +2344,13 @@ mod tests {
         assert_eq!(st.backend, "db");
         assert!(st.encryption_key.is_none());
 
+        // [session] must be materialised with the previous defaults.
+        let sess = loaded
+            .session
+            .as_ref()
+            .expect("[session] defaults must be emitted");
+        assert!(!sess.reason_required);
+
         // Accessor-level equivalence with the previous effective defaults.
         assert_eq!(loaded.recording_config().max_recordings, 1000);
         assert!(loaded.recording_enabled());

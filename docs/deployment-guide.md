@@ -423,3 +423,30 @@ If the audit log matters for compliance, compensate with:
 - **SIEM streaming**: forward audit events to an external log collector in real time.
 - **WORM storage**: write the log to write-once-read-many storage if available.
 - **Database access controls**: restrict who can write to the persea database.
+
+## High availability (multi-instance)
+
+persea can run several instances against one shared database for failover or regional proximity. The session state itself lives in each instance's memory, so the shared backend is the coordination point, not the execution engine.
+
+### What you need
+
+- **One shared database** (PostgreSQL or MySQL via `db_url`; the legacy SQLite file mode is single-instance only). All instances must run the same migrations.
+- **A distinct `instance_id` per instance** in the config, plus an **`ha_base_url`** per instance: the public URL other instances use to hand sessions back to the owner.
+- **A reverse proxy** in front of all instances (DNS round-robin or a load balancer). WebSocket connections follow the same path as page loads; the owner redirect happens at the application layer, not the proxy.
+
+### How sessions behave across instances
+
+- A session created on instance A belongs to A ("owner instance"). Its `SessionInfo` carries `owner_instance` and `owner_base_url`; the sessions list on instance B shows it as remote.
+- **Joining/refreshing a remote session** redirects the WebSocket (307) to the owner's `ha_base_url` with a fresh one-shot ticket, so the browser ends up talking to the owning instance even though the page was served by B.
+- **Terminating a remote session** is rejected on the non-owner instance with a clear error; terminate from the owner's instance (or via its UI).
+- **Shadow tokens** minted on any instance work for the session because tickets are persisted in the shared backend and validated cross-instance.
+- **Idle/max-duration reaping** runs per instance; the shared registry sweep (`registry_sweep_stale`) clears rows whose owner instance is gone, so a failed instance's sessions eventually expire instead of leaking forever.
+- **Share-viewer cap** (`[session] max_viewers`, default 10, 0 = unlimited) applies per session on the instance serving the share join; it does not count connections across instances (the owner connection is never counted).
+
+### Failure modes
+
+- If the owning instance dies, its in-memory sessions die with it. Clients see the WebSocket close and can reconnect to any live instance; the session history row remains in the database with a terminal status once the sweep runs.
+- A dead non-owner instance only costs the connections it was proxying; the owner keeps serving its own sessions.
+- The database is the single point of failure. Run it with its own redundancy (managed service or replication) and keep the connection string off the instance config files' public side.
+
+The HA machinery is deliberately conservative: no session is migrated between instances, no cross-instance live migration, no leader election. If you need session continuity across a server failure, run the instances behind a load balancer with sticky sessions so a client lands on the same instance it started with.
