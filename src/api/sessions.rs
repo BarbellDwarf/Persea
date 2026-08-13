@@ -17,9 +17,13 @@ use axum::{
     response::IntoResponse,
     Extension, Json,
 };
+use futures_util::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 /// Query parameters for `GET /api/sessions`.
@@ -888,6 +892,148 @@ pub async fn drive_delete_file(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Maximum size of a single drive upload: 4 GiB. The drive is a
+/// filesystem with no product-level file-size policy, so this is a hard
+/// safety cap enforced while streaming. The route must also carry a
+/// matching `DefaultBodyLimit` so oversized bodies are cut off at the
+/// transport layer before the handler sees them.
+const MAX_DRIVE_UPLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+/// Maximum concurrent uploads per session. guacd serializes its own file
+/// transfers, so more parallel streams cannot help; excess uploads wait
+/// for a free slot (serialized) instead of failing.
+const MAX_CONCURRENT_DRIVE_UPLOADS: usize = 5;
+
+/// Per-session upload semaphores. Entries are created on first use and
+/// never pruned: a few dozen bytes per distinct session id, negligible
+/// next to the sessions themselves.
+static DRIVE_UPLOAD_SEMAPHORES: OnceLock<StdMutex<HashMap<Uuid, Arc<tokio::sync::Semaphore>>>> =
+    OnceLock::new();
+
+fn drive_upload_semaphore(session_id: Uuid) -> Arc<tokio::sync::Semaphore> {
+    let map = DRIVE_UPLOAD_SEMAPHORES.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    guard
+        .entry(session_id)
+        .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_DRIVE_UPLOADS)))
+        .clone()
+}
+
+/// Stream a request body into an open drive file, enforcing the 4 GiB
+/// cap. Returns the number of bytes written; the file is flushed before
+/// returning so size and mtime reads see the final state.
+async fn stream_body_into_drive_file(
+    body: axum::body::Body,
+    file: &mut tokio::fs::File,
+) -> Result<u64, AppError> {
+    let mut stream = body.into_data_stream();
+    let mut written: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let bytes = chunk.map_err(|e| {
+            tracing::warn!(error = %e, "failed to read drive upload body");
+            AppError::Internal("failed to read upload body".into())
+        })?;
+        written = written.saturating_add(bytes.len() as u64);
+        if written > MAX_DRIVE_UPLOAD_BYTES {
+            return Err(AppError::Validation(
+                "file exceeds the 4 GiB upload cap".into(),
+            ));
+        }
+        file.write_all(&bytes).await.map_err(|e| {
+            tracing::warn!(error = %e, "failed to write drive upload");
+            AppError::Drive("failed to write upload to drive".into())
+        })?;
+    }
+    file.flush().await.map_err(|e| {
+        tracing::warn!(error = %e, "failed to flush drive upload");
+        AppError::Drive("failed to flush upload to drive".into())
+    })?;
+    Ok(written)
+}
+
+/// `PUT /api/sessions/{id}/drive-files/{name}`: stream the raw request
+/// body into a file in the session's RDP drive, creating or replacing it.
+///
+/// Exactly one file per request: the body is the file content, streamed
+/// straight to disk (no multipart, no buffering). Returns 201 with the
+/// drive listing entry `{name, size, modified}`. An interrupted request
+/// leaves a partial file in place; retry or `DELETE` it.
+///
+/// Gate and safety rules match the sibling drive endpoints: owner or
+/// admin only (403 otherwise, 404 for unknown sessions and sessions
+/// without a drive), the name must be a plain basename (400 for `..`,
+/// slashes, or `.`), and symlinks resolving outside the drive directory
+/// are refused. Uploads over 4 GiB are rejected (the route must carry a
+/// matching `DefaultBodyLimit`). At most 5 uploads run concurrently per
+/// session; excess requests wait for a free slot (serialized) rather
+/// than failing.
+///
+/// CSRF: like every other state-changing endpoint, this route sits
+/// behind the global double-submit cookie check and gets no exemption.
+/// A Bearer-only client must bootstrap the `csrf_token` cookie once:
+/// perform any anonymous GET (e.g. `/api/auth/status`), capture
+/// `Set-Cookie: csrf_token=...`, then send both `Cookie: csrf_token=...`
+/// and `X-CSRF-Token: ...` on this PUT.
+pub async fn drive_upload_file(
+    State(manager): State<AppState>,
+    Path((id, name)): Path<(Uuid, String)>,
+    identity: Option<Extension<AuthIdentity>>,
+    body: axum::body::Body,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let dir = resolve_drive_session(&manager, id, identity.as_ref()).await?;
+    if !valid_drive_basename(&name) {
+        return Err(AppError::Validation("invalid file name".into()));
+    }
+    let target = dir.join(&name);
+    let existing = std::fs::symlink_metadata(&target).is_ok();
+    let write_path = if existing {
+        // Existing entry: resolve symlinks and confine the write to the
+        // drive dir, exactly like download/delete.
+        let canonical = std::fs::canonicalize(&target)
+            .map_err(|_| AppError::NotFound("file not found".into()))?;
+        if !canonical.starts_with(&dir) || !canonical.is_file() {
+            return Err(AppError::NotFound("file not found".into()));
+        }
+        canonical
+    } else {
+        target
+    };
+    let _permit = drive_upload_semaphore(id)
+        .acquire_owned()
+        .await
+        .map_err(|_| AppError::Internal("upload semaphore closed".into()))?;
+    let mut options = tokio::fs::OpenOptions::new();
+    options.write(true);
+    if existing {
+        options.create(true).truncate(true);
+    } else {
+        // O_EXCL refuses to follow a symlink planted between the
+        // existence check and the open.
+        options.create_new(true);
+    }
+    let mut file = options.open(&write_path).await.map_err(|e| {
+        tracing::warn!(error = %e, "failed to open drive upload target");
+        AppError::Drive("failed to open drive file for upload".into())
+    })?;
+    let written = stream_body_into_drive_file(body, &mut file).await?;
+    let meta = file.metadata().await.map_err(|e| {
+        tracing::warn!(error = %e, "failed to stat drive upload");
+        AppError::Drive("failed to stat uploaded file".into())
+    })?;
+    let modified = meta
+        .modified()
+        .map(|m| chrono::DateTime::<chrono::Utc>::from(m).to_rfc3339())
+        .unwrap_or_default();
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "name": name,
+            "size": written,
+            "modified": modified,
+        })),
+    ))
+}
+
 #[cfg(test)]
 mod drive_tests {
     use super::*;
@@ -1276,5 +1422,320 @@ mod drive_tests {
             .await
             .unwrap_err();
         assert!(matches!(err, AppError::Forbidden(_)), "got {:?}", err);
+    }
+
+    async fn upload(
+        manager: &Arc<SessionManager>,
+        id: Uuid,
+        name: &str,
+        identity: Option<AuthIdentity>,
+        payload: Vec<u8>,
+    ) -> Result<(StatusCode, serde_json::Value), AppError> {
+        drive_upload_file(
+            State(manager.clone()),
+            Path((id, name.to_string())),
+            identity.map(Extension),
+            axum::body::Body::from(payload),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn drive_upload_creates_file_and_returns_entry() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        let payload = b"streamed upload body".to_vec();
+        let (status, json) = upload(
+            &manager,
+            id,
+            "upload.bin",
+            Some(test_identity("alice", "viewer")),
+            payload.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(json["name"], "upload.bin");
+        assert_eq!(json["size"], payload.len() as u64);
+        assert!(json["modified"].as_str().unwrap().contains('T'));
+        assert_eq!(std::fs::read(dir.join("upload.bin")).unwrap(), payload);
+        // Round-trip through the download endpoint.
+        let res = drive_download_file(
+            State(manager),
+            Path((id, "upload.bin".into())),
+            Some(Extension(test_identity("alice", "viewer"))),
+        )
+        .await
+        .unwrap();
+        let body = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], payload);
+    }
+
+    #[tokio::test]
+    async fn drive_upload_overwrites_existing_file() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "notes.txt", b"old content");
+        let payload = b"new".to_vec();
+        let (status, json) = upload(
+            &manager,
+            id,
+            "notes.txt",
+            Some(test_identity("alice", "viewer")),
+            payload.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(json["size"], 3);
+        assert_eq!(std::fs::read(dir.join("notes.txt")).unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn drive_upload_as_admin_allowed() {
+        let (manager, id, _dir) = seeded_rdp_session().await;
+        let (status, json) = upload(
+            &manager,
+            id,
+            "admin.bin",
+            Some(test_identity("root", "admin")),
+            b"by admin".to_vec(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(json["size"], 8);
+    }
+
+    #[tokio::test]
+    async fn drive_upload_as_non_owner_is_403() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        let err = upload(
+            &manager,
+            id,
+            "evil.bin",
+            Some(test_identity("mallory", "viewer")),
+            b"x".to_vec(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Forbidden(_)), "got {:?}", err);
+        assert!(!dir.join("evil.bin").exists());
+    }
+
+    #[tokio::test]
+    async fn drive_upload_without_identity_is_403() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        let err = upload(&manager, id, "anon.bin", None, b"x".to_vec())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, AppError::Forbidden(_)), "got {:?}", err);
+        assert!(!dir.join("anon.bin").exists());
+    }
+
+    #[tokio::test]
+    async fn drive_upload_nonexistent_session_is_404() {
+        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let err = upload(
+            &manager,
+            Uuid::new_v4(),
+            "x.bin",
+            Some(test_identity("alice", "viewer")),
+            b"x".to_vec(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, AppError::Session(ref m) if m.contains("not found")),
+            "got {:?}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_upload_traversal_names_rejected() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        for name in ["../secrets", "a/b", "a\\b", "..", ".", ""] {
+            let err = upload(
+                &manager,
+                id,
+                name,
+                Some(test_identity("alice", "viewer")),
+                b"x".to_vec(),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                matches!(err, AppError::Validation(_)),
+                "name {:?} should 400, got {:?}",
+                name,
+                err
+            );
+        }
+        assert!(!dir.parent().unwrap().join("secrets").exists());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drive_upload_symlink_escape_refused() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        let outside = dir
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("outside-target.txt");
+        std::fs::write(&outside, b"do not touch").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("escape.txt")).unwrap();
+        let err = upload(
+            &manager,
+            id,
+            "escape.txt",
+            Some(test_identity("alice", "viewer")),
+            b"x".to_vec(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)), "got {:?}", err);
+        assert_eq!(std::fs::read(&outside).unwrap(), b"do not touch");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn drive_upload_symlink_inside_drive_dir_allowed() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        write_test_file(&dir, "real.txt", b"orig");
+        std::os::unix::fs::symlink("real.txt", dir.join("alias.txt")).unwrap();
+        let payload = b"via-alias".to_vec();
+        upload(
+            &manager,
+            id,
+            "alias.txt",
+            Some(test_identity("alice", "viewer")),
+            payload.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(std::fs::read(dir.join("real.txt")).unwrap(), payload);
+        assert!(
+            std::fs::symlink_metadata(dir.join("alias.txt"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "alias must remain a symlink"
+        );
+    }
+
+    #[tokio::test]
+    async fn drive_upload_to_directory_rejected() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        std::fs::create_dir(dir.join("subdir")).unwrap();
+        let err = upload(
+            &manager,
+            id,
+            "subdir",
+            Some(test_identity("alice", "viewer")),
+            b"x".to_vec(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)), "got {:?}", err);
+    }
+
+    #[tokio::test]
+    async fn drive_upload_ssh_session_has_no_drive() {
+        let (manager, _id, _dir) = seeded_rdp_session().await;
+        let ssh_id = Uuid::new_v4();
+        seed_session(&manager, ssh_id, SessionType::Ssh, true, None, "alice").await;
+        let err = upload(
+            &manager,
+            ssh_id,
+            "x.bin",
+            Some(test_identity("alice", "viewer")),
+            b"x".to_vec(),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)), "got {:?}", err);
+    }
+
+    /// Manager whose drive config carries LUKS fields, as if the volume
+    /// were already mounted at `drive_path` (the mount itself is a
+    /// startup-time root step, `drive::mount_luks`). Pins that upload
+    /// resolution is identical on LUKS-configured drives.
+    async fn seeded_rdp_session_with_luks_config() -> (Arc<SessionManager>, Uuid, std::path::PathBuf)
+    {
+        let tmp = std::env::temp_dir().join(format!("persea-drive-api-test-{}", Uuid::new_v4()));
+        let mut config = crate::config::Config::default();
+        config.recording_path = Some(tmp.join("recordings"));
+        config.drive = Some(crate::config::DriveConfig {
+            enabled: true,
+            drive_path: tmp.join("drives"),
+            luks_device: Some(tmp.join("container.img")),
+            luks_name: "persea-test".into(),
+            luks_key_path: Some("secret/test".into()),
+            ..Default::default()
+        });
+        let manager: AppState = Arc::new(SessionManager::new(config, None));
+        let id = Uuid::new_v4();
+        let drive_cfg = crate::drive::drive_config_or_default(&manager.config().drive);
+        let drive_dir = crate::drive::create_session_dir(&drive_cfg, id).unwrap();
+        seed_session(
+            &manager,
+            id,
+            SessionType::Rdp,
+            true,
+            Some(drive_dir.clone()),
+            "alice",
+        )
+        .await;
+        (manager, id, drive_dir)
+    }
+
+    #[tokio::test]
+    async fn drive_upload_luks_configured_drive_round_trip() {
+        let (manager, id, dir) = seeded_rdp_session_with_luks_config().await;
+        let payload = b"luks-encrypted payload".to_vec();
+        let (status, json) = upload(
+            &manager,
+            id,
+            "luks.bin",
+            Some(test_identity("alice", "viewer")),
+            payload.clone(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(json["size"], payload.len() as u64);
+        assert_eq!(std::fs::read(dir.join("luks.bin")).unwrap(), payload);
+    }
+
+    #[tokio::test]
+    async fn drive_upload_concurrent_uploads_capped_per_session() {
+        let (manager, id, _dir) = seeded_rdp_session().await;
+        let sem = drive_upload_semaphore(id);
+        let mut held = Vec::new();
+        for _ in 0..MAX_CONCURRENT_DRIVE_UPLOADS {
+            held.push(sem.clone().acquire_owned().await.unwrap());
+        }
+        let identity = test_identity("alice", "viewer");
+        let handle = tokio::spawn(async move {
+            drive_upload_file(
+                State(manager),
+                Path((id, "queued.bin".into())),
+                Some(Extension(identity)),
+                axum::body::Body::from(b"queued".to_vec()),
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert!(!handle.is_finished(), "upload must wait for a free permit");
+        drop(held.pop());
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("upload must complete once a permit frees up")
+            .expect("upload task must not panic")
+            .unwrap();
+        assert_eq!(result.0, StatusCode::CREATED);
     }
 }
