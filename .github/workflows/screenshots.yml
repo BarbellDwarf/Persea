@@ -40,16 +40,36 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install guacd (official image, SSH support) and demo sshd
+      - name: Install build deps for guacd (fork build) and demo sshd
         run: |
           sudo apt-get update
-          sudo apt-get install -y openssh-server
-          # guacamole-server is not packaged for Ubuntu 24.04 (noble) — the
-          # official guacd image is the supported CI path.
-          docker run -d --name persea-guacd -p 4822:4822 guacamole/guacd:1.5.5
-          for i in $(seq 1 30); do
+          sudo apt-get install -y \
+            build-essential autoconf automake libtool pkg-config \
+            uuid-dev freerdp3-dev libvncserver-dev libwebsockets-dev \
+            libpulse-dev libssl-dev libavcodec-dev libavutil-dev \
+            openssh-server
+
+      - name: Build guacd from the persea fork (same recipe as release.yml)
+        env:
+          GUACD_REPO: https://github.com/BarbellDwarf/persea-guacamole-server.git
+          GUACD_COMMIT: d9218fe1
+        run: |
+          if [ ! -f /tmp/guacd-build/Makefile ]; then
+            git clone --depth 1 --branch persea-1.6.1-freerdp3 $GUACD_REPO /tmp/guacamole-server
+            git -C /tmp/guacamole-server checkout $GUACD_COMMIT 2>/dev/null || true
+            cd /tmp/guacamole-server && autoreconf -fi
+            mkdir /tmp/guacd-build && cd /tmp/guacd-build
+            /tmp/guacamole-server/configure \
+              --prefix=/opt/persea \
+              --with-ssh --with-vnc --with-rdp \
+              --without-telnet --without-kubernetes \
+              --disable-guacenc --disable-guaclog --disable-static
+          fi
+          make -C /tmp/guacd-build -j"$(nproc)"
+          /tmp/guacd-build/src/guacd -b 127.0.0.1 -L /tmp/guacd-build/guacd.log &
+          for i in $(seq 1 60); do
             if bash -c 'echo > /dev/tcp/127.0.0.1/4822' 2>/dev/null; then
-              echo "guacd ready after ${i}s"
+              echo "guacd (fork d9218fe1) ready after ${i}s"
               break
             fi
             sleep 1
