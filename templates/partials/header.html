@@ -1,3 +1,10 @@
+{% if is_admin %}
+<div id="update-banner" class="alert alert-success" style="display:none;margin-bottom:0">
+    <span id="update-banner-text"></span>
+    <a id="update-banner-link" href="#" target="_blank" rel="noopener noreferrer" style="margin-left:8px">View release</a>
+    <button id="update-banner-dismiss" type="button" class="btn btn-sm" style="margin-left:auto">Dismiss</button>
+</div>
+{% endif %}
 <header class="header">
     <div style="display:flex;align-items:center;gap:8px">
         <button class="hamburger" id="hamburger-btn" aria-label="Toggle navigation">
@@ -74,5 +81,26 @@ document.getElementById('theme-toggle')?.addEventListener('click', function() {
         });
         if (window.innerWidth < 1400) sidebar.classList.add('collapsed');
     }
+})();
+// ── Version update banner (admin pages only; markup gated on is_admin) ──
+(function() {
+    var banner = document.getElementById('update-banner');
+    if (!banner) return;
+    var dismissKey = null;
+    document.getElementById('update-banner-dismiss')?.addEventListener('click', function() {
+        if (dismissKey) localStorage.setItem(dismissKey, '1');
+        banner.style.display = 'none';
+    });
+    fetch('/api/auth/status', { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (!data.update_available || !data.latest_version) return;
+            dismissKey = 'persea_update_dismissed_' + data.latest_version;
+            if (localStorage.getItem(dismissKey)) return;
+            document.getElementById('update-banner-text').textContent = 'Persea ' + data.latest_version + ' is available';
+            document.getElementById('update-banner-link').href = 'https://github.com/BarbellDwarf/persea/releases/tag/v' + data.latest_version;
+            banner.style.display = 'flex';
+        })
+        .catch(function() { /* offline: banner stays hidden */ });
 })();
 </script>

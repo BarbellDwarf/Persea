@@ -710,6 +710,11 @@ pub struct Config {
     /// silently reset the defaults.
     #[serde(default = "default_session_config")]
     pub session: Option<SessionConfig>,
+    /// Server version update checking (`[updates]`). Materialised in
+    /// `default_toml()` so an absent section cannot silently reset the
+    /// defaults.
+    #[serde(default = "default_updates_config")]
+    pub updates: Option<UpdatesConfig>,
 }
 
 fn default_password_config() -> Option<PasswordConfig> {
@@ -735,6 +740,48 @@ impl Default for SessionConfig {
             reason_required: default_false(),
         }
     }
+}
+
+/// Server version update checking configuration (`[updates]`). Materialised
+/// in `default_toml()` so an absent section cannot silently reset the
+/// defaults.
+#[derive(Debug, Deserialize, Clone)]
+pub struct UpdatesConfig {
+    /// Check `check_url` on a schedule for a newer persea release. Default:
+    /// true. Set false in air-gapped deployments: no network call is ever
+    /// made and the admin banner / status endpoint report nothing.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Release-list API URL. Default: the unauthenticated GitHub Releases
+    /// API for the persea repository. Internal mirrors (e.g. Gitea) can
+    /// point this at their own `/releases/latest` endpoint.
+    #[serde(default = "default_update_check_url")]
+    pub check_url: String,
+    /// Hours between checks. Default: 24.
+    #[serde(default = "default_update_check_interval_hours")]
+    pub check_interval_hours: u64,
+}
+
+fn default_update_check_url() -> String {
+    "https://api.github.com/repos/BarbellDwarf/persea/releases/latest".to_string()
+}
+
+fn default_update_check_interval_hours() -> u64 {
+    24
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            check_url: default_update_check_url(),
+            check_interval_hours: default_update_check_interval_hours(),
+        }
+    }
+}
+
+fn default_updates_config() -> Option<UpdatesConfig> {
+    Some(UpdatesConfig::default())
 }
 
 fn default_session_config() -> Option<SessionConfig> {
@@ -1811,6 +1858,7 @@ impl Default for Config {
             password: default_password_config(),
             desktop: default_desktop_config(),
             session: default_session_config(),
+            updates: default_updates_config(),
         }
     }
 }
@@ -2350,6 +2398,18 @@ mod tests {
             .as_ref()
             .expect("[session] defaults must be emitted");
         assert!(!sess.reason_required);
+
+        // [updates] must be materialised with the previous defaults.
+        let upd = loaded
+            .updates
+            .as_ref()
+            .expect("[updates] defaults must be emitted");
+        assert!(upd.enabled);
+        assert_eq!(
+            upd.check_url,
+            "https://api.github.com/repos/BarbellDwarf/persea/releases/latest"
+        );
+        assert_eq!(upd.check_interval_hours, 24);
 
         // Accessor-level equivalence with the previous effective defaults.
         assert_eq!(loaded.recording_config().max_recordings, 1000);

@@ -338,14 +338,15 @@ const SETTING_DESKTOP_PAIRING: &str = "desktop_pairing";
 
 /// `GET /api/auth/status`: login-page configuration for anonymous
 /// callers: OIDC availability, site title, drive flag, the resolved
-/// theme data, the server version, and the desktop-shell capability
-/// probe.
+/// theme data, the server version, the desktop-shell capability
+/// probe, and the cached server update-check result (S16).
 pub async fn auth_status(
     Extension(oidc_enabled): Extension<OidcEnabled>,
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
     Extension(drive_configured): Extension<DriveConfigured>,
     database: Option<Extension<Db>>,
+    update_state: Option<Extension<crate::updates::UpdateState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let settings = load_capability_settings(database).await;
     let kiosk_allowed =
@@ -378,6 +379,22 @@ pub async fn auth_status(
     if let Some(ref url) = theme.logo_url {
         resp["theme"]["logo_url"] = json!(url);
     }
+    // S16: cached server update check. Null/false when the checker is
+    // disabled, never ran, or every attempt failed so far.
+    let (latest_version, update_available) = match update_state {
+        Some(state) => {
+            let info = state.info.read().unwrap();
+            let latest = info.latest_version.clone();
+            let available = latest
+                .as_deref()
+                .map(|v| crate::updates::version_newer(v, env!("CARGO_PKG_VERSION")))
+                .unwrap_or(false);
+            (latest, available)
+        }
+        None => (None, false),
+    };
+    resp["latest_version"] = json!(latest_version);
+    resp["update_available"] = json!(update_available);
     Ok(Json(resp))
 }
 

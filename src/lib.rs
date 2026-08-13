@@ -72,6 +72,7 @@ pub mod testing;
 pub mod thumbnails;
 pub mod totp;
 pub mod tunnel;
+pub mod updates;
 pub mod vault;
 pub mod vdi;
 pub mod vsphere;

@@ -541,3 +541,20 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # session_history.reason and shown on the Sessions page and in reports.
 # Default: false (reasons stay optional).
 # reason_required = false    # Env: PERSEA_SESSION__REASON_REQUIRED
+
+# [updates]
+# Server version update checking. Every `check_interval_hours`, persea
+# fetches `check_url` (the unauthenticated GitHub Releases API by default)
+# and compares the latest release against the running version. When a newer
+# stable release exists, admins see a dismissible banner ("Persea X.Y.Z is
+# available") with a link to the release. The check runs in the background;
+# a failure is logged as a warning and retried at the next interval.
+#
+# AIR-GAPPED DEPLOYMENTS: set enabled = false. No network call is made at
+# all, and the banner / status endpoint report nothing. Alternatively, keep
+# it enabled and point check_url at an internal mirror that implements the
+# same `/releases/latest` shape (e.g. Gitea).
+# enabled = true     # Env: PERSEA_UPDATES__ENABLED
+# check_url = "https://api.github.com/repos/BarbellDwarf/persea/releases/latest"
+#                     # Env: PERSEA_UPDATES__CHECK_URL
+# check_interval_hours = 24    # Env: PERSEA_UPDATES__CHECK_INTERVAL_HOURS

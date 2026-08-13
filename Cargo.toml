@@ -34,6 +34,9 @@ multer = "3"
 toml = "1"
 config = "0.14"
 
+# Version comparison for the update check (already in the tree via rustc_version)
+semver = "1"
+
 # Crypto/random
 rand = "0.10"
 hex = "0.4"

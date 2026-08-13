@@ -46,6 +46,7 @@ mod testing;
 mod thumbnails;
 mod totp;
 mod tunnel;
+mod updates;
 mod vault;
 mod vdi;
 mod vsphere;
