@@ -6,17 +6,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!--
-Release checklist (delete this comment before tagging v1.1.1):
-- [ ] Enterprise HA lands — amend "High availability" entries below
+Release checklist (delete this comment before tagging v1.2.0):
 - [ ] `cargo test` + `cargo fmt --check` green on the final commit
 - [ ] CI green for the final push (`gh run list`)
-- [ ] Tag `v1.1.1` (annotated) and push it
-- [ ] Regenerate Playwright visual snapshots (connections page changed)
-- [ ] Re-run Playwright E2E suite (`tests/playwright`)
-- [ ] Update `screenshots/screenshots.md` if the new connections UI is captured there
-- [ ] Bump the asset cache-bust version in `templates/base.html` if more static files change
-- [ ] Push the beta image (`gh workflow run beta.yml --ref v1.1.1`) after the tag
+- [ ] Tag `v1.2.0` (annotated) and push it
+- [ ] Release workflow green (deb/rpm/Windows artifacts, guacd pin untouched)
+- [ ] Push the beta image + beta pre-release (`gh workflow run beta.yml --ref v1.2.0`) after the tag
 -->
+
+## [1.2.0] - 2026-08-13
+
+This release is the desktop round: the server APIs the persea desktop
+shell needs — session events, drive uploads, device pairing, an anonymous
+version/capabilities probe, and the Tauri IPC bridge — plus a hardening
+pass, RHEL 10 RPM and Windows server packages, and a polish pass over
+admin settings, branding, and session UX.
+
+### Added
+
+- **Session events SSE** — `GET /api/sessions/events` streams session
+  lifecycle events over SSE with `id:` cursors and `Last-Event-ID`
+  resume, and serves JSON replay with `?replay=true` for polling
+  clients. Ownership mirrors `GET /api/sessions`: owners see their own,
+  admins pass `?all=true`; at most one concurrent SSE stream per user.
+- **RDP drive upload REST** — `PUT /api/sessions/{id}/drive-files/{name}`
+  streams a raw request body into an open RDP drive file (no multipart),
+  capped at 4 GiB with per-session concurrency limiting; the desktop
+  shell's drag-drop transfers ride on it.
+- **Device pairing flow** — OAuth-style device-code flow for the
+  desktop shell: anonymous `POST /api/desktop/pair` (rate-limited) hands
+  out a single-use 8-char code (SHA-256 stored only), a logged-in user
+  confirms it via `POST /api/desktop/confirm` under CSRF, and
+  `GET /api/desktop/pair/status` mints an ordinary, revocable user token
+  to the paired device exactly once. Auth-method-agnostic: pairing binds
+  to whichever identity confirms.
+- **Anonymous version + capabilities probe** — `GET /api/auth/status`
+  now reports the server version and compiled-in capabilities
+  (`drive_upload`, `session_events`, `desktop_pairing`,
+  `desktop_bridge`, `kiosk_allowed`, `desktop_transfers`) so the
+  desktop shell can gate features per server. Capability flags are
+  compiled-in constants; the admin-gated toggles default ON.
+- **Desktop bridge CSP/IPC** — `allow_bridge` config plus CSP scheme
+  allowances and a desktop-mode flag so the Tauri shell's remote-origin
+  IPC works through the webview without loosening browser-mode
+  security.
+- **Version update alert** — a background check task polls the GitHub
+  releases API (air-gap-able), `/api/auth/status` carries
+  `latest_version` / `update_available`, and the admin UI shows a
+  banner when a newer version exists.
+- **Admin/session UX** — settings reorganized into a submenu bar with
+  tabbed sections; per-protocol connection defaults in the admin UI;
+  RDP client-name forwarding with DNS resolution; session tab
+  switching, connection reasons, and recent/disconnect semantics.
+- **Web branding** — leaf logo, tile favicon, and a live favicon with a
+  state dot (login fallback included); canonical web UI screenshot set
+  with a regeneration workflow.
+- **RHEL 10 RPM** — the server ships as a native RPM for RHEL 10 /
+  EL10 (guacd from the maintained fork, `ffmpeg-free` libs, hostname
+  fallback for minimal containers); Windows server release with native
+  service, NSIS installer, and first-run `--init` bootstrap; beta
+  channel ships deb + rpm alongside the Docker image.
+- **HA seams docs** — share-viewer capability errors and the bytes
+  buffer carry are documented; `GET /api/sessions/recent` wires recent
+  connection semantics.
+
+### Changed
+
+- **rusqlite 0.32 → 0.35** — with the audit log re-verified against the
+  new API surface.
+- **Repo moved to the persea-grove org** — URLs, guacd fork references,
+  and package metadata follow; Open Collective funding link added.
+
+### Fixed
+
+- **RDP drive file open under subdirectories** — no more ENOENT for
+  files nested in drive folders.
+- **Background task JoinHandle double-poll** — eliminated a panic path
+  in task shutdown.
+- **Test harness port race** — teardown tests no longer bind-then-release
+  with a race window.
+
+### Security
+
+- **Hardening pass** — Proxmox SSRF guards (metadata blocklist),
+  OIDC callback HMAC validation, TLS warning on insecure connections,
+  safe RDP defaults, and parallel DNS resolution with timeouts.
+- **CodeQL remediations** — 5 alerts resolved (test-vector and guarded
+  XSS suppressions); login page lost its CSP-blocked reset link.
 
 ## [1.1.1] - 2026-08-12
 
