@@ -1,0 +1,248 @@
+# persea RPM spec — Red Hat Enterprise Linux 10 (and compatible EL 10 distros).
+#
+# ONE RPM containing: persea (Rust binary), guacd (C daemon built in %build
+# from the pinned fork tarball), persea.service + persea-guacd.service, a
+# SELinux policy module, and a self-signed certificate bootstrap in %post.
+# Everything lives under /opt/persea (mirrors the debian/ package layout).
+#
+# Repositories required to build:
+#   - RHEL 10 AppStream (gcc, cargo, pango-devel, ...)
+#   - RHEL 10 CodeReady Builder (freerdp-devel = FreeRDP 3 headers,
+#     CUnit-devel)
+#   - EPEL 10: libwebsockets-devel, libtelnet-devel, libvncserver-devel,
+#     ffmpeg-free-devel (the ffmpeg-free library set; full ffmpeg is RPM
+#     Fusion only and is not needed by guacd)
+#
+# SPICE is intentionally not built on EL 10: spice-client-glib is not
+# packaged for RHEL 10 or EPEL 10. The guacd configure flags mirror the
+# Ubuntu release build in .github/workflows/release.yml, which also omits
+# SPICE.
+#
+# The source tarball persea-<version>.tar.gz is produced by the release
+# workflow (git archive of the tagged commit); the version is passed to
+# rpmbuild with --define "persea_version <version>".
+#
+# guacd is built with crates-network-free tooling (autotools), but the Rust
+# build pulls crates from crates.io during %build. Offline vendoring is a
+# follow-up.
+
+%{!?persea_version:%global persea_version 0.0.0}
+%global _prefix /opt/persea
+
+Name:           persea
+Version:        %{persea_version}
+Release:        1%{?dist}
+Summary:        Lightweight Rust replacement for Apache Guacamole client
+License:        Apache-2.0
+URL:            https://github.com/BarbellDwarf/persea
+Source0:        %{name}-%{persea_version}.tar.gz
+
+# ── Build requirements ──────────────────────────────────────────────────
+# Rust toolchain (RHEL 10 AppStream)
+BuildRequires:  cargo
+BuildRequires:  rust
+# C toolchain for guacd
+BuildRequires:  gcc
+BuildRequires:  gcc-c++
+BuildRequires:  make
+BuildRequires:  autoconf
+BuildRequires:  automake
+BuildRequires:  libtool
+BuildRequires:  pkgconf-pkg-config
+BuildRequires:  git
+# guacd library deps — RHEL 10 AppStream / CRB
+BuildRequires:  cairo-devel
+BuildRequires:  libjpeg-turbo-devel
+BuildRequires:  libpng-devel
+BuildRequires:  libwebp-devel
+BuildRequires:  libssh2-devel
+BuildRequires:  openssl-devel
+BuildRequires:  pango-devel
+BuildRequires:  pulseaudio-libs-devel
+BuildRequires:  libuuid-devel
+BuildRequires:  freerdp-devel
+BuildRequires:  CUnit-devel
+# guacd library deps — EPEL 10
+BuildRequires:  libvncserver-devel
+BuildRequires:  libtelnet-devel
+BuildRequires:  libwebsockets-devel
+BuildRequires:  ffmpeg-free-devel
+# SELinux policy module build (the devel Makefile + semodule_package)
+BuildRequires:  selinux-policy-devel
+BuildRequires:  checkpolicy
+# systemd scriptlet macros (systemd-rpm-macros)
+BuildRequires:  systemd-rpm-macros
+
+# ── Runtime requirements ────────────────────────────────────────────────
+# RHEL 10 AppStream
+Requires:       cairo
+Requires:       libjpeg-turbo
+Requires:       libpng
+Requires:       libwebp
+Requires:       libssh2
+Requires:       openssl-libs
+Requires:       pango
+Requires:       pulseaudio-libs
+Requires:       freerdp-libs
+Requires:       ca-certificates
+# EPEL 10
+Requires:       libvncserver
+Requires:       libtelnet
+Requires:       libwebsockets
+Requires:       ffmpeg-free-libs
+# SELinux module install (%post loads the policy; semanage relabels ports)
+Requires:       policycoreutils
+Requires:       policycoreutils-python-utils
+Requires:       selinux-policy-targeted
+
+# Optional features (installed by default with dnf unless weak deps are off)
+Recommends:     tigervnc-server
+Recommends:     chromium
+Recommends:     xorg-x11-utils
+Recommends:     cryptsetup
+Recommends:     firewalld
+
+%description
+persea is a lightweight Rust replacement for the Apache Guacamole Java
+webapp. It proxies the Guacamole protocol over WebSockets between web
+browsers and guacd (the C daemon from guacamole-server). Supports SSH,
+VNC, RDP, Proxmox, VMware, and web browser sessions (headless Chromium
+on Xvnc). This package bundles both persea and guacd.
+
+%prep
+%autosetup -n persea-%{persea_version}
+
+# RHEL 10's cargo defaults release builds to thin LTO + strip. Thin LTO on
+# the final link (this crate graph includes aws-lc and the sqlite3
+# amalgamation) needs several GB of RAM and has crashed builders; the
+# Ubuntu release build uses the plain cargo defaults (no LTO), so mirror
+# that here for parity and build reliability.
+mkdir -p .cargo
+cat > .cargo/config.toml <<'EOF'
+[profile.release]
+lto = false
+EOF
+
+%build
+# RHEL 10's rpmbuild defaults enable gcc LTO in CFLAGS (-flto=auto). The
+# final Rust link then LTOs the C objects (aws-lc, the sqlite3 amalgamation)
+# in a single gcc process, which has OOM-crashed builders. Build without LTO
+# to match the Ubuntu release build and keep peak memory sane.
+export CFLAGS="${CFLAGS/-flto=auto/}"
+export CXXFLAGS="${CXXFLAGS/-flto=auto/}"
+export FFLAGS="${FFLAGS/-flto=auto/}"
+
+# ── persea (Rust) — pulls crates from crates.io (offline vendoring: follow-up)
+cargo build --release
+
+# ── guacd (C) — pinned fork tarball, same repo/commit as the Ubuntu build ──
+git clone --depth 1 --branch persea-1.6.1-freerdp3 \
+    https://github.com/BarbellDwarf/persea-guacamole-server.git guacamole-server
+git -C guacamole-server checkout d9218fe1
+( cd guacamole-server && autoreconf -fi )
+mkdir guacd-build
+cd guacd-build
+../guacamole-server/configure \
+    --prefix=%{_prefix} \
+    --with-ssh \
+    --with-vnc \
+    --with-rdp \
+    --without-telnet \
+    --without-kubernetes \
+    --disable-guacenc \
+    --disable-guaclog \
+    --disable-static
+make %{?_smp_mflags}
+cd ..
+
+# ── SELinux policy module ──
+cp rpm/selinux/*.te rpm/selinux/*.fc .
+make -f /usr/share/selinux/devel/Makefile persea.pp
+
+%install
+rm -rf %{buildroot}
+
+# Directory structure
+install -d %{buildroot}%{_prefix}/bin
+install -d %{buildroot}%{_prefix}/sbin
+install -d %{buildroot}%{_prefix}/lib
+install -d %{buildroot}%{_prefix}/static
+install -d %{buildroot}%{_prefix}/data
+install -d %{buildroot}%{_prefix}/recordings
+install -d %{buildroot}%{_prefix}/tls
+install -d %{buildroot}%{_unitdir}
+install -d %{buildroot}%{_sysconfdir}/ld.so.conf.d
+install -d %{buildroot}%{_libdir}/freerdp3
+install -d %{buildroot}%{_libexecdir}/persea
+install -d %{buildroot}/usr/share/selinux/targeted
+
+# persea binary
+install -m 755 target/release/persea %{buildroot}%{_prefix}/bin/persea
+
+# Drive setup helper script
+install -m 755 scripts/drive-setup.sh %{buildroot}%{_prefix}/bin/drive-setup.sh
+
+# guacd binary and libraries
+make -C guacd-build DESTDIR=%{buildroot} install
+
+# FreeRDP 3 plugins (RDPDR/RDPSND channels: drive redirection, audio,
+# printing) install under the guacd prefix — move them next to the system
+# FreeRDP libraries so freerdp finds them at runtime.
+cp -a %{buildroot}%{_prefix}/lib/freerdp3/*.so* %{buildroot}%{_libdir}/freerdp3/ 2>/dev/null || true
+rm -rf %{buildroot}%{_prefix}/lib/freerdp3
+
+# Static web assets
+cp -r static/* %{buildroot}%{_prefix}/static/
+
+# Default config (EL 10 default: HTTPS on 443)
+install -m 644 rpm/config.toml.default %{buildroot}%{_prefix}/config.toml
+
+# ldconfig drop-in so guacd can find its libs
+echo "%{_prefix}/lib" > %{buildroot}%{_sysconfdir}/ld.so.conf.d/persea.conf
+
+# Systemd units
+install -m 644 rpm/persea.service %{buildroot}%{_unitdir}/persea.service
+install -m 644 rpm/persea-guacd.service %{buildroot}%{_unitdir}/persea-guacd.service
+
+# SELinux policy module + install/remove scriptlets
+install -m 644 persea.pp %{buildroot}/usr/share/selinux/targeted/persea.pp
+install -m 755 rpm/scripts/pre.sh %{buildroot}%{_libexecdir}/persea/pre.sh
+install -m 755 rpm/scripts/post.sh %{buildroot}%{_libexecdir}/persea/post.sh
+install -m 755 rpm/scripts/postun.sh %{buildroot}%{_libexecdir}/persea/postun.sh
+
+%pre
+/usr/libexec/persea/pre.sh
+
+%post
+/usr/libexec/persea/post.sh || exit $?
+%systemd_post persea.service persea-guacd.service
+
+%preun
+%systemd_preun persea.service persea-guacd.service
+
+%postun
+if [ "$1" -eq 0 ]; then
+    /usr/libexec/persea/postun.sh "$1"
+fi
+%systemd_postun_with_restart persea.service persea-guacd.service
+
+%files
+%license debian/copyright
+%dir %{_prefix}
+%{_prefix}/bin/persea
+%{_prefix}/bin/drive-setup.sh
+%{_prefix}/sbin/guacd
+%{_prefix}/lib/*.so*
+%{_libdir}/freerdp3/
+%{_prefix}/static/
+%config(noreplace) %attr(0640,persea,persea) %{_prefix}/config.toml
+%dir %attr(0750,persea,persea) %{_prefix}/data
+%dir %attr(0750,persea,persea) %{_prefix}/recordings
+%dir %attr(0750,persea,persea) %{_prefix}/tls
+%{_unitdir}/persea.service
+%{_unitdir}/persea-guacd.service
+%{_sysconfdir}/ld.so.conf.d/persea.conf
+%{_libexecdir}/persea/pre.sh
+%{_libexecdir}/persea/post.sh
+%{_libexecdir}/persea/postun.sh
+/usr/share/selinux/targeted/persea.pp

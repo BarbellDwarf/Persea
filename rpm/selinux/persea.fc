@@ -1,0 +1,4 @@
+# persea SELinux file contexts
+/opt/persea/bin/persea       -- gen_context(system_u:object_r:persea_exec_t,s0)
+/opt/persea/sbin/guacd       -- gen_context(system_u:object_r:guacd_exec_t,s0)
+/opt/persea(/.*)?             gen_context(system_u:object_r:persea_var_t,s0)

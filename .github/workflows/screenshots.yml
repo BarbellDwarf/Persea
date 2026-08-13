@@ -56,7 +56,7 @@ jobs:
 
       - name: Build guacd from the persea fork (same recipe as release.yml)
         env:
-          GUACD_REPO: https://github.com/BarbellDwarf/persea-guacamole-server.git
+          GUACD_REPO: https://github.com/persea-grove/persea-guacamole-server.git
           GUACD_COMMIT: d9218fe1
         run: |
           if [ ! -f /tmp/guacd-build/Makefile ]; then

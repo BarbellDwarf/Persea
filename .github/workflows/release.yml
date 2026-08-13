@@ -11,7 +11,7 @@ permissions:
   actions: write
 
 env:
-  GUACD_REPO: https://github.com/BarbellDwarf/persea-guacamole-server.git
+  GUACD_REPO: https://github.com/persea-grove/persea-guacamole-server.git
   GUACD_COMMIT: d9218fe1
 
 jobs:
@@ -154,6 +154,114 @@ jobs:
           name: deb-arm64
           path: "*.deb"
           if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Build .rpm (RHEL 10 / EL 10) — native rpmbuild in an ubi10 container
+  # ---------------------------------------------------------------------------
+  build-rpm:
+    name: Build .rpm (el10)
+    runs-on: ubuntu-latest
+    container: registry.access.redhat.com/ubi10/ubi
+    steps:
+      - uses: actions/checkout@v7
+      - name: Enable EPEL 10 and CodeReady Builder
+        run: |
+          dnf -y install dnf-plugins-core
+          dnf config-manager --set-enabled "codeready-builder-for-ubi-10-$(uname -m)-rpms"
+          # UBI ships a curated package subset; add CentOS Stream 10 for the
+          # full AppStream/CRB (freerdp3 dev headers, pango-devel, CUnit).
+          dnf config-manager --add-repo "https://mirror.stream.centos.org/10-stream/BaseOS/$(uname -m)/os/"
+          dnf config-manager --add-repo "https://mirror.stream.centos.org/10-stream/AppStream/$(uname -m)/os/"
+          dnf config-manager --add-repo "https://mirror.stream.centos.org/10-stream/CRB/$(uname -m)/os/"
+          # Bootstrap the CentOS Stream 10 signing keys (single HTTPS-verified
+          # package; the www.centos.org key file is rejected by RHEL 10 rpm
+          # for its SHA-1 self-signature).
+          dnf -y install --nogpgcheck centos-gpg-keys
+          rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial-SHA256
+          dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+      - name: Install build dependencies
+        run: |
+          dnf -y install --setopt=install_weak_deps=False \
+            cargo rust gcc gcc-c++ make autoconf automake libtool \
+            pkgconf-pkg-config git \
+            cairo-devel libjpeg-turbo-devel libpng-devel libwebp-devel \
+            libssh2-devel openssl-devel pango-devel pulseaudio-libs-devel \
+            libuuid-devel freerdp-devel CUnit-devel \
+            libvncserver-devel libtelnet-devel libwebsockets-devel \
+            ffmpeg-free-devel \
+            selinux-policy-devel checkpolicy \
+            rpm-build systemd-rpm-macros
+      - name: Create source tarball
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          git archive --prefix="persea-${VERSION}/" -o "persea-${VERSION}.tar.gz" "$GITHUB_SHA"
+          mkdir -p "$HOME/rpmbuild"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp "persea-${VERSION}.tar.gz" "$HOME/rpmbuild/SOURCES/"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+      - name: Build RPM
+        run: |
+          rpmbuild -bb \
+            --define "_topdir $HOME/rpmbuild" \
+            --define "persea_version $VERSION" \
+            rpm/persea.spec
+      - name: Upload RPM
+        uses: actions/upload-artifact@v7
+        with:
+          name: rpm-el10
+          path: "$HOME/rpmbuild/RPMS/**/*.rpm"
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Smoke test the RPM: install into an ubi10-init container with systemd,
+  # start persea, and hit the health endpoint over the bootstrapped cert.
+  # ---------------------------------------------------------------------------
+  smoke-rpm:
+    name: Smoke test RPM (el10)
+    runs-on: ubuntu-latest
+    needs: [build-rpm]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: rpm-el10
+          path: artifacts
+      - name: Install RPM and start services
+        run: |
+          docker run -d --name persea-smoke --privileged --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v "$PWD/artifacts:/artifacts:ro" \
+            registry.access.redhat.com/ubi10/ubi-init
+          for i in $(seq 1 60); do
+            docker exec persea-smoke systemctl is-system-running >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec persea-smoke bash -c '
+            set -e
+            dnf -q -y install dnf-plugins-core
+            dnf -q config-manager --set-enabled "codeready-builder-for-ubi-10-$(uname -m)-rpms"
+            dnf -q config-manager --add-repo "https://mirror.stream.centos.org/10-stream/BaseOS/$(uname -m)/os/"
+            dnf -q config-manager --add-repo "https://mirror.stream.centos.org/10-stream/AppStream/$(uname -m)/os/"
+            dnf -q config-manager --add-repo "https://mirror.stream.centos.org/10-stream/CRB/$(uname -m)/os/"
+            dnf -q -y install --nogpgcheck centos-gpg-keys
+            rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial-SHA256
+            dnf -q -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+            dnf -q -y install --setopt=install_weak_deps=False /artifacts/*.rpm
+          '
+          docker exec persea-smoke bash -c '
+            set -e
+            # %post must have bootstrapped a cert and disabled Secure cookies
+            test -f /opt/persea/tls/cert.pem
+            test -f /opt/persea/tls/key.pem
+            grep -q "secure_cookies = false" /opt/persea/config.toml
+            systemctl start persea
+            for i in $(seq 1 30); do
+              if curl -ksf https://localhost/api/health; then exit 0; fi
+              sleep 2
+            done
+            echo "persea failed to become healthy" >&2
+            systemctl status persea --no-pager || true
+            journalctl -u persea --no-pager | tail -40 || true
+            exit 1
+          '
 
   # ---------------------------------------------------------------------------
   # Build .tar.gz + .zip packages (amd64)
@@ -339,7 +447,7 @@ jobs:
   # ---------------------------------------------------------------------------
   release:
     name: Create Release
-    needs: [build-deb, build-deb-arm64, build-tarball, build-tarball-arm64, build-docker-manifest]
+    needs: [build-deb, build-deb-arm64, build-rpm, smoke-rpm, build-tarball, build-tarball-arm64, build-docker-manifest]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -353,6 +461,11 @@ jobs:
         with:
           name: deb-arm64
           path: artifacts/deb-arm64
+      - name: Download .rpm (el10)
+        uses: actions/download-artifact@v8
+        with:
+          name: rpm-el10
+          path: artifacts/rpm-el10
       - name: Download packages (amd64)
         uses: actions/download-artifact@v8
         with:
@@ -370,6 +483,7 @@ jobs:
           files: |
             artifacts/deb-amd64/*.deb
             artifacts/deb-arm64/*.deb
+            artifacts/rpm-el10/*.rpm
             artifacts/packages-amd64/*.tar.gz
             artifacts/packages-amd64/*.zip
             artifacts/packages-arm64/*.tar.gz

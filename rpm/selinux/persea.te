@@ -1,0 +1,86 @@
+policy_module(persea, 1.0.0)
+
+########################################
+# persea — web session proxy (HTTPS on 443)
+# guacd  — Guacamole protocol daemon (loopback 4822)
+#
+# Scope (kept deliberately small):
+#   - persea_t: HTTPS listener on 443, connects to guacd on 4822, manages
+#     /opt/persea (config, SQLite DB, recordings, certs), spawns children
+#     (Xvnc/Chromium for web sessions run inside persea_t).
+#   - guacd_t: listener on 4822, outbound connections to operator-defined
+#     SSH/RDP/VNC/SPICE targets on any port, reads the TLS certs and its
+#     libraries from /opt/persea.
+#
+# Known limits (documented, not denied): web-browser sessions and the LUKS
+# drive feature spawn extra helpers (Xvnc, Chromium, cryptsetup) that may
+# need rules beyond this module. If they hit denials in enforcing mode,
+# extend persea.te or run `semanage permissive -a persea_t`.
+
+type persea_t;
+type persea_exec_t;
+init_daemon_domain(persea_t, persea_exec_t)
+
+type guacd_t;
+type guacd_exec_t;
+init_daemon_domain(guacd_t, guacd_exec_t)
+
+# Listening ports (labeled by semanage in %post):
+#   443  — persea web UI
+#   4822 — guacd
+type persea_port_t;
+corenet_port(persea_port_t)
+type guacd_port_t;
+corenet_port(guacd_port_t)
+
+# Everything under /opt/persea
+type persea_var_t;
+files_type(persea_var_t)
+
+########################################
+# persea daemon
+corenet_tcp_bind_all_nodes(persea_t)
+allow persea_t persea_port_t:tcp_socket name_bind;
+allow persea_t self:tcp_socket { accept listen };
+allow persea_t guacd_port_t:tcp_socket name_connect;
+corenet_udp_sendrecv_dns_port(persea_t)
+allow persea_t self:capability net_bind_service;
+
+manage_dirs_pattern(persea_t, persea_var_t, persea_var_t)
+manage_files_pattern(persea_t, persea_var_t, persea_var_t)
+manage_lnk_files_pattern(persea_t, persea_var_t, persea_var_t)
+manage_sock_files_pattern(persea_t, persea_var_t, persea_var_t)
+
+files_read_etc_files(persea_t)
+logging_send_syslog_msg(persea_t)
+dev_read_rand(persea_t)
+
+# Process spawn: Xvnc, Chromium and helpers execute inside persea_t
+# (execute without domain transition).
+gen_require(`
+    attribute file_type;
+')
+allow persea_t file_type:file execute_no_trans;
+allow persea_t self:process { fork signal signull };
+allow persea_t self:capability { chown dac_override fowner setgid setuid };
+allow persea_t self:unix_stream_socket { accept bind connect create getattr listen read write };
+
+########################################
+# guacd daemon
+corenet_tcp_bind_all_nodes(guacd_t)
+allow guacd_t guacd_port_t:tcp_socket name_bind;
+allow guacd_t self:tcp_socket { accept listen };
+# guacd connects to operator-defined targets on any port (SSH 22, RDP 3389,
+# VNC 5900+, SPICE, serial consoles, ...)
+corenet_tcp_connect_all_ports(guacd_t)
+corenet_udp_sendrecv_dns_port(guacd_t)
+
+# Libraries and TLS certs live under /opt/persea
+allow guacd_t persea_var_t:dir { getattr search open read };
+allow guacd_t persea_var_t:file { read open execute map };
+allow guacd_t persea_var_t:lnk_file read;
+
+files_read_etc_files(guacd_t)
+logging_send_syslog_msg(guacd_t)
+dev_read_rand(guacd_t)
+allow guacd_t self:process { fork signal signull };

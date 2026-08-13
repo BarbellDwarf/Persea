@@ -1,8 +1,8 @@
 # Persea
 
-[![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/BarbellDwarf/persea/total)](https://github.com/BarbellDwarf/persea/releases)
+[![CI](https://github.com/persea-grove/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/persea-grove/persea/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/persea-grove/persea/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/BarbellDwarf/persea/total)](https://github.com/persea-grove/persea/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
@@ -143,7 +143,7 @@ guacd (C, from guacamole-server)
 
 ### Debian 13 (.deb)
 
-Pre-built packages for amd64 and arm64 are available from [Releases](https://github.com/BarbellDwarf/persea/releases):
+Pre-built packages for amd64 and arm64 are available from [Releases](https://github.com/persea-grove/persea/releases):
 
 ```bash
 sudo apt install ./persea_*.deb

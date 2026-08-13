@@ -31,15 +31,32 @@ For a small deployment (up to roughly 50 concurrent sessions) everything runs on
 
 ## Step 1: Install persea
 
-**Debian 13 (recommended)**: install the `.deb` from the [releases page](https://github.com/BarbellDwarf/persea/releases):
+**Debian 13 (recommended)**: install the `.deb` from the [releases page](https://github.com/persea-grove/persea/releases):
 
 ```bash
-curl -sL https://api.github.com/repos/BarbellDwarf/persea/releases/latest \
+curl -sL https://api.github.com/repos/persea-grove/persea/releases/latest \
   | sed -n 's/.*"browser_download_url": "\([^"]*_amd64\.deb\)".*/\1/p' \
   | head -1 | xargs wget
 sudo apt install ./persea_*.deb
 sudo systemctl enable --now persea
 ```
+
+**RHEL 10 (or compatible EL 10)**: install the `.rpm` from the [releases page](https://github.com/persea-grove/persea/releases). The package bundles persea, guacd, both systemd services, a SELinux policy module, and a self-signed certificate bootstrap:
+
+```bash
+sudo dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+sudo dnf install -y ./persea-*.el10.x86_64.rpm
+sudo systemctl start persea        # starts guacd too (Requires=)
+```
+
+The RPM's default config listens on 443 (HTTPS), so no reverse proxy is needed for a small deployment. Installation notes:
+
+- **Ports**: `%post` opens 443/tcp and 4822/tcp in firewalld when it is active. guacd itself only listens on loopback.
+- **SELinux**: the package loads a `persea` policy module (web UI on 443, guacd on 4822, outbound sessions) so both services run with SELinux enforcing and no changes. Web-browser sessions and the LUKS drive feature spawn extra helpers; if those hit denials in enforcing mode, extend the module or run `sudo semanage permissive -a persea_t`.
+- **Certificate**: a self-signed cert is generated in `/opt/persea/tls` on first install, and `secure_cookies = false` is appended to the config so login works over it. Replace the cert and remove that line for production.
+- **Web sessions**: Xvnc and Chromium come from the package's recommended dependencies; on minimal installs add them with `sudo dnf install tigervnc-server chromium xorg-x11-utils`.
+- **SPICE** is not built into the EL 10 guacd: `spice-client-glib` is not packaged for RHEL 10 or EPEL 10.
+- **RHEL 9 is out of scope**: the pinned guacd fork requires FreeRDP 3, which EL 9 does not ship (RHEL 10 provides it from CRB).
 
 **Any other distribution**: use the Docker image, which bundles guacd and FreeRDP so nothing can clash with the host:
 
@@ -229,7 +246,7 @@ It enables AVC 4:4:4, 60 FPS, desktop composition, and GPU encoding. Windows onl
 
 ```bash
 # Run on the RDP target machine, not the persea server:
-wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/BarbellDwarf/persea/main/contrib/setup-xrdp-gfx.sh
+wget -O setup-xrdp-gfx.sh https://raw.githubusercontent.com/persea-grove/persea/main/contrib/setup-xrdp-gfx.sh
 sudo bash setup-xrdp-gfx.sh --desktop mate
 ```
 
