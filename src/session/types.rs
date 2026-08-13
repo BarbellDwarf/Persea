@@ -217,6 +217,11 @@ pub struct CreateSessionRequest {
     pub dpi: Option<u32>,
     /// Notice text shown to the user in the client when the session connects.
     pub banner: Option<String>,
+    /// Connection reason (V09): why this session was started. Captured at
+    /// creation from the dropdown + free text on the connect flows; stored
+    /// in `session_history.reason`. Required when `[session] reason_required`
+    /// is enabled.
+    pub reason: Option<String>,
     /// Override drive/file transfer setting for this session.
     pub enable_drive: Option<bool>,
     /// Disable clipboard copy (server → client).
@@ -288,15 +293,25 @@ pub enum SessionStatus {
     Expired,
     /// Browser disconnected but session remains in manager for reconnection
     Disconnected,
+    /// User-initiated logout: the session was terminated and its reconnect
+    /// data cleared, so it can no longer be joined or resumed (V10). A
+    /// distinct terminal status from `Completed` — history and the event
+    /// feed carry `logged_out` so logout is distinguishable from a normal
+    /// end.
+    #[serde(rename = "logged_out")]
+    LoggedOut,
 }
 
 impl SessionStatus {
-    /// True for terminal states (completed/error/expired): the session can
-    /// no longer be joined or resumed.
+    /// True for terminal states (completed/error/expired/logged_out): the
+    /// session can no longer be joined or resumed.
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            SessionStatus::Completed | SessionStatus::Error | SessionStatus::Expired
+            SessionStatus::Completed
+                | SessionStatus::Error
+                | SessionStatus::Expired
+                | SessionStatus::LoggedOut
         )
     }
 }

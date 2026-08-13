@@ -371,6 +371,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             address_book_entry TEXT,
             address_book_folder TEXT,
             entry_display_name TEXT,
+            reason             TEXT,
             started_at         TEXT NOT NULL DEFAULT (datetime('now')),
             ended_at           TEXT,
             duration_secs      INTEGER,
@@ -460,6 +461,15 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         .is_ok();
     if !has_custom_role_id {
         conn.execute_batch("ALTER TABLE users ADD COLUMN custom_role_id TEXT")?;
+    }
+
+    // Migration: connection reason column (V09). Fresh databases get the
+    // column from the CREATE TABLE above; existing databases are ALTERed
+    // here, idempotent-guarded like the other column migrations.
+    if let Err(e) = conn.execute("ALTER TABLE session_history ADD COLUMN reason TEXT", []) {
+        if !e.to_string().contains("duplicate column") {
+            return Err(e);
+        }
     }
 
     // Migration: auth_sessions token → token_hash (v1.0.0 security hardening)
@@ -1953,6 +1963,28 @@ pub fn end_session_history(
     Ok(())
 }
 
+/// Attach the connection reason to a session-history row (V09). Called
+/// right after `insert_session_history`; the guarded WHERE keeps the
+/// first reason written (never overwrites a user-supplied one).
+pub fn update_session_history_reason(
+    db: &Db,
+    session_id: &str,
+    reason: &str,
+) -> rusqlite::Result<()> {
+    db_route!(
+        db,
+        update_session_history_reason_pool,
+        session_id.to_string(),
+        reason.to_string()
+    );
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE session_history SET reason = ?1 WHERE session_id = ?2 AND reason IS NULL",
+        params![reason, session_id],
+    )?;
+    Ok(())
+}
+
 // ── Session registry (enterprise HA) ──────────────────────────────
 
 /// One live-session record in the shared registry. Mirrors the in-memory
@@ -2301,7 +2333,7 @@ pub fn query_session_history(
     let query_sql = format!(
         "SELECT session_id, session_type, hostname, port, username, created_by,
                 address_book_entry, address_book_folder, entry_display_name,
-                started_at, ended_at, duration_secs, recording_file, status
+                reason, started_at, ended_at, duration_secs, recording_file, status
          FROM session_history WHERE {} ORDER BY started_at DESC LIMIT ?{} OFFSET ?{}",
         where_clause,
         idx,
@@ -2323,11 +2355,12 @@ pub fn query_session_history(
                 "address_book_entry": row.get::<_, Option<String>>(6)?,
                 "address_book_folder": row.get::<_, Option<String>>(7)?,
                 "entry_display_name": row.get::<_, Option<String>>(8)?,
-                "started_at": row.get::<_, String>(9)?,
-                "ended_at": row.get::<_, Option<String>>(10)?,
-                "duration_secs": row.get::<_, Option<i64>>(11)?,
-                "recording_file": row.get::<_, Option<String>>(12)?,
-                "status": row.get::<_, String>(13)?,
+                "reason": row.get::<_, Option<String>>(9)?,
+                "started_at": row.get::<_, String>(10)?,
+                "ended_at": row.get::<_, Option<String>>(11)?,
+                "duration_secs": row.get::<_, Option<i64>>(12)?,
+                "recording_file": row.get::<_, Option<String>>(13)?,
+                "status": row.get::<_, String>(14)?,
             }))
         })?
         .filter_map(|r| r.ok())
@@ -4854,11 +4887,12 @@ macro_rules! session_history_json_row {
             "address_book_entry": $row.get::<Option<String>>(6),
             "address_book_folder": $row.get::<Option<String>>(7),
             "entry_display_name": $row.get::<Option<String>>(8),
-            "started_at": $row.get::<String>(9),
-            "ended_at": $row.get::<Option<String>>(10),
-            "duration_secs": $row.get::<Option<i64>>(11),
-            "recording_file": $row.get::<Option<String>>(12),
-            "status": $row.get::<String>(13),
+            "reason": $row.get::<Option<String>>(9),
+            "started_at": $row.get::<String>(10),
+            "ended_at": $row.get::<Option<String>>(11),
+            "duration_secs": $row.get::<Option<i64>>(12),
+            "recording_file": $row.get::<Option<String>>(13),
+            "status": $row.get::<String>(14),
         })
     };
 }
@@ -6640,6 +6674,25 @@ async fn end_session_history_pool(
     Ok(())
 }
 
+async fn update_session_history_reason_pool(
+    pool: &DbPool,
+    session_id: String,
+    reason: String,
+) -> rusqlite::Result<()> {
+    pool_exec(
+        pool,
+        &format!(
+            "UPDATE session_history SET reason = {ph1} WHERE session_id = {ph2} AND reason IS NULL",
+            ph1 = ph1(pool),
+            ph2 = ph2(pool)
+        ),
+        &[Arg::Str(reason), Arg::Str(session_id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(())
+}
+
 // ── Session registry (enterprise HA) ───────────────────────────────
 
 /// Upsert differs only in the conflict clause: Postgres and SQLite share
@@ -7221,7 +7274,7 @@ async fn query_session_history_pool(
     let query_sql = format!(
         "SELECT session_id, session_type, hostname, port, username, created_by, \
                 address_book_entry, address_book_folder, entry_display_name, \
-                started_at, ended_at, duration_secs, recording_file, status \
+                reason, started_at, ended_at, duration_secs, recording_file, status \
          FROM session_history WHERE {where_clause} ORDER BY started_at DESC LIMIT {limit_ph} OFFSET {offset_ph}"
     );
     args.push(Arg::I64(limit as i64));

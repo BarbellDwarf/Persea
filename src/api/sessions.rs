@@ -10,7 +10,7 @@ use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
 use crate::rbac;
-use crate::session::CreateSessionRequest;
+use crate::session::{CreateSessionRequest, SessionStatus};
 use axum::{
     extract::{ConnectInfo, Path, Query, State},
     http::StatusCode,
@@ -89,6 +89,25 @@ pub async fn create_session(
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip = client_ip(&headers, addr.ip(), &proxies);
+
+    // V09: connection reason policy. `[session] reason_required = true`
+    // rejects creation without a reason (400 with a clear message); the
+    // reason itself is length-capped to keep the history column tidy.
+    let reason = req
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|r| !r.is_empty());
+    if manager.config().session_reason_required() && reason.is_none() {
+        return Err(AppError::Validation(
+            "a connection reason is required — pick one from the list or type a description".into(),
+        ));
+    }
+    if reason.is_some_and(|r| r.chars().count() > 500) {
+        return Err(AppError::Validation(
+            "connection reason must be 500 characters or fewer".into(),
+        ));
+    }
 
     let target = match req.session_type {
         crate::session::SessionType::Ssh => {
@@ -247,6 +266,59 @@ pub async fn list_sessions(
     Ok(Json(json!(sessions)))
 }
 
+/// Query parameters for `GET /api/sessions/recent`.
+#[derive(Deserialize, Default)]
+pub struct RecentSessionsQuery {
+    /// Maximum number of rows returned (clamped to 1..=50). Default 10.
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// `GET /api/sessions/recent`: the current user's most recent sessions
+/// from the session-history table (V10). Rows are ordered by start time
+/// descending; every row carries the stored status (`active`,
+/// `disconnected`, `completed`, `logged_out`, ...), the connection reason
+/// (V09) when one was given, and a `client_url` for live rows.
+///
+/// Scoped strictly to the caller's own history: `query_session_history`
+/// matches `created_by` with LIKE, so the wider page is pulled and then
+/// exact-filtered here — a like-named user's rows can neither displace
+/// nor leak into this list.
+pub async fn recent_connections(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Query(q): Query<RecentSessionsQuery>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let Some(Extension(id)) = identity else {
+        return Err(AppError::Forbidden(
+            "authentication required to list recent sessions".into(),
+        ));
+    };
+    let limit = q.limit.unwrap_or(10).clamp(1, 50) as usize;
+    let user = id.display_name().to_string();
+
+    let (rows, _) = tokio::task::spawn_blocking({
+        let user = user.clone();
+        move || db::query_session_history(&database, Some(&user), None, None, None, None, 200, 0)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(|e| AppError::Internal(format!("failed to query session history: {e}")))?;
+
+    let recent: Vec<serde_json::Value> = rows
+        .into_iter()
+        .filter(|r| r["created_by"].as_str() == Some(user.as_str()))
+        .take(limit)
+        .map(|mut r| {
+            let sid = r["session_id"].as_str().unwrap_or("").to_string();
+            r["client_url"] = serde_json::json!(format!("/client/{}", sid));
+            r
+        })
+        .collect();
+
+    Ok(Json(json!({ "recent": recent })))
+}
+
 /// `GET /api/sessions/{id}`: one session with its share URL redacted
 /// for non-owners. Returns `AppError::Session` (404) when the session
 /// does not exist or belongs to someone else.
@@ -331,6 +403,42 @@ pub async fn delete_session(
                 info.owner_instance.as_deref().unwrap_or("unknown")
             )));
         }
+    }
+
+    // V10 logout semantics: a user-initiated end is a LOGOUT, distinct
+    // from a normal end. Mark the session `logged_out` (a terminal status
+    // that can no longer be joined or resumed), clear its reconnect data
+    // (guacd stream + cancel token), and record the distinct history
+    // event BEFORE the manager tears the session down. The WebSocket
+    // teardown's own history write is guarded by `ended_at IS NULL`, so
+    // once the logout row is closed the teardown cannot overwrite it with
+    // "disconnected"/"completed".
+    let mut logout_meta: Option<(chrono::DateTime<chrono::Utc>, bool)> = None;
+    {
+        let sessions = manager.sessions.write().await;
+        if let Some(session_arc) = sessions.get(&id) {
+            let mut session = session_arc.lock().await;
+            if session.status != SessionStatus::LoggedOut {
+                let old_status = session.status.clone();
+                if old_status == SessionStatus::Active {
+                    crate::metrics::session_active_dec();
+                }
+                session.status = SessionStatus::LoggedOut;
+                session.guacd_stream = None;
+                // Terminal transition: publishes `session_ended` with the
+                // `logged_out` status and records ended_at.
+                manager.publish_transition(&old_status, &session);
+                logout_meta = Some((session.created_at, session.recording_enabled));
+            }
+        }
+    }
+    if let Some((created_at, recording)) = logout_meta {
+        let duration = (chrono::Utc::now() - created_at).num_seconds().max(0) as u64;
+        // Write BEFORE delete_session cancels the session: the cancel
+        // fires the WebSocket teardown, whose own history write is
+        // guarded by `ended_at IS NULL` — once the logout row is closed,
+        // the teardown cannot overwrite it with "disconnected"/"completed".
+        manager.end_session_history(id, "logged_out", duration, recording);
     }
 
     if manager.delete_session(id).await {

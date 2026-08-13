@@ -528,3 +528,16 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 
 # [desktop]
 # allow_bridge = false    # Env: PERSEA_DESKTOP__ALLOW_BRIDGE
+
+# [session]
+# Session behaviour.
+#
+# reason_required: when true, every session creation (the Connections page
+# connect flow and the Sessions page ad-hoc form) must carry a connection
+# reason (dropdown: Maintenance / Password rotation / Troubleshooting /
+# Incident response / Configuration change / Data migration / Performance
+# testing / Security audit / Other, plus free text). Creation without a
+# reason is rejected with a 400 and a clear message. Reasons are stored in
+# session_history.reason and shown on the Sessions page and in reports.
+# Default: false (reasons stay optional).
+# reason_required = false    # Env: PERSEA_SESSION__REASON_REQUIRED

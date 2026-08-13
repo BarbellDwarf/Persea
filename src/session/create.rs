@@ -88,6 +88,14 @@ impl SessionManager {
         check_session_type_enabled(&req.session_type, req.address_book_entry.as_deref(), toggle)?;
 
         let session_id = Uuid::new_v4();
+        // V09: connection reason, trimmed and normalized before any of
+        // `req`'s fields are moved into the session literal below.
+        let reason = req
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .map(str::to_string);
         // Protocol-specific params land in flattened sub-structs (see
         // CreateSessionRequest); bind them up-front for ergonomic access.
         let ssh = req.ssh.as_ref();
@@ -1260,8 +1268,9 @@ impl SessionManager {
             let address_book_entry = info.address_book_entry.clone();
             let address_book_folder = info.address_book_folder.clone();
             let entry_display_name = info.entry_display_name.clone();
+            let reason = reason.clone();
             tokio::task::spawn_blocking(move || {
-                crate::db::insert_session_history(
+                let _ = crate::db::insert_session_history(
                     &db,
                     &session_id_str,
                     &st,
@@ -1272,7 +1281,10 @@ impl SessionManager {
                     address_book_entry.as_deref(),
                     address_book_folder.as_deref(),
                     entry_display_name.as_deref(),
-                )
+                );
+                if let Some(r) = reason.as_deref() {
+                    let _ = crate::db::update_session_history_reason(&db, &session_id_str, r);
+                }
             })
             .await
             .ok();

@@ -705,10 +705,40 @@ pub struct Config {
     /// defaults.
     #[serde(default = "default_desktop_config")]
     pub desktop: Option<DesktopConfig>,
+    /// Session behaviour (`[session]`): connection reason enforcement.
+    /// Materialised in `default_toml()` so an absent section cannot
+    /// silently reset the defaults.
+    #[serde(default = "default_session_config")]
+    pub session: Option<SessionConfig>,
 }
 
 fn default_password_config() -> Option<PasswordConfig> {
     Some(PasswordConfig::default())
+}
+
+/// Session behaviour configuration (`[session]`). Materialised in
+/// `default_toml()` so an absent section cannot silently reset the
+/// defaults.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SessionConfig {
+    /// Require a connection reason on every session creation. When true,
+    /// `POST /api/sessions` (and the address-book connect flow) rejects
+    /// creation without a `reason` with a 400 and a clear message. Default
+    /// false — reasons stay optional.
+    #[serde(default = "default_false")]
+    pub reason_required: bool,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            reason_required: default_false(),
+        }
+    }
+}
+
+fn default_session_config() -> Option<SessionConfig> {
+    Some(SessionConfig::default())
 }
 
 /// Desktop shell bridge configuration (`[desktop]`).
@@ -1690,6 +1720,10 @@ fn default_toml() -> String {
     // cannot silently reset the default (allow_bridge = false).
     s.push_str("[desktop]\n");
     s.push_str(&format!("allow_bridge = {}\n", default_false()));
+    // [session] — session behaviour. Materialised so an absent section
+    // cannot silently reset the default (reason_required = false).
+    s.push_str("[session]\n");
+    s.push_str(&format!("reason_required = {}\n", default_false()));
     s
 }
 
@@ -1776,6 +1810,7 @@ impl Default for Config {
             storage: None,
             password: default_password_config(),
             desktop: default_desktop_config(),
+            session: default_session_config(),
         }
     }
 }
@@ -2053,6 +2088,15 @@ impl Config {
     /// Whether recording is globally enabled. Defaults to true.
     pub fn recording_enabled(&self) -> bool {
         self.recording.as_ref().is_none_or(|r| r.enabled)
+    }
+
+    /// Whether a connection reason is mandatory on session creation
+    /// (`[session] reason_required`). Defaults to false.
+    pub fn session_reason_required(&self) -> bool {
+        self.session
+            .as_ref()
+            .map(|s| s.reason_required)
+            .unwrap_or(false)
     }
 
     /// Get recording config (or synthesized default that respects legacy `recording_path`).

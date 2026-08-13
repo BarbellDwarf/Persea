@@ -692,6 +692,10 @@ pub struct ConnectRequest {
     /// RDP domain override.
     #[serde(default)]
     pub domain: Option<String>,
+    /// Connection reason (V09): why this session was started. Stored in
+    /// session history; required when `[session] reason_required` is on.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Body for `POST /api/ssh/probe-host-key`.
@@ -1489,6 +1493,7 @@ pub async fn ab_connect_entry(
         height: req.height,
         dpi: req.dpi,
         banner: req.banner.or(ab_entry.banner),
+        reason: req.reason,
         enable_drive: ab_entry.enable_drive,
         disable_copy: ab_entry.disable_copy,
         disable_paste: ab_entry.disable_paste,
@@ -2774,6 +2779,7 @@ pub async fn quick_connect(
             height: query.height,
             dpi: query.dpi,
             banner: ab_entry.banner,
+            reason: None,
             enable_drive: ab_entry.enable_drive,
             disable_copy: ab_entry.disable_copy,
             disable_paste: ab_entry.disable_paste,
