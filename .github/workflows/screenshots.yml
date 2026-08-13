@@ -7,7 +7,7 @@ name: Screenshots
 # Manual regen: Actions → Screenshots → Run workflow → a PR with the new
 # images appears if anything changed.
 #
-# PR runs: non-blocking warning job — boots the same instance, runs the
+# PR runs: non-blocking warning job - boots the same instance, runs the
 # specs, and warns with a diff summary instead of failing the check.
 on:
   workflow_dispatch:
@@ -101,7 +101,7 @@ jobs:
           encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
           EOF
           # display_date in the recordings table renders in the server's local
-          # timezone — pin UTC so the output matches the committed baselines.
+          # timezone - pin UTC so the output matches the committed baselines.
           TZ=UTC ./target/release/persea --config /tmp/persea-screenshots.toml &
           SERVER_PID=$!
           echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
@@ -168,13 +168,11 @@ jobs:
           body: |
             Regenerated from the seeded test instance (wayfinder/v1.2.0/S18).
 
-            Changes detected in `docs/screenshots/` — the committed baselines no
+            Changes detected in `docs/screenshots/` - the committed baselines no
             longer match a fresh capture. Review the diff; if the UI change was
             intentional, merge to update the docs.
-          labels:
-            - documentation
 
-      # PR runs: warn, don't fail — the check stays green (non-blocking).
+      # PR runs: warn, don't fail - the check stays green (non-blocking).
       - name: Warn about baseline drift
         if: github.event_name == 'pull_request' && steps.diff-check.outputs.changed == 'true'
         continue-on-error: true
