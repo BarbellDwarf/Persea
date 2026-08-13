@@ -476,6 +476,32 @@ sudo systemctl restart persea
 
 Config files are preserved across upgrades, and database tables migrate automatically at startup. In Docker, pull the new image and recreate the container with the same volumes.
 
+### Beta channel
+
+Rolling beta builds ship from the branch picked in the **Beta** workflow (Actions → Beta → Run workflow). Each build runs the standard CI checks first and publishes only if they pass:
+
+- Docker image `ghcr.io/persea-grove/persea:beta`
+- `.deb` and `.rpm` on the [beta pre-release](https://github.com/persea-grove/persea/releases/tag/beta)
+
+The beta is rolling: every build deletes the previous `beta` release with its assets and recreates it, so the tag always points at the newest build and old artifacts do not linger. Install like the stable packages:
+
+```bash
+# Docker
+docker pull ghcr.io/persea-grove/persea:beta
+
+# Debian 13
+curl -sL https://api.github.com/repos/persea-grove/persea/releases/tags/beta \
+  | sed -n 's/.*"browser_download_url": "\([^"]*_amd64\.deb\)".*/\1/p' \
+  | head -1 | xargs wget
+sudo apt install ./persea_*.deb
+
+# RHEL 10 (or compatible EL 10)
+sudo dnf install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+sudo dnf install -y ./persea-*.el10.x86_64.rpm
+```
+
+Versioning: the deb embeds the build's short commit sha (`X.Y.Z+g<sha>`), so every beta deb is a distinct package version and upgrades work with `apt`; the rpm keeps the plain `X.Y.Z` from Cargo.toml. Treat beta builds as test-only: they are overwritten without notice and have not gone through the stable release process.
+
 ### Security checklist
 
 - [ ] TLS terminates at persea (`[tls]` section) or at the reverse proxy — plain HTTP puts credentials and session tokens on the wire unencrypted. persea logs a warning at startup when no `[tls]` is configured and the listener is not HTTPS
