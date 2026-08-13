@@ -158,6 +158,8 @@ The printed key (it starts with `rgu_`) is shown only once; save it. It grants f
 
 persea serves HTTPS itself, but with a self-signed certificate. For production, terminate TLS at a reverse proxy with a real certificate, HAProxy here; nginx, Caddy, Apache, and Traefik examples are in [Reverse Proxies](reverse-proxies.md) (that page also covers a `%2F` path-encoding gotcha that affects nested folders on several proxies).
 
+Running persea on plain HTTP (no `[tls]` section) works for LAN development, but credentials and session tokens then travel unencrypted: persea logs a warning at startup, and production deployments should use `[tls]` or a TLS-terminating proxy.
+
 Install and configure HAProxy:
 
 ```bash
@@ -402,6 +404,7 @@ Config files are preserved across upgrades, and database tables migrate automati
 
 ### Security checklist
 
+- [ ] TLS terminates at persea (`[tls]` section) or at the reverse proxy — plain HTTP puts credentials and session tokens on the wire unencrypted. persea logs a warning at startup when no `[tls]` is configured and the listener is not HTTPS
 - [ ] The reverse proxy terminates TLS with a real certificate (not self-signed)
 - [ ] persea listens on loopback only (`listen_addr = "127.0.0.1:8089"`)
 - [ ] Network allowlists configured per protocol (sessions can't reach unintended hosts)

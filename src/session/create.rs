@@ -492,6 +492,7 @@ impl SessionManager {
                 let (pve_host, pve_port) = parse_host_port(&pve_url, 8006)?;
                 check_allowed_network(&pve_host, pve_port, &self.config.web_allowed_networks)
                     .await?;
+                reject_denied_target(&pve_host)?;
 
                 let vmid = proxmox.and_then(|s| s.proxmox_vmid).unwrap_or(0);
                 if vmid == 0 {
@@ -707,17 +708,7 @@ impl SessionManager {
                 check_allowed_network(url_host, url_port, &self.config.web_allowed_networks)
                     .await?;
 
-                if url_host == "169.254.169.254"
-                    || url_host.parse::<std::net::IpAddr>().is_ok_and(|ip| {
-                        "169.254.0.0/16"
-                            .parse::<ipnetwork::IpNetwork>()
-                            .is_ok_and(|net| net.contains(ip))
-                    })
-                {
-                    return Err(SessionError::ValidationError(
-                        "access to link-local / cloud metadata (169.254.0.0/16) is blocked".into(),
-                    ));
-                }
+                reject_denied_target(url_host)?;
 
                 tracing::info!(
                     session_id = %session_id,
@@ -1091,24 +1082,45 @@ impl SessionManager {
             let guacd_addr = self.config.guacd_addr.clone();
             let guacd_tls = self.guacd_tls.clone();
 
-            // Parallelise DNS validation with guacd connect
-            let ((), (stream, connection_id)) = tokio::try_join!(
-                async {
-                    if let Some((h, p, nets)) = pending_net_check.take() {
-                        check_allowed_network(&h, p, &nets)
+            // R05: hostname targets resolve DNS (allowlist validation) in
+            // parallel with the guacd connect — guacd resolves the
+            // hostname itself, so the DNS result does not gate the TCP
+            // connect. tokio::try_join! aborts the guacd future the
+            // moment the DNS/allowlist branch errors (dropping the TCP
+            // stream mid-connect), and returns the guacd error when the
+            // connect fails while DNS succeeds. IP targets need no DNS, so
+            // they keep the sequential path (no resolution to overlap).
+            let hostname_target = pending_net_check
+                .as_ref()
+                .is_some_and(|(h, _, _)| h.parse::<std::net::IpAddr>().is_err());
+
+            let (stream, connection_id) = if hostname_target {
+                let ((), (stream, connection_id)) = tokio::try_join!(
+                    async {
+                        if let Some((h, p, nets)) = pending_net_check.take() {
+                            check_allowed_network(&h, p, &nets)
+                                .await
+                                .map_err(|e| e.to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    async {
+                        guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
                             .await
                             .map_err(|e| e.to_string())
-                    } else {
-                        Ok(())
                     }
-                },
-                async {
-                    guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
-                        .await
-                        .map_err(|e| e.to_string())
+                )
+                .map_err(SessionError::GuacdConnection)?;
+                (stream, connection_id)
+            } else {
+                if let Some((h, p, nets)) = pending_net_check.take() {
+                    check_allowed_network(&h, p, &nets).await?;
                 }
-            )
-            .map_err(SessionError::GuacdConnection)?;
+                guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
+                    .await
+                    .map_err(|e| SessionError::GuacdConnection(e.to_string()))?
+            };
 
             tracing::info!(
                 session_id = %session_id,
@@ -1257,7 +1269,10 @@ impl SessionManager {
             }
         }
 
-        // Record in session history (non-blocking)
+        // Record in session history (non-blocking, fire-and-forget, R02):
+        // the insert runs on the blocking pool and the response is not
+        // held up waiting for it. Session history is audit-only — a late
+        // insert is harmless, so the JoinHandle is dropped un-awaited.
         if let Some(ref db) = self.db {
             let db = db.clone();
             let session_id_str = session_id.to_string();
@@ -1269,7 +1284,10 @@ impl SessionManager {
             let address_book_folder = info.address_book_folder.clone();
             let entry_display_name = info.entry_display_name.clone();
             let reason = reason.clone();
-            tokio::task::spawn_blocking(move || {
+            // Explicit drop: detach the blocking task (fire-and-forget).
+            // Dropping the JoinHandle does not cancel spawn_blocking work;
+            // the insert runs to completion on the blocking pool.
+            drop(tokio::task::spawn_blocking(move || {
                 let _ = crate::db::insert_session_history(
                     &db,
                     &session_id_str,
@@ -1285,9 +1303,7 @@ impl SessionManager {
                 if let Some(r) = reason.as_deref() {
                     let _ = crate::db::update_session_history_reason(&db, &session_id_str, r);
                 }
-            })
-            .await
-            .ok();
+            }));
         }
 
         // Spawn timeout task for pending sessions
@@ -1464,6 +1480,35 @@ fn parse_host_port(input: &str, default_port: u16) -> Result<(String, u16), Sess
         .to_string();
     let port = parsed.port().unwrap_or(default_port);
     Ok((host, port))
+}
+
+/// Link-local / cloud-metadata networks denied as session targets
+/// regardless of the configured allowlist (S06, S02). 169.254.169.254 is
+/// the AWS/GCP/Azure metadata endpoint; the deny covers the whole
+/// 169.254.0.0/16 link-local block, strictly stronger than the
+/// ticket's 169.254.169.254/32. Applied AFTER the allowlist check, as
+/// defense in depth for when operators widen the allowlist (e.g. to
+/// 0.0.0.0/0).
+const DENIED_TARGET_NETWORKS: &[&str] = &["169.254.0.0/16"];
+
+/// Reject hosts inside the hardcoded deny list. Only direct IP targets
+/// are matched (a hostname's resolved addresses are checked against the
+/// allowlist by [`check_allowed_network`]).
+fn reject_denied_target(host: &str) -> Result<(), SessionError> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        for cidr in DENIED_TARGET_NETWORKS {
+            if cidr
+                .parse::<ipnetwork::IpNetwork>()
+                .is_ok_and(|net| net.contains(ip))
+            {
+                return Err(SessionError::ValidationError(format!(
+                    "access to link-local / cloud metadata network {} is blocked",
+                    cidr
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Check that a host resolves to an IP within the allowed CIDR networks.

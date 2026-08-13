@@ -133,6 +133,13 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+/// Fast-path threshold: buffers at or above this size always run the full
+/// scan. Small buffers are the SSH terminal common case (keystrokes, short
+/// text), where the structural walk below avoids the byte-by-byte element
+/// walk; large buffers are RDP display data (JPEG tiles), where the full
+/// scan stays authoritative.
+const BOUNDARY_FAST_PATH_MAX: usize = 1024;
+
 /// Find the byte offset just past the last complete Guacamole instruction in
 /// `buf`. Returns `None` if no complete instruction is present.
 ///
@@ -144,6 +151,24 @@ impl std::error::Error for ParseError {}
 /// On the first malformed byte it returns the boundary discovered so far
 /// rather than scanning the rest of the buffer.
 pub fn last_instruction_boundary(buf: &[u8]) -> Option<usize> {
+    // Fast path: small buffers ending in `;` (the overwhelmingly common
+    // case of one complete SSH terminal instruction) skip the per-byte
+    // element walk. The length prefixes let the structural walk skip each
+    // element's data in O(1), so complete small instructions are resolved
+    // without touching their bytes. The walk only claims a boundary when
+    // the buffer is pure ASCII (length prefixes count characters, not
+    // bytes) and the declared lengths account for the buffer exactly —
+    // a truncated tail (element whose declared length runs past the end,
+    // or a trailing `;` that is really data inside an unfinished element)
+    // always falls through to the full scan below.
+    if buf.len() < BOUNDARY_FAST_PATH_MAX
+        && buf.last() == Some(&b';')
+        && buf.is_ascii()
+        && fast_instruction_boundary(buf).is_some()
+    {
+        return Some(buf.len());
+    }
+
     let mut last_end: Option<usize> = None;
     let mut pos = 0usize;
 
@@ -215,6 +240,52 @@ pub fn last_instruction_boundary(buf: &[u8]) -> Option<usize> {
         // Falls through on `;`: continue 'instructions to scan more.
         if pos >= buf.len() {
             return last_end;
+        }
+    }
+}
+
+/// Structural walk used by the [`last_instruction_boundary`] fast path.
+///
+/// For a pure-ASCII buffer, skips each element's data via its declared
+/// length (no byte-by-byte scan) and requires the instruction sequence to
+/// end exactly at the final `;`. Returns `Some(buf.len())` when the buffer
+/// is exactly one or more complete instructions; `None` for anything
+/// truncated or malformed (the caller then runs the full scan).
+///
+/// For ASCII input this walk is equivalent to the full scan: lengths are
+/// in characters and characters are one byte, so the arithmetic lands on
+/// the same separators. Incomplete input never satisfies the length
+/// accounting (the declared lengths run past the end), so a trailing `;`
+/// inside an unfinished element can never be mistaken for a terminator.
+fn fast_instruction_boundary(buf: &[u8]) -> Option<usize> {
+    let mut pos = 0usize;
+    loop {
+        let len_start = pos;
+        while pos < buf.len() && buf[pos].is_ascii_digit() {
+            pos += 1;
+        }
+        if pos == len_start || pos >= buf.len() || buf[pos] != b'.' {
+            return None;
+        }
+        let len: usize = std::str::from_utf8(&buf[len_start..pos])
+            .ok()?
+            .parse()
+            .ok()?;
+        pos += 1; // skip '.'
+        pos = pos.checked_add(len)?; // skip element data (ASCII: bytes == chars)
+        if pos >= buf.len() {
+            return None; // declared length runs past the end — truncated
+        }
+        match buf[pos] {
+            b',' => pos += 1,
+            b';' => {
+                pos += 1;
+                if pos == buf.len() {
+                    return Some(buf.len());
+                }
+                // More instructions follow; keep walking.
+            }
+            _ => return None,
         }
     }
 }
