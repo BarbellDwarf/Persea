@@ -43,10 +43,15 @@ jobs:
       - name: Install build deps for guacd (fork build) and demo sshd
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential autoconf automake libtool pkg-config \
-            uuid-dev freerdp3-dev libvncserver-dev libwebsockets-dev \
-            libpulse-dev libssl-dev libavcodec-dev libavutil-dev \
+          sudo apt-get install -y --no-install-recommends \
+            build-essential autoconf automake libtool pkg-config make \
+            curl ca-certificates gcc g++ \
+            libcairo2-dev libjpeg-dev libpng-dev libwebp-dev \
+            libssh2-1-dev libssl-dev libvncserver-dev \
+            libpango1.0-dev libpulse-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libtelnet-dev libwebsockets-dev \
+            uuid-dev freerdp3-dev \
             openssh-server
 
       - name: Build guacd from the persea fork (same recipe as release.yml)
