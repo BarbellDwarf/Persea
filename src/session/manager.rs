@@ -1122,8 +1122,10 @@ impl SessionManager {
     /// Publish a status transition: exactly one event per real transition,
     /// nothing when the status did not change (duplicate notify). Terminal
     /// statuses publish `session_ended` and record `ended_at`; everything
-    /// else publishes `status_changed`.
-    fn publish_transition(&self, old: &SessionStatus, session: &Session) {
+    /// else publishes `status_changed`. `pub(crate)` so the session
+    /// creation path (create.rs) can publish the pending → expired
+    /// transition from its timeout task.
+    pub(crate) fn publish_transition(&self, old: &SessionStatus, session: &Session) {
         if old == &session.status {
             return;
         }
