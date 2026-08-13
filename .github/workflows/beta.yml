@@ -186,11 +186,12 @@ jobs:
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           # UBI10 has no git, so checkout lands via the REST tarball (no .git);
-          # tar the workspace instead of git archive.
-          tar -czf "persea-${VERSION}.tar.gz" --transform "s,^\./,persea-${VERSION}/," \
-            --exclude="./target" --exclude="./persea-${VERSION}.tar.gz" -C "$GITHUB_WORKSPACE" .
+          # tar the workspace instead of git archive. Output goes to /tmp so
+          # the archive never contains itself.
+          tar -czf "/tmp/persea-${VERSION}.tar.gz" --transform "s,^\./,persea-${VERSION}/," \
+            --exclude="./target" -C "$GITHUB_WORKSPACE" .
           mkdir -p "$HOME/rpmbuild"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
-          cp "persea-${VERSION}.tar.gz" "$HOME/rpmbuild/SOURCES/"
+          cp "/tmp/persea-${VERSION}.tar.gz" "$HOME/rpmbuild/SOURCES/"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
       - name: Build RPM
         run: |
