@@ -10,6 +10,10 @@
 //! 3. The request-time page gates 404 when a toggle is off: the real
 //!    recordings/tunnels page handlers self-gate via `read_toggle`, and
 //!    the tokens pages are gated by the `feature_gate` middleware.
+//! 4. The admin settings page renders with the five-section submenu bar
+//!    (Session / Features / Storage / Security / Updates), keeps every
+//!    toggle and field, and stays CSP-clean (nonce'd script, no inline
+//!    handlers).
 //!
 //! The handlers and the settings module live in the binary crate's module
 //! graph, so they are included directly (`#[path]`) with crate-root shims
@@ -496,5 +500,132 @@ async fn gated_pages_render_when_toggles_are_on_or_absent() {
     ] {
         let resp = router.clone().oneshot(page_get(path)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK, "path {path}");
+    }
+}
+
+// ── 4. Admin settings page render smoke tests (tab structure) ─────────────
+
+async fn render_settings_page() -> String {
+    render_page("pages/admin/settings.html", FeatureFlags::default()).await
+}
+
+#[tokio::test]
+async fn settings_page_renders_five_section_tabs() {
+    let html = render_settings_page().await;
+    assert!(html.contains("role=\"tablist\""), "tablist must render");
+    assert_eq!(html.matches("role=\"tab\"").count(), 5, "exactly five tabs");
+    for tab in ["Session", "Features", "Storage", "Security", "Updates"] {
+        assert!(
+            html.contains(&format!(">{tab}</button>")),
+            "tab {tab} must render"
+        );
+    }
+    // Exactly one tab is selected: the default Session tab. (The style
+    // block also contains `[aria-selected="true"]`, so assert the false
+    // count and the session tab markup directly.)
+    assert_eq!(
+        html.matches("aria-selected=\"false\"").count(),
+        4,
+        "the other four tabs must be unselected"
+    );
+    assert!(
+        html.contains("id=\"tab-session\" aria-controls=\"panel-session\" aria-selected=\"true\""),
+        "session tab must be the selected one"
+    );
+}
+
+#[tokio::test]
+async fn settings_page_defaults_to_session_panel_and_hides_the_rest() {
+    let html = render_settings_page().await;
+    for panel in ["session", "features", "storage", "security", "updates"] {
+        assert!(
+            html.contains(&format!("id=\"panel-{panel}\"")),
+            "panel {panel} must render"
+        );
+    }
+    // Only the Session panel is visible on load; the other four start hidden.
+    assert!(
+        !html.contains("id=\"panel-session\" hidden"),
+        "session panel must be visible by default"
+    );
+    assert_eq!(
+        html.matches("tabindex=\"-1\" hidden").count(),
+        4,
+        "the four non-default panels must start hidden"
+    );
+}
+
+#[tokio::test]
+async fn settings_page_keeps_every_toggle_and_field() {
+    let html = render_settings_page().await;
+    let toggles = [
+        "enable_rdp",
+        "enable_ssh_tunnels",
+        "enable_api_keys",
+        "enable_recordings",
+        "enable_web_sessions",
+        "enable_spice",
+        "enable_proxmox",
+        "enable_vmware",
+        "enable_vdi",
+        "enable_file_transfer",
+        "desktop_kiosk",
+        "desktop_transfers",
+        "desktop_pairing",
+        "vault_enabled",
+        "db_only_mode",
+    ];
+    for toggle in toggles {
+        assert!(
+            html.contains(&format!("id=\"{toggle}\"")),
+            "toggle {toggle} must render"
+        );
+        assert!(
+            html.contains(&format!("id=\"{toggle}-hidden\"")),
+            "hidden value field for {toggle} must render"
+        );
+    }
+    for name in [
+        "listen_addr",
+        "guacd_addr",
+        "tls_cert_path",
+        "tls_key_path",
+        "session_max_duration_secs",
+        "max_concurrent_sessions",
+        "session_history_retention_days",
+        "custom_fields",
+    ] {
+        assert!(
+            html.contains(&format!("name=\"{name}\"")),
+            "field {name} must render"
+        );
+    }
+    // The collapsible Features group and the custom-fields editor stay wired.
+    assert!(
+        html.contains("id=\"features-group\""),
+        "features group must render"
+    );
+    assert!(
+        html.contains("id=\"custom-fields-editor\""),
+        "custom-fields editor must render"
+    );
+    assert!(
+        html.contains("id=\"add-custom-field\""),
+        "add-field button must render"
+    );
+}
+
+#[tokio::test]
+async fn settings_page_is_csp_clean() {
+    let html = render_settings_page().await;
+    assert!(
+        html.contains("nonce=\"test\""),
+        "script block must carry the CSP nonce"
+    );
+    for attr in ["onclick=", "onchange=", "onsubmit=", "onkeydown="] {
+        assert!(
+            !html.contains(attr),
+            "inline handler {attr} must not appear"
+        );
     }
 }
