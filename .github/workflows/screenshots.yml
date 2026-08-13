@@ -171,7 +171,8 @@ jobs:
             Changes detected in `docs/screenshots/` — the committed baselines no
             longer match a fresh capture. Review the diff; if the UI change was
             intentional, merge to update the docs.
-          labels: [documentation]
+          labels:
+            - documentation
 
       # PR runs: warn, don't fail — the check stays green (non-blocking).
       - name: Warn about baseline drift
