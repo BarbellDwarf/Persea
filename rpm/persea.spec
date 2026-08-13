@@ -46,7 +46,7 @@ Version:        %{persea_version}
 Release:        1%{?dist}
 Summary:        Lightweight Rust replacement for Apache Guacamole client
 License:        Apache-2.0
-URL:            https://github.com/BarbellDwarf/persea
+URL:            https://github.com/persea-grove/persea
 Source0:        %{name}-%{persea_version}.tar.gz
 
 # ── Build requirements ──────────────────────────────────────────────────
