@@ -101,7 +101,7 @@ Requires:       ca-certificates
 Requires:       libvncserver
 Requires:       libtelnet
 Requires:       libwebsockets
-Requires:       ffmpeg-free-libs
+Requires:       ffmpeg-free
 # SELinux module install (%post loads the policy; semanage relabels ports)
 Requires:       policycoreutils
 Requires:       policycoreutils-python-utils
