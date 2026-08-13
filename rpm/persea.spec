@@ -222,6 +222,11 @@ install -m 644 rpm/config.toml.default %{buildroot}%{_prefix}/config.toml
 # ldconfig drop-in so guacd can find its libs
 echo "%{_prefix}/lib" > %{buildroot}%{_sysconfdir}/ld.so.conf.d/persea.conf
 
+# guacd requires /etc/guacamole/guacd.conf to exist (aborts otherwise);
+# the unit passes all flags, this only mirrors the binding.
+install -d %{buildroot}/etc/guacamole
+install -m 644 rpm/guacd.conf %{buildroot}/etc/guacamole/guacd.conf
+
 # Systemd units
 install -m 644 rpm/persea.service %{buildroot}%{_unitdir}/persea.service
 install -m 644 rpm/persea-guacd.service %{buildroot}%{_unitdir}/persea-guacd.service
@@ -280,5 +285,6 @@ fi
 %{_unitdir}/persea.service
 %{_unitdir}/persea-guacd.service
 %{_sysconfdir}/ld.so.conf.d/persea.conf
+/etc/guacamole/guacd.conf
 %{_libexecdir}/persea/post.sh
 /usr/share/selinux/targeted/persea.pp
