@@ -1,0 +1,181 @@
+name: Screenshots
+
+# Regenerates the canonical web-UI screenshots (docs/screenshots/*.png) from
+# a seeded test instance and, on manual runs, opens a PR when the output
+# differs from the committed baselines (wayfinder/v1.2.0/S18).
+#
+# Manual regen: Actions → Screenshots → Run workflow → a PR with the new
+# images appears if anything changed.
+#
+# PR runs: non-blocking warning job — boots the same instance, runs the
+# specs, and warns with a diff summary instead of failing the check.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'templates/**'
+      - 'static/**'
+      - 'tests/playwright/screenshots/**'
+      - 'docs/screenshots/**'
+      - 'README.md'
+      - 'docs/deployment-guide.md'
+      - '.github/workflows/screenshots.yml'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  regenerate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          rustflags: ""
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install guacd (distro build, SSH support) and demo sshd
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y guacamole-server openssh-server
+          sudo systemctl start guacd
+          for i in $(seq 1 30); do
+            if bash -c 'echo > /dev/tcp/127.0.0.1/4822' 2>/dev/null; then
+              echo "guacd ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Set up demo sshd (fixed prompt, deterministic terminal)
+        run: |
+          sudo useradd -m -s /bin/bash persea-demo
+          sudo -u persea-demo mkdir -p /home/persea-demo/.ssh
+          sudo -u persea-demo ssh-keygen -q -t ed25519 -N '' -f /tmp/demo_key
+          sudo -u persea-demo cp /tmp/demo_key.pub /home/persea-demo/.ssh/authorized_keys
+          sudo -u persea-demo chmod 600 /home/persea-demo/.ssh/authorized_keys
+          # The spec (running as the runner user) reads the private key.
+          sudo chmod 644 /tmp/demo_key
+          cat > /tmp/sshd-demo.conf <<'EOF'
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey /etc/ssh/ssh_host_ed25519_key
+          PidFile /tmp/sshd-demo.pid
+          UsePAM no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitRootLogin no
+          StrictModes no
+          PrintMotd no
+          PrintLastLog no
+          AllowTcpForwarding no
+          LogLevel ERROR
+          ForceCommand /bin/bash --norc --noprofile -c 'export PS1="persea-demo@local> "; export TERM=xterm-256color; clear; exec /bin/bash --norc --noprofile -i'
+          EOF
+          sudo /usr/sbin/sshd -f /tmp/sshd-demo.conf -D -e > /tmp/sshd-demo.log 2>&1 &
+          sleep 2
+
+      - name: Build persea
+        run: cargo build --release
+
+      - name: Start the seeded test instance
+        run: |
+          cat > /tmp/persea-screenshots.toml <<'EOF'
+          listen_addr = "127.0.0.1:8089"
+          guacd_addr = "127.0.0.1:4822"
+          db_path = "/tmp/persea-screenshots.db"
+          secure_cookies = false
+
+          [recording]
+          path = "/tmp/persea-screenshots-recordings"
+          enabled = true
+          encrypt_at_rest = false
+
+          [storage]
+          encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+          EOF
+          # display_date in the recordings table renders in the server's local
+          # timezone — pin UTC so the output matches the committed baselines.
+          TZ=UTC ./target/release/persea --config /tmp/persea-screenshots.toml &
+          SERVER_PID=$!
+          echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8089/api/health >/dev/null 2>&1; then
+              echo "server healthy after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Create the screenshot admin key
+        id: admin-key
+        run: |
+          KEY=$(./target/release/persea --config /tmp/persea-screenshots.toml add-admin --name screenshots-admin | grep "API Key:" | awk '{print $3}')
+          [ -n "$KEY" ] || { echo "failed to create admin key" >&2; exit 1; }
+          echo "ADMIN_API_KEY=$KEY" >> "$GITHUB_ENV"
+
+      - name: Install Playwright
+        working-directory: tests/playwright
+        run: |
+          npm ci
+          npx playwright install chromium
+
+      - name: Run the screenshot specs
+        working-directory: tests/playwright
+        env:
+          BASE_URL: http://127.0.0.1:8089
+          ADMIN_API_KEY: ${{ env.ADMIN_API_KEY }}
+          SHOT_DB: /tmp/persea-screenshots.db
+          SHOT_RECORDING_DIR: /tmp/persea-screenshots-recordings
+          SHOT_SSH_KEY: /tmp/demo_key
+          SHOT_SSH_HOST: 127.0.0.1
+          SHOT_SSH_PORT: "2222"
+          SHOT_SSH_USER: persea-demo
+        run: npx playwright test --config screenshots/playwright.config.ts
+
+      - name: Stop the test instance
+        run: kill "$SERVER_PID" 2>/dev/null || true
+
+      - name: Check for baseline changes
+        id: diff-check
+        run: |
+          if git diff --quiet -- docs/screenshots; then
+            echo "screenshots match the committed baselines"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Regenerated screenshots differ from the committed baselines:" | tee -a "$GITHUB_STEP_SUMMARY"
+            git diff --stat -- docs/screenshots | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Manual runs: open a PR with the new baselines. GITHUB_TOKEN-created
+      # PRs do not re-trigger workflows, so this cannot loop.
+      - name: Open regeneration PR
+        if: github.event_name == 'workflow_dispatch' && steps.diff-check.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          add-paths: docs/screenshots
+          branch: screenshots/regen
+          delete-branch: true
+          commit-message: "chore(screenshots): regenerate canonical web UI screenshots"
+          title: "chore(screenshots): refresh canonical web UI screenshots"
+          body: |
+            Regenerated from the seeded test instance (wayfinder/v1.2.0/S18).
+
+            Changes detected in `docs/screenshots/` — the committed baselines no
+            longer match a fresh capture. Review the diff; if the UI change was
+            intentional, merge to update the docs.
+          labels: [documentation]
+
+      # PR runs: warn, don't fail — the check stays green (non-blocking).
+      - name: Warn about baseline drift
+        if: github.event_name == 'pull_request' && steps.diff-check.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          echo "::warning::Screenshots differ from the committed baselines. Run the Screenshots workflow (workflow_dispatch) to regenerate and open a PR with the new images."

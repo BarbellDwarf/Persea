@@ -60,6 +60,11 @@ research/
 
 # Screenshots (local only)
 screenshots/
+# ...except the committed canonical UI screenshot suite + baselines (S18)
+!tests/playwright/screenshots/
+!tests/playwright/screenshots/**
+!docs/screenshots/
+!docs/screenshots/**
 
 # Benchmarks (local only)
 bench/

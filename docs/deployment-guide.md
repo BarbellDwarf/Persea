@@ -64,7 +64,7 @@ Open the web interface in a browser (for the package and Docker installs above: 
 - **Database URL**: leave it empty to use the local SQLite file (`/opt/persea/data/persea.db`), which is fine for most deployments. Enter a `postgres://`, `mysql://`, or `sqlite://` URL to store everything in a managed database instead. persea connects, creates the tables, and creates the admin straight in that backend: there is no SQLite intermediate step. The URL is written into the config, so it applies to every later start.
 - **guacd mode**: *Embedded* for guacd on the same machine (the normal setup), *External* if guacd runs on another host.
 
-![Login page](assets/screenshots/login.png)
+![Login page](screenshots/login.png)
 
 ### Databases
 
@@ -269,8 +269,6 @@ persea must be restarted after the change. The login page then shows a sign-in b
 
 **Group-to-role mapping.** Roles are assigned per user, but you can map SSO groups to roles automatically: on the Admin → Users page or via the `POST /api/admin/group-mappings` API endpoint. Users arriving from a mapped group get that role on login. (New OIDC users default to *operator* unless a mapping applies, changeable with the `default_role` OIDC setting.)
 
-![Admin users page](assets/screenshots/admin-users.png)
-
 Provider-specific walkthroughs (Authentik, JumpCloud, Entra ID, …) are in [Integrations](integrations.md). SAML, LDAP, and RADIUS are available as alternatives under `[auth]`: see the [Configuration guide](configuration.md).
 
 ### Remove the bootstrap API key
@@ -282,7 +280,9 @@ sudo -u persea /opt/persea/bin/persea --config /opt/persea/config.toml list-admi
 sudo -u persea /opt/persea/bin/persea --config /opt/persea/config.toml delete-admin --name admin
 ```
 
-For programmatic API access later, create scoped [user API tokens](roles-and-access-control.md) instead.
+For programmatic API access later, create scoped [user API tokens](roles-and-access-control.md) instead. They are managed per-user on the Account → Tokens page:
+
+![API tokens page](screenshots/account-tokens.png)
 
 ## Step 6: Connections (database or Vault)
 
@@ -316,7 +316,7 @@ sudo systemctl restart persea
 
 Check the persea logs for `Vault: authenticated via AppRole` to confirm. The full Vault walkthrough is in [Integrations](integrations.md). Moving an existing Vault-backed address book into the database is covered in [Migration](migration.md).
 
-![Connections page](assets/screenshots/connections.png)
+![Connections page](screenshots/connections.png)
 
 ## Step 7 (optional): gate the login page with Knocknoc
 
@@ -367,7 +367,15 @@ rotation_interval_secs = 300 # check every 5 minutes
 
 (There is a legacy top-level `recording_path` key; move its value into `[recording]` as above; the old key prints a deprecation warning at startup.)
 
-![Sessions page with the live session list](assets/screenshots/sessions.png)
+![Sessions page with the live session list](screenshots/sessions.png)
+
+Every recording replays in the browser with a seekable player:
+
+![Recordings player](screenshots/recordings-player.png)
+
+A live SSH session in the client page:
+
+![Live SSH session in the client page](screenshots/ssh-session.png)
 
 ## Day-to-day operations
 
@@ -377,8 +385,6 @@ rotation_interval_secs = 300 # check every 5 minutes
 - **Metrics**: `GET /metrics` exports Prometheus metrics.
 - **System status**: `GET /api/system/status` (admin only) reports version, uptime, and active session count.
 - **Reports**: session history, top connections, and top users are on the Reports page (admin) and via the reports API.
-
-![Admin settings page](assets/screenshots/admin-settings.png)
 
 ### Backups
 
@@ -416,9 +422,15 @@ Config files are preserved across upgrades, and database tables migrate automati
 - [ ] `/opt/persea/env` is `chmod 600`
 - [ ] `trusted_proxies` matches the reverse proxy's address
 
+The security-relevant toggles (protocol lockdown, desktop shell, file transfer, recordings) live on the Admin → Settings page:
+
+![Admin settings page](screenshots/admin-settings.png)
+
 ## A note on the audit log
 
 The audit log chains every event into the previous one with a hash, so any change to old entries is detectable. That makes it **tamper-evident, not tamper-proof**: someone with database write access could rewrite the chain from a point of tampering onward. There is no external signature or timestamp authority.
+
+![Audit log page](screenshots/admin-audit.png)
 
 If the audit log matters for compliance, compensate with:
 

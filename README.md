@@ -9,6 +9,12 @@ A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Prox
 
 Single binary plus guacd. No Java, no Tomcat.
 
+## Screenshots
+
+| | | |
+|---|---|---|
+| ![Login page](docs/screenshots/login.png) | ![Connections page with folder tree and entry details](docs/screenshots/connections.png) | ![Sessions page with session history](docs/screenshots/sessions.png) |
+
 ## Why "Persea"?
 
 Someone will ask why the name Persea. Fair question. Guacamole is a fine name for open source software, but pitching it to enterprise leadership runs into the problem that it sounds like a dip. I wanted something that felt more professional for client-facing use.
