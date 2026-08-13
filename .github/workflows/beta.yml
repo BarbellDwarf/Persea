@@ -200,10 +200,16 @@ jobs:
             --define "persea_version $VERSION" \
             rpm/persea.spec
       - name: Upload RPM
+        run: |
+          # The runner's upload step cannot see $HOME/rpmbuild (container
+          # path /github/home); stage the RPM into the shared workspace.
+          mkdir -p "$GITHUB_WORKSPACE/rpm-artifacts"
+          cp "$HOME/rpmbuild"/RPMS/*/*.rpm "$GITHUB_WORKSPACE/rpm-artifacts/"
+      - name: Upload RPM
         uses: actions/upload-artifact@v7
         with:
           name: rpm-el10
-          path: "$HOME/rpmbuild/RPMS/**/*.rpm"
+          path: "rpm-artifacts/**/*.rpm"
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
