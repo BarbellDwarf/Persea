@@ -171,7 +171,7 @@
 
         /* ── Status bar ──────────────────────────────────────── */
         #status {
-            position: fixed; top: var(--toolbar-height); left: 0; right: 0;
+            position: fixed; top: calc(var(--toolbar-height) + 34px); left: 0; right: 0;
             padding: 6px 16px;
             background: rgba(0, 0, 0, 0.8); color: var(--text-muted);
             font-family: monospace; font-size: 12px;
@@ -216,6 +216,83 @@
         .btn-secondary:hover { background: var(--border); }
 
         /* ── Theme from localStorage ─────────────────────────── */
+
+        /* ── Session tab bar (V03) ────────────────────────────── */
+        #tab-bar {
+            position: fixed; top: var(--toolbar-height); left: 0; right: 0;
+            height: 34px;
+            background: rgba(10, 14, 26, 0.95);
+            border-bottom: 1px solid var(--border);
+            z-index: 1450;
+            display: flex; align-items: stretch;
+            overflow-x: auto; overflow-y: hidden;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            font-size: 12px;
+        }
+        #tab-bar::-webkit-scrollbar { height: 4px; }
+        #tab-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+        #tab-list { display: flex; align-items: stretch; min-width: 0; }
+        .tab-item {
+            display: flex; align-items: center; gap: 6px;
+            padding: 0 8px 0 10px; max-width: 200px; min-width: 0;
+            border-right: 1px solid var(--border);
+            color: var(--text-muted); cursor: pointer;
+            user-select: none; white-space: nowrap;
+            background: transparent;
+        }
+        .tab-item:hover { background: var(--input); color: var(--text); }
+        .tab-item.active { background: var(--surface); color: var(--text); box-shadow: inset 0 2px 0 var(--accent); }
+        .tab-item .tab-name { overflow: hidden; text-overflow: ellipsis; }
+        .tab-item .tb-badge { font-size: 10px; padding: 1px 6px; }
+        .tab-close {
+            background: none; border: none; color: var(--text-dim);
+            font-size: 14px; line-height: 1; padding: 0 2px; cursor: pointer;
+            font-family: inherit; border-radius: 3px; flex-shrink: 0;
+        }
+        .tab-close:hover { color: var(--primary); background: rgba(233, 69, 96, 0.12); }
+
+        /* ── Session switcher overlay (Ctrl+K, V03) ───────────── */
+        #session-switcher {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0, 0, 0, 0.65); z-index: 2800;
+            justify-content: center; align-items: flex-start;
+            padding-top: 12vh;
+        }
+        #session-switcher.visible { display: flex; }
+        .switcher-box {
+            width: min(520px, 90vw);
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; overflow: hidden;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+        }
+        #switcher-input {
+            width: 100%; box-sizing: border-box;
+            background: var(--input); border: none; border-bottom: 1px solid var(--border);
+            color: var(--text); font-size: 14px; padding: 12px 14px; outline: none;
+        }
+        #switcher-hint {
+            padding: 8px 14px; font-size: 11px; color: var(--text-dim);
+            border-bottom: 1px solid var(--border); text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        #switcher-list { max-height: 46vh; overflow-y: auto; padding: 4px 0; }
+        .sw-item {
+            display: flex; align-items: center; gap: 10px;
+            padding: 9px 14px; cursor: pointer; color: var(--text-secondary);
+            font-size: 13px;
+        }
+        .sw-item:hover, .sw-item.active { background: var(--input); color: var(--text); }
+        .sw-item .tb-badge { font-size: 10px; padding: 1px 6px; flex-shrink: 0; }
+        .sw-item .sw-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .sw-item .sw-host { color: var(--text-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+        .sw-empty { padding: 18px 14px; color: var(--text-dim); text-align: center; font-size: 13px; }
+
+        /* Desktop mode (bridge): the shell has its own tabs + Ctrl+K. */
+        .desktop-hidden { display: none !important; }
+        body.toolbar-hidden #tab-bar { top: 0; }
+        body.toolbar-hidden #status { top: 34px; }
+        body.desktop-mode #status { top: var(--toolbar-height); }
 
         /* ── Mobile responsive ──────────────────────────────── */
         @media (max-width: 768px) {
@@ -334,13 +411,27 @@
                     </label>
                 </div>
             </div>
-            <button class="tb-btn danger" id="btn-logout" title="Log Out — destroy session" aria-label="Log out and destroy session">
+            <button class="tb-btn danger" id="btn-logout" title="Log Out — terminate the session and clear reconnect data" aria-label="Log out and destroy session">
                 <svg viewBox="0 0 24 24"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>
                 <span>Log Out</span>
             </button>
-            <button class="tb-btn" id="btn-disconnect" title="Disconnect — end the remote session" aria-label="Disconnect session">
+            <button class="tb-btn" id="btn-disconnect" title="Disconnect — keep the session for later reconnection" aria-label="Disconnect session">
                 <svg viewBox="0 0 24 24"><path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.13.94-4.05 2.42-5.36L6 5.17A8.94 8.94 0 0 0 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9a8.94 8.94 0 0 0-3.17-6.83z"/></svg>
             </button>
+        </div>
+    </div>
+
+    <!-- ── Session tab bar (V03) ─────────────────────────────── -->
+    <div id="tab-bar" role="tablist" aria-label="Active sessions">
+        <div id="tab-list"></div>
+    </div>
+
+    <!-- ── Session switcher overlay (Ctrl+K, V03) ────────────── -->
+    <div id="session-switcher" role="dialog" aria-modal="true" aria-label="Switch session">
+        <div class="switcher-box">
+            <input id="switcher-input" type="text" placeholder="Filter sessions by name, host or type..." autocomplete="off">
+            <div id="switcher-hint">Enter to switch · Esc to close</div>
+            <div id="switcher-list"></div>
         </div>
     </div>
 
@@ -611,12 +702,18 @@
         var toolbarForced = false;
         function toolbarReveal() {
             toolbarEl.classList.remove('hidden');
+            document.body.classList.remove('toolbar-hidden');
             if (toolbarHideTimer) { clearTimeout(toolbarHideTimer); toolbarHideTimer = null; }
         }
         function toolbarScheduleHide(delayMs) {
             if (toolbarHideTimer) clearTimeout(toolbarHideTimer);
             toolbarHideTimer = setTimeout(function() {
-                if (!toolbarForced) toolbarEl.classList.add('hidden');
+                if (!toolbarForced) {
+                    toolbarEl.classList.add('hidden');
+                    // The V03 tab bar follows the toolbar: with the toolbar
+                    // slid away it moves to the very top of the viewport.
+                    document.body.classList.add('toolbar-hidden');
+                }
                 toolbarHideTimer = null;
             }, delayMs);
         }
@@ -675,6 +772,241 @@
             document.getElementById('tb-host').textContent = targetHost;
         }
 
+        // ── Session tab bar + Ctrl+K switcher (V03) ──
+        // Client-side only, no server change: lists the current user's
+        // active sessions (protocol badge + hostname + status dot); clicking
+        // a tab navigates to that session while background tabs keep their
+        // own WebSocket alive; the close button terminates the session.
+        // Ctrl+K opens the filterable switcher overlay (Enter switches, Esc
+        // closes). Both containers carry a `.desktop-hidden` class toggle the
+        // bridge `desktop-mode` event flips (the shell has its own tab strip
+        // and Ctrl+K); without the bridge nothing changes.
+        var tabBarEl = document.getElementById('tab-bar');
+        var tabListEl = document.getElementById('tab-list');
+        var switcherEl = document.getElementById('session-switcher');
+        var switcherInput = document.getElementById('switcher-input');
+        var switcherList = document.getElementById('switcher-list');
+        var sessionCache = [];
+        var desktopMode = false;
+        var switcherIndex = 0;
+
+        function sessionLabel(s) { return s.entry_display_name || s.hostname || s.session_id || 'session'; }
+        function sessionTarget(s) { return s.url || s.hostname || ''; }
+        function sessionDotClass(s) {
+            if (s.status === 'active') return 'dot-live';
+            if (s.status === 'pending' || s.status === 'disconnected') return 'dot-warn';
+            return 'dot-ended';
+        }
+        function fetchSessions() {
+            var headers = {};
+            if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+            return fetch('/api/sessions', { headers: headers, credentials: 'same-origin' })
+                .then(function(r) { return r.ok ? r.json() : []; })
+                .catch(function() { return []; });
+        }
+        // Live (joinable) sessions only, current one first, then by
+        // status, then newest first.
+        function activeSessions(list) {
+            var order = { active: 0, pending: 1, disconnected: 2 };
+            return (list || []).filter(function(s) {
+                return s.status === 'active' || s.status === 'pending' || s.status === 'disconnected';
+            }).sort(function(a, b) {
+                var aCur = a.session_id === sessionId ? -1 : 0;
+                var bCur = b.session_id === sessionId ? -1 : 0;
+                if (aCur !== bCur) return aCur - bCur;
+                var oa = order[a.status] || 3, ob = order[b.status] || 3;
+                if (oa !== ob) return oa - ob;
+                return (a.created_at < b.created_at) ? 1 : -1;
+            });
+        }
+        function terminateSession(id) {
+            var headers = {};
+            if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+            return fetch('/api/sessions/' + encodeURIComponent(id), {
+                method: 'DELETE', headers: headers, credentials: 'same-origin'
+            });
+        }
+        function renderTabs() {
+            tabListEl.textContent = '';
+            activeSessions(sessionCache).forEach(function(s) {
+                var tab = document.createElement('div');
+                tab.className = 'tab-item' + (s.session_id === sessionId ? ' active' : '');
+                tab.setAttribute('role', 'tab');
+                tab.setAttribute('aria-selected', String(s.session_id === sessionId));
+                var dot = document.createElement('span');
+                dot.className = 'tb-dot ' + sessionDotClass(s);
+                tab.appendChild(dot);
+                var badge = document.createElement('span');
+                badge.className = 'tb-badge badge-' + (s.session_type || '').toLowerCase();
+                badge.textContent = (s.session_type || '?').toUpperCase();
+                tab.appendChild(badge);
+                var name = document.createElement('span');
+                name.className = 'tab-name';
+                name.textContent = sessionLabel(s);
+                tab.appendChild(name);
+                var close = document.createElement('button');
+                close.className = 'tab-close';
+                close.textContent = '\u00D7';
+                close.title = 'Terminate this session';
+                close.setAttribute('aria-label', 'Terminate session');
+                close.addEventListener('click', function(ev) {
+                    ev.stopPropagation();
+                    if (!confirm('Terminate this session?')) return;
+                    terminateSession(s.session_id).then(function() {
+                        if (s.session_id === sessionId) closeOrNavigate();
+                        else loadTabs();
+                    }).catch(function() {});
+                });
+                tab.appendChild(close);
+                tab.addEventListener('click', function() {
+                    if (s.session_id !== sessionId) {
+                        window.location.href = '/client/' + encodeURIComponent(s.session_id);
+                    }
+                });
+                tabListEl.appendChild(tab);
+            });
+            tabBarEl.style.display = tabListEl.childElementCount > 0 ? '' : 'none';
+        }
+        function loadTabs() {
+            fetchSessions().then(function(list) {
+                sessionCache = list;
+                renderTabs();
+                if (switcherEl.classList.contains('visible')) renderSwitcher();
+            });
+        }
+
+        // ── Ctrl+K switcher overlay ──
+        function renderSwitcher() {
+            switcherList.textContent = '';
+            var q = switcherInput.value.trim().toLowerCase();
+            var items = activeSessions(sessionCache).filter(function(s) {
+                if (!q) return true;
+                return (sessionLabel(s) + ' ' + sessionTarget(s) + ' ' + (s.session_type || '')).toLowerCase().indexOf(q) !== -1;
+            });
+            if (items.length === 0) {
+                var empty = document.createElement('div');
+                empty.className = 'sw-empty';
+                empty.textContent = q ? 'No sessions match \u201C' + q + '\u201D.' : 'No active sessions.';
+                switcherList.appendChild(empty);
+                switcherIndex = -1;
+                return;
+            }
+            if (switcherIndex >= items.length) switcherIndex = items.length - 1;
+            if (switcherIndex < 0) switcherIndex = 0;
+            items.forEach(function(s, i) {
+                var row = document.createElement('div');
+                row.className = 'sw-item' + (i === switcherIndex ? ' active' : '');
+                row.setAttribute('role', 'option');
+                row.setAttribute('aria-selected', String(i === switcherIndex));
+                row.setAttribute('data-session-id', s.session_id);
+                var badge = document.createElement('span');
+                badge.className = 'tb-badge badge-' + (s.session_type || '').toLowerCase();
+                badge.textContent = (s.session_type || '?').toUpperCase();
+                row.appendChild(badge);
+                var name = document.createElement('span');
+                name.className = 'sw-name';
+                name.textContent = sessionLabel(s);
+                row.appendChild(name);
+                var host = document.createElement('span');
+                host.className = 'sw-host';
+                host.textContent = sessionTarget(s);
+                row.appendChild(host);
+                row.addEventListener('mousedown', function(ev) {
+                    ev.preventDefault();
+                    switchToSession(s);
+                });
+                row.addEventListener('mouseenter', function() {
+                    if (switcherIndex !== i) {
+                        switcherIndex = i;
+                        renderSwitcher();
+                    }
+                });
+                switcherList.appendChild(row);
+            });
+        }
+        function switchToSession(s) {
+            switcherEl.classList.remove('visible');
+            if (s.session_id !== sessionId) {
+                window.location.href = '/client/' + encodeURIComponent(s.session_id);
+            }
+        }
+        function openSwitcher() {
+            if (desktopMode) return;
+            switcherIndex = 0;
+            switcherInput.value = '';
+            renderSwitcher();
+            switcherEl.classList.add('visible');
+            switcherInput.focus();
+        }
+        function closeSwitcher() {
+            switcherEl.classList.remove('visible');
+        }
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 'k' || e.key === 'K')) {
+                if (e.repeat) return;
+                e.preventDefault();
+                e.stopPropagation();
+                if (switcherEl.classList.contains('visible')) closeSwitcher();
+                else openSwitcher();
+                return;
+            }
+            if (!switcherEl.classList.contains('visible')) return;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeSwitcher();
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                switcherIndex++;
+                renderSwitcher();
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                switcherIndex--;
+                renderSwitcher();
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                var rows = switcherList.querySelectorAll('.sw-item');
+                var target = rows[switcherIndex];
+                if (target) {
+                    var id = target.getAttribute('data-session-id');
+                    var found = null;
+                    for (var i = 0; i < sessionCache.length; i++) {
+                        if (sessionCache[i].session_id === id) { found = sessionCache[i]; break; }
+                    }
+                    if (found) switchToSession(found);
+                }
+            }
+        }, true);
+        switcherInput.addEventListener('input', function() {
+            switcherIndex = 0;
+            renderSwitcher();
+        });
+        switcherEl.addEventListener('click', function(e) {
+            if (e.target === switcherEl) closeSwitcher();
+        });
+
+        // ── Bridge desktop-mode flag (S07/D04) ──
+        // The shell has its own tab strip and Ctrl+K: hide this page's tab
+        // bar and switcher via the class toggle. Without the bridge
+        // (`window.perseaDesktop` absent) this is a no-op — a plain browser
+        // keeps the V03 UI exactly as-is.
+        function applyDesktopMode(on) {
+            desktopMode = !!on;
+            document.body.classList.toggle('desktop-mode', desktopMode);
+            if (tabBarEl) tabBarEl.classList.toggle('desktop-hidden', desktopMode);
+            if (switcherEl) {
+                switcherEl.classList.toggle('desktop-hidden', desktopMode);
+                if (desktopMode) closeSwitcher();
+            }
+            if (window.__scaleDisplay) window.__scaleDisplay();
+        }
+        if (window.perseaDesktop && window.perseaDesktop.on) {
+            window.perseaDesktop.on('desktop-mode', function(payload) {
+                applyDesktopMode(!!(payload && payload.on));
+            });
+        }
+        loadTabs();
+        setInterval(loadTabs, 5000);
+
         // ── Screenshot ──
         document.getElementById('btn-screenshot').addEventListener('click', function() {
             if (!window.__guac_client) return;
@@ -715,9 +1047,12 @@
             }
         });
 
-        // ── Disconnect (ends the remote session) ──
+        // ── Disconnect (keeps the session record for reconnection) ──
+        // V10: Disconnect only drops the browser connection — the session
+        // stays in the manager as `disconnected` and can be reconnected
+        // later. Logout (below) is the destructive end.
         document.getElementById('btn-disconnect').addEventListener('click', function() {
-            if (!confirm('Disconnect from this session? This will end the remote session.')) return;
+            if (!confirm('Disconnect from this session? The session stays available — you can reconnect later.')) return;
             userDisconnected = true;
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
             try { if (window.__guac_client) window.__guac_client.disconnect(); } catch (e) {}
@@ -778,6 +1113,7 @@
                 if (toolbarForced) {
                     toolbarEl.classList.remove('hidden');
                     toolbarEl.classList.add('force-visible');
+                    document.body.classList.remove('toolbar-hidden');
                 } else {
                     toolbarEl.classList.remove('force-visible');
                     toolbarScheduleHide(2000);
@@ -1605,14 +1941,18 @@
                 var dh = display.getHeight();
                 if (dw <= 0 || dh <= 0) return;
                 var tbH = toolbarEl.classList.contains('hidden') ? 0 : 48;
+                // The V03 tab bar sits below the toolbar (hidden in
+                // desktop mode, where the shell owns the tabs).
+                var tabH = document.body.classList.contains('desktop-mode') ? 0 : 34;
                 var availW = window.innerWidth;
-                var availH = window.innerHeight - tbH;
+                var availH = window.innerHeight - tbH - tabH;
                 display.scale(Math.min(availW / dw, availH / dh));
                 var el = display.getElement();
                 el.style.marginLeft = Math.max(0, (availW - dw * display.getScale()) / 2) + 'px';
-                el.style.marginTop = Math.max(0, (availH - dh * display.getScale()) / 2) + tbH + 'px';
+                el.style.marginTop = Math.max(0, (availH - dh * display.getScale()) / 2) + (tbH + tabH) + 'px';
             }
             _scaleDisplay = scaleDisplay;
+            window.__scaleDisplay = scaleDisplay;
             displayEl.style.position = 'absolute';
             displayEl.style.top = '0';
             displayEl.style.left = '0';

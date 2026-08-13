@@ -1,24 +1,60 @@
-name: Beta Docker
+name: Beta
 
-# Builds a rolling beta image from any branch (use the workflow_dispatch
-# branch picker, e.g. wayfinder-completion) so beta testers do not need to
-# merge with main first. The image is tagged `ghcr.io/<repo>:beta` and each
-# build overwrites the previous beta tag. Beta images print their version at
-# container startup (PERSEA_BETA=1 build arg); production images do not.
+# Builds a rolling beta from any branch (use the workflow_dispatch branch
+# picker) and publishes the full artifact set:
+#   - Docker image `ghcr.io/<repo>:beta` (PERSEA_BETA=1 build arg); each
+#     build overwrites the previous beta tag
+#   - .deb + .rpm attached to the `beta` pre-release. The beta release is
+#     deleted and recreated on every build (DELETE-then-create, so the
+#     previous assets are replaced and the moving `beta` tag re-points at
+#     the new commit); a failed build leaves the previous beta in place.
+# CI checks (check/fmt/clippy/test/audit) gate the build: a failing check
+# aborts before anything is built or published.
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   packages: write
   # type=gha cache needs the actions scope (write includes read); without it
   # the cache exporter aborts the whole build.
   actions: write
 
+env:
+  GUACD_REPO: https://github.com/persea-grove/persea-guacamole-server.git
+  GUACD_COMMIT: d9218fe1
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # Checks gate: the same check/fmt/clippy/test/audit jobs as ci.yml, run on
+  # the dispatched branch before anything is built or published. Any failure
+  # here aborts the build jobs below (needs).
+  # ---------------------------------------------------------------------------
+  checks:
+    name: Checks gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+          rustflags: ""
+      - run: cargo check
+      - run: cargo fmt --check
+      # Deliberate visibility lints (missing_docs, clippy::unwrap_used) in
+      # lib.rs generate ~800 warnings; run clippy without -D warnings so the
+      # warnings are visible but never fail the job.
+      - run: cargo clippy
+      - run: cargo test
+      - run: cargo install cargo-audit && cargo audit
+
+  # ---------------------------------------------------------------------------
+  # Docker image (unchanged from the original beta workflow)
+  # ---------------------------------------------------------------------------
   build:
     runs-on: ubuntu-latest
+    needs: [checks]
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -37,3 +73,236 @@ jobs:
           tags: ghcr.io/${{ steps.repo.outputs.name }}:beta
           cache-from: type=gha,scope=beta
           cache-to: type=gha,mode=max,scope=beta
+
+  # ---------------------------------------------------------------------------
+  # Build .deb package (Debian 13 / Trixie)
+  # ---------------------------------------------------------------------------
+  build-deb:
+    name: Build .deb (amd64)
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    needs: [checks]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl ca-certificates gcc g++ pkg-config make git \
+            autoconf automake libtool \
+            libcairo2-dev libjpeg-dev libpng-dev libwebp-dev \
+            libssh2-1-dev libssl-dev libvncserver-dev \
+            libpango1.0-dev libpulse-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
+            libcunit1-dev libtelnet-dev libwebsockets-dev \
+            uuid-dev freerdp3-dev \
+            dpkg-dev debhelper fakeroot build-essential
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Restore guacd build cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            /tmp/guacamole-server
+            /tmp/guacd-build
+          key: guacd-${{ runner.arch }}-${{ env.GUACD_COMMIT }}
+      - name: Clone and build guacd
+        run: |
+          if [ ! -f /tmp/guacd-build/Makefile ]; then
+            git clone --depth 1 --branch persea-1.6.1-freerdp3 $GUACD_REPO /tmp/guacamole-server
+            git -C /tmp/guacamole-server checkout $GUACD_COMMIT 2>/dev/null || true
+            cd /tmp/guacamole-server && autoreconf -fi
+            mkdir /tmp/guacd-build && cd /tmp/guacd-build
+            /tmp/guacamole-server/configure \
+              --prefix=/opt/persea \
+              --with-ssh --with-vnc --with-rdp \
+              --without-telnet --without-kubernetes \
+              --disable-guacenc --disable-guaclog --disable-static
+          fi
+          make -C /tmp/guacd-build -j"$(nproc)"
+          make -C /tmp/guacd-build DESTDIR="$GITHUB_WORKSPACE/debian/staging" install
+      - uses: Swatinem/rust-cache@v2
+      - name: Build persea
+        run: $HOME/.cargo/bin/cargo build --release
+      - name: Build .deb
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          GIT_HASH=$(echo "$GITHUB_SHA" | cut -c1-7)
+          DEB_VERSION="${VERSION}+g${GIT_HASH}"
+          cat > debian/changelog <<EOF
+          persea (${DEB_VERSION}) unstable; urgency=medium
+            * Release ${GITHUB_REF_NAME}
+           -- persea build <persea@localhost>  $(date -R)
+          EOF
+          dpkg-buildpackage -us -uc -b
+          cp ../*.deb .
+      - name: Upload .deb
+        uses: actions/upload-artifact@v7
+        with:
+          name: deb-amd64
+          path: "*.deb"
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Build .rpm (RHEL 10 / EL 10) — native rpmbuild in an ubi10 container
+  # ---------------------------------------------------------------------------
+  build-rpm:
+    name: Build .rpm (el10)
+    runs-on: ubuntu-latest
+    container: registry.access.redhat.com/ubi10/ubi
+    needs: [checks]
+    steps:
+      - uses: actions/checkout@v7
+      - name: Enable EPEL 10 and CodeReady Builder
+        run: |
+          dnf -y install dnf-plugins-core
+          dnf config-manager --set-enabled "codeready-builder-for-ubi-10-$(uname -m)-rpms"
+          # UBI ships a curated package subset; add CentOS Stream 10 for the
+          # full AppStream/CRB (freerdp3 dev headers, pango-devel, CUnit).
+          dnf config-manager --add-repo "https://mirror.stream.centos.org/10-stream/BaseOS/$(uname -m)/os/"
+          dnf config-manager --add-repo "https://mirror.stream.centos.org/10-stream/AppStream/$(uname -m)/os/"
+          dnf config-manager --add-repo "https://mirror.stream.centos.org/10-stream/CRB/$(uname -m)/os/"
+          # Bootstrap the CentOS Stream 10 signing keys (single HTTPS-verified
+          # package; the www.centos.org key file is rejected by RHEL 10 rpm
+          # for its SHA-1 self-signature).
+          dnf -y install --nogpgcheck centos-gpg-keys
+          rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial-SHA256
+          dnf -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+      - name: Install build dependencies
+        run: |
+          dnf -y install --setopt=install_weak_deps=False \
+            cargo rust gcc gcc-c++ make autoconf automake libtool \
+            pkgconf-pkg-config git \
+            cairo-devel libjpeg-turbo-devel libpng-devel libwebp-devel \
+            libssh2-devel openssl-devel pango-devel pulseaudio-libs-devel \
+            libuuid-devel freerdp-devel CUnit-devel \
+            libvncserver-devel libtelnet-devel libwebsockets-devel \
+            ffmpeg-free-devel \
+            selinux-policy-devel checkpolicy \
+            rpm-build systemd-rpm-macros
+      - name: Create source tarball
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          # UBI10 has no git, so checkout lands via the REST tarball (no .git);
+          # tar the workspace instead of git archive. Output goes to /tmp so
+          # the archive never contains itself.
+          tar -czf "/tmp/persea-${VERSION}.tar.gz" --transform "s,^\./,persea-${VERSION}/," \
+            --exclude="./target" -C "$GITHUB_WORKSPACE" .
+          mkdir -p "$HOME/rpmbuild"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          cp "/tmp/persea-${VERSION}.tar.gz" "$HOME/rpmbuild/SOURCES/"
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+      - name: Build RPM
+        run: |
+          rpmbuild -bb \
+            --define "_topdir $HOME/rpmbuild" \
+            --define "persea_version $VERSION" \
+            rpm/persea.spec
+      - name: Upload RPM
+        run: |
+          # The runner's upload step cannot see $HOME/rpmbuild (container
+          # path /github/home); stage the RPM into the shared workspace.
+          mkdir -p "$GITHUB_WORKSPACE/rpm-artifacts"
+          cp "$HOME/rpmbuild"/RPMS/*/*.rpm "$GITHUB_WORKSPACE/rpm-artifacts/"
+      - name: Upload RPM
+        uses: actions/upload-artifact@v7
+        with:
+          name: rpm-el10
+          path: "rpm-artifacts/**/*.rpm"
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Smoke test the RPM: install into an ubi10-init container with systemd,
+  # start persea, and hit the health endpoint over the bootstrapped cert.
+  # ---------------------------------------------------------------------------
+  smoke-rpm:
+    name: Smoke test RPM (el10)
+    runs-on: ubuntu-latest
+    needs: [checks, build-rpm]
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: rpm-el10
+          path: artifacts
+      - name: Install RPM and start services
+        run: |
+          docker run -d --name persea-smoke --privileged --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v "$PWD/artifacts:/artifacts:ro" \
+            registry.access.redhat.com/ubi10/ubi-init
+          for i in $(seq 1 60); do
+            docker exec persea-smoke systemctl is-system-running >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec persea-smoke bash -c '
+            set -e
+            dnf -q -y install dnf-plugins-core
+            dnf -q config-manager --set-enabled "codeready-builder-for-ubi-10-$(uname -m)-rpms"
+            dnf -q config-manager --add-repo "https://mirror.stream.centos.org/10-stream/BaseOS/$(uname -m)/os/"
+            dnf -q config-manager --add-repo "https://mirror.stream.centos.org/10-stream/AppStream/$(uname -m)/os/"
+            dnf -q config-manager --add-repo "https://mirror.stream.centos.org/10-stream/CRB/$(uname -m)/os/"
+            dnf -q -y install --nogpgcheck centos-gpg-keys
+            rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial-SHA256
+            dnf -q -y install https://dl.fedoraproject.org/pub/epel/epel-release-latest-10.noarch.rpm
+            dnf -q -y install --setopt=install_weak_deps=False /artifacts/*.rpm
+          '
+          docker exec persea-smoke bash -c '
+            set -e
+            # %post must have bootstrapped a cert and disabled Secure cookies
+            test -f /opt/persea/tls/cert.pem
+            test -f /opt/persea/tls/key.pem
+            grep -q "secure_cookies = false" /opt/persea/config.toml
+            systemctl start persea
+            for i in $(seq 1 30); do
+              if curl -ksf https://localhost/api/health; then exit 0; fi
+              sleep 2
+            done
+            echo "persea failed to become healthy" >&2
+            systemctl status persea --no-pager || true
+            journalctl -u persea --no-pager | tail -40 || true
+            exit 1
+          '
+
+  # ---------------------------------------------------------------------------
+  # Publish the rolling beta pre-release. DELETE-then-create: the previous
+  # `beta` release and its tag are removed first (so old assets never linger
+  # and the moving tag re-points at this build's commit), then a fresh
+  # prerelease named `beta` is created with the deb + rpm attached. A failed
+  # build job aborts here and leaves the previous beta untouched.
+  # ---------------------------------------------------------------------------
+  publish-beta:
+    name: Publish beta pre-release
+    runs-on: ubuntu-latest
+    needs: [build, build-deb, build-rpm, smoke-rpm]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: deb-amd64
+          path: artifacts/deb
+      - uses: actions/download-artifact@v8
+        with:
+          name: rpm-el10
+          path: artifacts/rpm
+      - name: Delete previous beta release and tag
+        run: gh release delete beta --yes --cleanup-tag || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create beta pre-release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: beta
+          name: Beta
+          body: |
+            Rolling beta build of ${{ github.sha }} from branch ${{ github.ref_name }}.
+
+            Docker: `ghcr.io/${{ github.repository }}:beta`
+            (the image tag and this release are overwritten by the next beta build).
+
+            Versioning: deb is `X.Y.Z+g<short-sha>`, rpm is `X.Y.Z` from Cargo.toml.
+          prerelease: true
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/deb/*.deb
+            artifacts/rpm/*.rpm

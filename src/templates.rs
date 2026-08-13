@@ -190,7 +190,7 @@ fn render_app_page(page_template: &str, context: &impl Serialize) -> Response {
 ///
 /// CONTRACT for template consumers — the rendered context carries a
 /// `features` object with EXACTLY these keys (1:1 with the `enable_*`
-/// admin settings):
+/// admin settings, plus one config-sourced flag):
 ///
 /// ```jinja
 /// {% if features.rdp %}          ← enable_rdp
@@ -202,6 +202,9 @@ fn render_app_page(page_template: &str, context: &impl Serialize) -> Response {
 /// {% if features.vmware %}       ← enable_vmware
 /// {% if features.recordings %}   ← enable_recordings
 /// {% if features.api_keys %}     ← enable_api_keys
+/// {% if features.desktop_bridge %} ← NOT an enable_* setting: mirrors the
+///                                     [desktop] allow_bridge config flag
+///                                     (src/config.rs, `init_allow_bridge`)
 /// ```
 ///
 /// There are NO `enable_ssh` / `enable_vnc` toggles: the ssh and vnc
@@ -227,11 +230,17 @@ pub struct FeatureFlags {
     pub recordings: bool,
     /// API key creation from the account page (`enable_api_keys`).
     pub api_keys: bool,
+    /// Desktop shell bridge (`[desktop] allow_bridge` config flag, NOT an
+    /// `enable_*` setting). Gates the base.html desktop bridge partial; the
+    /// CSP `connect-src` addition is gated on the same flag.
+    pub desktop_bridge: bool,
 }
 
 impl Default for FeatureFlags {
     /// All toggles default ON — a fresh install (or any render outside a
     /// request, e.g. tests) behaves exactly as before the flags existed.
+    /// `desktop_bridge` mirrors the config flag instead, which defaults to
+    /// false (no bridge = exactly as before).
     fn default() -> Self {
         Self {
             rdp: true,
@@ -243,6 +252,7 @@ impl Default for FeatureFlags {
             vmware: true,
             recordings: true,
             api_keys: true,
+            desktop_bridge: crate::config::allow_bridge_enabled(),
         }
     }
 }
@@ -269,6 +279,7 @@ impl FeatureFlags {
             vmware: crate::settings_merge::toggle_enabled(settings, "enable_vmware", true),
             recordings: crate::settings_merge::toggle_enabled(settings, "enable_recordings", true),
             api_keys: crate::settings_merge::toggle_enabled(settings, "enable_api_keys", true),
+            desktop_bridge: crate::config::allow_bridge_enabled(),
         }
     }
 }

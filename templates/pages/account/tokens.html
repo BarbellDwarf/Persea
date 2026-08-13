@@ -14,6 +14,27 @@
         </button>
     </div>
 
+    <!-- Device Pairing -->
+    <div class="card p-6 mb-6">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-1">Pair this device</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">
+            Get a pairing code from the Persea Desktop app, then enter it here to approve
+            this device. Approving mints an API token named
+            <code class="text-xs">Persea Desktop (hostname)</code> that appears in the table
+            below and can be revoked there to unpair the device.
+        </p>
+        <form id="pair-form" class="flex items-center gap-3 flex-wrap">
+            <label for="pair-code" class="sr-only">Pairing code</label>
+            <input type="text" id="pair-code" required maxlength="9" autocomplete="off" spellcheck="false"
+                class="form-input w-48 font-mono uppercase text-center tracking-widest"
+                placeholder="XXXX-XXXX" pattern="[A-Za-z0-9 -]{8,9}">
+            <button type="submit" id="btn-pair-confirm" class="btn btn-primary btn-sm">
+                Approve Device
+            </button>
+        </form>
+        <div id="pair-message" class="hidden mt-3 text-sm"></div>
+    </div>
+
     <!-- Tokens Table -->
     <div class="card table-wrapper">
         <table class="w-full text-sm">
@@ -224,6 +245,51 @@
         });
 
         document.getElementById('btn-create-token').addEventListener('click', openCreateModal);
+
+        // ── Device pairing ──
+        var pairForm = document.getElementById('pair-form');
+        var pairMessage = document.getElementById('pair-message');
+        var pairCode = document.getElementById('pair-code');
+        var pairBtn = document.getElementById('btn-pair-confirm');
+
+        function showPairMessage(text, ok) {
+            pairMessage.textContent = text;
+            pairMessage.className = 'mt-3 text-sm ' + (ok ? 'text-emerald-400' : 'text-red-400');
+            pairMessage.classList.remove('hidden');
+        }
+
+        pairForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            pairBtn.disabled = true;
+            fetch('/api/desktop/confirm', {
+                method: 'POST',
+                headers: apiHeaders(),
+                body: JSON.stringify({ code: pairCode.value.trim() })
+            })
+            .then(function(r) {
+                return r.json().then(function(data) { return { ok: r.ok, status: r.status, data: data }; });
+            })
+            .then(function(res) {
+                if (res.ok && res.data.ok) {
+                    var dev = res.data.device_name ? ' (' + res.data.device_name + ')' : '';
+                    showPairMessage('Device approved' + dev + '. The token appears in the list above; revoke it there to unpair the device.', true);
+                    pairCode.value = '';
+                    loadTokens();
+                } else if (res.status === 410) {
+                    showPairMessage('This code has expired or was already used. Generate a new one in the desktop app.', false);
+                } else if (res.status === 404) {
+                    showPairMessage('Unknown pairing code. Check the code shown by the desktop app.', false);
+                } else if (res.status === 429) {
+                    showPairMessage('Too many requests — wait a minute and try again.', false);
+                } else if (res.status === 403) {
+                    showPairMessage('Approval failed: your session may have expired. Reload the page and try again.', false);
+                } else {
+                    showPairMessage('Approval failed: ' + (res.data.error || 'unknown error'), false);
+                }
+            })
+            .catch(function() { showPairMessage('Approval failed — check your connection.', false); })
+            .finally(function() { pairBtn.disabled = false; });
+        });
 
         loadTokens();
     })();

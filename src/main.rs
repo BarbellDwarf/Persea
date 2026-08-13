@@ -43,12 +43,16 @@ mod slugify;
 mod templates;
 #[cfg(test)]
 mod testing;
+mod thumbnails;
 mod totp;
 mod tunnel;
+mod updates;
 mod vault;
 mod vdi;
 mod vsphere;
 mod websocket;
+#[cfg(windows)]
+mod windows_service;
 
 use crate::api::{
     AppState, CredentialDefaultScope, DriveConfigured, OidcEnabled, OidcProviderNames,
@@ -85,6 +89,26 @@ struct Cli {
     /// Log output format. Overrides the RUST_LOG_FORMAT env var.
     #[arg(long, value_enum, default_value_t = LogFormat::Text)]
     log_format: LogFormat,
+
+    /// Bootstrap a first-run install: create the data layout
+    /// (%ProgramData%\persea on Windows, /opt/persea elsewhere), generate a
+    /// self-signed TLS certificate, and write a starter config. Exits
+    /// without starting the server.
+    #[arg(long)]
+    init: bool,
+
+    /// Windows: register persea as a native service with the Service Control
+    /// Manager. Run as Administrator; the service runs as LocalSystem with
+    /// data in %ProgramData%\persea.
+    #[cfg(windows)]
+    #[arg(long)]
+    install_service: bool,
+
+    /// Windows: stop (if running) and unregister the persea service.
+    /// Run as Administrator.
+    #[cfg(windows)]
+    #[arg(long)]
+    uninstall_service: bool,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -279,6 +303,35 @@ async fn main() {
 
     let cli = Cli::parse();
 
+    if cli.init {
+        cmd_init();
+        return;
+    }
+
+    #[cfg(windows)]
+    {
+        if cli.install_service {
+            match crate::windows_service::install_service() {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("FATAL: failed to install service: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+        if cli.uninstall_service {
+            match crate::windows_service::uninstall_service() {
+                Ok(()) => {}
+                Err(e) => {
+                    eprintln!("FATAL: failed to uninstall service: {}", e);
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
+    }
+
     // Load config
     let mut config = Config::load(cli.config.as_deref());
 
@@ -429,6 +482,39 @@ async fn main() {
                     "Running without TLS — credentials and session tokens travel unencrypted. \
                      Use [tls] or a reverse proxy for production."
                 );
+            }
+            // Windows: when started by the SCM, dispatch to the service
+            // control dispatcher (blocks until the service stops, running
+            // the server on its own runtime). In a console session the
+            // dispatcher fails immediately with
+            // ERROR_FAILED_SERVICE_CONTROLLER_CONNECT (1063) — fall through
+            // to a normal foreground run.
+            #[cfg(windows)]
+            {
+                let service_fut = run_server(
+                    config.clone(),
+                    database.clone(),
+                    log_format,
+                    settings_baseline.clone(),
+                );
+                match crate::windows_service::dispatch(service_fut) {
+                    Ok(()) => return,
+                    Err(crate::windows_service::ServiceError::Winapi(ioe))
+                        if ioe.raw_os_error()
+                            == Some(
+                                crate::windows_service::ERROR_FAILED_SERVICE_CONTROLLER_CONNECT
+                                    as i32,
+                            ) =>
+                    {
+                        tracing::info!(
+                            "Not running as a Windows service — starting in the foreground"
+                        );
+                    }
+                    Err(e) => {
+                        eprintln!("FATAL: failed to run as a Windows service: {}", e);
+                        std::process::exit(1);
+                    }
+                }
             }
             run_server(config, database, log_format, settings_baseline).await
         }
@@ -664,7 +750,14 @@ fn cmd_rotate_key(database: &Db, name: &str) {
     }
 }
 
-fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
+/// Generate a self-signed certificate (rcgen — no openssl) and write
+/// cert.pem/key.pem into `out_dir`. localhost and 127.0.0.1 are always in
+/// the SANs. Returns the written paths.
+fn write_self_signed_cert(
+    hostname: &str,
+    out_dir: &std::path::Path,
+    extra_sans: &[String],
+) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     use rcgen::{generate_simple_self_signed, CertifiedKey};
 
     let mut sans = vec![
@@ -678,14 +771,160 @@ fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
         }
     }
 
-    let CertifiedKey { cert, signing_key } =
-        generate_simple_self_signed(sans.clone()).expect("Failed to generate certificate");
+    let CertifiedKey { cert, signing_key } = generate_simple_self_signed(sans)
+        .map_err(|e| format!("certificate generation failed: {}", e))?;
 
-    let cert_path = std::path::Path::new(out_dir).join("cert.pem");
-    let key_path = std::path::Path::new(out_dir).join("key.pem");
+    let cert_path = out_dir.join("cert.pem");
+    let key_path = out_dir.join("key.pem");
 
-    std::fs::write(&cert_path, cert.pem()).expect("Failed to write cert.pem");
-    std::fs::write(&key_path, signing_key.serialize_pem()).expect("Failed to write key.pem");
+    std::fs::write(&cert_path, cert.pem())
+        .map_err(|e| format!("failed to write cert.pem: {}", e))?;
+    std::fs::write(&key_path, signing_key.serialize_pem())
+        .map_err(|e| format!("failed to write key.pem: {}", e))?;
+
+    Ok((cert_path, key_path))
+}
+
+/// Data root for `--init`: `%ProgramData%\persea` on Windows, `/opt/persea`
+/// elsewhere (mirroring install.sh's layout).
+fn init_data_root() -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        crate::windows_service::program_data_dir()
+    }
+    #[cfg(not(windows))]
+    {
+        std::path::PathBuf::from("/opt/persea")
+    }
+}
+
+/// `--init`: first-run bootstrap. Creates the data layout (db, recordings,
+/// tls), generates a self-signed certificate, and writes a starter config —
+/// the Windows analogue of install.sh's setup_tls() and the RHEL %post
+/// scriptlet. Idempotent: existing certs and configs are never overwritten.
+fn cmd_init() {
+    let root = init_data_root();
+    let tls_dir = root.join("tls");
+    let db_dir = root.join("db");
+    let recordings_dir = root.join("recordings");
+
+    for dir in [&root, &tls_dir, &db_dir, &recordings_dir] {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            eprintln!("FATAL: --init failed to create {}: {}", dir.display(), e);
+            std::process::exit(1);
+        }
+    }
+
+    // Self-signed cert (rcgen; no openssl), mirroring install.sh — the
+    // corresponding secure_cookies = false is written with the config below.
+    let cert_path = tls_dir.join("cert.pem");
+    let key_path = tls_dir.join("key.pem");
+    if cert_path.exists() && key_path.exists() {
+        println!(
+            "TLS certificate already exists at {} (not overwritten)",
+            tls_dir.display()
+        );
+    } else {
+        let hostname = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "persea".to_string());
+        match write_self_signed_cert(&hostname, &tls_dir, &[]) {
+            Ok(_) => println!(
+                "Generated self-signed TLS certificate for '{}' in {}",
+                hostname,
+                tls_dir.display()
+            ),
+            Err(e) => {
+                eprintln!(
+                    "FATAL: --init failed to generate the TLS certificate: {}",
+                    e
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Starter config. Never clobber an existing one.
+    let config_path = root.join("config.toml");
+    if config_path.exists() {
+        println!(
+            "Config already exists at {} (not overwritten)",
+            config_path.display()
+        );
+        return;
+    }
+
+    // Forward slashes keep the TOML valid on Windows without escaping.
+    let fmt = |p: &std::path::Path| p.to_string_lossy().replace('\\', "/");
+    let config = format!(
+        "# persea — starter configuration (generated by `persea --init`)\n\
+         #\n\
+         # The bundled certificate is self-signed: browsers block Secure\n\
+         # cookies over invalid certs, so `secure_cookies = false` is set.\n\
+         # For production, replace cert.pem/key.pem with real certificates\n\
+         # and remove the secure_cookies line.\n\
+         #\n\
+         # guacd: Windows has no native guacd — point guacd_addr at a remote\n\
+         # host, WSL2, or Docker Desktop instance (the guacd image is\n\
+         # ghcr.io/barbelldwarf/persea:latest, run with -p 4822:4822).\n\n\
+         listen_addr = \"127.0.0.1:8089\"\n\
+         guacd_addr = \"127.0.0.1:4822\"\n\
+         static_path = \"{}\"\n\
+         db_path = \"{}\"\n\n\
+         [recording]\n\
+         path = \"{}\"\n\n\
+         [tls]\n\
+         cert_path = \"{}\"\n\
+         key_path = \"{}\"\n\
+         guacd_cert_path = \"{}\"\n\
+         secure_cookies = false  # self-signed cert — browsers block Secure cookies\n",
+        fmt(&root.join("static")),
+        fmt(&db_dir.join("persea.db")),
+        fmt(&recordings_dir),
+        fmt(&cert_path),
+        fmt(&key_path),
+        fmt(&cert_path),
+    );
+    if let Err(e) = std::fs::write(&config_path, &config) {
+        eprintln!(
+            "FATAL: --init failed to write {}: {}",
+            config_path.display(),
+            e
+        );
+        std::process::exit(1);
+    }
+    println!("Wrote starter config: {}", config_path.display());
+    println!();
+    println!(
+        "Start the server with: persea --config {}",
+        fmt(&config_path)
+    );
+    #[cfg(windows)]
+    {
+        println!("Or install it as a Windows service with: persea --install-service");
+    }
+    println!("Replace cert.pem/key.pem and remove `secure_cookies = false` for production.");
+}
+
+fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
+    let dir = std::path::Path::new(out_dir);
+    let (cert_path, key_path) = match write_self_signed_cert(hostname, dir, extra_sans) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+    let mut sans = vec![
+        hostname.to_string(),
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+    ];
+    for san in extra_sans {
+        if !sans.contains(san) {
+            sans.push(san.clone());
+        }
+    }
 
     println!("Generated self-signed certificate:");
     println!("  Certificate: {}", cert_path.display());
@@ -833,9 +1072,19 @@ async fn security_headers(
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=()".parse().unwrap(),
     );
+    // The desktop shell (Tauri) talks to this instance over remote IPC; its
+    // transports are only reachable when the page CSP permits them
+    // (tauri#8476: IPC silently fails otherwise). Added ONLY when the
+    // operator enabled the bridge via [desktop] allow_bridge = true —
+    // otherwise the header stays byte-identical to the pre-desktop build.
+    let connect_src = if crate::config::allow_bridge_enabled() {
+        "connect-src 'self' wss: ws: tauri://localhost http://ipc.localhost"
+    } else {
+        "connect-src 'self' wss: ws:"
+    };
     headers.insert(
         "Content-Security-Policy",
-        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self'")
+        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; {connect_src}; img-src 'self' data: https:; font-src 'self'")
             .parse()
             .unwrap(),
     );
@@ -1126,6 +1375,12 @@ async fn run_server(
     // Initialize drive / LUKS if configured (and Vault is already available)
     if let Some(ref drive_config) = config.drive {
         if drive_config.enabled {
+            #[cfg(windows)]
+            if drive::luks_configured(drive_config) {
+                tracing::warn!(
+                    "[drive] LUKS is not supported on Windows — the volume will not be mounted"
+                );
+            }
             // Mount LUKS volume if configured and Vault is available now
             if drive::luks_configured(drive_config) {
                 let vc = default_cell.read().await;
@@ -1469,6 +1724,22 @@ async fn run_server(
         );
     }
 
+    // Desktop bridge flag — read by the security-headers middleware (CSP
+    // connect-src) and the template renderer (base.html partial include).
+    // Mirrors SecureCookies::init: config is about to be moved into the
+    // session manager, so the flag is mirrored into a startup global first.
+    let allow_bridge = config
+        .desktop
+        .as_ref()
+        .map(|d| d.allow_bridge)
+        .unwrap_or(false);
+    crate::config::init_allow_bridge(allow_bridge);
+    if allow_bridge {
+        tracing::info!(
+            "allow_bridge = true — CSP connect-src extended with tauri://localhost and http://ipc.localhost (desktop shell bridge)"
+        );
+    }
+
     // Password policy — extracted before config is moved into
     // SessionManager so the admin users API and the account password-change
     // endpoint can enforce minimum length + reuse history.
@@ -1549,6 +1820,15 @@ async fn run_server(
             }
         });
     }
+
+    // Spawn orphaned thumbnail cleanup (30-min sweep)
+    thumbnails::spawn_thumbnail_cleanup(manager.clone());
+
+    // Version update alert (S16): periodic GitHub Releases check; the
+    // UpdateState extension feeds /api/auth/status (latest_version +
+    // update_available) and the admin banner.
+    let update_state =
+        updates::spawn_update_checker(manager.config().updates.clone().unwrap_or_default());
 
     // Spawn VDI container reaper (cleans up idle containers)
     if let Some(ref vdi_cfg) = manager.config().vdi {
@@ -1684,6 +1964,7 @@ async fn run_server(
     // API routes that require authentication
     let mut api_routes = Router::new()
         .route("/api/sessions", get(api::list_sessions))
+        .route("/api/sessions/recent", get(api::recent_connections))
         .route("/api/sessions/{id}", get(api::get_session))
         .route("/api/sessions/{id}", delete(api::delete_session))
         .route("/api/vdi/containers", get(api::list_vdi_containers))
@@ -1694,8 +1975,13 @@ async fn run_server(
         .route("/api/sessions/{id}/drive-files", get(api::drive_list_files))
         .route(
             "/api/sessions/{id}/drive-files/{name}",
-            get(api::drive_download_file).delete(api::drive_delete_file),
+            get(api::drive_download_file)
+                .delete(api::drive_delete_file)
+                .put(api::drive_upload_file)
+                .layer(axum::extract::DefaultBodyLimit::max(4 * 1024 * 1024 * 1024)),
         )
+        .route("/api/sessions/events", get(api::events::session_events))
+        .route("/api/desktop/confirm", post(api::pairing::confirm_pairing))
         .route("/api/sessions/{id}/shadow", post(api::shadow_session))
         .route("/api/sessions/{id}/terminate", post(api::delete_session))
         .route(
@@ -2157,8 +2443,6 @@ async fn run_server(
             "/admin/branding.html",
             get(handlers::pages::admin_branding_page),
         )
-        .route("/docs.html", get(handlers::account::docs_page))
-        .route("/docs", get(handlers::account::docs_page))
         .merge(gated_tunnels_page)
         .merge(gated_recordings_page)
         .merge(gated_tokens_pages)
@@ -2167,7 +2451,19 @@ async fn run_server(
         .layer(Extension(ws_ticket_store.clone()))
         .layer(Extension(database.clone()));
 
-    let html_routes = protected_html_routes;
+    // Public HTML page routes (U03): documentation only. `/`, `/setup`, and
+    // the login pages live in `auth_pages`/`setup_routes`; every other HTML
+    // page is behind `require_auth` above. The docs page renders without an
+    // identity; the sidebar it embeds gates on `features_context` like the
+    // authenticated pages (all-enabled defaults when the DB overlay is
+    // unreadable, which matches the no-cookie visitor's read-only view).
+    let public_html_routes = Router::new()
+        .route("/docs.html", get(handlers::account::docs_page))
+        .route("/docs", get(handlers::account::docs_page))
+        .layer(middleware::from_fn(features_context))
+        .layer(Extension(database.clone()));
+
+    let html_routes = protected_html_routes.merge(public_html_routes);
 
     // Build full router (all Router<()> at this point)
     let mut app: Router<()> = Router::new()
@@ -2210,6 +2506,18 @@ async fn run_server(
 
     app = app.merge(logout_route);
 
+    // Desktop device pairing — anonymous creation/status polling (no CSRF:
+    // no session to bind; low-privilege: a code only mints a token for the
+    // logged-in user who confirms it on the account page).
+    let pairing_anon_routes = Router::new()
+        .route("/api/desktop/pair", post(api::pairing::create_pairing))
+        .route(
+            "/api/desktop/pair/status",
+            get(api::pairing::pairing_status),
+        )
+        .layer(Extension(database.clone()));
+    app = app.merge(pairing_anon_routes);
+
     // Add shared layers
     // Server HTTPS requires both cert_path and key_path in [tls]
     let server_tls = tls_config.as_ref().and_then(|tls| {
@@ -2246,7 +2554,8 @@ async fn run_server(
         .layer(Extension(theme_data))
         .layer(Extension(trusted_proxies))
         .layer(Extension(branded_pages))
-        .layer(Extension(db_pool));
+        .layer(Extension(db_pool))
+        .layer(Extension(update_state));
 
     let scheme = if server_tls.is_some() {
         "https"
@@ -2326,7 +2635,12 @@ async fn run_server(
                 }
             });
         }
+        #[cfg(unix)]
         tracing::info!("TLS hot-reload via SIGHUP enabled");
+        #[cfg(windows)]
+        tracing::info!(
+            "TLS hot-reload is not available on Windows — restart the service to reload the certificate"
+        );
 
         let std_listener =
             std::net::TcpListener::bind(&listen_addr).expect("Failed to bind listener");
@@ -2359,7 +2673,18 @@ async fn run_server(
                     _ = sigterm.recv() => tracing::info!("SIGTERM received, starting graceful shutdown"),
                 }
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                // Under the SCM ctrl-c never fires — the service control
+                // handler sets the stop flag instead.
+                tokio::select! {
+                    _ = ctrl_c => tracing::info!("SIGINT received, starting graceful shutdown"),
+                    _ = crate::windows_service::wait_for_stop() => {
+                        tracing::info!("Service stop requested, starting graceful shutdown")
+                    }
+                }
+            }
+            #[cfg(all(not(unix), not(windows)))]
             {
                 ctrl_c.await.expect("Failed to listen for ctrl-c");
                 tracing::info!("Shutdown signal received");
@@ -2414,7 +2739,18 @@ async fn run_server(
                     _ = sigterm.recv() => tracing::info!("SIGTERM received, starting graceful shutdown"),
                 }
             }
-            #[cfg(not(unix))]
+            #[cfg(windows)]
+            {
+                // Under the SCM ctrl-c never fires — the service control
+                // handler sets the stop flag instead.
+                tokio::select! {
+                    _ = ctrl_c => tracing::info!("SIGINT received, starting graceful shutdown"),
+                    _ = crate::windows_service::wait_for_stop() => {
+                        tracing::info!("Service stop requested, starting graceful shutdown")
+                    }
+                }
+            }
+            #[cfg(all(not(unix), not(windows)))]
             {
                 ctrl_c.await.expect("Failed to listen for ctrl-c");
                 tracing::info!("Shutdown signal received");

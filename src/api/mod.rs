@@ -2,8 +2,10 @@
 
 pub mod address_book;
 pub mod admin;
+pub mod events;
 pub mod groups;
 pub mod imports;
+pub mod pairing;
 pub mod providers;
 pub mod reports;
 pub mod sessions;

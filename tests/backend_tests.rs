@@ -18,20 +18,15 @@
 //! When the env var is unset the test skips with a visible message, so local
 //! `cargo test` (SQLite-only) stays exactly as fast as before.
 
+mod support;
+
 use serde_json::json;
 use sqlx::{MySqlPool, PgPool, Row};
-use std::net::TcpListener;
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 const POSTGRES_URL_ENV: &str = "TEST_DATABASE_URL_POSTGRES";
 const MYSQL_URL_ENV: &str = "TEST_DATABASE_URL_MYSQL";
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(90);
-
-fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_persea")
-}
 
 #[tokio::test]
 async fn postgres_backend_round_trip_and_persistence() {
@@ -122,23 +117,26 @@ async fn run_backend_test(label: &str, url_env: &str, expected_backend: &str) {
     std::fs::create_dir_all(&tmp).expect("create scratch dir");
     let config_path = tmp.join("config.toml");
     let log_path = tmp.join("persea.log");
-    let port = free_port();
-    std::fs::write(
-        &config_path,
+    let db_path = tmp.join("admin.db").display().to_string();
+    let write_config = |port: u16| {
         format!(
-            "listen_addr = \"127.0.0.1:{port}\"\ndb_url = \"{db_url}\"\ndb_path = \"{}\"\n",
-            tmp.join("admin.db").display()
-        ),
+            "listen_addr = \"127.0.0.1:{port}\"\ndb_url = \"{db_url}\"\ndb_path = \"{db_path}\"\n"
+        )
+    };
+
+    let booted = support::boot_persea(
+        &admin_name,
+        &config_path,
+        &log_path,
+        None,
+        HEALTH_TIMEOUT,
+        &write_config,
     )
-    .expect("write config");
-
-    let key = create_admin_key(&config_path, &admin_name);
-
-    let client = reqwest::Client::new();
-    let base = format!("http://127.0.0.1:{port}");
-
-    let mut app = AppProc::new(&config_path, &log_path);
-    wait_healthy(&client, &base, &mut app, &log_path).await;
+    .await;
+    let client = booted.client;
+    let base = booted.base;
+    let key = booted.key;
+    let mut app = booted.app;
     assert_backend_health(&client, &base, &key, expected_backend).await;
 
     round_trips(
@@ -164,8 +162,19 @@ async fn run_backend_test(label: &str, url_env: &str, expected_backend: &str) {
     terminate(&mut app);
     eprintln!("backend test: restarted persea against {label}");
 
-    let mut app2 = AppProc::new(&config_path, &log_path);
-    wait_healthy(&client, &base, &mut app2, &log_path).await;
+    let booted = support::boot_persea(
+        &admin_name,
+        &config_path,
+        &log_path,
+        Some(key.clone()),
+        HEALTH_TIMEOUT,
+        &write_config,
+    )
+    .await;
+    let client = booted.client;
+    let base = booted.base;
+    let key = booted.key;
+    let mut app2 = booted.app;
     assert_backend_health(&client, &base, &key, expected_backend).await;
 
     let users = get_json(&client, &base, "/api/users", Some(&key)).await;
@@ -202,26 +211,6 @@ async fn run_backend_test(label: &str, url_env: &str, expected_backend: &str) {
     terminate(&mut app2);
     std::fs::remove_dir_all(&tmp).ok();
     eprintln!("backend test: PASSED against {label}");
-}
-
-fn create_admin_key(config_path: &PathBuf, admin_name: &str) -> String {
-    let out = Command::new(binary())
-        .arg("--config")
-        .arg(config_path)
-        .args(["add-admin", "--name", admin_name])
-        .output()
-        .expect("run persea add-admin");
-    assert!(
-        out.status.success(),
-        "add-admin failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    stdout
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("API Key: "))
-        .map(str::to_string)
-        .unwrap_or_else(|| panic!("no API key in add-admin output: {stdout}"))
 }
 
 async fn round_trips(
@@ -441,34 +430,7 @@ async fn fetch_csrf_token(client: &reqwest::Client, base: &str) -> String {
         .to_string()
 }
 
-async fn wait_healthy(client: &reqwest::Client, base: &str, app: &mut AppProc, log_path: &PathBuf) {
-    let deadline = tokio::time::Instant::now() + HEALTH_TIMEOUT;
-    loop {
-        let ok = match client.get(format!("{base}/api/health")).send().await {
-            Ok(resp) => resp.status().is_success(),
-            Err(_) => false,
-        };
-        if ok {
-            return;
-        }
-        if let Some(status) = app.child.try_wait().expect("wait on child") {
-            let log = std::fs::read_to_string(log_path).unwrap_or_default();
-            panic!("persea exited early with {status}; log:\n{log}");
-        }
-        if tokio::time::Instant::now() >= deadline {
-            let log = std::fs::read_to_string(log_path).unwrap_or_default();
-            panic!("persea did not become healthy within {HEALTH_TIMEOUT:?}; log:\n{log}");
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
-}
-
-fn free_port() -> u16 {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind ephemeral port");
-    listener.local_addr().expect("local addr").port()
-}
-
-fn terminate(app: &mut AppProc) {
+fn terminate(app: &mut support::AppProc) {
     let pid = app.child.id() as i32;
     unsafe {
         libc::kill(pid, libc::SIGTERM);
@@ -485,29 +447,4 @@ fn terminate(app: &mut AppProc) {
     }
     let _ = app.child.kill();
     let _ = app.child.wait();
-}
-
-struct AppProc {
-    child: Child,
-}
-
-impl AppProc {
-    fn new(config_path: &PathBuf, log_path: &PathBuf) -> Self {
-        let log_file = std::fs::File::create(log_path).expect("create log file");
-        let child = Command::new(binary())
-            .arg("--config")
-            .arg(config_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(log_file))
-            .spawn()
-            .unwrap_or_else(|e| panic!("failed to spawn persea: {e}"));
-        AppProc { child }
-    }
-}
-
-impl Drop for AppProc {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }

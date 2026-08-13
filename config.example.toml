@@ -5,6 +5,13 @@
 #
 # Usage:
 #   persea --config config.toml serve
+#
+# ─── Windows ─────────────────────────────────────────────────────────────────
+# The installer (`persea-setup.exe`) runs `persea --init`, which generates a
+# starter config at %ProgramData%\persea\config.toml and a self-signed TLS
+# certificate in %ProgramData%\persea\tls. The service picks that config up
+# automatically. Use forward slashes or escaped backslashes ("C:\\persea\...")
+# in path values: plain backslashes are invalid TOML escapes.
 
 # ─── Server ───────────────────────────────────────────────────────────────────
 
@@ -509,3 +516,52 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # [vsphere.vm_credentials]
 # "my-windows-server" = { username = "Administrator", password_env = "WIN_PASS" }
 # "my-linux-box" = { username = "root", password_env = "LINUX_PASS" }
+
+# ─── Desktop Shell Bridge ────────────────────────────────────────────────────
+#
+# The persea desktop app (Tauri) can talk to this instance over remote IPC:
+# Win-key injection, drag-drop file transfer, and session window commands.
+# This is OFF by default, because enabling it widens the page's CSP:
+# `connect-src` additionally permits the Tauri IPC transports
+# (`tauri://localhost` on macOS/Linux, `http://ipc.localhost` on Windows).
+# When the flag is on, every page also serves the desktop bridge script
+# (templates/partials/desktop_bridge.html); it stays inert in a normal
+# browser (it only activates when the Tauri webview granted remote IPC).
+#
+# SECURITY: the desktop app grants IPC only to the origins you allowlist in
+# its `dangerousRemoteDomainIpcAccess` capability — remote pages get IPC
+# ONLY for those allowlisted origins, and only the `core:event` command
+# group. Leave this flag off for plain-browser deployments.
+
+# [desktop]
+# allow_bridge = false    # Env: PERSEA_DESKTOP__ALLOW_BRIDGE
+
+# [session]
+# Session behaviour.
+#
+# reason_required: when true, every session creation (the Connections page
+# connect flow and the Sessions page ad-hoc form) must carry a connection
+# reason (dropdown: Maintenance / Password rotation / Troubleshooting /
+# Incident response / Configuration change / Data migration / Performance
+# testing / Security audit / Other, plus free text). Creation without a
+# reason is rejected with a 400 and a clear message. Reasons are stored in
+# session_history.reason and shown on the Sessions page and in reports.
+# Default: false (reasons stay optional).
+# reason_required = false    # Env: PERSEA_SESSION__REASON_REQUIRED
+
+# [updates]
+# Server version update checking. Every `check_interval_hours`, persea
+# fetches `check_url` (the unauthenticated GitHub Releases API by default)
+# and compares the latest release against the running version. When a newer
+# stable release exists, admins see a dismissible banner ("Persea X.Y.Z is
+# available") with a link to the release. The check runs in the background;
+# a failure is logged as a warning and retried at the next interval.
+#
+# AIR-GAPPED DEPLOYMENTS: set enabled = false. No network call is made at
+# all, and the banner / status endpoint report nothing. Alternatively, keep
+# it enabled and point check_url at an internal mirror that implements the
+# same `/releases/latest` shape (e.g. Gitea).
+# enabled = true     # Env: PERSEA_UPDATES__ENABLED
+# check_url = "https://api.github.com/repos/BarbellDwarf/persea/releases/latest"
+#                     # Env: PERSEA_UPDATES__CHECK_URL
+# check_interval_hours = 24    # Env: PERSEA_UPDATES__CHECK_INTERVAL_HOURS

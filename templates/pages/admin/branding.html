@@ -172,6 +172,7 @@ function updatePreview() {
             img.style.cssText = 'height:28px;width:auto;object-fit:contain';
             logoEl.appendChild(img);
         }
+        // codeql[js/xss-through-dom] — safe: img.src assigned only after isSafeLogoUrl() (http/https/schemeless only)
         img.src = logoUrl;
         img.style.display = '';
     } else {
@@ -300,6 +301,7 @@ document.getElementById('branding-form').addEventListener('submit', function(e) 
         var logoUrl = document.getElementById('branding-logo-url').value;
         if (isSafeLogoUrl(logoUrl)) {
             var logo = document.getElementById('site-logo');
+            // codeql[js/xss-through-dom] — safe: guarded by isSafeLogoUrl() on the line above
             if (logo) { logo.src = logoUrl; logo.style.display = ''; }
         }
         document.getElementById('save-confirm').classList.remove('hidden');

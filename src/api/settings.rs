@@ -5,7 +5,10 @@
 //! to handlers, so `GET /api/system/settings` returns whatever is stored in
 //! the DB, falling back to sensible defaults that mirror the hardcoded
 //! values in `templates/pages/admin/settings.html` and the documented
-//! defaults in `src/config.rs`.
+//! defaults in `src/config.rs`. The per-protocol session defaults
+//! (`default_rdp_*`, `default_ssh_*`, `default_vnc_*`) mirror
+//! `config::PROTOCOL_DEFAULT_KEYS`; the session creation path applies them
+//! at create time.
 
 use crate::api::SettingsBaseline;
 use crate::auth::AuthIdentity;
@@ -41,13 +44,49 @@ const SETTING_KEYS: &[&str] = &[
     "enable_vmware",
     "enable_vdi",
     "enable_file_transfer",
+    "desktop_kiosk",
+    "desktop_transfers",
+    "desktop_pairing",
     "vault_enabled",
     "db_only_mode",
     "site_title",
     "logo_url",
     "primary_color",
     "custom_fields",
+    // Per-protocol session defaults (admin Settings → Session →
+    // Session defaults). Their unset values mirror the canonical table in
+    // `config::PROTOCOL_DEFAULT_KEYS`.
+    "default_rdp_width",
+    "default_rdp_height",
+    "default_rdp_dpi",
+    "default_rdp_security",
+    "default_rdp_h264",
+    "default_rdp_gfx",
+    "default_rdp_drive",
+    "default_ssh_width",
+    "default_ssh_height",
+    "default_vnc_color_depth",
+    "default_vnc_disable_copy",
+    "default_vnc_disable_paste",
 ];
+
+/// Numeric per-protocol defaults with their upper bound. Values must be
+/// positive; the session creation path clamps display dimensions to its
+/// own safe ranges, so the API only rejects nonsense here.
+const PROTOCOL_NUM_KEYS: &[(&str, u64)] = &[
+    ("default_rdp_width", 8192),
+    ("default_rdp_height", 8192),
+    ("default_rdp_dpi", 384),
+    ("default_ssh_width", 8192),
+    ("default_ssh_height", 8192),
+    ("default_vnc_color_depth", 32),
+];
+
+/// RDP security modes accepted as a global default. "any" matches the
+/// pass-through behaviour of the create path (guacd receives no security
+/// arg and falls back to its own default).
+const RDP_SECURITY_KEYS: &[&str] = &["default_rdp_security"];
+const RDP_SECURITY_VALUES: &[&str] = &["any", "rdp", "tls", "nla"];
 
 /// Keys whose stored value is a JSON document (serialized as a string in the
 /// `system_settings` table).
@@ -80,8 +119,16 @@ const BOOL_KEYS: &[&str] = &[
     "enable_vmware",
     "enable_vdi",
     "enable_file_transfer",
+    "desktop_kiosk",
+    "desktop_transfers",
+    "desktop_pairing",
     "vault_enabled",
     "db_only_mode",
+    "default_rdp_h264",
+    "default_rdp_gfx",
+    "default_rdp_drive",
+    "default_vnc_disable_copy",
+    "default_vnc_disable_paste",
 ];
 
 /// Upper bounds for unbounded numeric settings (0 stays "unlimited" where
@@ -129,6 +176,13 @@ fn default_value(key: &str) -> Value {
         // must report true too or the admin checkbox lies about the gate.
         "enable_file_transfer" => json!(true),
         "enable_browser_sessions" => json!(true),
+        // S09 "Desktop" section toggles. All default ON: the S05 capability
+        // probe (auth_status) reads an unset desktop_* toggle as enabled
+        // (settings_merge::toggle_enabled(..., true)), so the Settings API
+        // must agree or the admin checkboxes lie about the gates.
+        "desktop_kiosk" => json!(true),
+        "desktop_transfers" => json!(true),
+        "desktop_pairing" => json!(true),
         "vault_enabled" => json!(false),
         "db_only_mode" => json!(true),
         "site_title" => json!("persea"),
@@ -137,6 +191,22 @@ fn default_value(key: &str) -> Value {
         // Custom field definitions: JSON array, empty by default so the
         // feature is OFF until an admin configures fields.
         "custom_fields" => json!([]),
+        // Per-protocol session defaults. These mirror the canonical table
+        // in `config::PROTOCOL_DEFAULT_KEYS` — the session creation path
+        // and this API must agree (an integration test in
+        // tests/protocol_defaults_tests.rs asserts GET matches the table).
+        "default_rdp_width" => json!(1920u64),
+        "default_rdp_height" => json!(1080u64),
+        "default_rdp_dpi" => json!(96u64),
+        "default_rdp_security" => json!("any"),
+        "default_rdp_h264" => json!(true),
+        "default_rdp_gfx" => json!(true),
+        "default_rdp_drive" => json!(false),
+        "default_ssh_width" => json!(1920u64),
+        "default_ssh_height" => json!(1080u64),
+        "default_vnc_color_depth" => json!(24u64),
+        "default_vnc_disable_copy" => json!(false),
+        "default_vnc_disable_paste" => json!(false),
         _ => json!(null),
     }
 }
@@ -160,6 +230,19 @@ fn stored_to_value(key: &str, stored: &str) -> Value {
         }
     } else if JSON_KEYS.contains(&key) {
         serde_json::from_str::<Value>(stored).unwrap_or_else(|_| default_value(key))
+    } else if PROTOCOL_NUM_KEYS.iter().any(|(k, _)| *k == key) {
+        stored
+            .parse::<u64>()
+            .map(|n| json!(n))
+            .unwrap_or_else(|_| default_value(key))
+    } else if RDP_SECURITY_KEYS.contains(&key) {
+        // Only the accepted modes pass through; anything else (manual DB
+        // edits) falls back so guacd never receives an unknown mode.
+        if RDP_SECURITY_VALUES.contains(&stored) {
+            json!(stored)
+        } else {
+            default_value(key)
+        }
     } else {
         default_value(key)
     }
@@ -313,6 +396,30 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
         Ok(n.to_string())
     } else if BOOL_KEYS.contains(&key) {
         Ok(parse_bool(value, key)?.to_string())
+    } else if PROTOCOL_NUM_KEYS.iter().any(|(k, _)| *k == key) {
+        let n = parse_u64(value, key)?;
+        let max = PROTOCOL_NUM_KEYS
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, m)| *m)
+            .expect("key matched PROTOCOL_NUM_KEYS");
+        if n == 0 || n > max {
+            return Err(AppError::Validation(format!(
+                "{key} must be between 1 and {max}"
+            )));
+        }
+        Ok(n.to_string())
+    } else if RDP_SECURITY_KEYS.contains(&key) {
+        let s = value
+            .as_str()
+            .ok_or_else(|| AppError::Validation(format!("{key} must be a string")))?;
+        if !RDP_SECURITY_VALUES.contains(&s) {
+            return Err(AppError::Validation(format!(
+                "{key} must be one of: {}",
+                RDP_SECURITY_VALUES.join(", ")
+            )));
+        }
+        Ok(s.to_string())
     } else {
         // A key in SETTING_KEYS without a type handler is a programming
         // error — fail loudly instead of silently persisting "".
@@ -674,5 +781,65 @@ mod tests {
         let out = canonicalize("custom_fields", &json!([{"name": "Owner"}])).unwrap();
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v[0]["type"], "text");
+    }
+
+    // ── Per-protocol session defaults ──
+
+    #[test]
+    fn protocol_default_values_are_typed() {
+        assert_eq!(default_value("default_rdp_width"), json!(1920u64));
+        assert_eq!(default_value("default_rdp_height"), json!(1080u64));
+        assert_eq!(default_value("default_rdp_dpi"), json!(96u64));
+        assert_eq!(default_value("default_rdp_security"), json!("any"));
+        assert_eq!(default_value("default_rdp_h264"), json!(true));
+        assert_eq!(default_value("default_rdp_gfx"), json!(true));
+        assert_eq!(default_value("default_rdp_drive"), json!(false));
+        assert_eq!(default_value("default_ssh_width"), json!(1920u64));
+        assert_eq!(default_value("default_ssh_height"), json!(1080u64));
+        assert_eq!(default_value("default_vnc_color_depth"), json!(24u64));
+        assert_eq!(default_value("default_vnc_disable_copy"), json!(false));
+        assert_eq!(default_value("default_vnc_disable_paste"), json!(false));
+    }
+
+    #[test]
+    fn protocol_defaults_stored_to_value_round_trips() {
+        assert_eq!(stored_to_value("default_rdp_width", "1280"), json!(1280u64));
+        assert_eq!(stored_to_value("default_rdp_h264", "false"), json!(false));
+        assert_eq!(stored_to_value("default_rdp_security", "nla"), json!("nla"));
+        assert_eq!(
+            stored_to_value("default_vnc_color_depth", "16"),
+            json!(16u64)
+        );
+        // Garbage falls back to the code default.
+        assert_eq!(stored_to_value("default_rdp_width", "wide"), json!(1920u64));
+        assert_eq!(stored_to_value("default_rdp_h264", "maybe"), json!(true));
+        // Unknown security modes fall back too (guacd must never receive
+        // one from a manual DB edit).
+        assert_eq!(stored_to_value("default_rdp_security", "psk"), json!("any"));
+    }
+
+    #[test]
+    fn protocol_defaults_canonicalize_validates() {
+        assert_eq!(
+            canonicalize("default_rdp_width", &json!(1280)).unwrap(),
+            "1280"
+        );
+        assert_eq!(
+            canonicalize("default_rdp_security", &json!("nla")).unwrap(),
+            "nla"
+        );
+        assert_eq!(
+            canonicalize("default_vnc_disable_copy", &json!(false)).unwrap(),
+            "false"
+        );
+        // Zero and oversized values are rejected.
+        assert!(canonicalize("default_rdp_width", &json!(0)).is_err());
+        assert!(canonicalize("default_rdp_width", &json!(9000)).is_err());
+        assert!(canonicalize("default_rdp_dpi", &json!(400)).is_err());
+        assert!(canonicalize("default_vnc_color_depth", &json!(64)).is_err());
+        // Unknown security modes are rejected.
+        let err = canonicalize("default_rdp_security", &json!("tls-psk")).unwrap_err();
+        assert!(err.to_string().contains("any"), "got: {err}");
+        assert!(err.to_string().contains("nla"), "got: {err}");
     }
 }

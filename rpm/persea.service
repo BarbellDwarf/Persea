@@ -1,0 +1,29 @@
+[Unit]
+Description=persea web session proxy
+After=network.target persea-guacd.service
+Requires=persea-guacd.service
+
+[Service]
+Type=simple
+User=persea
+# The default config listens on 443; allow the non-root service account to
+# bind it. (Debian mirrors the same unit without this line: it serves on 8089.)
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+WorkingDirectory=/opt/persea
+ExecStart=/opt/persea/bin/persea --config /opt/persea/config.toml serve
+Restart=on-failure
+RestartSec=5
+Environment=RUST_LOG=info
+EnvironmentFile=-/opt/persea/env
+LimitNOFILE=65535
+ProtectSystem=full
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadWritePaths=/opt/persea
+
+[Install]
+WantedBy=multi-user.target

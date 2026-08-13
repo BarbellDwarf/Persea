@@ -498,6 +498,29 @@ pub async fn ws_handler(
         .into_response()
 }
 
+/// Per-session concurrent viewer cap for share-token joins
+/// (`[session] max_viewers`, default 10, 0 = unlimited). Returns the rejection message when
+/// the session already has the cap's worth of viewers connected, or `None`
+/// when a viewer may join. The owner connection is not counted
+/// (active_connections starts at 0 for a Pending session); 0 = unlimited.
+/// Only reached on the share-token path — cookie/ticket owner connections
+/// join via the pending/reconnect paths and are never limited. Extracted
+/// for test: the caller sends the message as a Guacamole `error`
+/// instruction.
+async fn share_viewer_cap_exceeded(manager: &SessionManager, session_id: Uuid) -> Option<String> {
+    let max_viewers = manager.config().max_viewers;
+    if max_viewers == 0 {
+        return None;
+    }
+    match manager.get_session(session_id).await {
+        Some(info) if info.active_connections >= max_viewers => Some(format!(
+            "share viewer limit reached: {} of {} viewers already connected",
+            info.active_connections, max_viewers
+        )),
+        _ => None,
+    }
+}
+
 async fn handle_ws(
     manager: Arc<SessionManager>,
     session_id: Uuid,
@@ -569,26 +592,28 @@ async fn handle_ws(
             }
         }
 
-        // Per-session concurrent viewer limit.
-        // The owner connection is not counted (active_connections starts at 0
-        // for a Pending session).  max_viewers == 0 means unlimited.
-        {
-            let max_viewers = manager.config().max_viewers;
-            if max_viewers > 0 {
-                let session = manager.get_session(session_id).await;
-                if let Some(info) = session {
-                    if info.active_connections >= max_viewers {
-                        tracing::warn!(
-                            session_id = %session_id,
-                            client_ip = %client_addr,
-                            active = info.active_connections,
-                            max = max_viewers,
-                            "Rejecting viewer: per-session concurrent viewer limit reached"
-                        );
-                        return;
-                    }
-                }
-            }
+        // Per-session concurrent viewer cap for share-token joins
+        // (`[session] max_viewers`, default 10, 0 = unlimited). The owner
+        // connection is not counted (active_connections starts at 0 for a
+        // Pending session). Cookie/ticket (owner) connections join via the
+        // pending/reconnect paths above and never reach this check.
+        if let Some(message) = share_viewer_cap_exceeded(&manager, session_id).await {
+            tracing::warn!(
+                session_id = %session_id,
+                client_ip = %client_addr,
+                error = %message,
+                "Rejecting share-token viewer: per-session concurrent viewer limit reached"
+            );
+            // The Guacamole client renders `error,<message>,<code>` in the
+            // UI (Tunnel.js forwards every instruction; Client.js calls
+            // onerror with the reason and disconnects), so the 11th viewer
+            // sees WHY the stream closed instead of a silent drop.
+            let mut ws = ws;
+            let instr =
+                crate::protocol::Instruction::new("error", vec![message, "512".into()]).encode();
+            let _ = ws.send(Message::Text(instr.into())).await;
+            let _ = ws.close().await;
+            return;
         }
 
         match manager.join_session(session_id).await {
@@ -973,17 +998,21 @@ const MAX_GUACD_CARRY: usize = 16 * 1024 * 1024;
 /// we emit ends at a true Guacamole instruction boundary; partial tail data
 /// is held in `carry` until the next read completes it.
 #[allow(clippy::too_many_arguments)]
-async fn guacd_to_ws(
+async fn guacd_to_ws<S>(
     session_id: Uuid,
     mut guacd: tokio::io::ReadHalf<GuacdStream>,
-    ws: WsSink,
+    ws: Arc<tokio::sync::Mutex<S>>,
     recording: Option<Arc<tokio::sync::Mutex<tokio::fs::File>>>,
     server_disconnected: Arc<std::sync::atomic::AtomicBool>,
     last_error: Arc<tokio::sync::Mutex<Option<String>>>,
     pending_transfers: Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
     database: Option<Db>,
     session_user: Option<String>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: futures_util::Sink<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
     let mut buf = vec![0u8; 65536];
     let mut carry = bytes::BytesMut::new();
 
@@ -1612,5 +1641,92 @@ mod tests {
         // guacd's parser accepts any {len}.{opcode} prefix) — followed by a
         // shut-down write half (EOF above).
         assert_eq!(received, b"10.disconnect;");
+    }
+
+    // ── Share viewer cap (H02) ──────────────────────────────────────────
+
+    fn ws_test_session(id: Uuid, viewers: u32) -> crate::session::Session {
+        use crate::session::{SessionStatus, SessionType};
+        crate::session::Session {
+            id,
+            session_type: SessionType::Ssh,
+            status: SessionStatus::Active,
+            created_at: chrono::Utc::now(),
+            hostname: "test-host".into(),
+            username: "alice".into(),
+            url: None,
+            banner: None,
+            guacd_stream: None,
+            connection_id: "conn-test".into(),
+            share_token: "owner-secret".into(),
+            width: 1024,
+            height: 768,
+            active_connections: viewers,
+            created_by: "alice".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            browser_session: None,
+            deferred_params: None,
+            drive_path: None,
+            drive_enabled: false,
+            tunnels: Vec::new(),
+            container_id: None,
+            container_name: None,
+            recording_enabled: false,
+            address_book_entry: None,
+            address_book_folder: None,
+            entry_display_name: None,
+            max_recordings: None,
+            login_script_handle: None,
+            shadow_tokens: Vec::new(),
+            share_allowed: false,
+            fullscreen_on_connect: false,
+            autohide_side_tabs: false,
+            last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
+            source_ip: None,
+            user_id: Some("alice".into()),
+        }
+    }
+
+    async fn ws_manager(max_viewers: u32) -> std::sync::Arc<crate::session::SessionManager> {
+        let mut config = crate::config::Config::default();
+        config.max_viewers = max_viewers;
+        std::sync::Arc::new(crate::session::SessionManager::new(config, None))
+    }
+
+    #[tokio::test]
+    async fn share_viewer_cap_blocks_at_capacity() {
+        let manager = ws_manager(10).await;
+        let id = manager
+            .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 10))
+            .await;
+        // 10/10 viewers → 11th blocked with a message naming the limit.
+        let msg = share_viewer_cap_exceeded(&manager, id).await;
+        assert!(msg.is_some());
+    }
+
+    #[tokio::test]
+    async fn share_viewer_cap_allows_under_capacity() {
+        let manager = ws_manager(10).await;
+        let id = manager
+            .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 9))
+            .await;
+        assert!(share_viewer_cap_exceeded(&manager, id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn share_viewer_cap_zero_means_unlimited() {
+        let manager = ws_manager(0).await;
+        let id = manager
+            .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 99))
+            .await;
+        assert!(share_viewer_cap_exceeded(&manager, id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn share_viewer_cap_unknown_session_allows() {
+        let manager = ws_manager(10).await;
+        assert!(share_viewer_cap_exceeded(&manager, Uuid::new_v4())
+            .await
+            .is_none());
     }
 }

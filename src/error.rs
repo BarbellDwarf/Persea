@@ -205,6 +205,18 @@ impl IntoResponse for AppError {
             AppError::Vdi(msg) if msg.contains("timeout") => {
                 (StatusCode::GATEWAY_TIMEOUT, self.to_string())
             }
+            // Runtime feature guards (Windows): these are deliberate,
+            // user-visible "unsupported on Windows" errors, not
+            // infrastructure failures — do not sanitize them.
+            AppError::Session(msg) if msg.contains("not supported on Windows") => {
+                (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
+            }
+            AppError::Browser(msg) if msg.contains("not supported on Windows") => {
+                (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
+            }
+            AppError::Vdi(msg) if msg.contains("not supported on Windows") => {
+                (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
+            }
 
             // ── Infrastructure errors: sanitize to avoid leaking paths / hostnames ──
             AppError::Session(_)

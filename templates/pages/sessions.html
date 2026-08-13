@@ -53,6 +53,24 @@
             </div>
             <div id="web-fields" class="hidden"><div class="form-group"><label class="form-label">URL</label><input type="text" id="url" placeholder="https://example.com" class="form-input"></div></div>
             <div id="vdi-fields" class="hidden"><div class="form-group"><label class="form-label">Container Image</label><input type="text" id="vdi-image" placeholder="e.g. myregistry/xrdp-desktop:latest" class="form-input"></div></div>
+            <div class="form-group">
+                <label class="form-label" for="session-reason">Reason <span class="text-xs text-[var(--text-muted)]">— why are you connecting?</span></label>
+                <div class="grid grid-cols-2 gap-4">
+                    <select id="session-reason-preset" class="form-input">
+                        <option value="">Select a reason…</option>
+                        <option>Maintenance</option>
+                        <option>Password rotation</option>
+                        <option>Troubleshooting</option>
+                        <option>Incident response</option>
+                        <option>Configuration change</option>
+                        <option>Data migration</option>
+                        <option>Performance testing</option>
+                        <option>Security audit</option>
+                        <option>Other</option>
+                    </select>
+                    <input type="text" id="session-reason" class="form-input" placeholder="Free text (optional)" maxlength="500" autocomplete="off">
+                </div>
+            </div>
             <div id="error" class="alert alert-error hidden" aria-live="polite"></div>
             <button type="button" id="connect-btn" class="btn btn-primary">Connect</button>
         </div>
@@ -61,8 +79,19 @@
         <table class="w-full"><thead><tr><th class="w-8"></th><th>User</th><th>Protocol</th><th>Target</th><th>Status</th><th>Duration</th><th>Actions</th></tr></thead><tbody id="session-list"></tbody></table>
         <p id="session-empty" class="hidden text-center py-12 text-muted text-sm">No sessions yet — open the form above to start an ad-hoc session.</p>
     </div>
+
+    <!-- Recent ended sessions (V10): the live table above only shows
+         sessions still in the manager; this strip carries the last few
+         history rows so `disconnected` and `logged_out` ends stay visible
+         alongside the reason that was recorded at creation (V09). -->
+    <div id="recent-ended" class="hidden mt-6">
+        <h2 class="text-sm font-semibold text-[var(--text-primary)] mb-3">Recent sessions</h2>
+        <div class="card table-wrapper">
+            <table class="w-full"><thead><tr><th>Protocol</th><th>Target</th><th>Started</th><th>Duration</th><th>Status</th><th>Reason</th></tr></thead><tbody id="recent-ended-list"></tbody></table>
+        </div>
+    </div>
 </div>
-<style>.proto-ssh{background:rgba(34,197,94,.15);color:#4ade80;border-color:rgba(34,197,94,.3)}.proto-rdp{background:rgba(59,130,246,.15);color:#60a5fa;border-color:rgba(59,130,246,.3)}.proto-vnc{background:rgba(249,115,22,.15);color:#fb923c;border-color:rgba(249,115,22,.3)}.proto-spice{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}.proto-web,.proto-vmware{background:rgba(20,184,166,.15);color:#2dd4bf;border-color:rgba(20,184,166,.3)}.proto-proxmox{background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.3)}.proto-vdi{background:rgba(236,72,153,.15);color:#f472b6;border-color:rgba(236,72,153,.3)}.status-pill{padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid}.status-active{background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3)}.status-pending{background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3)}.status-disconnected{background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3)}.status-completed,.status-expired,.status-error{background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3)}</style>
+<style>.proto-ssh{background:rgba(34,197,94,.15);color:#4ade80;border-color:rgba(34,197,94,.3)}.proto-rdp{background:rgba(59,130,246,.15);color:#60a5fa;border-color:rgba(59,130,246,.3)}.proto-vnc{background:rgba(249,115,22,.15);color:#fb923c;border-color:rgba(249,115,22,.3)}.proto-spice{background:rgba(168,85,247,.15);color:#c084fc;border-color:rgba(168,85,247,.3)}.proto-web,.proto-vmware{background:rgba(20,184,166,.15);color:#2dd4bf;border-color:rgba(20,184,166,.3)}.proto-proxmox{background:rgba(99,102,241,.15);color:#818cf8;border-color:rgba(99,102,241,.3)}.proto-vdi{background:rgba(236,72,153,.15);color:#f472b6;border-color:rgba(236,72,153,.3)}.status-pill{padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid}.status-active{background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3)}.status-pending{background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3)}.status-disconnected{background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3)}.status-logged_out{background:rgba(233,69,96,.12);color:#f87171;border-color:rgba(233,69,96,.3)}.status-completed,.status-expired,.status-error{background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3)}</style>
 <script nonce="{{ csp_nonce }}">
 (function() {
     // ── Session open preference ──────────────────────────────────────
@@ -120,6 +149,31 @@
         errEl.textContent = msg;
         errEl.classList.remove('hidden');
     }
+
+    // ── Reason (V09): a preset dropdown feeds the free-text field; the
+    // user may type anything instead. Sent as `reason` on the create
+    // request; required by the server when [session] reason_required is on.
+    var reasonPreset = document.getElementById('session-reason-preset');
+    var reasonInput = document.getElementById('session-reason');
+    if (reasonPreset && reasonInput) {
+        reasonPreset.addEventListener('change', function() {
+            var v = this.value;
+            if (v === 'Other') { reasonInput.value = ''; reasonInput.focus(); }
+            else if (v) reasonInput.value = v;
+        });
+        reasonInput.addEventListener('input', function() {
+            var current = this.value.trim();
+            if (current && reasonPreset.value !== current && reasonPreset.value !== 'Other') {
+                reasonPreset.value = '';
+            }
+        });
+    }
+    function currentReason() {
+        if (!reasonInput) return '';
+        var v = reasonInput.value.trim();
+        return v.length > 500 ? v.substring(0, 500) : v;
+    }
+
     connectBtn.addEventListener('click', function() {
         var type = document.getElementById('session-type').value;
         var payload = { session_type: type };
@@ -149,6 +203,8 @@
         payload.password = req.password;
         if (req.url) payload.url = req.url;
         if (req.container_image) payload.container_image = req.container_image;
+        var reason = currentReason();
+        if (reason) payload.reason = reason;
 
         errEl.classList.add('hidden');
         connectBtn.disabled = true;
@@ -204,7 +260,7 @@
         return hrs + 'h ' + (mins % 60) + 'm';
     }
     function statusPill(s) {
-        var cls = { active: 'status-active', pending: 'status-pending', disconnected: 'status-disconnected' }[s] || 'status-completed';
+        var cls = { active: 'status-active', pending: 'status-pending', disconnected: 'status-disconnected', logged_out: 'status-logged_out' }[s] || 'status-completed';
         return '<span class="status-pill ' + cls + '">' + escapeHtml((s || 'unknown').toUpperCase()) + '</span>';
     }
     function renderSessions(sessions) {
@@ -271,6 +327,38 @@
     document.getElementById('filter-protocol').addEventListener('change', loadSessions);
     document.getElementById('filter-status').addEventListener('change', loadSessions);
 
+    // ── Recent sessions (V10) ──
+    // History rows for the current user: status distinguishes a plain
+    // disconnect (reconnectable, `disconnected`) from a logout (terminal,
+    // `logged_out`); the recorded reason (V09) is shown when present.
+    var recentEl = document.getElementById('recent-ended');
+    var recentListEl = document.getElementById('recent-ended-list');
+    function loadRecentEnded() {
+        fetch('/api/sessions/recent', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(data) {
+                var rows = (data && data.recent) || [];
+                recentEl.classList.toggle('hidden', rows.length === 0);
+                if (!rows.length) return;
+                recentListEl.innerHTML = rows.map(function(s) {
+                    var proto = (s.session_type || '').toLowerCase();
+                    var target = s.entry_display_name || s.hostname || '\u2014';
+                    var status = s.status || 'unknown';
+                    var dur = s.duration_secs ? Math.floor(s.duration_secs / 60) + 'm' : '\u2014';
+                    var reason = s.reason ? escapeHtml(s.reason) : '<span class="text-[var(--text-muted)]">\u2014</span>';
+                    return '<tr>'
+                        + '<td><span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid">' + escapeHtml((proto || '?').toUpperCase()) + '</span></td>'
+                        + '<td class="text-sm text-[var(--text-secondary)]">' + escapeHtml(target) + '</td>'
+                        + '<td class="text-sm text-[var(--text-muted)]">' + escapeHtml(s.started_at || '\u2014') + '</td>'
+                        + '<td class="text-sm text-[var(--text-muted)]">' + dur + '</td>'
+                        + '<td>' + statusPill(status) + '</td>'
+                        + '<td class="text-sm text-[var(--text-secondary)]" style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeAttr(s.reason || '') + '">' + reason + '</td>'
+                        + '</tr>';
+                }).join('');
+            })
+            .catch(function() {});
+    }
+
     fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
         .then(function(res) { return res.ok ? res.json() : null; })
         .then(function(me) {
@@ -282,6 +370,8 @@
         })
         .catch(function() { loadSessions(); });
     setInterval(loadSessions, 5000);
+    loadRecentEnded();
+    setInterval(loadRecentEnded, 30000);
 })();
 </script>
 {% endblock %}

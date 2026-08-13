@@ -217,6 +217,11 @@ pub struct RdpParams {
     /// advertises this to the client as `secondary-monitors` and drives RDP
     /// multi-monitor via the Display Control channel. 0 = single monitor.
     pub secondary_monitors: u32,
+    /// Value for the RDP `client-name` connect arg (the machine name
+    /// Windows shows in logon events / query session). `None` sends an
+    /// empty value and guacd falls back to its own default, exactly like
+    /// before the client-name feature existed.
+    pub client_name: Option<String>,
 }
 
 /// Connection parameters — SSH, VNC, or RDP.
@@ -366,6 +371,7 @@ pub async fn connect_and_handshake(
                 "username" => p.username.clone(),
                 "password" => p.password.clone().unwrap_or_default(),
                 "domain" => p.domain.clone().unwrap_or_default(),
+                "client-name" => p.client_name.clone().unwrap_or_default(),
                 "security" => p.security.clone().unwrap_or_else(|| "any".into()),
                 "width" => p.width.to_string(),
                 "height" => p.height.to_string(),

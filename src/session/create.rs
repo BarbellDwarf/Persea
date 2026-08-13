@@ -11,17 +11,150 @@ use uuid::Uuid;
 
 use tokio::time;
 
+use std::time::Duration;
+
 /// Command used when `ssh_tmux_detach` is enabled: attach to the most
 /// recent tmux session with `-d` (kicking any stale client left attached
 /// by an abrupt disconnect), or create a fresh session if none exists.
 const TMUX_DETACH_WRAPPER: &str = "tmux attach-session -d 2>/dev/null || tmux new-session";
 
+/// Maximum length of the RDP `client-name` value. guacd truncates the
+/// FreeRDP client hostname to 32 bytes (`RDP_CLIENT_HOSTNAME_SIZE`);
+/// persea truncates first so the value on the wire matches what Windows
+/// records.
+const RDP_CLIENT_NAME_MAX_CHARS: usize = 32;
+
+/// Expand the `[rdp] client_name_template` into the RDP `client-name`
+/// value: `{user}` = the persea identity that created the session,
+/// `{host}` = the resolved client hostname (or IP). Any other placeholder
+/// passes through verbatim.
+fn expand_rdp_client_name_template(template: &str, user: &str, host: &str) -> String {
+    template
+        .replace("{user}", user)
+        .replace("{host}", host)
+        .chars()
+        .take(RDP_CLIENT_NAME_MAX_CHARS)
+        .collect()
+}
+
+/// Resolve the connecting client's hostname via reverse DNS with a 1
+/// second budget. Any failure (missing IP, unparseable address, NXDOMAIN,
+/// timeout) falls back to the raw IP so session creation is never delayed
+/// by DNS. An unknown IP (no value at all) yields "unknown".
+async fn resolve_client_host(client_ip: Option<&str>) -> String {
+    let Some(ip_str) = client_ip.filter(|s| !s.is_empty()) else {
+        return "unknown".to_string();
+    };
+    let Ok(addr) = ip_str.parse::<std::net::IpAddr>() else {
+        return ip_str.to_string();
+    };
+    let lookup = async {
+        tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&addr))
+            .await
+            .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+    };
+    match tokio::time::timeout(Duration::from_secs(1), lookup).await {
+        Ok(Ok(name)) => {
+            let name = name.trim().trim_end_matches('.').to_string();
+            if name.is_empty() {
+                ip_str.to_string()
+            } else {
+                name
+            }
+        }
+        _ => ip_str.to_string(),
+    }
+}
+
+/// Effective per-protocol global defaults for one session creation (admin
+/// Settings → Session → Session defaults). Precedence: the request/entry
+/// value wins, then the stored global default (system_settings), then this
+/// struct's code defaults — the hardcoded values the create path used
+/// before the feature existed. Read once per create from the DB settings
+/// overlay loaded at the top of `create_session`, so a settings change
+/// affects new sessions only.
+struct ProtocolDefaults {
+    width: u32,
+    height: u32,
+    dpi: u32,
+    rdp_security: Option<String>,
+    rdp_h264: bool,
+    rdp_gfx: bool,
+    rdp_drive: Option<bool>,
+    vnc_color_depth: Option<u8>,
+    vnc_disable_copy: bool,
+    vnc_disable_paste: bool,
+}
+
+impl ProtocolDefaults {
+    fn from_settings(session_type: &SessionType, settings: &[(String, String)]) -> Self {
+        let stored_u32 = |key: &str, code: u32| {
+            settings
+                .iter()
+                .find(|(k, _)| k == key)
+                .and_then(|(_, v)| v.parse::<u32>().ok())
+                .unwrap_or(code)
+        };
+        let stored_bool = |key: &str| match settings
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+        {
+            Some("true") => Some(true),
+            Some("false") => Some(false),
+            _ => None,
+        };
+        let stored_str = |key: &str| {
+            settings
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.as_str())
+                .filter(|v| !v.is_empty())
+                .map(str::to_string)
+        };
+        let (width, height) = match session_type {
+            SessionType::Ssh => (
+                stored_u32("default_ssh_width", 1920),
+                stored_u32("default_ssh_height", 1080),
+            ),
+            SessionType::Rdp => (
+                stored_u32("default_rdp_width", 1920),
+                stored_u32("default_rdp_height", 1080),
+            ),
+            _ => (1920, 1080),
+        };
+        Self {
+            width,
+            height,
+            dpi: match session_type {
+                SessionType::Rdp => stored_u32("default_rdp_dpi", 96),
+                _ => 96,
+            },
+            rdp_security: stored_str("default_rdp_security")
+                .filter(|s| matches!(s.as_str(), "any" | "rdp" | "tls" | "nla")),
+            rdp_h264: stored_bool("default_rdp_h264").unwrap_or(true),
+            rdp_gfx: stored_bool("default_rdp_gfx").unwrap_or(true),
+            rdp_drive: stored_bool("default_rdp_drive"),
+            vnc_color_depth: settings
+                .iter()
+                .find(|(k, _)| k == "default_vnc_color_depth")
+                .and_then(|(_, v)| v.parse::<u8>().ok()),
+            vnc_disable_copy: stored_bool("default_vnc_disable_copy").unwrap_or(false),
+            vnc_disable_paste: stored_bool("default_vnc_disable_paste").unwrap_or(false),
+        }
+    }
+}
+
 impl SessionManager {
     /// Create a new session: connect to guacd, perform handshake, return session info.
+    /// `client_ip` is the connecting client's IP (from the HTTP layer,
+    /// already X-Forwarded-For aware); RDP sessions use it for the
+    /// `client-name` parameter.
     pub async fn create_session(
-        &self,
+        self: &std::sync::Arc<Self>,
         req: CreateSessionRequest,
         created_by: String,
+        client_ip: Option<String>,
     ) -> Result<SessionInfo, SessionError> {
         // Enforce session limits (only count active/pending sessions)
         {
@@ -87,19 +220,37 @@ impl SessionManager {
         let toggle = |key: &str| crate::settings_merge::toggle_enabled(&settings, key, true);
         check_session_type_enabled(&req.session_type, req.address_book_entry.as_deref(), toggle)?;
 
+        // Effective per-protocol global defaults (admin Settings → Session
+        // → Session defaults). Precedence: the request/entry value wins,
+        // then the stored global default, then the code defaults inside
+        // `ProtocolDefaults`. Read once per create — a settings change
+        // affects new sessions only, never existing ones.
+        let defaults = ProtocolDefaults::from_settings(&req.session_type, &settings);
+
         let session_id = Uuid::new_v4();
+        // V09: connection reason, trimmed and normalized before any of
+        // `req`'s fields are moved into the session literal below.
+        let reason = req
+            .reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+            .map(str::to_string);
         // Protocol-specific params land in flattened sub-structs (see
         // CreateSessionRequest); bind them up-front for ergonomic access.
         let ssh = req.ssh.as_ref();
         let rdp = req.rdp.as_ref();
         let vnc = req.vnc.as_ref();
         let web = req.web.as_ref();
+        // On Windows the Vdi arm returns at the guard, so this binding is
+        // unused there — the feature stays compiled (runtime guard).
+        #[allow(unused_variables)]
         let vdi_params = req.vdi.as_ref();
         let spice = req.spice.as_ref();
         let proxmox = req.proxmox.as_ref();
-        let raw_width = req.width.unwrap_or(1920);
-        let raw_height = req.height.unwrap_or(1080);
-        let raw_dpi = req.dpi.unwrap_or(96);
+        let raw_width = req.width.unwrap_or(defaults.width);
+        let raw_height = req.height.unwrap_or(defaults.height);
+        let raw_dpi = req.dpi.unwrap_or(defaults.dpi);
         let width = raw_width.clamp(640, 8192);
         let height = raw_height.clamp(480, 8192);
         let dpi = raw_dpi.clamp(16, 384);
@@ -301,8 +452,13 @@ impl SessionManager {
                     "Creating new RDP session"
                 );
 
-                let drive_enabled = drive::is_drive_enabled(&self.config.drive, req.enable_drive)
-                    && toggle("enable_file_transfer");
+                // RDP drive: request/entry override wins, then the global
+                // default_rdp_drive setting, then the [drive] config
+                // section (drive on only when configured and enabled).
+                let drive_enabled = drive::is_drive_enabled(
+                    &self.config.drive,
+                    req.enable_drive.or(defaults.rdp_drive),
+                ) && toggle("enable_file_transfer");
                 let drive_cfg = drive::drive_config_or_default(&self.config.drive);
                 tracing::info!(
                     %session_id,
@@ -327,8 +483,40 @@ impl SessionManager {
                 };
 
                 let rdp_ignore_cert = req.ignore_cert.unwrap_or(false);
-                let rdp_security = rdp.and_then(|s| s.security.clone());
+                // RDP security: request/entry value wins, else the global
+                // default_rdp_security setting; unset passes None through
+                // (guacd falls back to "any").
+                let rdp_security = rdp
+                    .and_then(|s| s.security.clone())
+                    .or_else(|| defaults.rdp_security.clone());
                 let rdp_enable_drive = session_drive_path.is_some();
+                // RDP client-name: expand `[rdp] client_name_template`
+                // ({user} = persea identity, {host} = reverse-DNS of the
+                // connecting client or its IP). An empty template disables
+                // the parameter, keeping the pre-feature handshake.
+                let client_name_template = self
+                    .config
+                    .rdp
+                    .as_ref()
+                    .and_then(|r| r.client_name_template.as_deref())
+                    .unwrap_or(crate::config::DEFAULT_RDP_CLIENT_NAME_TEMPLATE);
+                let client_name = if client_name_template.trim().is_empty() {
+                    None
+                } else {
+                    let host = resolve_client_host(client_ip.as_deref()).await;
+                    tracing::info!(
+                        session_id = %session_id,
+                        client_ip = ?client_ip,
+                        resolved_host = %host,
+                        template = %client_name_template,
+                        "RDP client name resolved"
+                    );
+                    Some(expand_rdp_client_name_template(
+                        client_name_template,
+                        &created_by,
+                        &host,
+                    ))
+                };
                 tracing::info!(
                     %session_id,
                     ignore_cert = rdp_ignore_cert,
@@ -337,6 +525,7 @@ impl SessionManager {
                     drive_path = ?session_drive_path,
                     domain = ?rdp.and_then(|s| s.domain.as_ref()),
                     has_password = req.password.is_some(),
+                    client_name = ?client_name,
                     "RDP session params"
                 );
                 let params = guacd::ConnectionParams::Rdp(Box::new(guacd::RdpParams {
@@ -346,6 +535,7 @@ impl SessionManager {
                     password: req.password.clone(),
                     domain: rdp.and_then(|s| s.domain.clone()),
                     security: rdp_security,
+                    client_name,
                     width,
                     height,
                     dpi,
@@ -368,7 +558,7 @@ impl SessionManager {
                     remote_app_args: rdp.and_then(|s| s.remote_app_args.clone()),
                     disable_copy: req.disable_copy.unwrap_or(false),
                     disable_paste: req.disable_paste.unwrap_or(false),
-                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(true),
+                    enable_gfx: rdp.and_then(|s| s.enable_gfx).unwrap_or(defaults.rdp_gfx),
                     enable_desktop_composition: rdp
                         .and_then(|s| s.enable_desktop_composition)
                         .unwrap_or(false),
@@ -378,7 +568,7 @@ impl SessionManager {
                         .and_then(|s| s.enable_full_window_drag)
                         .unwrap_or(false),
                     force_lossless: rdp.and_then(|s| s.force_lossless).unwrap_or(false),
-                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(true),
+                    enable_h264: rdp.and_then(|s| s.enable_h264).unwrap_or(defaults.rdp_h264),
                     secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
                 }));
                 (
@@ -417,12 +607,12 @@ impl SessionManager {
                     hostname: hostname.clone(),
                     port,
                     password: req.password.clone(),
-                    color_depth: vnc.and_then(|s| s.color_depth),
+                    color_depth: vnc.and_then(|s| s.color_depth).or(defaults.vnc_color_depth),
                     width,
                     height,
                     dpi,
-                    disable_copy: req.disable_copy.unwrap_or(false),
-                    disable_paste: req.disable_paste.unwrap_or(false),
+                    disable_copy: req.disable_copy.unwrap_or(defaults.vnc_disable_copy),
+                    disable_paste: req.disable_paste.unwrap_or(defaults.vnc_disable_paste),
                 });
                 (
                     params, hostname, username, None, None, None, None, None, None,
@@ -484,6 +674,7 @@ impl SessionManager {
                 let (pve_host, pve_port) = parse_host_port(&pve_url, 8006)?;
                 check_allowed_network(&pve_host, pve_port, &self.config.web_allowed_networks)
                     .await?;
+                reject_denied_target(&pve_host)?;
 
                 let vmid = proxmox.and_then(|s| s.proxmox_vmid).unwrap_or(0);
                 if vmid == 0 {
@@ -699,17 +890,7 @@ impl SessionManager {
                 check_allowed_network(url_host, url_port, &self.config.web_allowed_networks)
                     .await?;
 
-                if url_host == "169.254.169.254"
-                    || url_host.parse::<std::net::IpAddr>().is_ok_and(|ip| {
-                        "169.254.0.0/16"
-                            .parse::<ipnetwork::IpNetwork>()
-                            .is_ok_and(|net| net.contains(ip))
-                    })
-                {
-                    return Err(SessionError::ValidationError(
-                        "access to link-local / cloud metadata (169.254.0.0/16) is blocked".into(),
-                    ));
-                }
+                reject_denied_target(url_host)?;
 
                 tracing::info!(
                     session_id = %session_id,
@@ -746,13 +927,26 @@ impl SessionManager {
                 )
             }
             SessionType::Vdi => {
+                // Runtime feature guard (not compile-out): VDI needs Docker
+                // container management, unsupported on Windows. Fails with a
+                // clear error instead of a confusing "driver not initialized".
+                #[cfg(windows)]
+                {
+                    return Err(SessionError::VdiError(
+                        "VDI (Docker containers) is not supported on Windows — \
+                         run persea on Linux for VDI desktops"
+                            .into(),
+                    ));
+                }
+                // On Windows the guard above returns, so the rest of the arm
+                // is unreachable — by design (runtime guard, not compile-out).
+                #[allow(unreachable_code)]
                 let vdi_cfg = self
                     .config
                     .vdi
                     .as_ref()
                     .filter(|v| v.enabled)
                     .ok_or_else(|| SessionError::VdiError("VDI feature is not enabled".into()))?;
-
                 let vdi = self
                     .vdi_driver
                     .as_ref()
@@ -889,6 +1083,7 @@ impl SessionManager {
                     force_lossless: false,
                     enable_h264: true,
                     secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
+                    client_name: None,
                 }));
                 (
                     params,
@@ -1083,24 +1278,45 @@ impl SessionManager {
             let guacd_addr = self.config.guacd_addr.clone();
             let guacd_tls = self.guacd_tls.clone();
 
-            // Parallelise DNS validation with guacd connect
-            let ((), (stream, connection_id)) = tokio::try_join!(
-                async {
-                    if let Some((h, p, nets)) = pending_net_check.take() {
-                        check_allowed_network(&h, p, &nets)
+            // R05: hostname targets resolve DNS (allowlist validation) in
+            // parallel with the guacd connect — guacd resolves the
+            // hostname itself, so the DNS result does not gate the TCP
+            // connect. tokio::try_join! aborts the guacd future the
+            // moment the DNS/allowlist branch errors (dropping the TCP
+            // stream mid-connect), and returns the guacd error when the
+            // connect fails while DNS succeeds. IP targets need no DNS, so
+            // they keep the sequential path (no resolution to overlap).
+            let hostname_target = pending_net_check
+                .as_ref()
+                .is_some_and(|(h, _, _)| h.parse::<std::net::IpAddr>().is_err());
+
+            let (stream, connection_id) = if hostname_target {
+                let ((), (stream, connection_id)) = tokio::try_join!(
+                    async {
+                        if let Some((h, p, nets)) = pending_net_check.take() {
+                            check_allowed_network(&h, p, &nets)
+                                .await
+                                .map_err(|e| e.to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                    async {
+                        guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
                             .await
                             .map_err(|e| e.to_string())
-                    } else {
-                        Ok(())
                     }
-                },
-                async {
-                    guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
-                        .await
-                        .map_err(|e| e.to_string())
+                )
+                .map_err(SessionError::GuacdConnection)?;
+                (stream, connection_id)
+            } else {
+                if let Some((h, p, nets)) = pending_net_check.take() {
+                    check_allowed_network(&h, p, &nets).await?;
                 }
-            )
-            .map_err(SessionError::GuacdConnection)?;
+                guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
+                    .await
+                    .map_err(|e| SessionError::GuacdConnection(e.to_string()))?
+            };
 
             tracing::info!(
                 session_id = %session_id,
@@ -1199,11 +1415,12 @@ impl SessionManager {
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
             autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
             last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
-            source_ip: None,
+            source_ip: client_ip,
             user_id: Some(created_by),
         };
 
         let info = session.info();
+        self.publish_session_started(&session);
         let session = tokio::sync::Mutex::new(session);
 
         self.sessions
@@ -1248,7 +1465,10 @@ impl SessionManager {
             }
         }
 
-        // Record in session history (non-blocking)
+        // Record in session history (non-blocking, fire-and-forget, R02):
+        // the insert runs on the blocking pool and the response is not
+        // held up waiting for it. Session history is audit-only — a late
+        // insert is harmless, so the JoinHandle is dropped un-awaited.
         if let Some(ref db) = self.db {
             let db = db.clone();
             let session_id_str = session_id.to_string();
@@ -1259,8 +1479,12 @@ impl SessionManager {
             let address_book_entry = info.address_book_entry.clone();
             let address_book_folder = info.address_book_folder.clone();
             let entry_display_name = info.entry_display_name.clone();
-            tokio::task::spawn_blocking(move || {
-                crate::db::insert_session_history(
+            let reason = reason.clone();
+            // Explicit drop: detach the blocking task (fire-and-forget).
+            // Dropping the JoinHandle does not cancel spawn_blocking work;
+            // the insert runs to completion on the blocking pool.
+            drop(tokio::task::spawn_blocking(move || {
+                let _ = crate::db::insert_session_history(
                     &db,
                     &session_id_str,
                     &st,
@@ -1271,10 +1495,11 @@ impl SessionManager {
                     address_book_entry.as_deref(),
                     address_book_folder.as_deref(),
                     entry_display_name.as_deref(),
-                )
-            })
-            .await
-            .ok();
+                );
+                if let Some(r) = reason.as_deref() {
+                    let _ = crate::db::update_session_history_reason(&db, &session_id_str, r);
+                }
+            }));
         }
 
         // Spawn timeout task for pending sessions
@@ -1286,6 +1511,7 @@ impl SessionManager {
         // (the store functions no-op without a shared backend pool).
         let registry_db = self.db.clone();
         let registry_ha = self.ha_enabled();
+        let publisher = std::sync::Arc::clone(self);
         tokio::spawn(async move {
             time::sleep(time::Duration::from_secs(timeout_secs)).await;
             let mut was_pending = false;
@@ -1296,6 +1522,7 @@ impl SessionManager {
                     if session.status == SessionStatus::Pending {
                         tracing::warn!(session_id = %session_id, "Session expired (no browser connected)");
                         session.status = SessionStatus::Expired;
+                        publisher.publish_transition(&SessionStatus::Pending, &session);
                         was_pending = true;
                         session.guacd_stream = None;
                         super::cleanup_browser(
@@ -1451,6 +1678,35 @@ fn parse_host_port(input: &str, default_port: u16) -> Result<(String, u16), Sess
     Ok((host, port))
 }
 
+/// Link-local / cloud-metadata networks denied as session targets
+/// regardless of the configured allowlist (S06, S02). 169.254.169.254 is
+/// the AWS/GCP/Azure metadata endpoint; the deny covers the whole
+/// 169.254.0.0/16 link-local block, strictly stronger than the
+/// ticket's 169.254.169.254/32. Applied AFTER the allowlist check, as
+/// defense in depth for when operators widen the allowlist (e.g. to
+/// 0.0.0.0/0).
+const DENIED_TARGET_NETWORKS: &[&str] = &["169.254.0.0/16"];
+
+/// Reject hosts inside the hardcoded deny list. Only direct IP targets
+/// are matched (a hostname's resolved addresses are checked against the
+/// allowlist by [`check_allowed_network`]).
+fn reject_denied_target(host: &str) -> Result<(), SessionError> {
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        for cidr in DENIED_TARGET_NETWORKS {
+            if cidr
+                .parse::<ipnetwork::IpNetwork>()
+                .is_ok_and(|net| net.contains(ip))
+            {
+                return Err(SessionError::ValidationError(format!(
+                    "access to link-local / cloud metadata network {} is blocked",
+                    cidr
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Check that a host resolves to an IP within the allowed CIDR networks.
 async fn check_allowed_network(
     host: &str,
@@ -1579,6 +1835,7 @@ mod auth_pkg_tests {
         Config {
             rdp: Some(crate::config::RdpConfig {
                 default_auth_pkg: default_auth_pkg.map(|s| s.to_string()),
+                client_name_template: None,
             }),
             ..Config::default()
         }
@@ -1693,6 +1950,181 @@ mod tests {
     fn typescript_name_unknown_token_left_literal() {
         let got = expand_typescript_name("pre-{bogus}-{user}", "x", "h", "c", &ts_id(), ts_when());
         assert_eq!(got, "pre-{bogus}-x");
+    }
+
+    // ── RDP client-name template ──
+
+    #[test]
+    fn rdp_client_name_expands_user_and_host() {
+        let got = expand_rdp_client_name_template("{user}@{host}", "alice", "switch01");
+        assert_eq!(got, "alice@switch01");
+    }
+
+    #[test]
+    fn rdp_client_name_custom_template_and_unknown_placeholder() {
+        assert_eq!(
+            expand_rdp_client_name_template("{user}:{host}", "bob", "192.0.2.5"),
+            "bob:192.0.2.5"
+        );
+        assert_eq!(
+            expand_rdp_client_name_template("persea-{bogus}-{user}", "carol", "h1"),
+            "persea-{bogus}-carol"
+        );
+    }
+
+    #[test]
+    fn rdp_client_name_truncates_to_guacd_32_char_limit() {
+        let got = expand_rdp_client_name_template(
+            "{user}@{host}",
+            "alice",
+            "very-long-fqdn.corp.example.com",
+        );
+        assert_eq!(got.chars().count(), RDP_CLIENT_NAME_MAX_CHARS);
+        assert_eq!(got, "alice@very-long-fqdn.corp.exampl");
+    }
+
+    #[test]
+    fn rdp_client_name_empty_template_expands_to_empty() {
+        assert_eq!(expand_rdp_client_name_template("", "alice", "h1"), "");
+        assert_eq!(
+            expand_rdp_client_name_template("   ", "alice", "h1"),
+            "   ",
+            "disable check happens on the trimmed template in the RDP branch"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_client_host_missing_or_invalid_ip_falls_back() {
+        assert_eq!(resolve_client_host(None).await, "unknown");
+        assert_eq!(resolve_client_host(Some("")).await, "unknown");
+        assert_eq!(resolve_client_host(Some("not-an-ip")).await, "not-an-ip");
+    }
+
+    #[tokio::test]
+    async fn resolve_client_host_unresolvable_ip_returns_raw_ip() {
+        // 203.0.113.7 is TEST-NET-3 (RFC 5737): no PTR record exists, so
+        // the reverse lookup must fail (NXDOMAIN or the 1s timeout) and
+        // the raw IP must come back.
+        assert_eq!(
+            resolve_client_host(Some("203.0.113.7")).await,
+            "203.0.113.7"
+        );
+    }
+
+    // ── Per-protocol global defaults ──
+
+    fn stored(rows: &[(&str, &str)]) -> Vec<(String, String)> {
+        rows.iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn protocol_defaults_unset_settings_match_code_defaults() {
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &[]);
+        assert_eq!((d.width, d.height, d.dpi), (1920, 1080, 96));
+        assert_eq!(d.rdp_security, None);
+        assert!(d.rdp_h264, "H.264 must default on");
+        assert!(d.rdp_gfx, "GFX must default on");
+        assert_eq!(d.rdp_drive, None);
+        assert_eq!(d.vnc_color_depth, None);
+        assert!(!d.vnc_disable_copy);
+        assert!(!d.vnc_disable_paste);
+    }
+
+    #[test]
+    fn protocol_defaults_apply_per_protocol_settings() {
+        let settings = stored(&[
+            ("default_rdp_width", "1280"),
+            ("default_rdp_height", "800"),
+            ("default_rdp_dpi", "120"),
+            ("default_rdp_security", "nla"),
+            ("default_rdp_h264", "false"),
+            ("default_rdp_gfx", "false"),
+            ("default_rdp_drive", "true"),
+            ("default_ssh_width", "200"),
+            ("default_ssh_height", "60"),
+            ("default_vnc_color_depth", "16"),
+            ("default_vnc_disable_copy", "true"),
+            ("default_vnc_disable_paste", "true"),
+        ]);
+        let rdp = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!((rdp.width, rdp.height, rdp.dpi), (1280, 800, 120));
+        assert_eq!(rdp.rdp_security.as_deref(), Some("nla"));
+        assert!(!rdp.rdp_h264);
+        assert!(!rdp.rdp_gfx);
+        assert_eq!(rdp.rdp_drive, Some(true));
+        assert_eq!(
+            rdp.vnc_color_depth,
+            Some(16),
+            "all groups are populated; only the session's protocol branch reads its own"
+        );
+
+        let ssh = ProtocolDefaults::from_settings(&SessionType::Ssh, &settings);
+        assert_eq!(
+            (ssh.width, ssh.height),
+            (200, 60),
+            "SSH width must come from default_ssh_width, not default_rdp_width"
+        );
+        assert_eq!(ssh.dpi, 96, "SSH has no per-protocol DPI setting");
+        assert!(
+            !ssh.rdp_h264,
+            "the RDP H.264 default still populates the struct; only the RDP branch reads it"
+        );
+
+        let vnc = ProtocolDefaults::from_settings(&SessionType::Vnc, &settings);
+        assert_eq!(vnc.vnc_color_depth, Some(16));
+        assert!(vnc.vnc_disable_copy);
+        assert!(vnc.vnc_disable_paste);
+        assert_eq!(
+            (vnc.width, vnc.height),
+            (1920, 1080),
+            "VNC has no per-protocol resolution settings"
+        );
+    }
+
+    #[test]
+    fn protocol_defaults_other_types_stay_on_code_defaults() {
+        for st in [
+            SessionType::Web,
+            SessionType::Spice,
+            SessionType::Vdi,
+            SessionType::Proxmox,
+        ] {
+            let d = ProtocolDefaults::from_settings(&st, &[]);
+            assert_eq!((d.width, d.height, d.dpi), (1920, 1080, 96));
+            assert!(d.rdp_h264);
+            assert!(d.rdp_gfx);
+        }
+    }
+
+    #[test]
+    fn protocol_defaults_garbage_stored_values_fall_back() {
+        let settings = stored(&[
+            ("default_rdp_width", "wide"),
+            ("default_rdp_h264", "maybe"),
+            ("default_rdp_security", ""),
+            ("default_rdp_drive", "yes"),
+            ("default_vnc_color_depth", "deep"),
+        ]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.width, 1920);
+        assert!(d.rdp_h264);
+        assert_eq!(d.rdp_security, None);
+        assert_eq!(d.rdp_drive, None);
+        assert_eq!(d.vnc_color_depth, None);
+    }
+
+    #[test]
+    fn protocol_defaults_unknown_security_mode_falls_back() {
+        // A manually-edited DB value outside the accepted modes must not
+        // reach guacd: fall back to the pass-through code default.
+        let settings = stored(&[("default_rdp_security", "ssl3")]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.rdp_security, None);
+        let settings = stored(&[("default_rdp_security", "tls")]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.rdp_security.as_deref(), Some("tls"));
     }
 
     #[tokio::test]

@@ -52,6 +52,61 @@ pub struct OidcState {
     pub session_ttl_secs: u64,
     /// Pending OIDC flows: state -> (pkce_verifier, nonce, created_at)
     pub pending: PendingFlows,
+    /// HMAC-SHA256 key for the state-cookie browser fingerprint (H01).
+    /// Derived from the client secret, so it is a server-side secret the
+    /// login-CSRF attacker (who knows the flow's state token, the victim's
+    /// IP and User-Agent) cannot compute. Never logged.
+    pub fingerprint_key: [u8; 32],
+}
+
+/// Derive the state-fingerprint HMAC key from the OIDC client secret.
+///
+/// Domain-separated SHA-256 so the key material is a fixed 32 bytes
+/// regardless of the secret's length and cannot be confused with the
+/// secret itself if it ever leaks from a different context. The secret is
+/// validated present at init (see [`init_oidc`]), so this always has input.
+fn derive_fingerprint_key(client_secret: &str) -> [u8; 32] {
+    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    ctx.update(b"persea-oidc-fingerprint-v1");
+    ctx.update(client_secret.as_bytes());
+    let digest = ctx.finish();
+    let mut key = [0u8; 32];
+    key.copy_from_slice(digest.as_ref());
+    key
+}
+
+/// Extract the client fingerprint inputs (IP + User-Agent) from the
+/// request headers. Mirrors how the callback compares the cookie against
+/// the current request, so both sides must use this same helper.
+fn client_fingerprint_inputs(headers: &axum::http::HeaderMap) -> (String, String) {
+    let ip = headers
+        .get("x-forwarded-for")
+        .or_else(|| headers.get("x-real-ip"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    let ua = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+    (ip, ua)
+}
+
+/// HMAC-SHA256 fingerprint of (IP, User-Agent) keyed by the server-side
+/// fingerprint key. The state cookie carries `state:fingerprint`; the
+/// callback recomputes this from the current request and rejects on
+/// mismatch, so a flow started in one browser cannot be completed from
+/// another (login CSRF), and — because the key is a server secret — the
+/// attacker cannot forge a cookie for a victim whose IP and UA they know.
+fn state_fingerprint(key: &[u8; 32], ip: &str, ua: &str) -> String {
+    use ring::hmac;
+    let key = hmac::Key::new(hmac::HMAC_SHA256, key);
+    let mut data = Vec::new();
+    data.extend_from_slice(ip.as_bytes());
+    data.extend_from_slice(ua.as_bytes());
+    let tag = hmac::sign(&key, &data);
+    hex::encode(tag.as_ref())
 }
 
 /// One named OIDC provider (DB-configured via the admin auth page, or the
@@ -128,7 +183,7 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
     let client = CoreClient::from_provider_metadata(
         provider_metadata,
         ClientId::new(config.client_id.clone()),
-        Some(ClientSecret::new(client_secret)),
+        Some(ClientSecret::new(client_secret.clone())),
     )
     .set_auth_type(AuthType::RequestBody)
     .set_redirect_uri(
@@ -142,6 +197,7 @@ pub async fn init_oidc(config: &OidcConfig, session_ttl_secs: u64) -> Result<Oid
         config: config.clone(),
         session_ttl_secs,
         pending: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        fingerprint_key: derive_fingerprint_key(&client_secret),
     })
 }
 
@@ -200,26 +256,13 @@ pub async fn login(
     drop(pending);
 
     // Set state in a cookie so we can verify on callback, then redirect
-    // Bind state to client fingerprint (IP + User-Agent) to prevent CSRF
-    // Using HMAC-SHA256 with state_key as the key for cryptographic integrity
-    let fingerprint = {
-        use ring::hmac;
-        let key = hmac::Key::new(hmac::HMAC_SHA256, state_key.as_bytes());
-        let mut data = Vec::new();
-        let ip = headers
-            .get("x-forwarded-for")
-            .or_else(|| headers.get("x-real-ip"))
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
-        data.extend_from_slice(ip.as_bytes());
-        let ua = headers
-            .get(header::USER_AGENT)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("unknown");
-        data.extend_from_slice(ua.as_bytes());
-        let tag = hmac::sign(&key, &data);
-        hex::encode(tag.as_ref())
-    };
+    // Bind state to client fingerprint (IP + User-Agent) to prevent CSRF.
+    // HMAC-SHA256 keyed by a server-side secret derived from the client
+    // secret (H01): the state token alone is public (it rides in the auth
+    // URL), so keying with it would let an attacker who knows the
+    // victim's IP + UA forge the cookie.
+    let (ip, ua) = client_fingerprint_inputs(&headers);
+    let fingerprint = state_fingerprint(&oidc.fingerprint_key, &ip, &ua);
     let cookie_value = format!("{}:{}", state_key, fingerprint);
 
     let sec = crate::csrf::cookie_secure_attr(
@@ -332,29 +375,17 @@ pub async fn callback(
     let state_cookie = extract_cookie(&headers, "persea_oidc_state");
     // Format: `state_key:fingerprint` (provider name lives in its own
     // cookie). Old 2-part cookies parse identically.
+    let (ip, ua) = client_fingerprint_inputs(&headers);
     let cookie_valid = match state_cookie.as_deref() {
         Some(cookie_val) => match cookie_val.split_once(':') {
             Some((cookie_state, cookie_fingerprint)) => {
                 if cookie_state != state {
                     false
                 } else {
-                    // Verify fingerprint matches current request
-                    use ring::hmac;
-                    let key = hmac::Key::new(hmac::HMAC_SHA256, cookie_state.as_bytes());
-                    let mut data = Vec::new();
-                    let ip = headers
-                        .get("x-forwarded-for")
-                        .or_else(|| headers.get("x-real-ip"))
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown");
-                    data.extend_from_slice(ip.as_bytes());
-                    let ua = headers
-                        .get(header::USER_AGENT)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown");
-                    data.extend_from_slice(ua.as_bytes());
-                    let tag = hmac::sign(&key, &data);
-                    let current_fp = hex::encode(tag.as_ref());
+                    // Verify fingerprint matches current request, keyed by
+                    // the server-side secret (H01) — same construction as
+                    // the login handler.
+                    let current_fp = state_fingerprint(&oidc.fingerprint_key, &ip, &ua);
                     cookie_fingerprint == current_fp
                 }
             }
@@ -946,6 +977,73 @@ mod tests {
         let jwt = make_jwt(&serde_json::json!({"roles": ["r1", "r2"], "groups": ["g1"]}));
         assert_eq!(extract_groups_from_jwt(&jwt, "roles"), vec!["r1", "r2"]);
         assert_eq!(extract_groups_from_jwt(&jwt, "groups"), vec!["g1"]);
+    }
+
+    // ── State fingerprint (H01) ────────────────────────────────────────
+
+    #[test]
+    fn fingerprint_deterministic_for_same_key_and_inputs() {
+        let key = derive_fingerprint_key("s3cret");
+        let a = state_fingerprint(&key, "10.0.0.5", "Mozilla/5.0 test");
+        let b = state_fingerprint(&key, "10.0.0.5", "Mozilla/5.0 test");
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 64, "hex HMAC-SHA256 is 64 chars");
+    }
+
+    #[test]
+    fn fingerprint_changes_with_ip_or_ua() {
+        let key = derive_fingerprint_key("s3cret");
+        let base = state_fingerprint(&key, "10.0.0.5", "UA");
+        assert_ne!(base, state_fingerprint(&key, "10.0.0.6", "UA"));
+        assert_ne!(base, state_fingerprint(&key, "10.0.0.5", "UA2"));
+    }
+
+    #[test]
+    fn forgery_with_guessed_key_fails() {
+        // The attacker knows the flow's state token, the victim's IP and
+        // User-Agent, but not the server-side fingerprint key (derived
+        // from the client secret). A fingerprint computed with their
+        // guessed key (e.g. the public state token, the old scheme) must
+        // not match the server's.
+        let server_key = derive_fingerprint_key("real-client-secret");
+        let ip = "203.0.113.7";
+        let ua = "Mozilla/5.0 (X11; Linux x86_64)";
+        let server_fp = state_fingerprint(&server_key, ip, ua);
+
+        let attacker_key = derive_fingerprint_key("guessed-secret");
+        let attacker_fp = state_fingerprint(&attacker_key, ip, ua);
+        assert_ne!(attacker_fp, server_fp, "guessed key must not forge");
+
+        // Old scheme: keyed by the public state token itself.
+        let old_scheme = {
+            use ring::hmac;
+            let key = hmac::Key::new(hmac::HMAC_SHA256, b"public-state-token");
+            let data = format!("{ip}{ua}");
+            hex::encode(hmac::sign(&key, data.as_bytes()).as_ref())
+        };
+        assert_ne!(old_scheme, server_fp);
+    }
+
+    #[test]
+    fn fingerprint_key_differs_between_secrets() {
+        assert_ne!(
+            derive_fingerprint_key("secret-a"),
+            derive_fingerprint_key("secret-b")
+        );
+        // And is stable across calls for the same secret (flows survive
+        // restarts as long as the client secret is unchanged).
+        assert_eq!(
+            derive_fingerprint_key("secret-a"),
+            derive_fingerprint_key("secret-a")
+        );
+    }
+
+    #[test]
+    fn fingerprint_key_is_32_bytes() {
+        // Any secret length must produce a fixed 32-byte key.
+        for secret in ["", "short", "x".repeat(100).as_str()] {
+            assert_eq!(derive_fingerprint_key(secret).len(), 32);
+        }
     }
 
     // ── Discovery error wrapping ────────────────────────────────────────

@@ -316,19 +316,60 @@ pub async fn system_status(
     })))
 }
 
+/// Compiled-in server capabilities, probed anonymously via
+/// `GET /api/auth/status`. These reflect whether the binary actually
+/// contains the feature; the v1.2.0 ticket dispatcher flips them as the
+/// tickets land (S02 → session_events, S03 → drive_upload, S04 →
+/// desktop_pairing, S07 → desktop_bridge).
+/// S03 landed: the drive upload endpoint is compiled in.
+pub const COMPILED_DRIVE_UPLOAD: bool = true;
+/// S02 landed: the SSE session-event feed is compiled in.
+pub const COMPILED_SESSION_EVENTS: bool = true;
+/// S04 landed: the device-pairing flow is compiled in.
+pub const COMPILED_DESKTOP_PAIRING: bool = true;
+/// S07 landed: the Tauri IPC bridge + CSP schemes are compiled in.
+pub const COMPILED_DESKTOP_BRIDGE: bool = true;
+
+/// `system_settings` keys backing the admin-gated desktop capabilities
+/// (S09 "Desktop" settings section, all default ON).
+const SETTING_DESKTOP_KIOSK: &str = "desktop_kiosk";
+const SETTING_DESKTOP_TRANSFERS: &str = "desktop_transfers";
+const SETTING_DESKTOP_PAIRING: &str = "desktop_pairing";
+
 /// `GET /api/auth/status`: login-page configuration for anonymous
-/// callers: OIDC availability, site title, drive flag, and the
-/// resolved theme data.
+/// callers: OIDC availability, site title, drive flag, the resolved
+/// theme data, the server version, the desktop-shell capability
+/// probe, and the cached server update-check result (S16).
 pub async fn auth_status(
     Extension(oidc_enabled): Extension<OidcEnabled>,
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
     Extension(drive_configured): Extension<DriveConfigured>,
+    database: Option<Extension<Db>>,
+    update_state: Option<Extension<crate::updates::UpdateState>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
+    let settings = load_capability_settings(database).await;
+    let kiosk_allowed =
+        crate::settings_merge::toggle_enabled(&settings, SETTING_DESKTOP_KIOSK, true);
+    let desktop_transfers =
+        crate::settings_merge::toggle_enabled(&settings, SETTING_DESKTOP_TRANSFERS, true);
+    let desktop_pairing = COMPILED_DESKTOP_PAIRING
+        && crate::settings_merge::toggle_enabled(&settings, SETTING_DESKTOP_PAIRING, true);
+
     let mut resp = json!({
         "oidc_enabled": oidc_enabled.0,
         "site_title": site_title.0,
         "drive_configured": drive_configured.0,
+        "version": env!("CARGO_PKG_VERSION"),
+        "capabilities": {
+            "drive_api": true,
+            "drive_upload": COMPILED_DRIVE_UPLOAD,
+            "session_events": COMPILED_SESSION_EVENTS,
+            "desktop_pairing": desktop_pairing,
+            "desktop_bridge": COMPILED_DESKTOP_BRIDGE,
+            "kiosk_allowed": kiosk_allowed,
+            "desktop_transfers": desktop_transfers,
+        },
     });
     resp["theme"] = json!({
         "admin_preset": theme.admin_preset,
@@ -338,7 +379,50 @@ pub async fn auth_status(
     if let Some(ref url) = theme.logo_url {
         resp["theme"]["logo_url"] = json!(url);
     }
+    // S16: cached server update check. Null/false when the checker is
+    // disabled, never ran, or every attempt failed so far.
+    let (latest_version, update_available) = match update_state {
+        Some(state) => {
+            let info = state.info.read().unwrap();
+            let latest = info.latest_version.clone();
+            let available = latest
+                .as_deref()
+                .map(|v| crate::updates::version_newer(v, env!("CARGO_PKG_VERSION")))
+                .unwrap_or(false);
+            (latest, available)
+        }
+        None => (None, false),
+    };
+    resp["latest_version"] = json!(latest_version);
+    resp["update_available"] = json!(update_available);
     Ok(Json(resp))
+}
+
+/// Read the `system_settings` rows for the anonymous capability probe.
+/// Resolves through the SQLx pool when one is active, otherwise through
+/// the legacy `Db` handle when one is layered (tests), and falls back to
+/// an empty list so every admin-gated capability defaults to ON when
+/// neither store is reachable.
+async fn load_capability_settings(database: Option<Extension<Db>>) -> Vec<(String, String)> {
+    if crate::db::pool_active() {
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+            crate::db::settings_load_all_pool(pool)
+        })
+        .unwrap_or_default();
+    }
+    match database {
+        Some(Extension(db)) => {
+            let db_clone = db.clone();
+            tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db_clone))
+                .await
+                .unwrap_or(Ok(Vec::new()))
+                .unwrap_or_else(|e| {
+                    tracing::warn!("failed to load capability settings: {e}");
+                    Vec::new()
+                })
+        }
+        None => Vec::new(),
+    }
 }
 
 include!(concat!(env!("OUT_DIR"), "/docs-rendered.rs"));

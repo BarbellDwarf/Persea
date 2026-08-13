@@ -16,7 +16,7 @@ Two programs run on the server: **persea** (the web server) and **guacd** (the p
 
 ## Option A: Debian package (recommended on Debian 13)
 
-Prebuilt `.deb` packages are published on the [releases page](https://github.com/BarbellDwarf/persea/releases). On your server:
+Prebuilt `.deb` packages are published on the [releases page](https://github.com/persea-grove/persea/releases). On your server:
 
 ```bash
 sudo apt install ./persea_*.deb

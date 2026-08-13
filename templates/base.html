@@ -113,5 +113,9 @@
         .then(function(d) { if (d && d.theme) initTheme(d.theme); })
         .catch(function() {});
     </script>
+
+    {% if features.desktop_bridge %}
+    {% include "partials/desktop_bridge.html" %}
+    {% endif %}
 </body>
 </html>

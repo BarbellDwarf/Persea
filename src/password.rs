@@ -488,7 +488,9 @@ mod tests {
         let uid = insert_user(&db, "b@example.com", "h0");
         // The history stores Argon2id hashes; reuse is detected by verifying
         // the candidate against each stored hash.
+        // codeql[rust/hard-coded-cryptographic-value] — #[test] vectors, not secrets
         let h1 = hash_password("h1").unwrap();
+        // codeql[rust/hard-coded-cryptographic-value] — #[test] vectors, not secrets
         let h2 = hash_password("h2").unwrap();
         record_password_history(&db, uid, &h1, 5).unwrap();
         record_password_history(&db, uid, &h2, 5).unwrap();

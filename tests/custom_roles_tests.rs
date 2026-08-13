@@ -39,6 +39,7 @@ fn create_admin(db: &Db, name: &str) -> String {
 }
 
 fn create_user(db: &Db, email: &str) {
+    // codeql[rust/hard-coded-cryptographic-value] — test fixture password, not a secret
     let hash = persea::password::hash_password("correct horse battery staple 42!").unwrap();
     db::create_user_with_password(db, email, email, &hash, "viewer", "local").unwrap();
 }

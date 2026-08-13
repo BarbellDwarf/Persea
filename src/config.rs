@@ -3,6 +3,37 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Canonical per-protocol session defaults (admin Settings → Session →
+/// Session defaults).
+///
+/// These are the hardcoded values the session creation path used before
+/// per-protocol global defaults existed, so an unset key changes nothing.
+/// The settings API (`src/api/settings.rs`) seeds the admin page from this
+/// table and the session creation path (`src/session/create.rs`) falls
+/// back to it when a key is unset. Precedence at session creation:
+/// entry/request value > stored global default > this code default.
+///
+/// Values are the canonical string forms the settings API persists:
+/// "true"/"false" for booleans, plain numbers, or the raw string for
+/// enums (RDP security).
+pub const PROTOCOL_DEFAULT_KEYS: &[(&str, &str)] = &[
+    // RDP
+    ("default_rdp_width", "1920"),
+    ("default_rdp_height", "1080"),
+    ("default_rdp_dpi", "96"),
+    ("default_rdp_security", "any"),
+    ("default_rdp_h264", "true"),
+    ("default_rdp_gfx", "true"),
+    ("default_rdp_drive", "false"),
+    // SSH
+    ("default_ssh_width", "1920"),
+    ("default_ssh_height", "1080"),
+    // VNC
+    ("default_vnc_color_depth", "24"),
+    ("default_vnc_disable_copy", "false"),
+    ("default_vnc_disable_paste", "false"),
+];
+
 /// TLS settings for the HTTPS listener and the guacd connection (`[tls]`).
 #[derive(Debug, Deserialize, Clone)]
 pub struct TlsConfig {
@@ -700,10 +731,136 @@ pub struct Config {
     /// reset the defaults.
     #[serde(default = "default_password_config")]
     pub password: Option<PasswordConfig>,
+    /// Desktop shell bridge settings (`[desktop]`). Materialised in
+    /// `default_toml()` so an absent section cannot silently reset the
+    /// defaults.
+    #[serde(default = "default_desktop_config")]
+    pub desktop: Option<DesktopConfig>,
+    /// Session behaviour (`[session]`): connection reason enforcement.
+    /// Materialised in `default_toml()` so an absent section cannot
+    /// silently reset the defaults.
+    #[serde(default = "default_session_config")]
+    pub session: Option<SessionConfig>,
+    /// Server version update checking (`[updates]`). Materialised in
+    /// `default_toml()` so an absent section cannot silently reset the
+    /// defaults.
+    #[serde(default = "default_updates_config")]
+    pub updates: Option<UpdatesConfig>,
 }
 
 fn default_password_config() -> Option<PasswordConfig> {
     Some(PasswordConfig::default())
+}
+
+/// Session behaviour configuration (`[session]`). Materialised in
+/// `default_toml()` so an absent section cannot silently reset the
+/// defaults.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SessionConfig {
+    /// Require a connection reason on every session creation. When true,
+    /// `POST /api/sessions` (and the address-book connect flow) rejects
+    /// creation without a `reason` with a 400 and a clear message. Default
+    /// false — reasons stay optional.
+    #[serde(default = "default_false")]
+    pub reason_required: bool,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            reason_required: default_false(),
+        }
+    }
+}
+
+/// Server version update checking configuration (`[updates]`). Materialised
+/// in `default_toml()` so an absent section cannot silently reset the
+/// defaults.
+#[derive(Debug, Deserialize, Clone)]
+pub struct UpdatesConfig {
+    /// Check `check_url` on a schedule for a newer persea release. Default:
+    /// true. Set false in air-gapped deployments: no network call is ever
+    /// made and the admin banner / status endpoint report nothing.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Release-list API URL. Default: the unauthenticated GitHub Releases
+    /// API for the persea repository. Internal mirrors (e.g. Gitea) can
+    /// point this at their own `/releases/latest` endpoint.
+    #[serde(default = "default_update_check_url")]
+    pub check_url: String,
+    /// Hours between checks. Default: 24.
+    #[serde(default = "default_update_check_interval_hours")]
+    pub check_interval_hours: u64,
+}
+
+fn default_update_check_url() -> String {
+    "https://api.github.com/repos/BarbellDwarf/persea/releases/latest".to_string()
+}
+
+fn default_update_check_interval_hours() -> u64 {
+    24
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            check_url: default_update_check_url(),
+            check_interval_hours: default_update_check_interval_hours(),
+        }
+    }
+}
+
+fn default_updates_config() -> Option<UpdatesConfig> {
+    Some(UpdatesConfig::default())
+}
+
+fn default_session_config() -> Option<SessionConfig> {
+    Some(SessionConfig::default())
+}
+
+/// Desktop shell bridge configuration (`[desktop]`).
+#[derive(Debug, Deserialize, Clone)]
+pub struct DesktopConfig {
+    /// Allow the Tauri desktop shell to reach this instance over remote IPC.
+    /// Default: false. When true, the page CSP `connect-src` additionally
+    /// permits the Tauri IPC transports (`tauri://localhost` on macOS/Linux,
+    /// `http://ipc.localhost` on Windows) and the desktop bridge script is
+    /// served on every page. See config.example.toml for the security note.
+    #[serde(default = "default_false")]
+    pub allow_bridge: bool,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            allow_bridge: default_false(),
+        }
+    }
+}
+
+fn default_desktop_config() -> Option<DesktopConfig> {
+    Some(DesktopConfig::default())
+}
+
+/// Startup mirror of the `[desktop] allow_bridge` flag, so the security
+/// headers middleware and the template renderer can read it without the full
+/// config. Initialised once at startup via [`init_allow_bridge`]; reads
+/// default to false before that (tests, renders outside the server
+/// lifecycle), which matches the config default.
+static ALLOW_BRIDGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Record the `[desktop] allow_bridge` flag at startup. Must be called once
+/// after config load; mirrors `SecureCookies::init` (src/csrf.rs).
+pub fn init_allow_bridge(allow: bool) {
+    let _ = ALLOW_BRIDGE.set(allow);
+}
+
+/// Whether the desktop bridge is enabled for this instance. False until
+/// [`init_allow_bridge`] ran, which matches the `allow_bridge = false`
+/// default.
+pub fn allow_bridge_enabled() -> bool {
+    ALLOW_BRIDGE.get().copied().unwrap_or(false)
 }
 
 /// Storage backend configuration for the address book.
@@ -745,7 +902,16 @@ pub struct RdpConfig {
     /// NLA/CredSSP auth package: "ntlm" (default), "kerberos", or
     /// "negotiate".
     pub default_auth_pkg: Option<String>,
+    /// Template for the RDP `client-name` parameter sent to guacd per
+    /// session: `{user}` is the persea identity that created the session
+    /// and `{host}` the reverse-DNS name of the connecting client (the raw
+    /// IP when DNS fails or times out). Empty string disables the
+    /// parameter, preserving the pre-template behavior.
+    pub client_name_template: Option<String>,
 }
+
+/// Default `[rdp] client_name_template`: `{user}@{host}`.
+pub const DEFAULT_RDP_CLIENT_NAME_TEMPLATE: &str = "{user}@{host}";
 
 /// Fully-resolved theme palette with all 26 color fields.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1415,6 +1581,20 @@ fn default_recording_path() -> PathBuf {
     PathBuf::from("./recordings")
 }
 
+/// On Windows, the installer's `--init` bootstrap places the config in
+/// `%ProgramData%\persea\config.toml`. `cfg!()` keeps this function
+/// compilable on every target; on non-Windows it always returns `None`.
+fn windows_default_config_path() -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let base = std::env::var("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(r"C:\ProgramData"));
+    let p = base.join("persea").join("config.toml");
+    p.exists().then(|| p.to_string_lossy().into_owned())
+}
+
 fn default_static_path() -> PathBuf {
     PathBuf::from("./static")
 }
@@ -1637,6 +1817,21 @@ fn default_toml() -> String {
     s.push_str("[password]\n");
     s.push_str(&format!("min_length = {}\n", default_password_min_length()));
     s.push_str(&format!("history = {}\n", default_password_history()));
+    // [desktop] — desktop shell bridge. Materialised so an absent section
+    // cannot silently reset the default (allow_bridge = false).
+    s.push_str("[desktop]\n");
+    s.push_str(&format!("allow_bridge = {}\n", default_false()));
+    // [session] — session behaviour. Materialised so an absent section
+    // cannot silently reset the default (reason_required = false).
+    s.push_str("[session]\n");
+    s.push_str(&format!("reason_required = {}\n", default_false()));
+    // [rdp] — RDP-wide settings. Materialised so an absent section cannot
+    // silently reset the client-name template default.
+    s.push_str("[rdp]\n");
+    s.push_str(&format!(
+        "client_name_template = \"{}\"\n",
+        DEFAULT_RDP_CLIENT_NAME_TEMPLATE
+    ));
     s
 }
 
@@ -1722,6 +1917,9 @@ impl Default for Config {
             ha_base_url: None,
             storage: None,
             password: default_password_config(),
+            desktop: default_desktop_config(),
+            session: default_session_config(),
+            updates: default_updates_config(),
         }
     }
 }
@@ -1764,6 +1962,11 @@ impl Config {
             (Some(p.to_string()), true)
         } else if std::path::Path::new("/opt/persea/config.toml").exists() {
             (Some("/opt/persea/config.toml".to_string()), true)
+        } else if let Some(p) = windows_default_config_path() {
+            // Windows: `persea --init` (run by the NSIS installer) drops the
+            // starter config in %ProgramData%\persea — pick it up with the
+            // same "present means required" semantics as /opt/persea.
+            (Some(p), true)
         } else {
             (None, false)
         };
@@ -2001,6 +2204,15 @@ impl Config {
         self.recording.as_ref().is_none_or(|r| r.enabled)
     }
 
+    /// Whether a connection reason is mandatory on session creation
+    /// (`[session] reason_required`). Defaults to false.
+    pub fn session_reason_required(&self) -> bool {
+        self.session
+            .as_ref()
+            .map(|s| s.reason_required)
+            .unwrap_or(false)
+    }
+
     /// Get recording config (or synthesized default that respects legacy `recording_path`).
     pub fn recording_config(&self) -> RecordingConfig {
         match self.recording.clone() {
@@ -2221,7 +2433,6 @@ mod tests {
         assert!(loaded.theme.is_none());
         assert!(loaded.vdi.is_none());
         assert!(loaded.vsphere.is_none());
-        assert!(loaded.rdp.is_none());
 
         // [recording] must be materialised with the previous defaults.
         let rec = loaded
@@ -2245,6 +2456,35 @@ mod tests {
             .expect("[storage] defaults must be emitted");
         assert_eq!(st.backend, "db");
         assert!(st.encryption_key.is_none());
+
+        // [session] must be materialised with the previous defaults.
+        let sess = loaded
+            .session
+            .as_ref()
+            .expect("[session] defaults must be emitted");
+        assert!(!sess.reason_required);
+
+        // [rdp] must be materialised with the previous defaults (the
+        // client-name template default; default_auth_pkg stays absent so
+        // resolve_rdp_auth_pkg still falls through to "ntlm").
+        let rdp_cfg = loaded.rdp.as_ref().expect("[rdp] defaults must be emitted");
+        assert_eq!(
+            rdp_cfg.client_name_template.as_deref(),
+            Some(DEFAULT_RDP_CLIENT_NAME_TEMPLATE)
+        );
+        assert!(rdp_cfg.default_auth_pkg.is_none());
+
+        // [updates] must be materialised with the previous defaults.
+        let upd = loaded
+            .updates
+            .as_ref()
+            .expect("[updates] defaults must be emitted");
+        assert!(upd.enabled);
+        assert_eq!(
+            upd.check_url,
+            "https://api.github.com/repos/BarbellDwarf/persea/releases/latest"
+        );
+        assert_eq!(upd.check_interval_hours, 24);
 
         // Accessor-level equivalence with the previous effective defaults.
         assert_eq!(loaded.recording_config().max_recordings, 1000);

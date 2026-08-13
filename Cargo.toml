@@ -1,6 +1,6 @@
 [package]
 name = "persea"
-version = "1.1.1"
+version = "1.2.0"
 edition = "2021"
 description = "Lightweight Rust replacement for Apache Guacamole client"
 license = "Apache-2.0"
@@ -34,6 +34,9 @@ multer = "3"
 toml = "1"
 config = "0.14"
 
+# Version comparison for the update check (already in the tree via rustc_version)
+semver = "1"
+
 # Crypto/random
 rand = "0.10"
 hex = "0.4"
@@ -48,7 +51,7 @@ sha1 = "0.11"
 md-5 = "0.11"
 
 # Database
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.35", features = ["bundled"] }
 sqlx = { version = "0.9.0", features = [
     "runtime-tokio",
     "tls-rustls",
@@ -135,6 +138,14 @@ argon2 = "0.5"
 
 # Memory zeroize for sensitive data
 zeroize = "1"
+dns-lookup = "2"
+
+[target.'cfg(windows)'.dependencies]
+# Native Windows service support (install/uninstall/run under the SCM)
+windows-service = "0.8"
+# Disk-space probe for recording rotation (GetDiskFreeSpaceExW); the
+# windows-sys version windows-service already locks.
+windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
 
 [dev-dependencies]
 proptest = "1"

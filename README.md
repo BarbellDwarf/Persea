@@ -1,13 +1,19 @@
 # Persea
 
-[![CI](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/BarbellDwarf/persea/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/BarbellDwarf/persea/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/BarbellDwarf/persea/total)](https://github.com/BarbellDwarf/persea/releases)
+[![CI](https://github.com/persea-grove/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/persea-grove/persea/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/persea-grove/persea/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/BarbellDwarf/persea/total)](https://github.com/persea-grove/persea/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
 
 Single binary plus guacd. No Java, no Tomcat.
+
+## Screenshots
+
+| | | |
+|---|---|---|
+| ![Login page](docs/screenshots/login.png) | ![Connections page with folder tree and entry details](docs/screenshots/connections.png) | ![Sessions page with session history](docs/screenshots/sessions.png) |
 
 ## Why "Persea"?
 
@@ -137,7 +143,7 @@ guacd (C, from guacamole-server)
 
 ### Debian 13 (.deb)
 
-Pre-built packages for amd64 and arm64 are available from [Releases](https://github.com/BarbellDwarf/persea/releases):
+Pre-built packages for amd64 and arm64 are available from [Releases](https://github.com/persea-grove/persea/releases):
 
 ```bash
 sudo apt install ./persea_*.deb
@@ -210,6 +216,10 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 ## Acknowledgements
 
 [OpenCode](https://opencode.ai) and the OpenCode Go subscription made this project possible. An AI coding agent that just works, a subscription that is worth every cent, and isn't that many cents either. If you are a dev who needs solid pricing for AI coding agents, this is the way to go. They are not a sponsor by the way, just love the product and the ethos.
+
+## Support
+
+persea is a hobby project, funded by its community. If persea saves you time, consider sponsoring it on [Open Collective](https://opencollective.com/persea): contributions pay for CI infrastructure, cross-platform build and signing certificates, test machines, and development time.
 
 ## License
 

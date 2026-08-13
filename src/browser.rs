@@ -114,7 +114,30 @@ impl BrowserManager {
         autofill_credentials: Option<&[(String, String, String)]>,
         allowed_domains: Option<&[String]>,
     ) -> Result<BrowserSession, BrowserError> {
-        // Default-deny non-http(s) schemes
+        // Runtime feature guard (not compile-out): the Xvnc + Chromium
+        // session stack is Linux-only; on Windows the feature stays in the
+        // binary and fails with a clear error when used.
+        #[cfg(windows)]
+        {
+            let _ = (
+                self,
+                url,
+                width,
+                height,
+                need_cdp,
+                autofill_credentials,
+                allowed_domains,
+            );
+            return Err(BrowserError::ChromiumSpawn(
+                "web sessions (Xvnc + Chromium) are not supported on Windows — \
+                 use SSH, RDP, or VNC sessions, or run persea on Linux"
+                    .into(),
+            ));
+        }
+        // Default-deny non-http(s) schemes. On Windows the guard above
+        // returns, so everything here is unreachable by design — the runtime
+        // guard keeps the code compiled in the one binary.
+        #[allow(unreachable_code)]
         if let Ok(parsed) = url::Url::parse(url) {
             if !matches!(parsed.scheme(), "http" | "https") {
                 return Err(BrowserError::ChromiumSpawn(format!(
@@ -164,6 +187,9 @@ impl BrowserManager {
             tracing::error!("{}", msg);
             return Err(BrowserError::ChromiumSpawn(msg));
         }
+        // Restrictive permissions on the profile dir (unix only — the whole
+        // browser feature is runtime-guarded off on Windows anyway).
+        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&profile_dir, std::fs::Permissions::from_mode(0o700));
@@ -342,13 +368,21 @@ impl BrowserManager {
         // so Chromium's sandbox is active. This --no-sandbox is only for local
         // development when running as root.
         let no_sandbox;
-        // SAFETY: geteuid() is a simple POSIX syscall that returns the
-        // effective user ID of the calling process. It is always safe to
-        // call and has no side effects or preconditions.
-        if unsafe { libc::geteuid() } == 0 {
-            no_sandbox = "--no-sandbox".to_string();
-            chromium_args.push(&no_sandbox);
-            tracing::debug!("Running as root, adding --no-sandbox to Chromium");
+        #[cfg(unix)]
+        {
+            // SAFETY: geteuid() is a simple POSIX syscall that returns the
+            // effective user ID of the calling process. It is always safe to
+            // call and has no side effects or preconditions.
+            if unsafe { libc::geteuid() } == 0 {
+                no_sandbox = "--no-sandbox".to_string();
+                chromium_args.push(&no_sandbox);
+                tracing::debug!("Running as root, adding --no-sandbox to Chromium");
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = &mut chromium_args;
+            no_sandbox = String::new();
         }
 
         chromium_args.push(url);

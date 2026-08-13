@@ -99,6 +99,12 @@ pub fn ensure_base_dir(config: &DriveConfig) -> Result<(), DriveError> {
 ///
 /// The path is canonicalized so that guacd (which runs as a separate process
 /// with a different working directory) resolves it correctly.
+///
+/// When downloads are enabled, a `Download` subdirectory is created eagerly.
+/// Guacd's RDPDR layer only creates `\Download` lazily, when the drive root is
+/// opened through RDPDR; a client that writes straight to `\Download\<file>`
+/// in a fresh session (whose drive dir starts empty) would otherwise hit
+/// ENOENT for every open.
 pub fn create_session_dir(config: &DriveConfig, session_id: Uuid) -> Result<PathBuf, DriveError> {
     let dir = config.drive_path.join(session_id.to_string());
     std::fs::create_dir_all(&dir).map_err(|e| {
@@ -111,6 +117,20 @@ pub fn create_session_dir(config: &DriveConfig, session_id: Uuid) -> Result<Path
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750));
+    }
+    if config.allow_download {
+        let download_dir = dir.join("Download");
+        std::fs::create_dir_all(&download_dir).map_err(|e| {
+            DriveError::Io(format!(
+                "failed to create session drive Download directory {:?}: {}",
+                download_dir, e
+            ))
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&download_dir, std::fs::Permissions::from_mode(0o750));
+        }
     }
     // Canonicalize to absolute path — guacd runs as a separate systemd service
     // with a different WorkingDirectory, so relative paths won't resolve correctly.
@@ -156,150 +176,176 @@ async fn do_cleanup(path: &Path, session_id: Uuid) {
 /// 4. Set ownership to the current user
 ///
 /// Requires sudoers rules for cryptsetup/mount commands.
-#[cfg(target_os = "linux")]
+///
+/// On Windows this is a runtime feature guard (not compile-out): the
+/// function exists in the one binary and returns a clear "unsupported on
+/// Windows" error; the cryptsetup/mount body is unix-only by nature.
 pub async fn mount_luks(
     config: &DriveConfig,
     vault: &dyn crate::vault::VaultBackend,
 ) -> Result<(), DriveError> {
-    let luks_device = config
-        .luks_device
-        .as_ref()
-        .ok_or_else(|| DriveError::Luks("luks_device not configured".into()))?;
-    let luks_key_path = config
-        .luks_key_path
-        .as_ref()
-        .ok_or_else(|| DriveError::Luks("luks_key_path not configured".into()))?;
-    let luks_name = &config.luks_name;
-    let mapper_path = format!("/dev/mapper/{}", luks_name);
+    #[cfg(windows)]
+    {
+        let _ = (config, vault);
+        return Err(DriveError::Luks(
+            "LUKS file transfer is not supported on Windows — \
+             disable [drive].luks_device / luks_key_path, or run persea on Linux"
+                .into(),
+        ));
+    }
+    #[cfg(not(windows))]
+    {
+        let luks_device = config
+            .luks_device
+            .as_ref()
+            .ok_or_else(|| DriveError::Luks("luks_device not configured".into()))?;
+        let luks_key_path = config
+            .luks_key_path
+            .as_ref()
+            .ok_or_else(|| DriveError::Luks("luks_key_path not configured".into()))?;
+        let luks_name = &config.luks_name;
+        let mapper_path = format!("/dev/mapper/{}", luks_name);
 
-    // 1. Read LUKS key from Vault
-    let key = vault
-        .read_kv_field(luks_key_path, "key")
-        .await
-        .map_err(|e| {
-            DriveError::Vault(format!(
-                "failed to read LUKS key from Vault path '{}': {}",
-                luks_key_path, e
+        // 1. Read LUKS key from Vault
+        let key = vault
+            .read_kv_field(luks_key_path, "key")
+            .await
+            .map_err(|e| {
+                DriveError::Vault(format!(
+                    "failed to read LUKS key from Vault path '{}': {}",
+                    luks_key_path, e
+                ))
+            })?;
+
+        tracing::info!("Retrieved LUKS key from Vault (path: {})", luks_key_path);
+
+        // 2. Open LUKS container if not already open
+        if !std::path::Path::new(&mapper_path).exists() {
+            tracing::info!(
+                "Opening LUKS container {:?} as '{}'",
+                luks_device,
+                luks_name
+            );
+            let mut child = tokio::process::Command::new("sudo")
+                .args(["cryptsetup", "open", "--type", "luks", "--key-file=-"])
+                .arg(luks_device)
+                .arg(luks_name)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| DriveError::Luks(format!("failed to run cryptsetup: {}", e)))?;
+
+            if let Some(mut stdin) = child.stdin.take() {
+                use tokio::io::AsyncWriteExt;
+                stdin.write_all(key.as_bytes()).await.map_err(|e| {
+                    DriveError::Luks(format!("failed to pipe key to cryptsetup: {}", e))
+                })?;
+                drop(stdin);
+            }
+
+            let output = child
+                .wait_with_output()
+                .await
+                .map_err(|e| DriveError::Luks(format!("cryptsetup failed: {}", e)))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(DriveError::Luks(format!(
+                    "cryptsetup open failed: {}",
+                    stderr
+                )));
+            }
+
+            tracing::info!("LUKS container opened successfully");
+        } else {
+            tracing::info!("LUKS volume '{}' already open", luks_name);
+        }
+
+        // 3. Mount if not already mounted
+        std::fs::create_dir_all(&config.drive_path).map_err(|e| {
+            DriveError::Io(format!(
+                "failed to create mount point {:?}: {}",
+                config.drive_path, e
             ))
         })?;
 
-    tracing::info!("Retrieved LUKS key from Vault (path: {})", luks_key_path);
-
-    // 2. Open LUKS container if not already open
-    if !std::path::Path::new(&mapper_path).exists() {
-        tracing::info!(
-            "Opening LUKS container {:?} as '{}'",
-            luks_device,
-            luks_name
-        );
-        let mut child = tokio::process::Command::new("sudo")
-            .args(["cryptsetup", "open", "--type", "luks", "--key-file=-"])
-            .arg(luks_device)
-            .arg(luks_name)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| DriveError::Luks(format!("failed to run cryptsetup: {}", e)))?;
-
-        if let Some(mut stdin) = child.stdin.take() {
-            use tokio::io::AsyncWriteExt;
-            stdin.write_all(key.as_bytes()).await.map_err(|e| {
-                DriveError::Luks(format!("failed to pipe key to cryptsetup: {}", e))
-            })?;
-            drop(stdin);
-        }
-
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(|e| DriveError::Luks(format!("cryptsetup failed: {}", e)))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(DriveError::Luks(format!(
-                "cryptsetup open failed: {}",
-                stderr
-            )));
-        }
-
-        tracing::info!("LUKS container opened successfully");
-    } else {
-        tracing::info!("LUKS volume '{}' already open", luks_name);
-    }
-
-    // 3. Mount if not already mounted
-    std::fs::create_dir_all(&config.drive_path).map_err(|e| {
-        DriveError::Io(format!(
-            "failed to create mount point {:?}: {}",
-            config.drive_path, e
-        ))
-    })?;
-
-    // Check if already mounted
-    let mount_check = tokio::process::Command::new("mountpoint")
-        .arg("-q")
-        .arg(&config.drive_path)
-        .status()
-        .await;
-
-    if mount_check.map_or(true, |s| !s.success()) {
-        let output = tokio::process::Command::new("sudo")
-            .args(["mount", &mapper_path])
+        // Check if already mounted
+        let mount_check = tokio::process::Command::new("mountpoint")
+            .arg("-q")
             .arg(&config.drive_path)
-            .output()
-            .await
-            .map_err(|e| DriveError::Luks(format!("failed to run mount: {}", e)))?;
+            .status()
+            .await;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(DriveError::Luks(format!("mount failed: {}", stderr)));
+        if mount_check.map_or(true, |s| !s.success()) {
+            let output = tokio::process::Command::new("sudo")
+                .args(["mount", &mapper_path])
+                .arg(&config.drive_path)
+                .output()
+                .await
+                .map_err(|e| DriveError::Luks(format!("failed to run mount: {}", e)))?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                return Err(DriveError::Luks(format!("mount failed: {}", stderr)));
+            }
+
+            tracing::info!("LUKS volume mounted at {:?}", config.drive_path);
+        } else {
+            tracing::info!("Drive path {:?} already mounted", config.drive_path);
         }
 
-        tracing::info!("LUKS volume mounted at {:?}", config.drive_path);
-    } else {
-        tracing::info!("Drive path {:?} already mounted", config.drive_path);
+        // 4. Ensure the current user owns the mount point contents
+        let uid = unsafe { libc::getuid() };
+        let gid = unsafe { libc::getgid() };
+        let _ = tokio::process::Command::new("sudo")
+            .args(["chown", &format!("{}:{}", uid, gid)])
+            .arg(&config.drive_path)
+            .status()
+            .await;
+
+        Ok(())
     }
-
-    // 4. Ensure the current user owns the mount point contents
-    let uid = unsafe { libc::getuid() };
-    let gid = unsafe { libc::getgid() };
-    let _ = tokio::process::Command::new("sudo")
-        .args(["chown", &format!("{}:{}", uid, gid)])
-        .arg(&config.drive_path)
-        .status()
-        .await;
-
-    Ok(())
 }
 
 /// Unmount and close the LUKS volume.
-#[cfg(target_os = "linux")]
+///
+/// Windows: runtime feature guard, see [`mount_luks`].
 pub async fn unmount_luks(config: &DriveConfig) -> Result<(), DriveError> {
-    let luks_name = &config.luks_name;
-
-    // Unmount
-    let _ = tokio::process::Command::new("sudo")
-        .args(["umount"])
-        .arg(&config.drive_path)
-        .status()
-        .await;
-
-    // Close LUKS
-    let output = tokio::process::Command::new("sudo")
-        .args(["cryptsetup", "close", luks_name])
-        .output()
-        .await
-        .map_err(|e| DriveError::Luks(format!("failed to run cryptsetup close: {}", e)))?;
-
-    if output.status.success() {
-        tracing::info!("LUKS volume '{}' closed", luks_name);
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::warn!("cryptsetup close warning: {}", stderr);
+    #[cfg(windows)]
+    {
+        let _ = config;
+        return Err(DriveError::Luks(
+            "LUKS file transfer is not supported on Windows".into(),
+        ));
     }
+    #[cfg(not(windows))]
+    {
+        let luks_name = &config.luks_name;
 
-    Ok(())
+        // Unmount
+        let _ = tokio::process::Command::new("sudo")
+            .args(["umount"])
+            .arg(&config.drive_path)
+            .status()
+            .await;
+
+        // Close LUKS
+        let output = tokio::process::Command::new("sudo")
+            .args(["cryptsetup", "close", luks_name])
+            .output()
+            .await
+            .map_err(|e| DriveError::Luks(format!("failed to run cryptsetup close: {}", e)))?;
+
+        if output.status.success() {
+            tracing::info!("LUKS volume '{}' closed", luks_name);
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!("cryptsetup close warning: {}", stderr);
+        }
+
+        Ok(())
+    }
 }
 
 /// Check if LUKS is configured (has both device and key path).
@@ -425,6 +471,53 @@ mod tests {
     fn luks_configured_neither() {
         let config = DriveConfig::default();
         assert!(!luks_configured(&config));
+    }
+
+    #[test]
+    fn create_session_dir_creates_download_folder_when_downloads_allowed() {
+        let tmp =
+            std::env::temp_dir().join(format!("persea-drive-download-test-{}", Uuid::new_v4()));
+        let config = DriveConfig {
+            enabled: true,
+            drive_path: tmp.clone(),
+            allow_download: true,
+            ..Default::default()
+        };
+        let dir = create_session_dir(&config, Uuid::new_v4()).unwrap();
+        assert!(dir.join("Download").is_dir());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn create_session_dir_skips_download_folder_when_downloads_disabled() {
+        let tmp =
+            std::env::temp_dir().join(format!("persea-drive-nodownload-test-{}", Uuid::new_v4()));
+        let config = DriveConfig {
+            enabled: true,
+            drive_path: tmp.clone(),
+            allow_download: false,
+            ..Default::default()
+        };
+        let dir = create_session_dir(&config, Uuid::new_v4()).unwrap();
+        assert!(!dir.join("Download").exists());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn create_session_dir_idempotent() {
+        let tmp = std::env::temp_dir().join(format!("persea-drive-idem-test-{}", Uuid::new_v4()));
+        let config = DriveConfig {
+            enabled: true,
+            drive_path: tmp.clone(),
+            allow_download: true,
+            ..Default::default()
+        };
+        let id = Uuid::new_v4();
+        let first = create_session_dir(&config, id).unwrap();
+        let second = create_session_dir(&config, id).unwrap();
+        assert_eq!(first, second);
+        assert!(first.join("Download").is_dir());
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

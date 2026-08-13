@@ -70,7 +70,7 @@
         <!-- Recent sessions -->
         <div id="recent-sessions" class="hidden" style="margin-bottom:24px">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-                <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Recent</p>
+                <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Recently Connected</p>
                 <span id="recent-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
             </div>
             <div id="recent-list" style="display:flex;flex-direction:column;gap:8px"></div>
@@ -123,6 +123,22 @@
                     <div id="detail-host" style="font-size:13px;color:var(--text-secondary);margin-bottom:12px"></div>
                     <div id="detail-description" class="hidden" style="margin-bottom:16px;padding:10px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word"></div>
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
+                    <div id="detail-reason-row" style="margin-bottom:16px">
+                        <label class="form-label" for="detail-reason">Reason <span style="color:var(--text-muted);font-weight:400">— why are you connecting?</span></label>
+                        <select id="detail-reason-preset" class="form-input" style="margin-bottom:8px">
+                            <option value="">Select a reason…</option>
+                            <option>Maintenance</option>
+                            <option>Password rotation</option>
+                            <option>Troubleshooting</option>
+                            <option>Incident response</option>
+                            <option>Configuration change</option>
+                            <option>Data migration</option>
+                            <option>Performance testing</option>
+                            <option>Security audit</option>
+                            <option>Other</option>
+                        </select>
+                        <input type="text" id="detail-reason" class="form-input" placeholder="Free text (optional)" maxlength="500" autocomplete="off">
+                    </div>
                     <button id="detail-rotate-cred" class="btn btn-sm admin-only" style="width:100%;margin-bottom:16px;background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);display:none">
                         <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-8.243a.75.75 0 00.219-.53V3.253a.75.75 0 00-1.5 0V5.23l-.312-.312A7 7 0 003.398 8.073a.75.75 0 101.449.39A5.5 5.5 0 0114.5 5.648l.312.311h-2.433a.75.75 0 000 1.5h3.634a.75.75 0 00.53-.219z" clip-rule="evenodd"/></svg>
                         Rotate Credential
@@ -531,6 +547,7 @@
     .status-active { background:rgba(52,211,153,.12);color:#34d399;border-color:rgba(52,211,153,.3) }
     .status-pending { background:rgba(240,192,64,.12);color:#f0c040;border-color:rgba(240,192,64,.3) }
     .status-disconnected { background:rgba(96,165,250,.12);color:#60a5fa;border-color:rgba(96,165,250,.3) }
+    .status-logged_out { background:rgba(233,69,96,.12);color:#f87171;border-color:rgba(233,69,96,.3) }
     .status-completed,.status-expired,.status-error { background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3) }
     .conn-sidebar {
         flex: 0 0 clamp(260px, 22vw, 360px); min-width:0; max-height:80vh; overflow-y:auto;
@@ -1189,6 +1206,30 @@
                 else if (selectedFolder) selectFolder(selectedFolder);
             });
     }
+    // ── Reason (V09) ────────────────────────────────────────────────
+    // A preset dropdown feeds the free-text field; the user may type
+    // anything instead. Sent as `reason` on every connect request.
+    var reasonPreset = document.getElementById('detail-reason-preset');
+    var reasonInput = document.getElementById('detail-reason');
+    if (reasonPreset && reasonInput) {
+        reasonPreset.addEventListener('change', function() {
+            var v = this.value;
+            if (v === 'Other') { reasonInput.value = ''; reasonInput.focus(); }
+            else if (v) reasonInput.value = v;
+        });
+        reasonInput.addEventListener('input', function() {
+            var current = this.value.trim();
+            if (current && reasonPreset.value !== current && reasonPreset.value !== 'Other') {
+                reasonPreset.value = '';
+            }
+        });
+    }
+    function currentReason() {
+        if (!reasonInput) return '';
+        var v = reasonInput.value.trim();
+        return v.length > 500 ? v.substring(0, 500) : v;
+    }
+
     function connectEntry(scope, folder, entry, creds) {
         var btn = document.getElementById('detail-connect');
         var err = document.getElementById('detail-error');
@@ -1199,6 +1240,11 @@
             if (creds.username) body.username = creds.username;
             if (creds.password) body.password = creds.password;
         }
+        // V09: connection reason from the detail-panel dropdown + free
+        // text; the server rejects creation without one when
+        // [session] reason_required is enabled.
+        var reason = currentReason();
+        if (reason) body.reason = reason;
         fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(entry) + '/connect', {
             method: 'POST',
             headers: apiHeaders(),
@@ -2867,14 +2913,20 @@
     }
     loadCustomFields();
 
-    // ── Recent sessions ──────────────────────────────────────────────
+    // ── Recently Connected (V10) ────────────────────────────────────
+    // History-backed, scoped to the current user, last 10 rows. Live
+    // sessions reconnect by rejoining /client/{id}; ended sessions with
+    // an address-book entry relaunch through the connect endpoint (the
+    // same path as the client page's Reconnect button). Ad-hoc sessions
+    // cannot be relaunched, so their button is omitted.
     function loadRecentSessions() {
-        fetch('/api/sessions?limit=5', { headers: apiHeaders(), credentials: 'same-origin' })
-            .then(function(r) { return r.ok ? r.json() : []; })
-            .then(function(sessions) {
+        fetch('/api/sessions/recent', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(data) {
                 var list = document.getElementById('recent-list');
                 var section = document.getElementById('recent-sessions');
                 var countEl = document.getElementById('recent-count');
+                var sessions = (data && data.recent) || [];
                 if (!sessions || sessions.length === 0) {
                     section.classList.add('hidden');
                     return;
@@ -2883,20 +2935,33 @@
                 countEl.textContent = sessions.length;
                 var statusClass = {
                     active: 'status-active', pending: 'status-pending',
-                    disconnected: 'status-disconnected'
+                    disconnected: 'status-disconnected', logged_out: 'status-logged_out'
                 };
                 list.innerHTML = sessions.map(function(s) {
                     var proto = (s.session_type || '').toLowerCase();
                     var target = s.url || s.hostname || '\u2014';
                     var sc = statusClass[s.status] || 'status-completed';
-                    return '<div class="recent-row">'
+                    var name = s.entry_display_name || s.hostname || s.session_id;
+                    var statusLabel = (s.status || 'unknown').toUpperCase();
+                    var live = s.status === 'active' || s.status === 'pending' || s.status === 'disconnected';
+                    var relaunchable = !!s.address_book_entry && !!s.address_book_folder;
+                    var btn = live
+                        ? '<button class="btn btn-primary btn-sm" data-session-id="' + escapeAttr(s.session_id) + '" style="width:auto">Reconnect</button>'
+                        : (relaunchable
+                            ? '<button class="btn btn-primary btn-sm" data-relaunch="' + escapeAttr(s.session_id) + '" style="width:auto">Reconnect</button>'
+                            : '');
+                    var reason = s.reason
+                        ? '<div style="font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeAttr(s.reason) + '">' + escapeHtml(s.reason) + '</div>'
+                        : '';
+                    return '<div class="recent-row" data-address-book-entry="' + escapeAttr(s.address_book_entry || '') + '" data-address-book-folder="' + escapeAttr(s.address_book_folder || '') + '" data-session-id="' + escapeAttr(s.session_id) + '">'
                         + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
                         + '<div style="flex:1;min-width:0">'
-                        + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(s.entry_display_name || s.hostname || s.session_id) + '</div>'
-                        + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(target) + '</div>'
+                        + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(name) + '</div>'
+                        + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(target) + ' \u00B7 ' + escapeHtml(s.started_at || '') + '</div>'
+                        + reason
                         + '</div>'
-                        + '<span class="status-pill ' + sc + '">' + escapeHtml((s.status || 'unknown').toUpperCase()) + '</span>'
-                        + '<button class="btn btn-primary btn-sm" data-session-id="' + escapeAttr(s.session_id) + '" style="width:auto">Reconnect</button>'
+                        + '<span class="status-pill ' + sc + '">' + escapeHtml(statusLabel) + '</span>'
+                        + btn
                         + '</div>';
                 }).join('');
             })
@@ -2904,14 +2969,42 @@
                 document.getElementById('recent-sessions').classList.add('hidden');
             });
     }
-    // Reconnect opens /client/{id} honouring the session open preference.
-    // CSP-safe: the button only carries a data-session-id attribute; the
-    // click is handled here.
+    // Reconnect: live rows rejoin the session page; ended rows relaunch
+    // the address-book entry they came from. CSP-safe: buttons only carry
+    // data attributes; the click is handled here.
     document.getElementById('recent-list').addEventListener('click', function(ev) {
-        var btn = ev.target.closest('[data-session-id]');
+        var btn = ev.target.closest('[data-session-id], [data-relaunch]');
         if (!btn) return;
-        var id = btn.getAttribute('data-session-id');
-        if (id) openSessionUrl('/client/' + encodeURIComponent(id));
+        var id = btn.getAttribute('data-session-id') || btn.getAttribute('data-relaunch');
+        if (btn.hasAttribute('data-session-id')) {
+            if (id) openSessionUrl('/client/' + encodeURIComponent(id));
+            return;
+        }
+        var row = ev.target.closest('.recent-row');
+        if (!row) return;
+        var entryKey = row.getAttribute('data-address-book-entry') || '';
+        var folder = row.getAttribute('data-address-book-folder') || '';
+        var firstSlash = entryKey.indexOf('/');
+        var lastSlash = entryKey.lastIndexOf('/');
+        if (firstSlash < 0 || lastSlash <= firstSlash || !folder) return;
+        var scope = entryKey.substring(0, firstSlash);
+        var entry = entryKey.substring(lastSlash + 1);
+        btn.disabled = true;
+        btn.textContent = 'Reconnecting\u2026';
+        fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries/' + encodeURIComponent(entry) + '/connect', {
+            method: 'POST',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({ width: window.innerWidth, height: window.innerHeight, dpi: Math.round((window.devicePixelRatio || 1) * 96) })
+        })
+        .then(function(res) {
+            if (!res.ok) { btn.disabled = false; btn.textContent = 'Reconnect'; return; }
+            return res.json().then(function(d) {
+                if (!d.client_url) { btn.disabled = false; btn.textContent = 'Reconnect'; return; }
+                openSessionUrl(d.client_url);
+            });
+        })
+        .catch(function() { btn.disabled = false; btn.textContent = 'Reconnect'; });
     });
 
     // ── Address book init ────────────────────────────────────────────

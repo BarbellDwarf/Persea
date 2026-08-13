@@ -692,6 +692,10 @@ pub struct ConnectRequest {
     /// RDP domain override.
     #[serde(default)]
     pub domain: Option<String>,
+    /// Connection reason (V09): why this session was started. Stored in
+    /// session history; required when `[session] reason_required` is on.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Body for `POST /api/ssh/probe-host-key`.
@@ -1489,6 +1493,7 @@ pub async fn ab_connect_entry(
         height: req.height,
         dpi: req.dpi,
         banner: req.banner.or(ab_entry.banner),
+        reason: req.reason,
         enable_drive: ab_entry.enable_drive,
         disable_copy: ab_entry.disable_copy,
         disable_paste: ab_entry.disable_paste,
@@ -1570,7 +1575,14 @@ pub async fn ab_connect_entry(
         "Address book connect requested"
     );
 
-    match manager.create_session(create_req, admin_name.clone()).await {
+    match manager
+        .create_session(
+            create_req,
+            admin_name.clone(),
+            Some(client_ip_addr.to_string()),
+        )
+        .await
+    {
         Ok(info) => {
             tracing::info!(
                 user = %admin_name,
@@ -2774,6 +2786,7 @@ pub async fn quick_connect(
             height: query.height,
             dpi: query.dpi,
             banner: ab_entry.banner,
+            reason: None,
             enable_drive: ab_entry.enable_drive,
             disable_copy: ab_entry.disable_copy,
             disable_paste: ab_entry.disable_paste,
@@ -2844,7 +2857,10 @@ pub async fn quick_connect(
             "Quick connect (address book)"
         );
 
-        return match manager.create_session(create_req, admin_name).await {
+        return match manager
+            .create_session(create_req, admin_name, Some(client_ip.to_string()))
+            .await
+        {
             Ok(info) => {
                 Redirect::temporary(&format!("/client/{}", info.session_id)).into_response()
             }
@@ -2895,7 +2911,10 @@ pub async fn quick_connect(
         ..Default::default()
     };
 
-    match manager.create_session(create_req, admin_name).await {
+    match manager
+        .create_session(create_req, admin_name, Some(client_ip.to_string()))
+        .await
+    {
         Ok(info) => Redirect::temporary(&format!("/client/{}", info.session_id)).into_response(),
         Err(e) => quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
