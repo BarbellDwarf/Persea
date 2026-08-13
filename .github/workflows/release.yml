@@ -194,7 +194,10 @@ jobs:
       - name: Create source tarball
         run: |
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
-          git archive --prefix="persea-${VERSION}/" -o "persea-${VERSION}.tar.gz" "$GITHUB_SHA"
+          # UBI10 has no git, so checkout lands via the REST tarball (no .git);
+          # tar the workspace instead of git archive.
+          tar -czf "persea-${VERSION}.tar.gz" --transform "s,^\./,persea-${VERSION}/," \
+            --exclude="./target" --exclude="./persea-${VERSION}.tar.gz" -C "$GITHUB_WORKSPACE" .
           mkdir -p "$HOME/rpmbuild"/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           cp "persea-${VERSION}.tar.gz" "$HOME/rpmbuild/SOURCES/"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
