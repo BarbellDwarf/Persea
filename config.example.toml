@@ -509,3 +509,22 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # [vsphere.vm_credentials]
 # "my-windows-server" = { username = "Administrator", password_env = "WIN_PASS" }
 # "my-linux-box" = { username = "root", password_env = "LINUX_PASS" }
+
+# ─── Desktop Shell Bridge ────────────────────────────────────────────────────
+#
+# The persea desktop app (Tauri) can talk to this instance over remote IPC:
+# Win-key injection, drag-drop file transfer, and session window commands.
+# This is OFF by default, because enabling it widens the page's CSP:
+# `connect-src` additionally permits the Tauri IPC transports
+# (`tauri://localhost` on macOS/Linux, `http://ipc.localhost` on Windows).
+# When the flag is on, every page also serves the desktop bridge script
+# (templates/partials/desktop_bridge.html); it stays inert in a normal
+# browser (it only activates when the Tauri webview granted remote IPC).
+#
+# SECURITY: the desktop app grants IPC only to the origins you allowlist in
+# its `dangerousRemoteDomainIpcAccess` capability — remote pages get IPC
+# ONLY for those allowlisted origins, and only the `core:event` command
+# group. Leave this flag off for plain-browser deployments.
+
+# [desktop]
+# allow_bridge = false    # Env: PERSEA_DESKTOP__ALLOW_BRIDGE

@@ -1,0 +1,29 @@
+<script nonce="{{ csp_nonce }}">
+(function () {
+    if (!window.__TAURI__) { return; }
+    var listeners = {};
+    function dispatch(name, payload) {
+        var list = listeners[name];
+        if (!list) { return; }
+        for (var i = 0; i < list.length; i++) {
+            try { list[i](payload); } catch (e) { /* handler errors must not break the page */ }
+        }
+    }
+    function bind(name) {
+        try {
+            if (window.__TAURI__.event && window.__TAURI__.event.listen) {
+                window.__TAURI__.event.listen(name, function (evt) {
+                    dispatch(name, evt && evt.payload !== undefined ? evt.payload : evt);
+                });
+            }
+        } catch (e) { /* IPC unavailable: degrade silently */ }
+    }
+    window.perseaDesktop = {
+        on: function (name, handler) {
+            if (typeof handler !== 'function') { return; }
+            (listeners[name] = listeners[name] || []).push(handler);
+        }
+    };
+    ['key-inject', 'file-drop', 'session-command', 'desktop-mode'].forEach(bind);
+})();
+</script>

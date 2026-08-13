@@ -833,9 +833,19 @@ async fn security_headers(
         "Permissions-Policy",
         "camera=(), microphone=(), geolocation=()".parse().unwrap(),
     );
+    // The desktop shell (Tauri) talks to this instance over remote IPC; its
+    // transports are only reachable when the page CSP permits them
+    // (tauri#8476: IPC silently fails otherwise). Added ONLY when the
+    // operator enabled the bridge via [desktop] allow_bridge = true —
+    // otherwise the header stays byte-identical to the pre-desktop build.
+    let connect_src = if crate::config::allow_bridge_enabled() {
+        "connect-src 'self' wss: ws: tauri://localhost http://ipc.localhost"
+    } else {
+        "connect-src 'self' wss: ws:"
+    };
     headers.insert(
         "Content-Security-Policy",
-        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; connect-src 'self' wss: ws:; img-src 'self' data: https:; font-src 'self'")
+        format!("default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'; {connect_src}; img-src 'self' data: https:; font-src 'self'")
             .parse()
             .unwrap(),
     );
@@ -1466,6 +1476,22 @@ async fn run_server(
     if !secure_cookies_flag {
         tracing::info!(
             "secure_cookies = false — the Secure attribute will be omitted from all cookies (self-signed cert mode)"
+        );
+    }
+
+    // Desktop bridge flag — read by the security-headers middleware (CSP
+    // connect-src) and the template renderer (base.html partial include).
+    // Mirrors SecureCookies::init: config is about to be moved into the
+    // session manager, so the flag is mirrored into a startup global first.
+    let allow_bridge = config
+        .desktop
+        .as_ref()
+        .map(|d| d.allow_bridge)
+        .unwrap_or(false);
+    crate::config::init_allow_bridge(allow_bridge);
+    if allow_bridge {
+        tracing::info!(
+            "allow_bridge = true — CSP connect-src extended with tauri://localhost and http://ipc.localhost (desktop shell bridge)"
         );
     }
 

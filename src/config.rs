@@ -700,10 +700,59 @@ pub struct Config {
     /// reset the defaults.
     #[serde(default = "default_password_config")]
     pub password: Option<PasswordConfig>,
+    /// Desktop shell bridge settings (`[desktop]`). Materialised in
+    /// `default_toml()` so an absent section cannot silently reset the
+    /// defaults.
+    #[serde(default = "default_desktop_config")]
+    pub desktop: Option<DesktopConfig>,
 }
 
 fn default_password_config() -> Option<PasswordConfig> {
     Some(PasswordConfig::default())
+}
+
+/// Desktop shell bridge configuration (`[desktop]`).
+#[derive(Debug, Deserialize, Clone)]
+pub struct DesktopConfig {
+    /// Allow the Tauri desktop shell to reach this instance over remote IPC.
+    /// Default: false. When true, the page CSP `connect-src` additionally
+    /// permits the Tauri IPC transports (`tauri://localhost` on macOS/Linux,
+    /// `http://ipc.localhost` on Windows) and the desktop bridge script is
+    /// served on every page. See config.example.toml for the security note.
+    #[serde(default = "default_false")]
+    pub allow_bridge: bool,
+}
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            allow_bridge: default_false(),
+        }
+    }
+}
+
+fn default_desktop_config() -> Option<DesktopConfig> {
+    Some(DesktopConfig::default())
+}
+
+/// Startup mirror of the `[desktop] allow_bridge` flag, so the security
+/// headers middleware and the template renderer can read it without the full
+/// config. Initialised once at startup via [`init_allow_bridge`]; reads
+/// default to false before that (tests, renders outside the server
+/// lifecycle), which matches the config default.
+static ALLOW_BRIDGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Record the `[desktop] allow_bridge` flag at startup. Must be called once
+/// after config load; mirrors `SecureCookies::init` (src/csrf.rs).
+pub fn init_allow_bridge(allow: bool) {
+    let _ = ALLOW_BRIDGE.set(allow);
+}
+
+/// Whether the desktop bridge is enabled for this instance. False until
+/// [`init_allow_bridge`] ran, which matches the `allow_bridge = false`
+/// default.
+pub fn allow_bridge_enabled() -> bool {
+    ALLOW_BRIDGE.get().copied().unwrap_or(false)
 }
 
 /// Storage backend configuration for the address book.
@@ -1637,6 +1686,10 @@ fn default_toml() -> String {
     s.push_str("[password]\n");
     s.push_str(&format!("min_length = {}\n", default_password_min_length()));
     s.push_str(&format!("history = {}\n", default_password_history()));
+    // [desktop] — desktop shell bridge. Materialised so an absent section
+    // cannot silently reset the default (allow_bridge = false).
+    s.push_str("[desktop]\n");
+    s.push_str(&format!("allow_bridge = {}\n", default_false()));
     s
 }
 
@@ -1722,6 +1775,7 @@ impl Default for Config {
             ha_base_url: None,
             storage: None,
             password: default_password_config(),
+            desktop: default_desktop_config(),
         }
     }
 }
