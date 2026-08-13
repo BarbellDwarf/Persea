@@ -11,10 +11,60 @@ use uuid::Uuid;
 
 use tokio::time;
 
+use std::time::Duration;
+
 /// Command used when `ssh_tmux_detach` is enabled: attach to the most
 /// recent tmux session with `-d` (kicking any stale client left attached
 /// by an abrupt disconnect), or create a fresh session if none exists.
 const TMUX_DETACH_WRAPPER: &str = "tmux attach-session -d 2>/dev/null || tmux new-session";
+
+/// Maximum length of the RDP `client-name` value. guacd truncates the
+/// FreeRDP client hostname to 32 bytes (`RDP_CLIENT_HOSTNAME_SIZE`);
+/// persea truncates first so the value on the wire matches what Windows
+/// records.
+const RDP_CLIENT_NAME_MAX_CHARS: usize = 32;
+
+/// Expand the `[rdp] client_name_template` into the RDP `client-name`
+/// value: `{user}` = the persea identity that created the session,
+/// `{host}` = the resolved client hostname (or IP). Any other placeholder
+/// passes through verbatim.
+fn expand_rdp_client_name_template(template: &str, user: &str, host: &str) -> String {
+    template
+        .replace("{user}", user)
+        .replace("{host}", host)
+        .chars()
+        .take(RDP_CLIENT_NAME_MAX_CHARS)
+        .collect()
+}
+
+/// Resolve the connecting client's hostname via reverse DNS with a 1
+/// second budget. Any failure (missing IP, unparseable address, NXDOMAIN,
+/// timeout) falls back to the raw IP so session creation is never delayed
+/// by DNS. An unknown IP (no value at all) yields "unknown".
+async fn resolve_client_host(client_ip: Option<&str>) -> String {
+    let Some(ip_str) = client_ip.filter(|s| !s.is_empty()) else {
+        return "unknown".to_string();
+    };
+    let Ok(addr) = ip_str.parse::<std::net::IpAddr>() else {
+        return ip_str.to_string();
+    };
+    let lookup = async {
+        tokio::task::spawn_blocking(move || dns_lookup::lookup_addr(&addr))
+            .await
+            .unwrap_or_else(|e| Err(std::io::Error::other(e)))
+    };
+    match tokio::time::timeout(Duration::from_secs(1), lookup).await {
+        Ok(Ok(name)) => {
+            let name = name.trim().trim_end_matches('.').to_string();
+            if name.is_empty() {
+                ip_str.to_string()
+            } else {
+                name
+            }
+        }
+        _ => ip_str.to_string(),
+    }
+}
 
 /// Effective per-protocol global defaults for one session creation (admin
 /// Settings → Session → Session defaults). Precedence: the request/entry
@@ -97,10 +147,14 @@ impl ProtocolDefaults {
 
 impl SessionManager {
     /// Create a new session: connect to guacd, perform handshake, return session info.
+    /// `client_ip` is the connecting client's IP (from the HTTP layer,
+    /// already X-Forwarded-For aware); RDP sessions use it for the
+    /// `client-name` parameter.
     pub async fn create_session(
         self: &std::sync::Arc<Self>,
         req: CreateSessionRequest,
         created_by: String,
+        client_ip: Option<String>,
     ) -> Result<SessionInfo, SessionError> {
         // Enforce session limits (only count active/pending sessions)
         {
@@ -433,6 +487,33 @@ impl SessionManager {
                     .and_then(|s| s.security.clone())
                     .or_else(|| defaults.rdp_security.clone());
                 let rdp_enable_drive = session_drive_path.is_some();
+                // RDP client-name: expand `[rdp] client_name_template`
+                // ({user} = persea identity, {host} = reverse-DNS of the
+                // connecting client or its IP). An empty template disables
+                // the parameter, keeping the pre-feature handshake.
+                let client_name_template = self
+                    .config
+                    .rdp
+                    .as_ref()
+                    .and_then(|r| r.client_name_template.as_deref())
+                    .unwrap_or(crate::config::DEFAULT_RDP_CLIENT_NAME_TEMPLATE);
+                let client_name = if client_name_template.trim().is_empty() {
+                    None
+                } else {
+                    let host = resolve_client_host(client_ip.as_deref()).await;
+                    tracing::info!(
+                        session_id = %session_id,
+                        client_ip = ?client_ip,
+                        resolved_host = %host,
+                        template = %client_name_template,
+                        "RDP client name resolved"
+                    );
+                    Some(expand_rdp_client_name_template(
+                        client_name_template,
+                        &created_by,
+                        &host,
+                    ))
+                };
                 tracing::info!(
                     %session_id,
                     ignore_cert = rdp_ignore_cert,
@@ -441,6 +522,7 @@ impl SessionManager {
                     drive_path = ?session_drive_path,
                     domain = ?rdp.and_then(|s| s.domain.as_ref()),
                     has_password = req.password.is_some(),
+                    client_name = ?client_name,
                     "RDP session params"
                 );
                 let params = guacd::ConnectionParams::Rdp(Box::new(guacd::RdpParams {
@@ -450,6 +532,7 @@ impl SessionManager {
                     password: req.password.clone(),
                     domain: rdp.and_then(|s| s.domain.clone()),
                     security: rdp_security,
+                    client_name,
                     width,
                     height,
                     dpi,
@@ -984,6 +1067,7 @@ impl SessionManager {
                     force_lossless: false,
                     enable_h264: true,
                     secondary_monitors: req.max_monitors.unwrap_or(1).saturating_sub(1),
+                    client_name: None,
                 }));
                 (
                     params,
@@ -1315,7 +1399,7 @@ impl SessionManager {
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
             autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
             last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
-            source_ip: None,
+            source_ip: client_ip,
             user_id: Some(created_by),
         };
 
@@ -1735,6 +1819,7 @@ mod auth_pkg_tests {
         Config {
             rdp: Some(crate::config::RdpConfig {
                 default_auth_pkg: default_auth_pkg.map(|s| s.to_string()),
+                client_name_template: None,
             }),
             ..Config::default()
         }
@@ -1849,6 +1934,65 @@ mod tests {
     fn typescript_name_unknown_token_left_literal() {
         let got = expand_typescript_name("pre-{bogus}-{user}", "x", "h", "c", &ts_id(), ts_when());
         assert_eq!(got, "pre-{bogus}-x");
+    }
+
+    // ── RDP client-name template ──
+
+    #[test]
+    fn rdp_client_name_expands_user_and_host() {
+        let got = expand_rdp_client_name_template("{user}@{host}", "alice", "switch01");
+        assert_eq!(got, "alice@switch01");
+    }
+
+    #[test]
+    fn rdp_client_name_custom_template_and_unknown_placeholder() {
+        assert_eq!(
+            expand_rdp_client_name_template("{user}:{host}", "bob", "192.0.2.5"),
+            "bob:192.0.2.5"
+        );
+        assert_eq!(
+            expand_rdp_client_name_template("persea-{bogus}-{user}", "carol", "h1"),
+            "persea-{bogus}-carol"
+        );
+    }
+
+    #[test]
+    fn rdp_client_name_truncates_to_guacd_32_char_limit() {
+        let got = expand_rdp_client_name_template(
+            "{user}@{host}",
+            "alice",
+            "very-long-fqdn.corp.example.com",
+        );
+        assert_eq!(got.chars().count(), RDP_CLIENT_NAME_MAX_CHARS);
+        assert_eq!(got, "alice@very-long-fqdn.corp.exampl");
+    }
+
+    #[test]
+    fn rdp_client_name_empty_template_expands_to_empty() {
+        assert_eq!(expand_rdp_client_name_template("", "alice", "h1"), "");
+        assert_eq!(
+            expand_rdp_client_name_template("   ", "alice", "h1"),
+            "   ",
+            "disable check happens on the trimmed template in the RDP branch"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_client_host_missing_or_invalid_ip_falls_back() {
+        assert_eq!(resolve_client_host(None).await, "unknown");
+        assert_eq!(resolve_client_host(Some("")).await, "unknown");
+        assert_eq!(resolve_client_host(Some("not-an-ip")).await, "not-an-ip");
+    }
+
+    #[tokio::test]
+    async fn resolve_client_host_unresolvable_ip_returns_raw_ip() {
+        // 203.0.113.7 is TEST-NET-3 (RFC 5737): no PTR record exists, so
+        // the reverse lookup must fail (NXDOMAIN or the 1s timeout) and
+        // the raw IP must come back.
+        assert_eq!(
+            resolve_client_host(Some("203.0.113.7")).await,
+            "203.0.113.7"
+        );
     }
 
     // ── Per-protocol global defaults ──

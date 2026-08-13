@@ -250,7 +250,10 @@ pub async fn connect_vm(
         ..Default::default()
     };
 
-    match manager.create_session(create_req, user_name).await {
+    match manager
+        .create_session(create_req, user_name, Some(client_ip.to_string()))
+        .await
+    {
         Ok(info) => {
             tracing::info!(session_id = %info.session_id, vm = %vm.name, "vSphere session created");
             Redirect::temporary(&format!("/client/{}", info.session_id)).into_response()

@@ -138,6 +138,7 @@ argon2 = "0.5"
 
 # Memory zeroize for sensitive data
 zeroize = "1"
+dns-lookup = "2"
 
 [dev-dependencies]
 proptest = "1"

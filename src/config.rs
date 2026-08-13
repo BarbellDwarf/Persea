@@ -902,7 +902,16 @@ pub struct RdpConfig {
     /// NLA/CredSSP auth package: "ntlm" (default), "kerberos", or
     /// "negotiate".
     pub default_auth_pkg: Option<String>,
+    /// Template for the RDP `client-name` parameter sent to guacd per
+    /// session: `{user}` is the persea identity that created the session
+    /// and `{host}` the reverse-DNS name of the connecting client (the raw
+    /// IP when DNS fails or times out). Empty string disables the
+    /// parameter, preserving the pre-template behavior.
+    pub client_name_template: Option<String>,
 }
+
+/// Default `[rdp] client_name_template`: `{user}@{host}`.
+pub const DEFAULT_RDP_CLIENT_NAME_TEMPLATE: &str = "{user}@{host}";
 
 /// Fully-resolved theme palette with all 26 color fields.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1802,6 +1811,13 @@ fn default_toml() -> String {
     // cannot silently reset the default (reason_required = false).
     s.push_str("[session]\n");
     s.push_str(&format!("reason_required = {}\n", default_false()));
+    // [rdp] — RDP-wide settings. Materialised so an absent section cannot
+    // silently reset the client-name template default.
+    s.push_str("[rdp]\n");
+    s.push_str(&format!(
+        "client_name_template = \"{}\"\n",
+        DEFAULT_RDP_CLIENT_NAME_TEMPLATE
+    ));
     s
 }
 
@@ -2398,7 +2414,6 @@ mod tests {
         assert!(loaded.theme.is_none());
         assert!(loaded.vdi.is_none());
         assert!(loaded.vsphere.is_none());
-        assert!(loaded.rdp.is_none());
 
         // [recording] must be materialised with the previous defaults.
         let rec = loaded
@@ -2429,6 +2444,16 @@ mod tests {
             .as_ref()
             .expect("[session] defaults must be emitted");
         assert!(!sess.reason_required);
+
+        // [rdp] must be materialised with the previous defaults (the
+        // client-name template default; default_auth_pkg stays absent so
+        // resolve_rdp_auth_pkg still falls through to "ntlm").
+        let rdp_cfg = loaded.rdp.as_ref().expect("[rdp] defaults must be emitted");
+        assert_eq!(
+            rdp_cfg.client_name_template.as_deref(),
+            Some(DEFAULT_RDP_CLIENT_NAME_TEMPLATE)
+        );
+        assert!(rdp_cfg.default_auth_pkg.is_none());
 
         // [updates] must be materialised with the previous defaults.
         let upd = loaded

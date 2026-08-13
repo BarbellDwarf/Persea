@@ -135,6 +135,7 @@ Every setting can also be supplied as an environment variable: the `PERSEA_` pre
 | max_sessions | `PERSEA_MAX_SESSIONS` | `500` | Concurrent session limit across all users (0 = unlimited) |
 | max_sessions_per_user | `PERSEA_MAX_SESSIONS_PER_USER` | `50` | Concurrent sessions per user |
 | max_viewers | `PERSEA_MAX_VIEWERS` | `10` | Extra viewers allowed per shared session |
+| rdp.client_name_template | `PERSEA_RDP__CLIENT_NAME_TEMPLATE` | `{user}@{host}` | RDP client-name template (`{user}` = persea user, `{host}` = resolved client hostname or IP; empty disables) |
 | ssh/rdp/vnc_allowed_networks | `PERSEA_SSH_ALLOWED_NETWORKS` etc. | private ranges + loopback | Target address allowlists per protocol |
 | web_allowed_networks | `PERSEA_WEB_ALLOWED_NETWORKS` | loopback only | Allowed URL hosts for web browser sessions |
 | trusted_proxies | `PERSEA_TRUSTED_PROXIES` | empty | Proxy addresses whose `X-Forwarded-For` is trusted |
@@ -242,6 +243,21 @@ sudo bash setup-xrdp-gfx.sh --desktop mate
 - **Windows target:** to end disconnected Windows sessions automatically, set the Group Policy **Set time limit for disconnected sessions**, `Computer Configuration → Administrative Templates → Windows Components → Remote Desktop Services → Remote Desktop Session Host → Session Time Limits`, and set it low (e.g. 1–5 minutes). This is the supported way to end abandoned RDP sessions.
 
 > **Future work:** true Windows logoff on disconnect would require a guacd fork change (RDP logoff-on-disconnect) or an out-of-band `shutdown /l` against the target: neither is implemented today.
+
+**Source computer names.** Windows targets show the connecting machine's name in logon events and `query session`. With a gateway, two things are true by design and identical for Apache Guacamole or Citrix:
+
+- The **source IP** recorded by the Windows target is the gateway's address, not the user's machine: all sessions appear to originate from one place. This is inherent to gateway architecture and cannot be changed.
+- The **source computer name** is fixable: persea sends the RDP `client-name` parameter per session. By default it expands the template `{user}@{host}`, where `{user}` is the persea identity that started the session and `{host}` is the reverse-DNS name of the connecting client's IP (resolved with a 1-second budget; the raw IP is used when DNS fails or times out, so session creation is never delayed by a slow resolver). In Active Directory environments the reverse lookup returns the machine FQDN, and Windows logon events then name the real machine.
+
+To change the format or disable the parameter entirely:
+
+```toml
+[rdp]
+client_name_template = "{user}@{host}"   # default
+# client_name_template = ""              # disable: pre-feature behavior
+```
+
+An empty template disables the parameter and Windows falls back to its own generated name (the behavior before this feature). `{host}` is the resolved hostname or the IP; any other text passes through verbatim, and the value is truncated to 32 characters (the RDP client-name field's limit).
 
 ## Step 5: Sign-in
 

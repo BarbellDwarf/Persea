@@ -1575,7 +1575,14 @@ pub async fn ab_connect_entry(
         "Address book connect requested"
     );
 
-    match manager.create_session(create_req, admin_name.clone()).await {
+    match manager
+        .create_session(
+            create_req,
+            admin_name.clone(),
+            Some(client_ip_addr.to_string()),
+        )
+        .await
+    {
         Ok(info) => {
             tracing::info!(
                 user = %admin_name,
@@ -2850,7 +2857,10 @@ pub async fn quick_connect(
             "Quick connect (address book)"
         );
 
-        return match manager.create_session(create_req, admin_name).await {
+        return match manager
+            .create_session(create_req, admin_name, Some(client_ip.to_string()))
+            .await
+        {
             Ok(info) => {
                 Redirect::temporary(&format!("/client/{}", info.session_id)).into_response()
             }
@@ -2901,7 +2911,10 @@ pub async fn quick_connect(
         ..Default::default()
     };
 
-    match manager.create_session(create_req, admin_name).await {
+    match manager
+        .create_session(create_req, admin_name, Some(client_ip.to_string()))
+        .await
+    {
         Ok(info) => Redirect::temporary(&format!("/client/{}", info.session_id)).into_response(),
         Err(e) => quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string()),
     }

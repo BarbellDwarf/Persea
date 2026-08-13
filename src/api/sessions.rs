@@ -174,7 +174,10 @@ pub async fn create_session(
         "Session creation requested"
     );
 
-    match manager.create_session(req, admin_name.clone()).await {
+    match manager
+        .create_session(req, admin_name.clone(), Some(client_ip.to_string()))
+        .await
+    {
         Ok(info) => {
             tracing::info!(
                 admin = %admin_name,
