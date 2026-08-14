@@ -6,21 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!--
-Release checklist (delete this comment before tagging v1.2.0):
+Release checklist (delete this comment before tagging v1.0.0):
 - [ ] `cargo test` + `cargo fmt --check` green on the final commit
 - [ ] CI green for the final push (`gh run list`)
-- [ ] Tag `v1.2.0` (annotated) and push it
+- [ ] Tag `v1.0.0` (annotated) and push it
 - [ ] Release workflow green (deb/rpm/Windows artifacts, guacd pin untouched)
-- [ ] Push the beta image + beta pre-release (`gh workflow run beta.yml --ref v1.2.0`) after the tag
+- [ ] Push the beta image + beta pre-release (`gh workflow run beta.yml --ref main`) after the tag
 -->
 
-## [1.2.0] - 2026-08-13
+## [1.0.0] - 2026-08-14
 
-This release is the desktop round: the server APIs the persea desktop
-shell needs — session events, drive uploads, device pairing, an anonymous
-version/capabilities probe, and the Tauri IPC bridge — plus a hardening
-pass, RHEL 10 RPM and Windows server packages, and a polish pass over
-admin settings, branding, and session UX.
+Initial release. The server is a lightweight Rust replacement for the
+Apache Guacamole webapp: SSH, RDP, VNC, SPICE, Proxmox and VMware
+sessions from any browser, with enterprise auth (OIDC, SAML, LDAP,
+RADIUS, TOTP), RBAC, audit logging, and packaging for Debian, RHEL 10
+and Windows — plus the APIs the persea desktop shell needs (session
+events, drive uploads, device pairing, the capability probe, and the
+Tauri IPC bridge).
 
 ### Added
 
@@ -94,7 +96,6 @@ admin settings, branding, and session UX.
 - **CodeQL remediations** — 5 alerts resolved (test-vector and guarded
   XSS suppressions); login page lost its CSP-blocked reset link.
 
-## [1.1.1] - 2026-08-12
 
 This release is the "make every claim real" round: the marketing said things
 that were not implemented, so we implemented them — the multi-backend
@@ -235,7 +236,6 @@ audit verification).
   settings/branding admin pages.
 - **CLA gate** — unsigned contributions fail CI.
 
-## [1.1.0] - 2026-08-09
 
 ### Added
 
