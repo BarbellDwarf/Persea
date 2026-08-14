@@ -2,6 +2,10 @@
 
 persea is a hobby project built in the open. Everything is free, self-hosted, and Apache-2.0 licensed. What we ask for is time and, if you can spare it, money.
 
+## GitHub Sponsors
+
+Sponsor the project on [GitHub Sponsors](https://github.com/sponsors/barbelldwarf).
+
 ## Ko-Fi
 
 Support the project on [Ko-Fi](https://ko-fi.com/barbelldwarf). Contributions pay for:
@@ -14,5 +18,6 @@ Support the project on [Ko-Fi](https://ko-fi.com/barbelldwarf). Contributions pa
 
 ## How to contribute
 
+- [Sponsor on GitHub Sponsors](https://github.com/sponsors/barbelldwarf) (one-time or recurring)
 - [Buy a coffee on Ko-Fi](https://ko-fi.com/barbelldwarf) (one-time or recurring)
 - Contribute code, docs, or bug reports: see [CONTRIBUTING.md](CONTRIBUTING.md) if present, and the [Contributor License Agreement (CLA.md)](CLA.md)
