@@ -381,6 +381,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             address_book_folder TEXT,
             entry_display_name TEXT,
             reason             TEXT,
+            source_ip          TEXT,
             started_at         TEXT NOT NULL DEFAULT (datetime('now')),
             ended_at           TEXT,
             duration_secs      INTEGER,
@@ -476,6 +477,15 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
     // column from the CREATE TABLE above; existing databases are ALTERed
     // here, idempotent-guarded like the other column migrations.
     if let Err(e) = conn.execute("ALTER TABLE session_history ADD COLUMN reason TEXT", []) {
+        if !e.to_string().contains("duplicate column") {
+            return Err(e);
+        }
+    }
+
+    // Migration: session source IP. Fresh databases get the
+    // column from the CREATE TABLE above; existing databases are ALTERed
+    // here, idempotent-guarded like the other column migrations.
+    if let Err(e) = conn.execute("ALTER TABLE session_history ADD COLUMN source_ip TEXT", []) {
         if !e.to_string().contains("duplicate column") {
             return Err(e);
         }
@@ -1911,6 +1921,7 @@ pub fn insert_session_history(
     address_book_entry: Option<&str>,
     address_book_folder: Option<&str>,
     entry_display_name: Option<&str>,
+    source_ip: Option<&str>,
 ) -> rusqlite::Result<()> {
     db_route!(
         db,
@@ -1923,14 +1934,15 @@ pub fn insert_session_history(
         created_by.to_string(),
         address_book_entry.map(str::to_string),
         address_book_folder.map(str::to_string),
-        entry_display_name.map(str::to_string)
+        entry_display_name.map(str::to_string),
+        source_ip.map(str::to_string)
     );
     let conn = db.lock().unwrap();
     conn.execute(
         "INSERT INTO session_history
          (session_id, session_type, hostname, port, username, created_by,
-          address_book_entry, address_book_folder, entry_display_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+          address_book_entry, address_book_folder, entry_display_name, source_ip)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             session_id,
             session_type,
@@ -1941,6 +1953,7 @@ pub fn insert_session_history(
             address_book_entry,
             address_book_folder,
             entry_display_name,
+            source_ip,
         ],
     )?;
     Ok(())
@@ -2342,7 +2355,8 @@ pub fn query_session_history(
     let query_sql = format!(
         "SELECT session_id, session_type, hostname, port, username, created_by,
                 address_book_entry, address_book_folder, entry_display_name,
-                reason, started_at, ended_at, duration_secs, recording_file, status
+                reason, started_at, ended_at, duration_secs, recording_file, status,
+                source_ip
          FROM session_history WHERE {} ORDER BY started_at DESC LIMIT ?{} OFFSET ?{}",
         where_clause,
         idx,
@@ -2370,6 +2384,7 @@ pub fn query_session_history(
                 "duration_secs": row.get::<_, Option<i64>>(12)?,
                 "recording_file": row.get::<_, Option<String>>(13)?,
                 "status": row.get::<_, String>(14)?,
+                "source_ip": row.get::<_, Option<String>>(15)?,
             }))
         })?
         .filter_map(|r| r.ok())
@@ -2414,14 +2429,17 @@ pub fn stream_session_history_csv(
             status,
             _recording,
             raw_entry_display_name,
+            source_ip,
         ) in rows
         {
+            let source_ip_field = source_ip.as_deref().unwrap_or("").to_string();
             let fields = [
                 &session_id,
                 &session_type,
                 &hostname,
                 &username,
                 &created_by,
+                &source_ip_field,
                 &entry_name,
                 &folder,
                 &started_at,
@@ -2496,7 +2514,7 @@ pub fn stream_session_history_csv(
                 COALESCE(entry_display_name, address_book_entry, \'\'),
                 COALESCE(address_book_folder, \'\'),
                 started_at, ended_at, duration_secs, status, recording_file,
-                entry_display_name
+                entry_display_name, source_ip
          FROM session_history WHERE {} ORDER BY started_at DESC",
         where_clause
     );
@@ -2519,6 +2537,7 @@ pub fn stream_session_history_csv(
             row.get::<_, String>(11)?,
             row.get::<_, Option<String>>(12)?,
             row.get::<_, Option<String>>(13)?,
+            row.get::<_, Option<String>>(14)?,
         ))
     })?;
 
@@ -2538,13 +2557,16 @@ pub fn stream_session_history_csv(
             status,
             _recording,
             raw_entry_display_name,
+            source_ip,
         ) = row?;
+        let source_ip_field = source_ip.as_deref().unwrap_or("").to_string();
         let fields = [
             &session_id,
             &session_type,
             &hostname,
             &username,
             &created_by,
+            &source_ip_field,
             &entry,
             &folder,
             &started_at,
@@ -3786,6 +3808,7 @@ mod tests {
             Some("shared/prod/rdp-host-1"),
             Some("prod"),
             Some("RDP Host 1"),
+            Some("10.9.8.7"),
         )
         .unwrap();
         insert_session_history(
@@ -3799,6 +3822,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
 
@@ -3809,6 +3833,9 @@ mod tests {
         // Most recent first
         assert_eq!(rows[0]["session_id"], "sess-2");
         assert_eq!(rows[1]["session_id"], "sess-1");
+        // source_ip persists through insert → read
+        assert_eq!(rows[1]["source_ip"], "10.9.8.7");
+        assert_eq!(rows[0]["source_ip"], serde_json::Value::Null);
     }
 
     #[test]
@@ -3825,6 +3852,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         insert_session_history(
@@ -3835,6 +3863,7 @@ mod tests {
             None,
             "",
             "andy@example.com",
+            None,
             None,
             None,
             None,
@@ -3850,10 +3879,14 @@ mod tests {
     #[test]
     fn test_session_history_filter_by_type() {
         let db = test_db();
-        insert_session_history(&db, "s1", "rdp", "h1", None, "", "user1", None, None, None)
-            .unwrap();
-        insert_session_history(&db, "s2", "ssh", "h2", None, "", "user2", None, None, None)
-            .unwrap();
+        insert_session_history(
+            &db, "s1", "rdp", "h1", None, "", "user1", None, None, None, None,
+        )
+        .unwrap();
+        insert_session_history(
+            &db, "s2", "ssh", "h2", None, "", "user2", None, None, None, None,
+        )
+        .unwrap();
 
         let (rows, total) =
             query_session_history(&db, None, None, Some("ssh"), None, None, 100, 0).unwrap();
@@ -3864,8 +3897,10 @@ mod tests {
     #[test]
     fn test_session_history_end() {
         let db = test_db();
-        insert_session_history(&db, "s1", "rdp", "h1", None, "", "user1", None, None, None)
-            .unwrap();
+        insert_session_history(
+            &db, "s1", "rdp", "h1", None, "", "user1", None, None, None, None,
+        )
+        .unwrap();
         end_session_history(&db, "s1", "completed", 3600, Some("s1.guac")).unwrap();
 
         let (rows, _) = query_session_history(&db, None, None, None, None, None, 100, 0).unwrap();
@@ -3889,6 +3924,7 @@ mod tests {
                 Some("shared/prod/host-a"),
                 Some("prod"),
                 Some("Host A"),
+                None,
             )
             .unwrap();
             end_session_history(&db, &format!("s{}", i), "completed", 600, None).unwrap();
@@ -3905,6 +3941,7 @@ mod tests {
                 Some("shared/dev/host-b"),
                 Some("dev"),
                 Some("Host B"),
+                None,
             )
             .unwrap();
             end_session_history(&db, &format!("s{}", i), "completed", 300, None).unwrap();
@@ -3933,6 +3970,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .unwrap();
             end_session_history(&db, &format!("s{}", i), "completed", 1800, None).unwrap();
@@ -3945,6 +3983,7 @@ mod tests {
             None,
             "",
             "bob@co.com",
+            None,
             None,
             None,
             None,
@@ -3963,9 +4002,15 @@ mod tests {
     #[test]
     fn test_session_summary() {
         let db = test_db();
-        insert_session_history(&db, "s1", "rdp", "h", None, "", "alice", None, None, None).unwrap();
+        insert_session_history(
+            &db, "s1", "rdp", "h", None, "", "alice", None, None, None, None,
+        )
+        .unwrap();
         end_session_history(&db, "s1", "completed", 7200, None).unwrap();
-        insert_session_history(&db, "s2", "ssh", "h", None, "", "bob", None, None, None).unwrap();
+        insert_session_history(
+            &db, "s2", "ssh", "h", None, "", "bob", None, None, None, None,
+        )
+        .unwrap();
         // s2 still active
         upsert_user(&db, "alice@co.com", "alice", None, "admin", &[]).unwrap();
         upsert_user(&db, "bob@co.com", "bob", None, "viewer", &[]).unwrap();
@@ -3980,7 +4025,8 @@ mod tests {
     #[test]
     fn test_cleanup_session_history_zero_keeps_all() {
         let db = test_db();
-        insert_session_history(&db, "s1", "rdp", "h", None, "", "u", None, None, None).unwrap();
+        insert_session_history(&db, "s1", "rdp", "h", None, "", "u", None, None, None, None)
+            .unwrap();
         let deleted = cleanup_session_history(&db, 0).unwrap();
         assert_eq!(deleted, 0);
         let (_, total) = query_session_history(&db, None, None, None, None, None, 100, 0).unwrap();
@@ -3999,6 +4045,7 @@ mod tests {
                 None,
                 "",
                 "u",
+                None,
                 None,
                 None,
                 None,
@@ -4902,6 +4949,7 @@ macro_rules! session_history_json_row {
             "duration_secs": $row.get::<Option<i64>>(12),
             "recording_file": $row.get::<Option<String>>(13),
             "status": $row.get::<String>(14),
+            "source_ip": $row.get::<Option<String>>(15),
         })
     };
 }
@@ -6629,17 +6677,18 @@ async fn insert_session_history_pool(
     address_book_entry: Option<String>,
     address_book_folder: Option<String>,
     entry_display_name: Option<String>,
+    source_ip: Option<String>,
 ) -> rusqlite::Result<()> {
     pool_exec(
         pool,
         qsql!(
             pool,
             "INSERT INTO session_history \
-             (session_id, session_type, hostname, port, username, created_by, address_book_entry, address_book_folder, entry_display_name) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             (session_id, session_type, hostname, port, username, created_by, address_book_entry, address_book_folder, entry_display_name, source_ip) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             "INSERT INTO session_history \
-             (session_id, session_type, hostname, port, username, created_by, address_book_entry, address_book_folder, entry_display_name) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             (session_id, session_type, hostname, port, username, created_by, address_book_entry, address_book_folder, entry_display_name, source_ip) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         ),
         &[
             Arg::Str(session_id),
@@ -6651,6 +6700,7 @@ async fn insert_session_history_pool(
             Arg::OptStr(address_book_entry),
             Arg::OptStr(address_book_folder),
             Arg::OptStr(entry_display_name),
+            Arg::OptStr(source_ip),
         ],
     )
     .await
@@ -7283,7 +7333,8 @@ async fn query_session_history_pool(
     let query_sql = format!(
         "SELECT session_id, session_type, hostname, port, username, created_by, \
                 address_book_entry, address_book_folder, entry_display_name, \
-                reason, started_at, ended_at, duration_secs, recording_file, status \
+                reason, started_at, ended_at, duration_secs, recording_file, status, \
+                source_ip \
          FROM session_history WHERE {where_clause} ORDER BY started_at DESC LIMIT {limit_ph} OFFSET {offset_ph}"
     );
     args.push(Arg::I64(limit as i64));
@@ -7327,6 +7378,7 @@ async fn stream_session_history_csv_pool(
         String,
         Option<String>,
         Option<String>,
+        Option<String>,
     )>,
     rusqlite::Error,
 > {
@@ -7345,7 +7397,7 @@ async fn stream_session_history_csv_pool(
                 COALESCE(entry_display_name, address_book_entry, ''), \
                 COALESCE(address_book_folder, ''), \
                 started_at, ended_at, duration_secs, status, recording_file, \
-                entry_display_name \
+                entry_display_name, source_ip \
          FROM session_history WHERE {where_clause} ORDER BY started_at DESC"
     );
     let rows = match pool {
@@ -7373,6 +7425,7 @@ async fn stream_session_history_csv_pool(
                 row.get::<String>(11),
                 row.get::<Option<String>>(12),
                 row.get::<Option<String>>(13),
+                row.get::<Option<String>>(14),
             )
         })
         .collect())

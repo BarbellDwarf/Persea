@@ -520,8 +520,10 @@ async fn session_history_insert_lands_despite_fire_and_forget() {
         let found = v["recent"]
             .as_array()
             .map(|rows| {
-                rows.iter()
-                    .any(|r| r["session_id"].as_str() == Some(&session_id))
+                rows.iter().any(|r| {
+                    r["session_id"].as_str() == Some(&session_id)
+                        && r["source_ip"].as_str() == Some("127.0.0.1")
+                })
             })
             .unwrap_or(false);
         if found {

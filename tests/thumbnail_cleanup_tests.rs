@@ -55,6 +55,7 @@ fn orphaned_thumbnail_is_deleted_live_one_kept() {
         None,
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -91,6 +92,7 @@ fn completed_session_thumbnail_is_kept() {
         None,
         "",
         "bob",
+        None,
         None,
         None,
         None,

@@ -1260,6 +1260,7 @@ impl SessionManager {
                 session.address_book_entry.as_deref(),
                 session.address_book_folder.as_deref(),
                 session.entry_display_name.as_deref(),
+                session.source_ip.as_deref(),
             ) {
                 tracing::warn!(
                     session_id = %session.id,

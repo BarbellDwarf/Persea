@@ -310,7 +310,7 @@ pub async fn report_sessions_csv(
         AppError::Internal("failed to query session history".into())
     })?;
 
-    let mut csv = String::from("Session ID,Type,Hostname,Username,User,Entry,Folder,Started,Ended,Duration (secs),Status,Recording\n");
+    let mut csv = String::from("Session ID,Type,Hostname,Username,User,Source IP,Entry,Folder,Started,Ended,Duration (secs),Status,Recording\n");
     csv.push_str(&String::from_utf8_lossy(&csv_buf));
     Ok(axum::response::Response::builder()
         .status(StatusCode::OK)

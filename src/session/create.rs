@@ -1415,7 +1415,7 @@ impl SessionManager {
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
             autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
             last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
-            source_ip: client_ip,
+            source_ip: client_ip.clone(),
             user_id: Some(created_by),
         };
 
@@ -1495,6 +1495,7 @@ impl SessionManager {
                     address_book_entry.as_deref(),
                     address_book_folder.as_deref(),
                     entry_display_name.as_deref(),
+                    client_ip.as_deref(),
                 );
                 if let Some(r) = reason.as_deref() {
                     let _ = crate::db::update_session_history_reason(&db, &session_id_str, r);

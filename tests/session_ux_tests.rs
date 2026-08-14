@@ -245,7 +245,7 @@ fn reason_required_defaults_to_false() {
 fn reason_is_stored_and_returned_by_history_query() {
     let db = db::init_db(std::path::Path::new(":memory:")).unwrap();
     db::insert_session_history(
-        &db, "s1", "ssh", "host1", None, "alice", "alice", None, None, None,
+        &db, "s1", "ssh", "host1", None, "alice", "alice", None, None, None, None,
     )
     .unwrap();
     db::update_session_history_reason(&db, "s1", "Password rotation").unwrap();
@@ -258,7 +258,10 @@ fn reason_is_stored_and_returned_by_history_query() {
 // ── V10: recent-connections endpoint ──────────────────────────────────
 
 fn seed_history(db: &Db, id: &str, user: &str, hostname: &str) {
-    db::insert_session_history(db, id, "ssh", hostname, None, "u", user, None, None, None).unwrap();
+    db::insert_session_history(
+        db, id, "ssh", hostname, None, "u", user, None, None, None, None,
+    )
+    .unwrap();
 }
 
 #[tokio::test]
@@ -423,6 +426,7 @@ async fn terminate_records_logged_out_history_and_removes_the_session() {
         None,
         "alice",
         "alice",
+        None,
         None,
         None,
         None,
