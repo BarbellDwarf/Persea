@@ -3,6 +3,13 @@
 **Applies to:** every implementation subagent dispatched in this repo.
 **Reference:** `AGENTS.md` → "Subagent Work Contract" section.
 
+## Tickets
+
+GitHub issues are the source of truth. Every subagent works from an open
+issue (see `AGENTS.md` → "Issue tracking"). Reference the issue in the
+commit message (`fix: ... (repo#N)`); use `Closes #N` in the PR body to
+close it on merge.
+
 ## Model: Edits first, single verifier
 
 Parallel subagents do NOT build concurrently. Cargo serializes builds via the

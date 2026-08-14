@@ -282,8 +282,7 @@ username = "administrator@vsphere.local"
 
 - **Never run `git reset`, `git checkout .`, or `git stash`**: these destroy parallel work. If the tree has unexpected changes, leave them alone and work around them.
 - **Never leave uncommitted work**: commit or `WIP:` before stopping.
-- **Commit messages**: Conventional Commits (`fix:`, `feat:`, `docs:`, `style:`, `test:`).
-- **Ticket numbers are LOCAL-ONLY**: they appear in commit messages only. Never mention ticket codes (wayfinder/…, T##, S##, D##) in documentation, READMEs, docs/, code comments, workflow files, or user-facing text. The `wayfinder/` folder is gitignored; nothing outside it references tickets.
+- **Commit messages**: Conventional Commits (`fix:`, `feat:`, `docs:`, `style:`, `test:`). Reference GitHub issues so they link: `fix: ... (repo#N)`, or `Closes #N` when the PR resolves it. GitHub issues are the source of truth; `wayfinder/` codes (wayfinder/…, T##, S##, D##) are historical and never referenced in new commits or docs.
 - **Push after commit**: the branch is shared.
 - **Never issue two edits to the same file in one parallel tool batch**: same-file edits race and silently clobber each other (both report success, one is lost). Verify with a re-read or grep after any same-file edit pair. (Hit twice in the v1.2.0 planning, 2026-08-12.)
 
@@ -325,9 +324,16 @@ When dispatching implementation work to subagents, follow the contract in
 - **Never leave uncommitted work**: commit or `WIP:` before stopping.
 - **CI must be green** (`gh run list`) before moving on.
 
-## Wayfinder planning
+## Issue tracking
 
-- `wayfinder/`: planning artifacts (gitignored, local only; do NOT commit)
-- `wayfinder/security-audit-round3/`: current security audit tickets
-- Tickets are numbered per round (security findings, config, login, error pages, process)
-- Each ticket: `wayfinder:task`, priority, phase, finding, fix, files, deliverable
+**GitHub issues are the source of truth for all tickets** (both repos). Create tickets on GitHub, assign them to a project, and work them through to close. `wayfinder/` is a historical archive only (gitignored, local only; do NOT commit); no new tickets are created there.
+
+- **Projects** (org `persea-grove`):
+  - `persea bugs` — server bugs
+  - `persea-desktop bugs` — desktop bugs
+  - `persea features` — features for both repos
+- **New bugs** → `gh issue create` on the repo with a `bug` label, then `gh project item-add` to the bugs project.
+- **New features** → `gh issue create` with an `enhancement` label, then `gh project item-add` to `persea features`.
+- **Status lives in the issue**: opened → assigned to project → worked → closed (with the fix PR linked). Issue status, not local files, is what everyone reads.
+- **Commit messages** reference the issue so GitHub links them: `fix: crash on Linux startup (persea-desktop#1)` or use `Closes #N` when the PR resolves the issue.
+- Check `gh issue list --repo <owner>/<repo> --state open` before starting work.
