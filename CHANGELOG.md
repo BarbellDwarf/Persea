@@ -77,7 +77,7 @@ Tauri IPC bridge).
 - **rusqlite 0.32 → 0.35** — with the audit log re-verified against the
   new API surface.
 - **Repo moved to the persea-grove org** — URLs, guacd fork references,
-  and package metadata follow; Open Collective funding link added.
+  and package metadata follow; Ko-Fi funding link added.
 
 ### Fixed
 

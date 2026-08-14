@@ -219,7 +219,7 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 
 ## Support
 
-persea is a hobby project, funded by its community. If persea saves you time, consider sponsoring it on [Open Collective](https://opencollective.com/persea): contributions pay for CI infrastructure, cross-platform build and signing certificates, test machines, and development time.
+persea is a hobby project, funded by its community. If persea saves you time, consider supporting it on [Ko-Fi](https://ko-fi.com/barbelldwarf): contributions pay for CI infrastructure, cross-platform build and signing certificates, test machines, and development time.
 
 ## License
 
