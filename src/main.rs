@@ -866,7 +866,7 @@ fn cmd_init() {
          #\n\
          # guacd: Windows has no native guacd — point guacd_addr at a remote\n\
          # host, WSL2, or Docker Desktop instance (the guacd image is\n\
-         # ghcr.io/barbelldwarf/persea:latest, run with -p 4822:4822).\n\n\
+         # ghcr.io/persea-grove/persea:latest, run with -p 4822:4822).\n\n\
          listen_addr = \"127.0.0.1:8089\"\n\
          guacd_addr = \"127.0.0.1:4822\"\n\
          static_path = \"{}\"\n\

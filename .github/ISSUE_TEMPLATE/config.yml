@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerabilities
-    url: https://github.com/BarbellDwarf/persea/security/policy
+    url: https://github.com/persea-grove/persea/security/policy
     about: Report security issues privately, never in a public issue

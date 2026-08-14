@@ -794,7 +794,7 @@ pub struct UpdatesConfig {
 }
 
 fn default_update_check_url() -> String {
-    "https://api.github.com/repos/BarbellDwarf/persea/releases/latest".to_string()
+    "https://api.github.com/repos/persea-grove/persea/releases/latest".to_string()
 }
 
 fn default_update_check_interval_hours() -> u64 {
@@ -2482,7 +2482,7 @@ mod tests {
         assert!(upd.enabled);
         assert_eq!(
             upd.check_url,
-            "https://api.github.com/repos/BarbellDwarf/persea/releases/latest"
+            "https://api.github.com/repos/persea-grove/persea/releases/latest"
         );
         assert_eq!(upd.check_interval_hours, 24);
 

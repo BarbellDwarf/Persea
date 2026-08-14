@@ -7,7 +7,7 @@ This Contributor License Agreement ("Agreement") applies to any contribution sub
 ## 1. Definitions
 
 - **"Contribution"** means any original work of authorship, including any modifications or additions to an existing work, that is intentionally submitted by You to the Licensor for inclusion in the Project. This includes any communication that accompanies, demonstrates, or otherwise relates to the Contribution.
-- **"Project"** means the persea software, including all source code, documentation, and related materials, hosted at github.com/BarbellDwarf/persea.
+- **"Project"** means the persea software, including all source code, documentation, and related materials, hosted at github.com/persea-grove/persea.
 - **"You" or "Contributor"** means the individual signing this Agreement, or, if You sign on behalf of a legal entity, that entity and any individual authorized to submit Contributions on its behalf (see Section 11).
 - **"Effective Date"** means the date You sign or accept this Agreement.
 

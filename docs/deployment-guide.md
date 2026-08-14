@@ -86,7 +86,7 @@ persea.exe --uninstall-service # remove the service (run as Administrator)
 
 Notes specific to Windows:
 
-- **guacd is not native on Windows**: point `guacd_addr` at a remote host, WSL2, or Docker Desktop. Run the container with `docker run -d -p 4822:4822 ghcr.io/barbelldwarf/persea:latest` (the image bundles guacd on 4822), or install the `.deb`/`.rpm` on a Linux host and use it as the guacd server. Edit `%ProgramData%\persea\config.toml` accordingly and restart the service.
+- **guacd is not native on Windows**: point `guacd_addr` at a remote host, WSL2, or Docker Desktop. Run the container with `docker run -d -p 4822:4822 ghcr.io/persea-grove/persea:latest` (the image bundles guacd on 4822), or install the `.deb`/`.rpm` on a Linux host and use it as the guacd server. Edit `%ProgramData%\persea\config.toml` accordingly and restart the service.
 - **TLS hot-reload is not available on Windows** (no SIGHUP): replace `tls\cert.pem` and `key.pem`, then restart the service. The server re-reads the files at startup.
 - **Unsupported features fail at runtime with clear errors**, not at compile time: web sessions (Xvnc + Chromium), VDI desktop containers (Docker), and LUKS file transfer. The binary is the same one shipped everywhere. Attempts to start such a session return an "unsupported on Windows" message; a `[drive]` LUKS or `[vdi]` config logs a warning at startup.
 - **Logs**: the service runs without a console, so `tracing` output is discarded. For diagnostics, stop the service and run `persea.exe` in a console with `--config C:\ProgramData\persea\config.toml --log-format json` (or check `/api/health`, which is public).
@@ -96,13 +96,13 @@ Notes specific to Windows:
 **Any other distribution**: use the Docker image, which bundles guacd and FreeRDP so nothing can clash with the host:
 
 ```bash
-docker pull ghcr.io/barbelldwarf/persea:latest
+docker pull ghcr.io/persea-grove/persea:latest
 docker run -d -p 8089:8089 \
   -v persea-data:/opt/persea/data \
   -v persea-recordings:/opt/persea/recordings \
   -v persea-tls:/opt/persea/tls \
   -v "$PWD/config.toml:/opt/persea/config.toml" \
-  ghcr.io/barbelldwarf/persea:latest
+  ghcr.io/persea-grove/persea:latest
 ```
 
 The three volumes are what keep your data across container upgrades. The `persea-tls` one matters more than it looks: without it, the container generates a fresh self-signed certificate every time it is recreated, and browsers warn again about a changed certificate. For production, mount your own certificate over `/opt/persea/tls/cert.pem` and `key.pem`.

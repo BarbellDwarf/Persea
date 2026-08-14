@@ -64,7 +64,7 @@ cmd_build_guacd() {
         error "guacamole-server source not found at $GUACD_SRC"
         error "Expected it at ../guacamole-server relative to persea"
         error "  (check out branch persea-1.6.1-freerdp3 of the fork"
-        error "   BarbellDwarf/persea-guacamole-server there — the former"
+        error "   persea-grove/persea-guacamole-server there — the former"
         error "   patches/ quilt now lives on that branch as commits)"
         exit 1
     fi

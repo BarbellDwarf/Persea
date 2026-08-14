@@ -19,7 +19,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GUACD_SRC_URL="https://github.com/BarbellDwarf/persea-guacamole-server.git"
+GUACD_SRC_URL="https://github.com/persea-grove/persea-guacamole-server.git"
 # guacd source is the maintained fork branch persea-1.6.1-freerdp3 — must
 # match build-deb.sh and install.sh (GUACD_BRANCH)
 GUACD_BRANCH="persea-1.6.1-freerdp3"

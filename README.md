@@ -1,8 +1,8 @@
 # Persea
 
 [![CI](https://github.com/persea-grove/persea/actions/workflows/ci.yml/badge.svg)](https://github.com/persea-grove/persea/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/BarbellDwarf/persea)](https://github.com/persea-grove/persea/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/BarbellDwarf/persea/total)](https://github.com/persea-grove/persea/releases)
+[![Release](https://img.shields.io/github/v/release/persea-grove/persea)](https://github.com/persea-grove/persea/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/persea-grove/persea/total)](https://github.com/persea-grove/persea/releases)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 A modern frontend for Apache Guacamole. Browser-based SSH, RDP, VNC, SPICE, Proxmox VE consoles, web browsing, and VDI desktop containers through [guacd](https://github.com/apache/guacamole-server).
@@ -156,8 +156,8 @@ sudo systemctl enable --now persea
 Images are published to the GitHub Container Registry:
 
 ```bash
-docker pull ghcr.io/barbelldwarf/persea:latest
-docker run -d -p 8089:8089 ghcr.io/barbelldwarf/persea:latest
+docker pull ghcr.io/persea-grove/persea:latest
+docker run -d -p 8089:8089 ghcr.io/persea-grove/persea:latest
 ```
 
 For VDI support, mount the Docker socket:
@@ -166,7 +166,7 @@ For VDI support, mount the Docker socket:
 docker run -d -p 8089:8089 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --group-add $(getent group docker | cut -d: -f3) \
-  ghcr.io/barbelldwarf/persea:latest
+  ghcr.io/persea-grove/persea:latest
 ```
 
 ### Other distributions

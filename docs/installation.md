@@ -84,12 +84,12 @@ Start with `sudo systemctl enable --now persea`, then open the web interface at 
 The Docker image bundles persea, guacd, FreeRDP, and all dependencies in one artifact, so it runs on any distribution with a recent Docker daemon. This is the recommended option on anything other than Debian 13.
 
 ```bash
-docker pull ghcr.io/barbelldwarf/persea:latest
+docker pull ghcr.io/persea-grove/persea:latest
 docker run -d -p 8089:8089 \
   -v persea-data:/opt/persea/data \
   -v persea-recordings:/opt/persea/recordings \
   -v persea-tls:/opt/persea/tls \
-  ghcr.io/barbelldwarf/persea:latest
+  ghcr.io/persea-grove/persea:latest
 ```
 
 Or build the image from source:
@@ -111,7 +111,7 @@ What the image does on first start:
 To keep a custom `config.toml` across container restarts, bind-mount it:
 
 ```bash
-docker run --rm --entrypoint cat ghcr.io/barbelldwarf/persea:latest /opt/persea/config.toml.default > config.toml
+docker run --rm --entrypoint cat ghcr.io/persea-grove/persea:latest /opt/persea/config.toml.default > config.toml
 ```
 
 Edit `config.toml` as needed (see [Configuration](configuration.md)), then mount it:
@@ -122,7 +122,7 @@ docker run -d -p 8089:8089 \
   -v persea-data:/opt/persea/data \
   -v persea-recordings:/opt/persea/recordings \
   -v persea-tls:/opt/persea/tls \
-  ghcr.io/barbelldwarf/persea:latest
+  ghcr.io/persea-grove/persea:latest
 ```
 
 A Docker Compose equivalent:
@@ -130,7 +130,7 @@ A Docker Compose equivalent:
 ```yaml
 services:
   persea:
-    image: ghcr.io/barbelldwarf/persea:latest
+    image: ghcr.io/persea-grove/persea:latest
     ports:
       - "8089:8089"
     volumes:
@@ -160,7 +160,7 @@ services:
     # ... your existing guacd config ...
 
   persea:
-    image: ghcr.io/barbelldwarf/persea:latest
+    image: ghcr.io/persea-grove/persea:latest
     entrypoint: ["/opt/persea/bin/persea"]
     command: ["--config", "/opt/persea/config.toml", "serve"]
     ports:

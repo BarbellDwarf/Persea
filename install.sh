@@ -12,7 +12,7 @@
 set -euo pipefail
 
 PREFIX="/opt/persea"
-GUACD_SRC_URL="https://github.com/BarbellDwarf/persea-guacamole-server.git"
+GUACD_SRC_URL="https://github.com/persea-grove/persea-guacamole-server.git"
 GUACD_BRANCH="persea-1.6.1-freerdp3"  # fork branch — former patch quilt applied as commits
 BUILD_DIR="/tmp/persea-build-$$"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -8,7 +8,7 @@ By contributing to persea, you agree to the [Contributor License Agreement (CLA.
 
 ```bash
 # Clone the repo
-git clone https://github.com/BarbellDwarf/persea.git
+git clone https://github.com/persea-grove/persea.git
 cd rustguac
 
 # Install dependencies and build guacd

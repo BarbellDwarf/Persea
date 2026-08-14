@@ -38,13 +38,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 # guacd source comes from the maintained fork
-# BarbellDwarf/persea-guacamole-server, branch persea-1.6.1-freerdp3: a fork
+# persea-grove/persea-guacamole-server, branch persea-1.6.1-freerdp3: a fork
 # of apache/guacamole-server at the pinned base commit de97609 with the
 # former patch quilt (FreeRDP 3.x / Debian 13 fixes, Kerberos NLA, H.264,
 # SPICE, multimonitor) applied as one commit per patch. Shallow-clone the
 # branch so the image stays small.
 RUN git clone --depth 1 --branch persea-1.6.1-freerdp3 \
-    https://github.com/BarbellDwarf/persea-guacamole-server.git guacamole-server
+    https://github.com/persea-grove/persea-guacamole-server.git guacamole-server
 
 WORKDIR /build/guacamole-server
 RUN autoreconf -fi

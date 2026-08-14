@@ -562,6 +562,6 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 # it enabled and point check_url at an internal mirror that implements the
 # same `/releases/latest` shape (e.g. Gitea).
 # enabled = true     # Env: PERSEA_UPDATES__ENABLED
-# check_url = "https://api.github.com/repos/BarbellDwarf/persea/releases/latest"
+# check_url = "https://api.github.com/repos/persea-grove/persea/releases/latest"
 #                     # Env: PERSEA_UPDATES__CHECK_URL
 # check_interval_hours = 24    # Env: PERSEA_UPDATES__CHECK_INTERVAL_HOURS

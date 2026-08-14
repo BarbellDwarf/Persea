@@ -18,7 +18,7 @@ them privately so they can be fixed before disclosure:
 
 - **GitHub Security Advisories** — use the **"Report a vulnerability"**
   button at
-  <https://github.com/BarbellDwarf/Persea/security/advisories/new>
+  <https://github.com/persea-grove/persea/security/advisories/new>
 
 When reporting, include:
 

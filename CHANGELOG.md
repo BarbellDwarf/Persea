@@ -160,7 +160,7 @@ audit verification).
   PRs, and a PR template acknowledgment. The fictional "CLA Assistant bot"
   claim is gone.
 - **Maintained guacd fork** — guacd builds from
-  `BarbellDwarf/persea-guacamole-server` (branch `persea-1.6.1-freerdp3`)
+  `persea-grove/persea-guacamole-server` (branch `persea-1.6.1-freerdp3`)
   instead of re-applying a 10-patch quilt: Dockerfile, install.sh, the
   release workflow, and the deb/rpm build scripts consume the fork. The
   fork carries the FreeRDP 3.x compile fixes, Kerberos NLA, H.264
