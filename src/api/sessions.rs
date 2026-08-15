@@ -1174,7 +1174,6 @@ pub async fn drive_upload_file(
     options.write(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::OpenOptionsExt;
         // Refuse to follow a symlink planted after the canonicalize
         // above: O_NOFOLLOW fails the open instead of redirecting the
         // truncating write outside the drive directory.
@@ -1944,9 +1943,9 @@ mod drive_tests {
         let mut file = tokio::fs::File::create(dir.join("idle.bin")).await.unwrap();
         // One chunk, then silence: the deadline must fire on the next
         // read even though the stream never ends.
-        let stalled = futures_util::stream::iter(vec![
-            Ok::<axum::body::Bytes, axum::Error>(axum::body::Bytes::from_static(b"first")),
-        ])
+        let stalled = futures_util::stream::iter(vec![Ok::<axum::body::Bytes, axum::Error>(
+            axum::body::Bytes::from_static(b"first"),
+        )])
         .chain(futures_util::stream::pending());
         let err = stream_body_into_drive_file(
             axum::body::Body::from_stream(stalled),
@@ -1986,7 +1985,7 @@ mod drive_tests {
         let (manager, id, dir) = seeded_rdp_session().await;
         let failing = futures_util::stream::iter(vec![
             Ok::<axum::body::Bytes, axum::Error>(axum::body::Bytes::from_static(b"partial data")),
-            Err::<axum::body::Bytes, axum::Error>(Box::new(std::io::Error::new(
+            Err::<axum::body::Bytes, axum::Error>(axum::Error::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 "boom",
             ))),
@@ -2021,8 +2020,7 @@ mod drive_tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn verify_drive_file_fd_rejects_swapped_path() {
-        let dir =
-            std::env::temp_dir().join(format!("persea-drive-verify-test-{}", Uuid::new_v4()));
+        let dir = std::env::temp_dir().join(format!("persea-drive-verify-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let a = dir.join("a.txt");
         let b = dir.join("b.txt");
