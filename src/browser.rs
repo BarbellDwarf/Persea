@@ -341,8 +341,10 @@ impl BrowserManager {
         // Maps all hosts to a non-routable address except the allowed ones.
         // Always blocks internal/metadata IPs (localhost, 127.0.0.1,
         // 169.254.0.0/16) even without an explicit allowlist.
-        let host_rules_arg =
-            Some(format!("--host-rules={}", build_host_rules(allowed_domains)));
+        let host_rules_arg = Some(format!(
+            "--host-rules={}",
+            build_host_rules(allowed_domains)
+        ));
         if let Some(ref arg) = host_rules_arg {
             chromium_args.push(arg);
             // Suppress the "unsupported command-line flag" infobar.
@@ -685,9 +687,10 @@ fn build_host_rules(allowed_domains: Option<&[String]>) -> String {
 /// (exact IPs or the `169.254.*` glob form).
 fn is_always_blocked(pattern: &str) -> bool {
     let p = pattern.trim().to_ascii_lowercase();
-    p == "localhost" || p.ends_with(".localhost") || p == "127.0.0.1"
-        || p
-            .strip_prefix("169.254")
+    p == "localhost"
+        || p.ends_with(".localhost")
+        || p == "127.0.0.1"
+        || p.strip_prefix("169.254")
             .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }
 
