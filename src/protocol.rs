@@ -57,15 +57,17 @@ impl Instruction {
                 .map_err(|_| ParseError::InvalidLength)?;
             remaining = &remaining[dot_pos + 1..];
 
-            // Extract element value (length is in bytes per Guacamole spec)
-            if remaining.len() < len {
-                return Err(ParseError::Truncated);
+            // Extract element value: the length prefix counts UTF-8
+            // characters per guac_utf8_strlen semantics, not bytes.
+            let mut end = 0usize;
+            for _ in 0..len {
+                match remaining[end..].chars().next() {
+                    Some(c) => end += c.len_utf8(),
+                    None => return Err(ParseError::Truncated),
+                }
             }
-            if !remaining.is_char_boundary(len) {
-                return Err(ParseError::Truncated);
-            }
-            elements.push(remaining[..len].to_string());
-            remaining = &remaining[len..];
+            elements.push(remaining[..end].to_string());
+            remaining = &remaining[end..];
 
             // Check for separator or end
             if remaining.is_empty() {
@@ -97,10 +99,9 @@ impl fmt::Display for Instruction {
 }
 
 fn encode_element(s: &str) -> String {
-    // Length is the number of UTF-8 bytes (matching guacamole-common-js behavior
-    // for the server-side protocol; the JS side counts UTF-16 code units but
-    // guacd uses byte length).
-    format!("{}.{}", s.len(), s)
+    // Length is the number of UTF-8 characters (matching guacd's
+    // guac_utf8_strlen, which counts code points, not bytes).
+    format!("{}.{}", s.chars().count(), s)
 }
 
 #[derive(Debug, PartialEq)]
@@ -113,7 +114,7 @@ pub enum ParseError {
     MalformedElement,
     /// The length prefix was not a valid `usize` (non-numeric, negative, or overflowing).
     InvalidLength,
-    /// The declared length ran past the end of the data, or cut through the middle of a UTF-8 character.
+    /// The declared length ran past the end of the data.
     Truncated,
     /// A byte appeared where the parser expected `,` or the end of the instruction.
     UnexpectedChar,
@@ -401,6 +402,26 @@ mod tests {
     }
 
     #[test]
+    fn test_roundtrip_multibyte() {
+        // Length prefixes count characters, so multibyte element data must
+        // encode and parse back to the identical instruction.
+        let original = Instruction::new(
+            "connect",
+            vec![
+                "süß@example.com".into(),
+                "пароль".into(),
+                "日本語".into(),
+                "café ☕".into(),
+                "👨‍👩‍👧‍👦".into(),
+            ],
+        );
+        let encoded = original.encode();
+        let parsed = Instruction::parse(&encoded).unwrap();
+        assert_eq!(original, parsed);
+        assert!(encoded.starts_with("7.connect,"));
+    }
+
+    #[test]
     fn test_streaming_parser() {
         let mut parser = InstructionParser::new();
 
@@ -423,7 +444,7 @@ mod tests {
 
     #[test]
     fn parse_rejects_length_longer_than_data() {
-        // Claims 10 bytes but only 3 are present.
+        // Claims 10 characters but only 3 are present.
         let err = Instruction::parse("10.abc").unwrap_err();
         assert!(matches!(err, ParseError::Truncated));
     }
@@ -475,9 +496,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_split_multibyte_char() {
-        // '€' is three bytes (E2 82 AC). Claiming length 2 would split the
-        // char on a non-boundary — parser must reject rather than panic.
+    fn parse_rejects_length_exceeding_element() {
+        // '€' is one character. Claiming length 2 overruns the element
+        // (only one char present) — parser must reject rather than panic.
         let bad = "2.€";
         let err = Instruction::parse(bad).unwrap_err();
         assert!(matches!(err, ParseError::Truncated));
@@ -485,8 +506,8 @@ mod tests {
 
     #[test]
     fn parse_accepts_correct_multibyte_length() {
-        // Correct byte-length for '€' is 3.
-        let inst = Instruction::parse("3.€").unwrap();
+        // Correct character-count for '€' is 1.
+        let inst = Instruction::parse("1.€").unwrap();
         assert_eq!(inst.opcode, "€");
     }
 
