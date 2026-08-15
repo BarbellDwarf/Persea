@@ -383,7 +383,7 @@ pub async fn callback(
     let cookie_valid = match state_cookie.as_deref() {
         Some(cookie_val) => match cookie_val.split_once(':') {
             Some((cookie_state, cookie_fingerprint)) => {
-                if !cookie_state.as_bytes().ct_eq(state.as_bytes()).into() {
+                if !bool::from(cookie_state.as_bytes().ct_eq(state.as_bytes())) {
                     false
                 } else {
                     // Verify fingerprint matches current request, keyed by
