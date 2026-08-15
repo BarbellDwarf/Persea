@@ -434,21 +434,32 @@ fn insert_ab_entry(
 
 /// Insert user credential variables into a dedicated `user_credentials` table.
 /// If the table doesn't exist yet, we create it.
+///
+/// Every value is encrypted before any row is written; an encryption failure
+/// aborts the whole set, so a partially-encrypted user is never stored and
+/// plaintext never lands in the DB.
 fn insert_user_credentials(
     db: &Db,
     user_key: &str,
     creds: &HashMap<String, String>,
     enc_key: &EncryptionKey,
-) -> Result<(), rusqlite::Error> {
+) -> Result<(), String> {
+    let encrypted: HashMap<String, String> = creds
+        .iter()
+        .map(|(k, v)| {
+            if v.is_empty() {
+                Ok((k.clone(), String::new()))
+            } else {
+                encrypt_value(enc_key, v)
+                    .map(|c| (k.clone(), c))
+                    .map_err(|e| format!("encrypt credential variable '{}': {}", k, e))
+            }
+        })
+        .collect::<Result<_, _>>()?;
     // Routed through the store so db-migrate-from-vault writes to the
     // active backend (SQLx pool) when db_url is set, never the legacy file.
-    crate::db::store_user_credentials(db, user_key, creds, |v| {
-        if v.is_empty() {
-            String::new()
-        } else {
-            encrypt_value(enc_key, v).unwrap_or_else(|_| v.to_string())
-        }
-    })
+    crate::db::store_user_credentials(db, user_key, &encrypted, |v| v.to_string())
+        .map_err(|e| format!("store user credentials: {}", e))
 }
 
 #[cfg(test)]

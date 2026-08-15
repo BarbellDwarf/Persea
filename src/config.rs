@@ -609,20 +609,20 @@ pub struct Config {
     #[serde(default = "default_false")]
     pub ssh_tmux_detach: bool,
 
-    /// CIDR allowlist for SSH session targets. Default: localhost only.
-    #[serde(default = "default_localhost_networks")]
+    /// CIDR allowlist for SSH session targets. Default: loopback only.
+    #[serde(default = "default_loopback_networks")]
     pub ssh_allowed_networks: Vec<String>,
 
-    /// CIDR allowlist for RDP session targets. Default: localhost only.
-    #[serde(default = "default_localhost_networks")]
+    /// CIDR allowlist for RDP session targets. Default: loopback only.
+    #[serde(default = "default_loopback_networks")]
     pub rdp_allowed_networks: Vec<String>,
 
-    /// CIDR allowlist for VNC session targets. Default: localhost only.
-    #[serde(default = "default_localhost_networks")]
+    /// CIDR allowlist for VNC session targets. Default: loopback only.
+    #[serde(default = "default_loopback_networks")]
     pub vnc_allowed_networks: Vec<String>,
 
-    /// CIDR allowlist for web session URL hosts. Default: localhost only.
-    #[serde(default = "default_localhost_networks")]
+    /// CIDR allowlist for web session URL hosts. Default: loopback only.
+    #[serde(default = "default_loopback_networks")]
     pub web_allowed_networks: Vec<String>,
 
     /// Maximum concurrent sessions (all types). Default: 500. Set to 0 for unlimited.
@@ -1679,16 +1679,6 @@ fn default_site_title() -> String {
     "Persea".into()
 }
 
-fn default_localhost_networks() -> Vec<String> {
-    vec![
-        "10.0.0.0/8".into(),
-        "172.16.0.0/12".into(),
-        "192.168.0.0/16".into(),
-        "127.0.0.0/8".into(),
-        "::1/128".into(),
-    ]
-}
-
 fn default_loopback_networks() -> Vec<String> {
     vec!["127.0.0.0/8".to_string(), "::1/128".to_string()]
 }
@@ -1784,11 +1774,11 @@ fn default_toml() -> String {
     ));
     // Vec fields
     s.push_str("ssh_allowed_networks = ");
-    s.push_str(&format!("{:?}\n", default_localhost_networks()));
+    s.push_str(&format!("{:?}\n", default_loopback_networks()));
     s.push_str("rdp_allowed_networks = ");
-    s.push_str(&format!("{:?}\n", default_localhost_networks()));
+    s.push_str(&format!("{:?}\n", default_loopback_networks()));
     s.push_str("vnc_allowed_networks = ");
-    s.push_str(&format!("{:?}\n", default_localhost_networks()));
+    s.push_str(&format!("{:?}\n", default_loopback_networks()));
     s.push_str("web_allowed_networks = ");
     s.push_str(&format!("{:?}\n", default_loopback_networks()));
     s.push_str("trusted_proxies = []\n");
@@ -1885,11 +1875,11 @@ impl Default for Config {
             login_script_timeout_secs: default_login_script_timeout_secs(),
             login_scripts_dir: default_login_scripts_dir(),
             site_title: default_site_title(),
-            ssh_allowed_networks: default_localhost_networks(),
+            ssh_allowed_networks: default_loopback_networks(),
             ssh_scrollback: default_ssh_scrollback(),
             ssh_tmux_detach: default_false(),
-            rdp_allowed_networks: default_localhost_networks(),
-            vnc_allowed_networks: default_localhost_networks(),
+            rdp_allowed_networks: default_loopback_networks(),
+            vnc_allowed_networks: default_loopback_networks(),
             web_allowed_networks: default_loopback_networks(),
             session_history_retention_days: default_session_history_retention_days(),
             max_sessions: default_max_sessions(),
@@ -2867,30 +2857,24 @@ mod tests {
     }
 
     #[test]
-    fn test_default_allowed_networks_includes_private_ranges() {
-        let defaults = default_localhost_networks();
-        assert!(defaults.contains(&"10.0.0.0/8".to_string()));
-        assert!(defaults.contains(&"172.16.0.0/12".to_string()));
-        assert!(defaults.contains(&"192.168.0.0/16".to_string()));
-        assert!(defaults.contains(&"127.0.0.0/8".to_string()));
-        assert!(defaults.contains(&"::1/128".to_string()));
+    fn test_default_allowed_networks_loopback_only() {
+        let defaults = default_loopback_networks();
+        assert_eq!(defaults, vec!["127.0.0.0/8", "::1/128"]);
     }
 
     #[test]
-    fn test_config_default_networks_use_private_ranges() {
+    fn test_config_default_networks_loopback_only() {
         let config = Config::default();
-        // SSH, RDP, VNC should use the expanded private-range defaults
+        // Every protocol defaults to loopback only; the private RFC1918
+        // ranges are explicit opt-ins, never implicit.
         for networks in [
             &config.ssh_allowed_networks,
             &config.rdp_allowed_networks,
             &config.vnc_allowed_networks,
+            &config.web_allowed_networks,
         ] {
-            assert!(networks.contains(&"10.0.0.0/8".to_string()));
-            assert!(networks.contains(&"172.16.0.0/12".to_string()));
-            assert!(networks.contains(&"192.168.0.0/16".to_string()));
+            assert_eq!(networks, &vec!["127.0.0.0/8".to_string(), "::1/128".to_string()]);
         }
-        // Web should default to loopback-only
-        assert_eq!(config.web_allowed_networks, vec!["127.0.0.0/8", "::1/128"]);
     }
 
     #[test]

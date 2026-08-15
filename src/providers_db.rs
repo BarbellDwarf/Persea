@@ -25,6 +25,19 @@
 //!
 //! `config` is a JSON object whose required keys depend on `type` (see
 //! [`validate_config`]).
+//!
+//! ## Secret fields at rest
+//!
+//! Secret fields (`oidc.client_secret`, `ldap.bind_password`,
+//! `radius.secret`, `saml.private_key`) are stored as plaintext JSON in the
+//! `auth_providers` table. Decision (recorded here so it survives): keep
+//! them plaintext. Encrypting would need the storage key in every write
+//! path (the API handlers that save provider configs) and a decryption step
+//! at chain build; Vault-backed deployments have no storage key at all, and
+//! pre-existing plaintext rows would become undecryptable. The admin
+//! database is access-controlled, but the trade-off is documented and a
+//! startup warning fires whenever an enabled provider carries secret
+//! fields.
 
 use crate::db::Db;
 use rusqlite::{params, Connection, Row};
@@ -298,6 +311,27 @@ fn field_present(v: Option<&Value>) -> bool {
     }
 }
 
+/// Secret config fields per provider type (see module docs on why they are
+/// stored in plaintext).
+pub fn secret_fields(provider_type: &str) -> &'static [&'static str] {
+    match provider_type {
+        "oidc" => &["client_secret"],
+        "ldap" => &["bind_password"],
+        "radius" => &["secret", "shared_secret"],
+        "saml" => &["private_key"],
+        _ => &[],
+    }
+}
+
+/// True when the provider config carries at least one non-empty secret
+/// field. Used by the startup warning, which should not fire for providers
+/// whose config holds no secrets.
+pub fn has_secrets(provider_type: &str, config: &Value) -> bool {
+    secret_fields(provider_type)
+        .iter()
+        .any(|f| matches!(config.get(*f), Some(Value::String(s)) if !s.is_empty()))
+}
+
 fn query_provider(conn: &Connection, id: i64) -> rusqlite::Result<Option<DbProvider>> {
     conn.query_row(
         "SELECT id, name, type, enabled, position, config, created_at, updated_at
@@ -481,5 +515,21 @@ mod tests {
     #[test]
     fn validate_config_rejects_unknown_type() {
         assert!(validate_config("fido", &json!({})).is_err());
+    }
+
+    #[test]
+    fn has_secrets_detects_populated_secret_fields() {
+        assert!(has_secrets("oidc", &oidc_config()));
+        assert!(has_secrets("radius", &json!({"hostname": "x", "auth_port": 1812, "secret": "s"})));
+        assert!(has_secrets("ldap", &json!({"url": "ldap://x", "bind_dn": "cn=x", "bind_password": "pw"})));
+        assert!(has_secrets("saml", &json!({"private_key": "-----BEGIN PRIVATE KEY-----"})));
+    }
+
+    #[test]
+    fn has_secrets_false_without_secrets() {
+        assert!(!has_secrets("oidc", &json!({"client_secret": ""})));
+        assert!(!has_secrets("database", &json!({})));
+        assert!(!has_secrets("saml", &json!({"acs_url": "https://x/acs"})));
+        assert!(!has_secrets("totp", &json!({})));
     }
 }
