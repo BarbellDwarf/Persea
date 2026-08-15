@@ -2873,7 +2873,10 @@ mod tests {
             &config.vnc_allowed_networks,
             &config.web_allowed_networks,
         ] {
-            assert_eq!(networks, &vec!["127.0.0.0/8".to_string(), "::1/128".to_string()]);
+            assert_eq!(
+                networks,
+                &vec!["127.0.0.0/8".to_string(), "::1/128".to_string()]
+            );
         }
     }
 

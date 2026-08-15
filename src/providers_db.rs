@@ -520,9 +520,18 @@ mod tests {
     #[test]
     fn has_secrets_detects_populated_secret_fields() {
         assert!(has_secrets("oidc", &oidc_config()));
-        assert!(has_secrets("radius", &json!({"hostname": "x", "auth_port": 1812, "secret": "s"})));
-        assert!(has_secrets("ldap", &json!({"url": "ldap://x", "bind_dn": "cn=x", "bind_password": "pw"})));
-        assert!(has_secrets("saml", &json!({"private_key": "-----BEGIN PRIVATE KEY-----"})));
+        assert!(has_secrets(
+            "radius",
+            &json!({"hostname": "x", "auth_port": 1812, "secret": "s"})
+        ));
+        assert!(has_secrets(
+            "ldap",
+            &json!({"url": "ldap://x", "bind_dn": "cn=x", "bind_password": "pw"})
+        ));
+        assert!(has_secrets(
+            "saml",
+            &json!({"private_key": "-----BEGIN PRIVATE KEY-----"})
+        ));
     }
 
     #[test]

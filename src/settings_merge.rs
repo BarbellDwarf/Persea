@@ -263,7 +263,10 @@ mod tests {
         let settings = vec![("tls_cert_path".to_string(), "/tls/cert.pem".to_string())];
         apply_db_settings(&mut config, &settings);
         let tls = config.tls.unwrap();
-        assert_eq!(tls.cert_path, Some(std::path::PathBuf::from("/tls/cert.pem")));
+        assert_eq!(
+            tls.cert_path,
+            Some(std::path::PathBuf::from("/tls/cert.pem"))
+        );
         assert!(
             !tls.secure_cookies,
             "synthesized TLS must not flip Secure cookies on for a plain-HTTP listener"
