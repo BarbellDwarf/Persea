@@ -133,7 +133,7 @@ async fn boot(tag: &str, extra_config: &str, args_names: &[&str]) -> TestEnv {
         HEALTH_TIMEOUT,
         &|port: u16| {
             format!(
-                "listen_addr = \"127.0.0.1:{port}\"\ndb_path = \"{db_path}\"\nguacd_addr = \"{guacd_addr}\"\n{extra_config}"
+                "listen_addr = \"127.0.0.1:{port}\"\ndb_path = \"{db_path}\"\nguacd_addr = \"{guacd_addr}\"\n{extra_config}\n[storage]\nencryption_key = \"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"\n"
             )
         },
     )

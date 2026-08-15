@@ -447,6 +447,12 @@ fn gated_page_router(db: Db) -> Router {
         .layer(Extension(persea::api::SiteTitle("persea".into())))
         .layer(Extension(test_theme()))
         .layer(Extension(CspNonce("test".into())))
+        .layer(Extension(persea::auth::AuthIdentity::User {
+            email: "admin@example.com".into(),
+            name: "Admin".into(),
+            role: "admin".into(),
+            groups: vec![],
+        }))
 }
 
 fn page_get(path: &str) -> Request<axum::body::Body> {

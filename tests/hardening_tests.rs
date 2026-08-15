@@ -29,6 +29,7 @@ use tokio::sync::Mutex;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(30);
 const ASSERT_DEADLINE: Duration = Duration::from_secs(15);
+const TEST_KEY_HEX: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
 // ── Test environment (mirrors tests/teardown_tests.rs) ──────────────
 
@@ -220,7 +221,7 @@ async fn boot(
         HEALTH_TIMEOUT,
         &|port: u16| {
             format!(
-                "listen_addr = \"127.0.0.1:{port}\"\ndb_path = \"{db_path}\"\nguacd_addr = \"{guacd_addr}\"\n{extra_config}"
+                "listen_addr = \"127.0.0.1:{port}\"\ndb_path = \"{db_path}\"\nguacd_addr = \"{guacd_addr}\"\n{extra_config}\n\n[storage]\nencryption_key = \"{TEST_KEY_HEX}\""
             )
         },
     )
