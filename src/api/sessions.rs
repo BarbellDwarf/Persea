@@ -1019,6 +1019,12 @@ pub async fn drive_delete_file(
 /// transport layer before the handler sees them.
 const MAX_DRIVE_UPLOAD_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
+/// Idle timeout for a drive upload body: if no chunk arrives within
+/// this window the upload is aborted and the partial file removed,
+/// releasing the permit and file handle. A stalled client can no longer
+/// pin an upload slot (or an open fd) indefinitely.
+const DRIVE_UPLOAD_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Maximum concurrent uploads per session. guacd serializes its own file
 /// transfers, so more parallel streams cannot help; excess uploads wait
 /// for a free slot (serialized) instead of failing.
@@ -1039,27 +1045,65 @@ fn drive_upload_semaphore(session_id: Uuid) -> Arc<tokio::sync::Semaphore> {
         .clone()
 }
 
-/// Stream a request body into an open drive file, enforcing the 4 GiB
-/// cap. Returns the number of bytes written; the file is flushed before
-/// returning so size and mtime reads see the final state.
+/// Re-verify that the opened fd still refers to the file at `path`
+/// (same device and inode). Callers that resolved `path` beforehand
+/// use this to detect a file swapped in between resolution and open:
+/// the write would otherwise target a file the confinement check never
+/// saw. `#[cfg(unix)]`: inode comparison is only meaningful there.
+#[cfg(unix)]
+async fn verify_drive_file_fd(
+    file: &tokio::fs::File,
+    path: &std::path::Path,
+) -> Result<(), AppError> {
+    use std::os::unix::fs::MetadataExt;
+    let opened = file.metadata().await.map_err(|e| {
+        tracing::warn!(error = %e, "failed to stat opened drive upload");
+        AppError::Drive("failed to stat drive file for upload".into())
+    })?;
+    let at_path = std::fs::metadata(path).map_err(|e| {
+        tracing::warn!(error = %e, "failed to stat drive upload target");
+        AppError::NotFound("file not found".into())
+    })?;
+    if opened.dev() != at_path.dev() || opened.ino() != at_path.ino() {
+        return Err(AppError::NotFound("file not found".into()));
+    }
+    Ok(())
+}
+
+/// Stream a request body into an open drive file, enforcing the size
+/// cap and the per-chunk idle timeout. Returns the number of bytes
+/// written; the file is flushed before returning so size and mtime
+/// reads see the final state. On any error (cap, idle, read, write)
+/// the caller removes the partial file.
 async fn stream_body_into_drive_file(
     body: axum::body::Body,
     file: &mut tokio::fs::File,
+    max_bytes: u64,
+    idle_timeout: std::time::Duration,
 ) -> Result<u64, AppError> {
     let mut stream = body.into_data_stream();
     let mut written: u64 = 0;
-    while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| {
-            tracing::warn!(error = %e, "failed to read drive upload body");
-            AppError::Internal("failed to read upload body".into())
-        })?;
-        written = written.saturating_add(bytes.len() as u64);
-        if written > MAX_DRIVE_UPLOAD_BYTES {
+    loop {
+        // Fresh deadline per chunk: a slow-but-alive client never hits
+        // it, a stalled one frees the permit within one window.
+        let chunk = match tokio::time::timeout(idle_timeout, stream.next()).await {
+            Err(_) => {
+                tracing::warn!("drive upload body idle timeout");
+                return Err(AppError::Drive("upload idle timeout".into()));
+            }
+            Ok(Some(chunk)) => chunk.map_err(|e| {
+                tracing::warn!(error = %e, "failed to read drive upload body");
+                AppError::Internal("failed to read upload body".into())
+            })?,
+            Ok(None) => break,
+        };
+        written = written.saturating_add(chunk.len() as u64);
+        if written > max_bytes {
             return Err(AppError::Validation(
                 "file exceeds the 4 GiB upload cap".into(),
             ));
         }
-        file.write_all(&bytes).await.map_err(|e| {
+        file.write_all(&chunk).await.map_err(|e| {
             tracing::warn!(error = %e, "failed to write drive upload");
             AppError::Drive("failed to write upload to drive".into())
         })?;
@@ -1076,17 +1120,21 @@ async fn stream_body_into_drive_file(
 ///
 /// Exactly one file per request: the body is the file content, streamed
 /// straight to disk (no multipart, no buffering). Returns 201 with the
-/// drive listing entry `{name, size, modified}`. An interrupted request
-/// leaves a partial file in place; retry or `DELETE` it.
+/// drive listing entry `{name, size, modified}`. A failed request
+/// removes the partial file, so errors, cap violations, and idle
+/// timeouts never leave truncated content on the drive.
 ///
 /// Gate and safety rules match the sibling drive endpoints: owner or
 /// admin only (403 otherwise, 404 for unknown sessions and sessions
 /// without a drive), the name must be a plain basename (400 for `..`,
 /// slashes, or `.`), and symlinks resolving outside the drive directory
-/// are refused. Uploads over 4 GiB are rejected (the route must carry a
-/// matching `DefaultBodyLimit`). At most 5 uploads run concurrently per
-/// session; excess requests wait for a free slot (serialized) rather
-/// than failing.
+/// are refused. Existing files open without following symlinks and the
+/// opened fd is re-verified against the canonical path. Uploads over
+/// 4 GiB are rejected (the route must carry a matching
+/// `DefaultBodyLimit`), and uploads that receive no data for 120
+/// seconds are aborted, releasing the upload permit and file handle.
+/// At most 5 uploads run concurrently per session; excess requests wait
+/// for a free slot (serialized) rather than failing.
 ///
 /// CSRF: like every other state-changing endpoint, this route sits
 /// behind the global double-submit cookie check and gets no exemption.
@@ -1124,6 +1172,14 @@ pub async fn drive_upload_file(
         .map_err(|_| AppError::Internal("upload semaphore closed".into()))?;
     let mut options = tokio::fs::OpenOptions::new();
     options.write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Refuse to follow a symlink planted after the canonicalize
+        // above: O_NOFOLLOW fails the open instead of redirecting the
+        // truncating write outside the drive directory.
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
     if existing {
         options.create(true).truncate(true);
     } else {
@@ -1135,7 +1191,28 @@ pub async fn drive_upload_file(
         tracing::warn!(error = %e, "failed to open drive upload target");
         AppError::Drive("failed to open drive file for upload".into())
     })?;
-    let written = stream_body_into_drive_file(body, &mut file).await?;
+    #[cfg(unix)]
+    if existing {
+        verify_drive_file_fd(&file, &write_path).await?;
+    }
+    let written = match stream_body_into_drive_file(
+        body,
+        &mut file,
+        MAX_DRIVE_UPLOAD_BYTES,
+        DRIVE_UPLOAD_IDLE_TIMEOUT,
+    )
+    .await
+    {
+        Ok(written) => written,
+        Err(err) => {
+            // Best-effort cleanup: failed uploads must not leave a
+            // truncated or half-written file on the drive.
+            if let Err(e) = tokio::fs::remove_file(&write_path).await {
+                tracing::warn!(error = %e, "failed to remove partial drive upload");
+            }
+            return Err(err);
+        }
+    };
     let meta = file.metadata().await.map_err(|e| {
         tracing::warn!(error = %e, "failed to stat drive upload");
         AppError::Drive("failed to stat uploaded file".into())
@@ -1858,5 +1935,105 @@ mod drive_tests {
             .expect("upload task must not panic")
             .unwrap();
         assert_eq!(result.0, StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn stream_body_idle_timeout_aborts_upload() {
+        let dir = std::env::temp_dir().join(format!("persea-drive-idle-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut file = tokio::fs::File::create(dir.join("idle.bin")).await.unwrap();
+        // One chunk, then silence: the deadline must fire on the next
+        // read even though the stream never ends.
+        let stalled = futures_util::stream::iter(vec![
+            Ok::<axum::body::Bytes, axum::Error>(axum::body::Bytes::from_static(b"first")),
+        ])
+        .chain(futures_util::stream::pending());
+        let err = stream_body_into_drive_file(
+            axum::body::Body::from_stream(stalled),
+            &mut file,
+            MAX_DRIVE_UPLOAD_BYTES,
+            std::time::Duration::from_millis(100),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, AppError::Drive(ref m) if m.contains("idle")),
+            "got {:?}",
+            err
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn stream_body_cap_rejects_oversized_upload() {
+        let dir = std::env::temp_dir().join(format!("persea-drive-cap-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut file = tokio::fs::File::create(dir.join("cap.bin")).await.unwrap();
+        let err = stream_body_into_drive_file(
+            axum::body::Body::from(b"0123456789".to_vec()),
+            &mut file,
+            3,
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)), "got {:?}", err);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn drive_upload_stream_error_removes_partial_file_and_releases_permit() {
+        let (manager, id, dir) = seeded_rdp_session().await;
+        let failing = futures_util::stream::iter(vec![
+            Ok::<axum::body::Bytes, axum::Error>(axum::body::Bytes::from_static(b"partial data")),
+            Err::<axum::body::Bytes, axum::Error>(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "boom",
+            ))),
+        ]);
+        let err = drive_upload_file(
+            State(manager.clone()),
+            Path((id, "failing.bin".into())),
+            Some(Extension(test_identity("alice", "viewer"))),
+            axum::body::Body::from_stream(failing),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Internal(_)), "got {:?}", err);
+        assert!(
+            !dir.join("failing.bin").exists(),
+            "partial file must be removed after a failed upload"
+        );
+        // The failed upload must release its permit: a full set of
+        // fresh acquisitions completes without blocking.
+        let sem = drive_upload_semaphore(id);
+        for _ in 0..MAX_CONCURRENT_DRIVE_UPLOADS {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                sem.clone().acquire_owned(),
+            )
+            .await
+            .expect("a permit must be free after the failed upload")
+            .unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn verify_drive_file_fd_rejects_swapped_path() {
+        let dir =
+            std::env::temp_dir().join(format!("persea-drive-verify-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.txt");
+        let b = dir.join("b.txt");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        let file = tokio::fs::File::open(&a).await.unwrap();
+        // The fd refers to a.txt; the path being verified is b.txt: the
+        // device/inode comparison must fail.
+        verify_drive_file_fd(&file, &b).await.unwrap_err();
+        // A matching fd and path verify clean.
+        verify_drive_file_fd(&file, &a).await.unwrap();
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
