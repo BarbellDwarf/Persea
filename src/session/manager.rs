@@ -3,15 +3,29 @@ use crate::browser::BrowserManager;
 use crate::config::Config;
 use crate::guacd;
 use crate::guacd::GuacdStream;
+use crate::protocol::Instruction;
 use chrono::{DateTime, Utc};
 use rand::RngExt;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio::sync::{watch, Mutex, RwLock};
 use tokio_rustls::TlsConnector;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+/// Upper bound on a single guacd interaction (connect, join, or one
+/// instruction read). A stalled guacd must never hold up the session map,
+/// so every guacd I/O from the manager runs inside this budget.
+const GUACD_IO_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Map a guacd socket I/O error onto the join error surface.
+fn join_io_error(e: std::io::Error) -> SessionError {
+    SessionError::GuacdConnection(format!("guacd I/O error: {}", e))
+}
 
 /// Manages all active sessions.
 pub struct SessionManager {
@@ -44,6 +58,16 @@ pub struct SessionManager {
     /// expired). Attached to `SessionInfo.ended_at` by list/get and
     /// pruned when the session leaves the map.
     pub(super) ended_at: std::sync::Mutex<HashMap<Uuid, DateTime<Utc>>>,
+    /// Sessions whose owner currently holds the guacd stream. The
+    /// per-session viewer cap counts viewers only, so the owner's slot is
+    /// excluded. Inserted by the owner paths (take/reconnect), removed by
+    /// the WebSocket teardown and every terminal transition.
+    owner_connected: std::sync::Mutex<HashSet<Uuid>>,
+    /// When each session entered `Disconnected`. The cleanup reaper
+    /// measures the reconnect window from this timestamp, not from
+    /// creation: otherwise any session older than the cleanup delay is
+    /// removed the moment it disconnects, with no reconnect window at all.
+    disconnected_at: std::sync::Mutex<HashMap<Uuid, DateTime<Utc>>>,
 }
 
 /// Bounded retained log + watch broadcast backing the session event feed.
@@ -194,6 +218,8 @@ impl SessionManager {
             event_bus: SessionEventBus::new(),
             sse_subscribers: std::sync::Mutex::new(HashSet::new()),
             ended_at: std::sync::Mutex::new(HashMap::new()),
+            owner_connected: std::sync::Mutex::new(HashSet::new()),
+            disconnected_at: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -354,69 +380,169 @@ impl SessionManager {
     /// Take the guacd stream from a session (for the owner/first WebSocket connection).
     /// Transitions the session to Active. Returns the stream and a cancellation token.
     /// For deferred connections (ephemeral keypair), connects to guacd here.
+    ///
+    /// The deferred connect runs OUTSIDE the session locks and inside
+    /// [`GUACD_IO_TIMEOUT`]: a stalled guacd must not hold up the session
+    /// map, and a concurrent caller must not block on this one. The
+    /// deferred params are restored after the connect so a later reconnect
+    /// can re-establish the connection (each owner connection gets a fresh
+    /// guacd session to the target).
     pub async fn take_guacd_stream(&self, id: Uuid) -> Option<(GuacdStream, CancellationToken)> {
+        // Phase 1: check status and take the deferred params, then drop
+        // every lock before any guacd I/O.
+        let deferred = {
+            let sessions = self.sessions.read().await;
+            let session_arc = sessions.get(&id)?;
+            let mut session = session_arc.lock().await;
+            if session.status != SessionStatus::Pending {
+                return None;
+            }
+            session.deferred_params.take()
+        };
+
+        // Phase 2: deferred connect, no locks held, bounded.
+        let connected = match &deferred {
+            Some(params) => {
+                tracing::info!(session_id = %id, "Establishing deferred guacd connection");
+                match tokio::time::timeout(
+                    GUACD_IO_TIMEOUT,
+                    guacd::connect_and_handshake(
+                        &self.config.guacd_addr,
+                        params,
+                        self.guacd_tls.as_ref(),
+                    ),
+                )
+                .await
+                {
+                    Ok(Ok((stream, connection_id))) => {
+                        tracing::info!(
+                            session_id = %id,
+                            connection_id = %connection_id,
+                            "Deferred guacd connection established"
+                        );
+                        Some((stream, connection_id))
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!(session_id = %id, error = %e, "Deferred guacd connection failed");
+                        self.mark_connect_failed(id, SessionStatus::Pending).await;
+                        return None;
+                    }
+                    Err(_) => {
+                        tracing::error!(session_id = %id, "Deferred guacd connection timed out");
+                        self.mark_connect_failed(id, SessionStatus::Pending).await;
+                        return None;
+                    }
+                }
+            }
+            None => None,
+        };
+
+        // Phase 3: re-acquire, install the stream, transition.
         let sessions = self.sessions.read().await;
         let session_arc = sessions.get(&id)?;
         let mut session = session_arc.lock().await;
         if session.status != SessionStatus::Pending {
             return None;
         }
-        let old_status = session.status.clone();
-
-        // If this is a deferred connection, connect to guacd now
-        if let Some(params) = session.deferred_params.take() {
-            tracing::info!(session_id = %id, "Establishing deferred guacd connection");
-            match guacd::connect_and_handshake(
-                &self.config.guacd_addr,
-                &params,
-                self.guacd_tls.as_ref(),
-            )
-            .await
-            {
-                Ok((stream, connection_id)) => {
-                    tracing::info!(
-                        session_id = %id,
-                        connection_id = %connection_id,
-                        "Deferred guacd connection established"
-                    );
-                    session.guacd_stream = Some(stream);
-                    session.connection_id = connection_id;
-                }
-                Err(e) => {
-                    tracing::error!(session_id = %id, error = %e, "Deferred guacd connection failed");
-                    session.status = SessionStatus::Error;
-                    self.publish_transition(&old_status, &session);
-                    return None;
-                }
-            }
+        if let Some((stream, connection_id)) = connected {
+            session.guacd_stream = Some(stream);
+            session.connection_id = connection_id;
         }
-
+        // Restore the params: ephemeral-keypair sessions reconnect with a
+        // fresh guacd connection to the target, so the params must survive
+        // the first connect.
+        session.deferred_params = deferred;
         let stream = session.guacd_stream.take()?;
         let cancel = session.cancel.clone();
         session.status = SessionStatus::Active;
-        self.publish_transition(&old_status, &session);
+        self.publish_transition(&SessionStatus::Pending, &session);
         session.active_connections += 1;
         crate::metrics::session_active_inc();
         tracing::info!(session_id = %id, "Session now active (owner connected)");
         drop(session);
         drop(sessions);
+        self.mark_owner_connected(id);
         self.registry_set_status(id, "active");
         Some((stream, cancel))
     }
 
-    /// Join an active session by opening a new guacd connection.
-    /// Returns a new GuacdStream and the session's cancellation token.
-    pub async fn join_session(
+    /// Mark a session `Error` after a deferred connect failed, but only if
+    /// it is still in `from`: the session may have moved on (or been
+    /// removed) while the connect was in flight.
+    async fn mark_connect_failed(&self, id: Uuid, from: SessionStatus) {
+        let sessions = self.sessions.read().await;
+        if let Some(session) = sessions.get(&id) {
+            let mut session = session.lock().await;
+            if session.status == from {
+                session.status = SessionStatus::Error;
+                self.publish_transition(&from, &session);
+            }
+        }
+    }
+
+    /// Record that the session's owner holds the guacd stream (the viewer
+    /// cap counts viewers only).
+    pub(crate) fn mark_owner_connected(&self, id: Uuid) {
+        self.owner_connected.lock().unwrap().insert(id);
+    }
+
+    /// Record that the session's owner connection ended.
+    pub(crate) fn mark_owner_disconnected(&self, id: Uuid) {
+        self.owner_connected.lock().unwrap().remove(&id);
+    }
+
+    /// Whether the session's owner currently holds the guacd stream.
+    pub(crate) fn owner_is_connected(&self, id: Uuid) -> bool {
+        self.owner_connected.lock().unwrap().contains(&id)
+    }
+
+    /// Atomically reserve a viewer slot for a share/shadow join: counts
+    /// viewers only (the owner's connection is excluded) and rejects at
+    /// the configured cap. The reservation IS the increment, so two
+    /// concurrent joins cannot both pass the check. Callers release the
+    /// slot with `disconnect_viewer` when the join fails.
+    pub(crate) async fn reserve_viewer_slot(
         &self,
         id: Uuid,
+        max_viewers: u32,
+    ) -> Result<(), SessionError> {
+        let sessions = self.sessions.read().await;
+        let session = sessions.get(&id).ok_or(SessionError::NotFound)?;
+        let mut session = session.lock().await;
+        if session.status != SessionStatus::Active {
+            return Err(SessionError::NotActive);
+        }
+        let viewers = session
+            .active_connections
+            .saturating_sub(if self.owner_is_connected(id) { 1 } else { 0 });
+        if max_viewers > 0 && viewers >= max_viewers {
+            return Err(SessionError::ViewerLimit {
+                viewers,
+                max: max_viewers,
+            });
+        }
+        session.active_connections += 1;
+        Ok(())
+    }
+
+    /// Join an active session as a viewer (share token or shadow token
+    /// holder). Reserves the viewer slot atomically against the cap before
+    /// connecting, so concurrent joins cannot exceed `max_viewers` (0 =
+    /// unlimited). `read_only` joins (shadow tokens) tell guacd to reject
+    /// the user's input. The guacd join is bounded by [`GUACD_IO_TIMEOUT`]
+    /// and runs without any session locks held.
+    pub async fn join_session_as_viewer(
+        &self,
+        id: Uuid,
+        max_viewers: u32,
+        read_only: bool,
     ) -> Result<(GuacdStream, CancellationToken), SessionError> {
+        self.reserve_viewer_slot(id, max_viewers).await?;
+
         let (connection_id, width, height, cancel) = {
             let sessions = self.sessions.read().await;
             let session = sessions.get(&id).ok_or(SessionError::NotFound)?;
             let session = session.lock().await;
-            if session.status != SessionStatus::Active {
-                return Err(SessionError::NotActive);
-            }
             (
                 session.connection_id.clone(),
                 session.width,
@@ -425,29 +551,208 @@ impl SessionManager {
             )
         };
 
-        let stream = guacd::join_connection(
-            &self.config.guacd_addr,
-            &connection_id,
-            width,
-            height,
-            96,
-            self.guacd_tls.as_ref(),
+        let stream = match self
+            .join_connection(&connection_id, width, height, 96, read_only)
+            .await
+        {
+            Ok(stream) => stream,
+            Err(e) => {
+                // Release the reserved slot: no proxy will run to release
+                // it at teardown.
+                tracing::error!(session_id = %id, error = %e, "Failed to join guacd session");
+                self.disconnect_viewer(id).await;
+                return Err(e);
+            }
+        };
+
+        tracing::info!(session_id = %id, read_only = read_only, "Viewer joined session");
+        Ok((stream, cancel))
+    }
+
+    /// Open a second guacd connection to an existing session (join).
+    ///
+    /// Mirrors `guacd::join_connection` (same wire sequence) but lets the
+    /// caller choose the `read-only` connect arg, which guacd uses to
+    /// reject input for that user. Shadow (view-only) joins pass `true`;
+    /// share-token joins do not. Every read is bounded by
+    /// [`GUACD_IO_TIMEOUT`] so a stalled guacd cannot hang the session map.
+    async fn join_connection(
+        &self,
+        connection_id: &str,
+        width: u32,
+        height: u32,
+        dpi: u32,
+        read_only: bool,
+    ) -> Result<GuacdStream, SessionError> {
+        let tcp = tokio::time::timeout(
+            GUACD_IO_TIMEOUT,
+            TcpStream::connect(&self.config.guacd_addr),
         )
         .await
-        .map_err(|e| {
-            tracing::error!(session_id = %id, error = %e, "Failed to join guacd session");
-            SessionError::GuacdConnection(e.to_string())
-        })?;
+            .map_err(|_| {
+                SessionError::GuacdConnection(format!(
+                    "timeout connecting to guacd at {}",
+                    self.config.guacd_addr
+                ))
+            })?
+            .map_err(|e| {
+                SessionError::GuacdConnection(format!(
+                    "failed to connect to guacd at {}: {}",
+                    self.config.guacd_addr, e
+                ))
+            })?;
 
-        // Increment active connections
-        let sessions = self.sessions.read().await;
-        if let Some(session) = sessions.get(&id) {
-            let mut session = session.lock().await;
-            session.active_connections += 1;
+        // Same socket tuning as `guacd::apply_keepalive`.
+        {
+            let keepalive = socket2::TcpKeepalive::new()
+                .with_time(Duration::from_secs(30))
+                .with_interval(Duration::from_secs(10))
+                .with_retries(3);
+            let sock = socket2::SockRef::from(&tcp);
+            let _ = sock.set_tcp_keepalive(&keepalive);
+            let _ = sock.set_tcp_nodelay(true);
         }
 
-        tracing::info!(session_id = %id, "Viewer joined session");
-        Ok((stream, cancel))
+        let mut stream: GuacdStream = if let Some(connector) = self.guacd_tls.as_ref() {
+            let hostname = self
+                .config
+                .guacd_addr
+                .rsplit_once(':')
+                .map(|(h, _)| h)
+                .unwrap_or(&self.config.guacd_addr);
+            let server_name =
+                tokio_rustls::rustls::pki_types::ServerName::try_from(hostname.to_string())
+                    .map_err(|e| {
+                        SessionError::GuacdConnection(format!(
+                            "invalid TLS server name '{}': {}",
+                            hostname, e
+                        ))
+                    })?
+                    .to_owned();
+            Box::new(
+                connector
+                    .connect(server_name, tcp)
+                    .await
+                    .map_err(|e| {
+                        SessionError::GuacdConnection(format!(
+                            "TLS handshake with guacd failed: {}",
+                            e
+                        ))
+                    })?,
+            )
+        } else {
+            Box::new(tcp)
+        };
+
+        let select = Instruction::new("select", vec![connection_id.into()]);
+        stream
+            .write_all(select.encode().as_bytes())
+            .await
+            .map_err(join_io_error)?;
+
+        let args_instruction = Self::read_guacd_instruction(&mut stream).await?;
+        if args_instruction.opcode != "args" {
+            return Err(SessionError::GuacdConnection(format!(
+                "expected 'args' from join, got '{}'",
+                args_instruction.opcode
+            )));
+        }
+
+        // The connection is already configured; only the per-user
+        // read-only flag is meaningful.
+        let arg_values: Vec<String> = args_instruction
+            .args
+            .iter()
+            .map(|name| match name.as_str() {
+                "read-only" => if read_only { "true" } else { "false" }.into(),
+                _ => String::new(),
+            })
+            .collect();
+
+        Self::send_join_handshake(&mut stream, width, height, dpi).await?;
+
+        let connect = Instruction::new("connect", arg_values);
+        stream
+            .write_all(connect.encode().as_bytes())
+            .await
+            .map_err(join_io_error)?;
+
+        let ready = Self::read_guacd_instruction(&mut stream).await?;
+        if ready.opcode != "ready" {
+            return Err(SessionError::GuacdConnection(format!(
+                "expected 'ready' from join, got '{}' (args: {:?})",
+                ready.opcode, ready.args
+            )));
+        }
+
+        tracing::info!(
+            connection_id = %connection_id,
+            read_only = read_only,
+            "Joined existing connection"
+        );
+        Ok(stream)
+    }
+
+    /// Read one complete instruction from a guacd stream, bounded by
+    /// [`GUACD_IO_TIMEOUT`] per read.
+    async fn read_guacd_instruction(
+        stream: &mut (impl AsyncRead + Unpin),
+    ) -> Result<Instruction, SessionError> {
+        let mut parser = crate::protocol::InstructionParser::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = tokio::time::timeout(GUACD_IO_TIMEOUT, stream.read(&mut buf))
+                .await
+                .map_err(|_| {
+                    SessionError::GuacdConnection(
+                        "timed out waiting for an instruction from guacd".into(),
+                    )
+                })?
+                .map_err(join_io_error)?;
+            if n == 0 {
+                return Err(SessionError::GuacdConnection(
+                    "guacd closed the connection".into(),
+                ));
+            }
+            let data = std::str::from_utf8(&buf[..n]).map_err(|e| {
+                SessionError::GuacdConnection(format!("invalid UTF-8 from guacd: {}", e))
+            })?;
+            let results = parser.receive(data);
+            if let Some(result) = results.into_iter().next() {
+                return result.map_err(|e| SessionError::GuacdConnection(e.to_string()));
+            }
+        }
+    }
+
+    /// Send the common join handshake instructions (size, audio, video,
+    /// image, timezone): the same wire sequence `guacd::send_handshake`
+    /// emits for joins (no H.264).
+    async fn send_join_handshake(
+        stream: &mut (impl AsyncWrite + Unpin),
+        width: u32,
+        height: u32,
+        dpi: u32,
+    ) -> Result<(), SessionError> {
+        let instructions = [
+            Instruction::new(
+                "size",
+                vec![width.to_string(), height.to_string(), dpi.to_string()],
+            ),
+            Instruction::new("audio", vec!["audio/L16".into(), "audio/L8".into()]),
+            Instruction::new("video", Vec::new()),
+            Instruction::new(
+                "image",
+                vec!["image/png".into(), "image/jpeg".into(), "image/webp".into()],
+            ),
+            Instruction::new("timezone", vec!["Australia/Brisbane".into()]),
+        ];
+        for inst in &instructions {
+            stream
+                .write_all(inst.encode().as_bytes())
+                .await
+                .map_err(join_io_error)?;
+        }
+        Ok(())
     }
 
     /// Validate a share-or-shadow token for a session (constant-time
@@ -665,6 +970,7 @@ impl SessionManager {
         }
         drop(sessions);
         if did_transition {
+            self.mark_owner_disconnected(id);
             self.registry_set_status(id, "completed");
         }
     }
@@ -690,52 +996,89 @@ impl SessionManager {
         }
         drop(sessions);
         if did_transition {
+            // The reconnect window starts at the disconnect, not at
+            // creation: the cleanup reaper measures from this timestamp.
+            self.disconnected_at.lock().unwrap().insert(id, Utc::now());
+            self.mark_owner_disconnected(id);
             self.registry_set_status(id, "disconnected");
         }
     }
 
     /// Attempt to reconnect an owner to a disconnected session. Returns the
     /// guacd stream and cancellation token if the session has reconnect data.
+    ///
+    /// Like `take_guacd_stream`, the deferred connect runs outside the
+    /// session locks and inside [`GUACD_IO_TIMEOUT`], and the params are
+    /// restored so repeated reconnects keep working.
     pub async fn reconnect_session(&self, id: Uuid) -> Option<(GuacdStream, CancellationToken)> {
+        let deferred = {
+            let sessions = self.sessions.read().await;
+            let session_arc = sessions.get(&id)?;
+            let mut session = session_arc.lock().await;
+            if session.status != SessionStatus::Disconnected {
+                return None;
+            }
+            session.deferred_params.take()
+        };
+
+        let connected = match &deferred {
+            Some(params) => {
+                tracing::info!(session_id = %id, "Re-establishing deferred guacd connection for reconnect");
+                match tokio::time::timeout(
+                    GUACD_IO_TIMEOUT,
+                    guacd::connect_and_handshake(
+                        &self.config.guacd_addr,
+                        params,
+                        self.guacd_tls.as_ref(),
+                    ),
+                )
+                .await
+                {
+                    Ok(Ok((stream, connection_id))) => {
+                        tracing::info!(
+                            session_id = %id,
+                            connection_id = %connection_id,
+                            "Deferred guacd connection re-established"
+                        );
+                        Some((stream, connection_id))
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!(session_id = %id, error = %e, "Reconnect: deferred guacd connection failed");
+                        self.mark_connect_failed(id, SessionStatus::Disconnected).await;
+                        return None;
+                    }
+                    Err(_) => {
+                        tracing::error!(session_id = %id, "Reconnect: deferred guacd connection timed out");
+                        self.mark_connect_failed(id, SessionStatus::Disconnected).await;
+                        return None;
+                    }
+                }
+            }
+            None => None,
+        };
+
         let sessions = self.sessions.read().await;
         let session_arc = sessions.get(&id)?;
         let mut session = session_arc.lock().await;
         if session.status != SessionStatus::Disconnected {
             return None;
         }
-        let old_status = session.status.clone();
-
-        if let Some(params) = session.deferred_params.take() {
-            tracing::info!(session_id = %id, "Re-establishing deferred guacd connection for reconnect");
-            match guacd::connect_and_handshake(
-                &self.config.guacd_addr,
-                &params,
-                self.guacd_tls.as_ref(),
-            )
-            .await
-            {
-                Ok((stream, connection_id)) => {
-                    session.guacd_stream = Some(stream);
-                    session.connection_id = connection_id;
-                }
-                Err(e) => {
-                    tracing::error!(session_id = %id, error = %e, "Reconnect: deferred guacd connection failed");
-                    session.status = SessionStatus::Error;
-                    self.publish_transition(&old_status, &session);
-                    return None;
-                }
-            }
+        if let Some((stream, connection_id)) = connected {
+            session.guacd_stream = Some(stream);
+            session.connection_id = connection_id;
         }
-
+        session.deferred_params = deferred;
         let stream = session.guacd_stream.take()?;
         let cancel = session.cancel.clone();
         session.status = SessionStatus::Active;
-        self.publish_transition(&old_status, &session);
+        self.publish_transition(&SessionStatus::Disconnected, &session);
         session.active_connections += 1;
         crate::metrics::session_active_inc();
         tracing::info!(session_id = %id, "Session reconnected (owner)");
         drop(session);
         drop(sessions);
+        self.disconnected_at.lock().unwrap().remove(&id);
+        self.mark_owner_connected(id);
         self.registry_set_status(id, "active");
         Some((stream, cancel))
     }
@@ -761,6 +1104,7 @@ impl SessionManager {
         }
         drop(sessions);
         if did_transition {
+            self.mark_owner_disconnected(id);
             self.registry_set_status(id, "error");
         }
     }
@@ -883,8 +1227,10 @@ impl SessionManager {
             drop(session);
             drop(sessions);
             // The session is gone from the map — drop its terminal
-            // timestamp entry (the event feed already carried the event).
+            // timestamp entries (the event feed already carried the event).
             self.ended_at.lock().unwrap().remove(&id);
+            self.disconnected_at.lock().unwrap().remove(&id);
+            self.mark_owner_disconnected(id);
             // Keep the registry row in a terminal state so the owning
             // instance's recording rotation can still attribute the file;
             // the stale sweep removes the row within 24h.
@@ -897,7 +1243,14 @@ impl SessionManager {
 
     /// Reap active sessions that have exceeded the max duration.
     /// Returns the number of sessions reaped.
+    ///
+    /// History rows are closed with the terminal "max-duration" status and
+    /// the session's real lifetime before the map entry is removed.
+    /// `session_max_duration_secs = 0` disables the reaper entirely.
     pub async fn reap_expired_sessions(&self) -> usize {
+        if self.config.session_max_duration_secs == 0 {
+            return 0;
+        }
         let max_duration = std::time::Duration::from_secs(self.config.session_max_duration_secs);
         let now = Utc::now();
         let mut to_delete = Vec::new();
@@ -911,15 +1264,17 @@ impl SessionManager {
                 {
                     let age = now.signed_duration_since(session.created_at);
                     if age.to_std().unwrap_or_default() > max_duration {
-                        to_delete.push(*id);
+                        to_delete.push((*id, session.created_at, session.recording_enabled));
                     }
                 }
             }
         }
 
         let count = to_delete.len();
-        for id in to_delete {
+        for (id, created_at, recording) in to_delete {
             tracing::warn!(session_id = %id, "Reaping session (exceeded max duration)");
+            let duration = now.signed_duration_since(created_at).num_seconds().max(0) as u64;
+            self.end_session_history(id, "max-duration", duration, recording);
             self.delete_session(id).await;
         }
         count
@@ -935,10 +1290,11 @@ impl SessionManager {
     /// (max duration still applies).
     ///
     /// Terminated sessions are recorded in the session history with status
-    /// "idle-timeout" (distinguishable from max-duration reaping), cancelled,
-    /// and their in-memory status moves to the terminal state used by
-    /// `delete_session`. A `SessionStatus::IdleTimeout` variant does not
-    /// exist yet (src/session/types.rs) — when one lands, flip the status
+    /// "idle-timeout" (distinguishable from max-duration reaping) and the
+    /// session's real lifetime, cancelled, and their in-memory status moves
+    /// to the terminal state used by `delete_session`. A
+    /// `SessionStatus::IdleTimeout` variant does not exist yet
+    /// (src/session/types.rs): when one lands, flip the status
     /// here and in `delete_session` for a live-API-distinguishable label.
     pub async fn reap_idle_sessions(&self) -> usize {
         let idle_timeout = self.config.session_idle_timeout_secs;
@@ -946,9 +1302,20 @@ impl SessionManager {
             return 0;
         }
         let to_delete = self.get_idle_sessions(idle_timeout as i64).await;
+        let now = Utc::now();
         for id in &to_delete {
-            let recording = self.is_recording_enabled(*id).await;
-            self.end_session_history(*id, "idle-timeout", 0, recording);
+            let (created_at, recording) = {
+                let sessions = self.sessions.read().await;
+                match sessions.get(id) {
+                    Some(session) => {
+                        let session = session.lock().await;
+                        (session.created_at, session.recording_enabled)
+                    }
+                    None => continue,
+                }
+            };
+            let duration = now.signed_duration_since(created_at).num_seconds().max(0) as u64;
+            self.end_session_history(*id, "idle-timeout", duration, recording);
             tracing::warn!(
                 session_id = %id,
                 idle_timeout_secs = idle_timeout,
@@ -960,12 +1327,22 @@ impl SessionManager {
     }
 
     /// Remove sessions in terminal states (Completed, Error, Expired) that have
-    /// been in that state longer than the configured cleanup delay. The session
+    /// been in that state longer than the configured cleanup delay, and
+    /// finalize `Disconnected` sessions past the reconnect window. The session
     /// history in SQLite is not affected — this only frees in-memory state.
+    ///
+    /// Disconnected sessions survive within the documented reconnect window
+    /// (`session_cleanup_delay_secs`, measured from the disconnect): the owner
+    /// can reconnect until then. Past the window the session gets its terminal
+    /// transition (`Disconnected` to `Expired`, publishing `session_ended`), a
+    /// history row with the terminal "expired" status and the session's real
+    /// lifetime, and its VDI container is stopped: the same lifecycle the
+    /// pending-timeout path performs for sessions that never connected.
     pub async fn reap_completed_sessions(&self) -> usize {
         let delay = std::time::Duration::from_secs(self.config.session_cleanup_delay_secs);
         let now = Utc::now();
         let mut to_remove = Vec::new();
+        let mut to_finalize = Vec::new();
 
         {
             let sessions = self.sessions.read().await;
@@ -974,11 +1351,23 @@ impl SessionManager {
                 match session.status {
                     SessionStatus::Completed
                     | SessionStatus::Error
-                    | SessionStatus::Expired
-                    | SessionStatus::Disconnected => {
+                    | SessionStatus::Expired => {
                         let age = now.signed_duration_since(session.created_at);
                         if age.to_std().unwrap_or_default() > delay {
                             to_remove.push(*id);
+                        }
+                    }
+                    SessionStatus::Disconnected => {
+                        let disconnected_at = self
+                            .disconnected_at
+                            .lock()
+                            .unwrap()
+                            .get(id)
+                            .copied()
+                            .unwrap_or(session.created_at);
+                        let age = now.signed_duration_since(disconnected_at);
+                        if age.to_std().unwrap_or_default() > delay {
+                            to_finalize.push((*id, session.created_at, session.recording_enabled));
                         }
                     }
                     _ => {}
@@ -986,12 +1375,36 @@ impl SessionManager {
             }
         }
 
+        for (id, created_at, recording) in to_finalize {
+            // History first: the row is still open (no terminal status was
+            // recorded at disconnect) and must not stay open forever.
+            let duration = now.signed_duration_since(created_at).num_seconds().max(0) as u64;
+            self.end_session_history(id, "expired", duration, recording);
+            // Terminal transition: publishes session_ended with `expired`.
+            {
+                let sessions = self.sessions.read().await;
+                if let Some(session) = sessions.get(&id) {
+                    let mut session = session.lock().await;
+                    if session.status == SessionStatus::Disconnected {
+                        session.status = SessionStatus::Expired;
+                        self.publish_transition(&SessionStatus::Disconnected, &session);
+                    }
+                }
+            }
+            // The reconnect window is over. The VDI container (if any)
+            // is stopped here, not at the browser disconnect.
+            self.stop_vdi_container(id).await;
+            to_remove.push(id);
+        }
+
         if !to_remove.is_empty() {
             let mut sessions = self.sessions.write().await;
             for id in &to_remove {
                 sessions.remove(id);
-                // The terminal timestamp entry dies with the session.
+                // The terminal timestamp entries die with the session.
                 self.ended_at.lock().unwrap().remove(id);
+                self.disconnected_at.lock().unwrap().remove(id);
+                self.mark_owner_disconnected(*id);
                 // The registry row intentionally stays (terminal
                 // state) so recording rotation can still attribute the
                 // file — the stale sweep removes it within 24h.
@@ -1311,5 +1724,167 @@ impl SessionManager {
             }
         }
         count
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_manager() -> SessionManager {
+        let mut config = Config::default();
+        let tmp =
+            std::env::temp_dir().join(format!("persea-mgr-test-{}", uuid::Uuid::new_v4()));
+        config.recording_path = Some(tmp.clone());
+        config.xvnc_path = "/bin/true".into();
+        config.chromium_path = "/bin/true".into();
+        config.login_scripts_dir = "/tmp".into();
+        SessionManager::new(config, None)
+    }
+
+    fn test_session(status: SessionStatus) -> Session {
+        Session {
+            id: uuid::Uuid::new_v4(),
+            session_type: SessionType::Ssh,
+            status,
+            created_at: Utc::now(),
+            hostname: "test-host".into(),
+            username: "alice".into(),
+            url: None,
+            banner: None,
+            guacd_stream: None,
+            connection_id: "conn-test".into(),
+            share_token: "owner-secret".into(),
+            width: 1024,
+            height: 768,
+            active_connections: 0,
+            created_by: "alice".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            browser_session: None,
+            deferred_params: None,
+            drive_path: None,
+            drive_enabled: false,
+            tunnels: Vec::new(),
+            container_id: None,
+            container_name: None,
+            recording_enabled: false,
+            address_book_entry: None,
+            address_book_folder: None,
+            entry_display_name: None,
+            max_recordings: None,
+            login_script_handle: None,
+            shadow_tokens: Vec::new(),
+            share_allowed: true,
+            fullscreen_on_connect: false,
+            autohide_side_tabs: false,
+            last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
+            source_ip: None,
+            user_id: Some("alice".into()),
+        }
+    }
+
+    async fn seed(mgr: &SessionManager, session: Session) -> Uuid {
+        let id = session.id;
+        mgr.sessions
+            .write()
+            .await
+            .insert(id, Arc::new(Mutex::new(session)));
+        id
+    }
+
+    #[tokio::test]
+    async fn reap_completed_keeps_disconnected_within_reconnect_window() {
+        let mgr = test_manager();
+        let id = seed(&mgr, test_session(SessionStatus::Active)).await;
+        mgr.disconnect_session(id).await;
+        // Fresh disconnect: the session must survive cleanup.
+        assert_eq!(mgr.reap_completed_sessions().await, 0);
+        assert!(mgr.is_session_disconnected(id).await);
+    }
+
+    #[tokio::test]
+    async fn reap_completed_finalizes_disconnected_past_reconnect_window() {
+        let mgr = test_manager();
+        let id = seed(&mgr, test_session(SessionStatus::Active)).await;
+        mgr.disconnect_session(id).await;
+        // Age the disconnect past the cleanup delay (300s default).
+        mgr.disconnected_at
+            .lock()
+            .unwrap()
+            .insert(id, Utc::now() - chrono::Duration::minutes(10));
+
+        assert_eq!(mgr.reap_completed_sessions().await, 1);
+        assert!(!mgr.is_session_disconnected(id).await);
+
+        // The finalization is a real terminal transition: the event feed
+        // carries a session_ended with `expired`.
+        let (_, events) = mgr.replay_events(0);
+        let ended = events
+            .iter()
+            .filter(|e| e.event == SessionEventKind::SessionEnded && e.session_id == id)
+            .collect::<Vec<_>>();
+        assert_eq!(ended.len(), 1);
+        assert_eq!(ended[0].status, SessionStatus::Expired);
+    }
+
+    #[tokio::test]
+    async fn reap_completed_finalizes_disconnected_once() {
+        let mgr = test_manager();
+        let id = seed(&mgr, test_session(SessionStatus::Active)).await;
+        mgr.disconnect_session(id).await;
+        mgr.disconnected_at
+            .lock()
+            .unwrap()
+            .insert(id, Utc::now() - chrono::Duration::minutes(10));
+        assert_eq!(mgr.reap_completed_sessions().await, 1);
+        // Second pass: nothing left to finalize (session already removed).
+        assert_eq!(mgr.reap_completed_sessions().await, 0);
+    }
+
+    #[tokio::test]
+    async fn reap_expired_zero_max_duration_is_disabled() {
+        let mut config = Config::default();
+        config.session_max_duration_secs = 0;
+        let mgr = SessionManager::new(config, None);
+        let mut session = test_session(SessionStatus::Active);
+        session.created_at = Utc::now() - chrono::Duration::hours(10);
+        let id = seed(&mgr, session).await;
+        // 0 = unlimited: the session must NOT be reaped.
+        assert_eq!(mgr.reap_expired_sessions().await, 0);
+        assert!(mgr.get_session(id).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn reap_expired_reaps_past_max_duration() {
+        let mut config = Config::default();
+        config.session_max_duration_secs = 60;
+        let mgr = SessionManager::new(config, None);
+        let mut session = test_session(SessionStatus::Active);
+        session.created_at = Utc::now() - chrono::Duration::minutes(10);
+        let id = seed(&mgr, session).await;
+        assert_eq!(mgr.reap_expired_sessions().await, 1);
+        assert!(mgr.get_session(id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn owner_connection_tracking_excludes_owner_from_viewer_cap() {
+        let mgr = test_manager();
+        let mut session = test_session(SessionStatus::Active);
+        session.active_connections = 10; // 1 owner + 9 viewers
+        let id = seed(&mgr, session).await;
+
+        // Without the owner slot, 10 connections are 10 viewers: at the cap.
+        assert!(matches!(
+            mgr.reserve_viewer_slot(id, 10).await,
+            Err(SessionError::ViewerLimit {
+                viewers: 10,
+                max: 10
+            })
+        ));
+
+        // With the owner slot tracked, they count as 9 viewers: a 10th may
+        // join.
+        mgr.mark_owner_connected(id);
+        assert!(mgr.reserve_viewer_slot(id, 10).await.is_ok());
     }
 }
