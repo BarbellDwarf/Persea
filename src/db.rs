@@ -9986,10 +9986,26 @@ async fn rbac_load_role_permissions_pool(
 
 // ── Audit hash chain (src/audit.rs) ────────────────────────────────────
 
+/// Serializes audit-chain writes on the SQLx backends. The tail-read and
+/// the insert in [`audit_log_event_pool`] must be atomic: two concurrent
+/// events that both read the same tail would insert two rows chaining to
+/// the same predecessor, forking the chain (verify_chain then reports it
+/// broken). The rusqlite path needs no extra guard, the connection mutex
+/// already serializes it. The per-process worker thread serializes most
+/// pool jobs anyway; the lock makes the guarantee explicit and holds it
+/// across the whole read, hash, and insert sequence regardless of how
+/// the pool store evolves.
+static AUDIT_CHAIN_WRITE_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
 pub(crate) async fn audit_log_event_pool(
     pool: &DbPool,
     mut event: AuditEvent,
 ) -> rusqlite::Result<i64> {
+    let _chain_guard = AUDIT_CHAIN_WRITE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
     let prev_hash: String = match pool {
         DbPool::Postgres(p) => {
             pg_fetch_opt(
