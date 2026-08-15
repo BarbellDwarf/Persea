@@ -67,51 +67,123 @@ Session streams run over WebSockets (paths `/ws/{id}` and
 
 ## nginx
 
-**Affected by a URI-normalisation gotcha by default** (see
-[Common mistakes](#common-mistakes-the-2f-gotcha)): nginx decodes `%2F`
-in the path when `proxy_pass` has a URI component, including just a
-trailing slash. Use a `proxy_pass` URL with **no path component**:
+A complete, copy-paste-ready config is in
+[`docs/examples/nginx.conf`](examples/nginx.conf): an HTTP server block
+that serves the ACME webroot and redirects to HTTPS, TLS termination with
+the Let's Encrypt certificate paths, the header set below, and a dedicated
+`/ws/` location for session streams.
+
+Two things matter more than the rest:
+
+- **The `%2F` gotcha.** nginx decodes `%2F` in the path when `proxy_pass`
+  has a URI component, including just a trailing slash. The example uses a
+  `proxy_pass` URL with **no path component** (`https://127.0.0.1:8089`,
+  no trailing slash). See
+  [Common mistakes](#common-mistakes-the-2f-gotcha).
+- **Trusting the proxy.** persea needs
+  `trusted_proxies = ["127.0.0.1/32"]` in `config.toml` (see
+  [Tell persea about the proxy](#tell-persea-about-the-proxy)).
+
+The essential directives, for reference:
 
 ```nginx
-server {
-    listen 443 ssl http2;
-    server_name console.example.com;
+proxy_pass https://127.0.0.1:8089;   # no path component; see the %2F gotcha
 
-    ssl_certificate     /etc/letsencrypt/live/console.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/console.example.com/privkey.pem;
+proxy_set_header Host              $host;
+proxy_set_header X-Real-IP         $remote_addr;
+proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
 
-    location / {
-        # CRITICAL: no trailing slash or path on the upstream URL.
-        # "https://localhost:8089/" would cause nginx to decode %2F to /
-        # before forwarding, which breaks nested folder paths.
-        proxy_pass https://localhost:8089;
-
-        proxy_set_header Host              $host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # WebSocket support for session streams.
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade    $http_upgrade;
-        proxy_set_header Connection "upgrade";
-
-        # Long-lived WebSocket sessions; match persea's session_max_duration_secs.
-        proxy_read_timeout  8h;
-        proxy_send_timeout  8h;
-    }
-}
+# WebSocket support for session streams.
+proxy_http_version 1.1;
+proxy_set_header Upgrade    $http_upgrade;
+proxy_set_header Connection "upgrade";
 ```
 
 Notes:
 
-- The example forwards to `https://localhost:8089` because persea
-  itself serves HTTPS with a self-signed loopback certificate. If you
-  run persea on plain HTTP (no `[tls]` section), use
-  `proxy_pass http://localhost:8089;` instead.
-- WebSocket timeouts: set `proxy_read_timeout`/`proxy_send_timeout` to
-  at least persea's `session_max_duration_secs` (default 8 h).
-- persea config: `trusted_proxies = ["127.0.0.1/32"]`.
+- The example forwards to `https://127.0.0.1:8089` because persea serves
+  HTTPS with a self-signed loopback certificate, and skips verification
+  with `proxy_ssl_verify off`. If you run persea on plain HTTP (no `[tls]`
+  section), use `proxy_pass http://127.0.0.1:8089;` instead.
+- WebSocket timeouts: the example sets `proxy_read_timeout`/
+  `proxy_send_timeout` to at least persea's `session_max_duration_secs`
+  (default 8 h).
+
+## Let's Encrypt certificates
+
+persea re-reads `tls.cert_path`/`tls.key_path` on SIGHUP and swaps the
+served certificate for new connections without a restart. Renewal is
+therefore: get a new certificate, reload nginx, signal persea.
+
+### Issue the certificate
+
+Install certbot (Debian 13):
+
+```bash
+sudo apt install certbot
+```
+
+Two challenge options:
+
+- **Webroot challenge**, for a server with a public port 80. The nginx
+  example serves the challenge directory, so no extra web server is
+  needed:
+
+  ```bash
+  sudo certbot certonly --webroot -w /var/www/html -d console.example.com
+  ```
+
+- **DNS challenge**, for wildcard certificates (`*.example.com`) or hosts
+  with no public port 80:
+
+  ```bash
+  sudo certbot certonly --manual --preferred-challenges dns \
+      -d example.com -d '*.example.com'
+  ```
+
+  A DNS plugin automates the TXT records for most providers; for example
+  `sudo apt install python3-certbot-dns-cloudflare` for Cloudflare. The
+  [official certbot documentation](https://eff-certbot.readthedocs.io/) is
+  the deep dive for everything above.
+
+The certificate lands in `/etc/letsencrypt/live/console.example.com/`
+(`fullchain.pem` and `privkey.pem`), exactly where
+[`docs/examples/nginx.conf`](examples/nginx.conf) reads it from.
+
+### Point persea at the same certificate
+
+```toml
+[tls]
+cert_path = "/etc/letsencrypt/live/console.example.com/fullchain.pem"
+key_path = "/etc/letsencrypt/live/console.example.com/privkey.pem"
+```
+
+persea runs as an unprivileged user, so grant it read access to the
+certificate files: `sudo setfacl -m u:persea:rx /etc/letsencrypt/live
+/etc/letsencrypt/archive` for the packaged install, or mount
+`/etc/letsencrypt` read-only into the container for Docker deployments.
+
+### Reload on renewal
+
+certbot renews automatically (the `certbot.timer` unit on Debian), and
+runs deploy hooks from `/etc/letsencrypt/renewal-hooks/deploy/` only after
+a successful renewal. Put this there:
+
+```bash
+sudo install -m 0755 /dev/stdin /etc/letsencrypt/renewal-hooks/deploy/persea <<'EOF'
+#!/bin/bash
+systemctl reload nginx
+systemctl kill -s HUP persea   # TLS hot-reload: new cert, no restart
+EOF
+```
+
+Test the whole loop with `sudo certbot renew --dry-run`. In Docker,
+replace the `systemctl kill` line with `docker kill --signal=HUP persea`
+(the compose examples name the container `persea`; the entrypoint runs
+persea as PID 1, so the signal reaches it directly). Passing
+`--deploy-hook` to `certbot renew` is equivalent to the directory above;
+the directory form is what the automatic timer picks up.
 
 ## Caddy
 
@@ -279,9 +351,10 @@ extra path segments along the way).
 - **TLS mismatch on the upstream.** The examples above use
   `https://localhost:8089` because a self-signed loopback cert is the
   common setup, so the proxy must skip verification
-  (`tls_insecure_skip_verify` in Caddy, `SSLProxyVerify none` in
-  Apache, `insecureSkipVerify` in Traefik). If you run persea on plain
-  HTTP, use `http://localhost:8089` instead and drop those directives.
+  (`proxy_ssl_verify off` in nginx, `tls_insecure_skip_verify` in Caddy,
+  `SSLProxyVerify none` in Apache, `insecureSkipVerify` in Traefik). If
+  you run persea on plain HTTP, use `http://localhost:8089` instead and
+  drop those directives.
 - **Exposing `/metrics`.** It is unauthenticated: restrict it via the
   proxy's ACL rules (see [API Reference](api.md#get-metrics--prometheus-metrics)).
 

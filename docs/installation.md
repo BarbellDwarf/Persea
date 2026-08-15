@@ -147,6 +147,14 @@ volumes:
   persea-tls:
 ```
 
+Ready-made Compose files ship in
+[`docs/examples/`](examples/README.md): a minimal single-service stack
+with the bundled SQLite database (`docker-compose.sqlite.yml`), and persea
+plus a PostgreSQL or MySQL backend (`docker-compose.postgres.yml`,
+`docker-compose.mysql.yml`). Each runs with
+`docker compose -f docs/examples/docker-compose.<backend>.yml up -d` once
+you replace the placeholder storage key and passwords.
+
 Logs are visible with `docker logs persea` (the container name from `docker ps`).
 
 ### Using an existing guacd

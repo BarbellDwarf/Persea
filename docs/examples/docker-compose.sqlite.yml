@@ -1,0 +1,40 @@
+# docker compose for persea with the bundled SQLite database.
+#
+# Minimal single-service stack. The image bundles guacd and persea; the
+# entrypoint generates a self-signed TLS certificate and, on first start,
+# an admin API key at /opt/persea/data/admin-key.txt.
+#
+# Run:
+#   docker compose -f docs/examples/docker-compose.sqlite.yml up -d
+# Then open https://your-server:8089 and complete the setup wizard.
+#
+# The persea-tls volume keeps the generated certificate across container
+# recreates; without it the certificate changes every time and browsers
+# warn about the new fingerprint. For production, put a reverse proxy with
+# a real certificate in front (see docs/examples/nginx.conf) or mount your
+# own certificate over /opt/persea/tls.
+
+services:
+  persea:
+    image: ghcr.io/persea-grove/persea:latest
+    container_name: persea
+    restart: unless-stopped
+    ports:
+      - "8089:8089"
+    volumes:
+      - persea-data:/opt/persea/data
+      - persea-recordings:/opt/persea/recordings
+      - persea-tls:/opt/persea/tls
+    environment:
+      # Encryption key for connection credentials stored in the database.
+      # Replace with your own key:  openssl rand -hex 32
+      # The key must never change after the first start: a new key makes
+      # stored credentials undecryptable. The entrypoint can generate one,
+      # but it writes it into the container's ephemeral config, so the key
+      # would be lost on recreate; pinning it here keeps it stable.
+      PERSEA_STORAGE_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
+volumes:
+  persea-data:
+  persea-recordings:
+  persea-tls:
