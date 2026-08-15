@@ -4,16 +4,16 @@
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18l6-6-6-6"/></svg>
         </button>
         {% if logo_url %}
-        <img id="site-logo" src="{{ logo_url }}" alt="" style="height:28px;max-width:140px;object-fit:contain">
+        <img id="site-logo" src="{{ logo_url | escape }}" alt="" style="height:28px;max-width:140px;object-fit:contain">
         {% else %}
-        <div class="sidebar-logo-icon" role="img" aria-label="{{ site_title }}">
+        <div class="sidebar-logo-icon" role="img" aria-label="{{ site_title | escape }}">
             <svg viewBox="0 0 128 128" width="28" height="28" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
                 <path d="M64 8C40 8 19 30 15 56c-3 20 6 44 24 58 9 7 17 10 25 10s16-3 25-10c18-14 27-38 24-58C109 30 88 8 64 8z" fill="#ffffff"/>
                 <path d="M40 36c9 16 17 30 28 44 6-8 10-17 13-26-7 4-12 7-18 10-9-10-16-18-23-28z" fill="#059669" fill-opacity="0.4"/>
             </svg>
         </div>
         {% endif %}
-        <span class="sidebar-logo-text">{{ site_title }}</span>
+        <span class="sidebar-logo-text">{{ site_title | escape }}</span>
     </div>
 
     <nav class="sidebar-nav" role="navigation" aria-label="Main navigation">
