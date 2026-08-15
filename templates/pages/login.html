@@ -69,12 +69,16 @@
         {% endif %}
 
         {% if saml_enabled %}
-        <a href="/auth/saml/acs" class="btn btn-secondary mb-4" style="gap:8px">
-            <svg class="sso-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-            </svg>
-            {{ saml_button_text }}
-        </a>
+        <form method="POST" action="/auth/login" id="saml-form">
+            <input type="hidden" name="csrf_token" value="">
+            <input type="hidden" name="saml" value="1">
+            <button type="submit" class="btn btn-secondary mb-4" style="gap:8px;width:100%">
+                <svg class="sso-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+                </svg>
+                {{ saml_button_text }}
+            </button>
+        </form>
         {% endif %}
 
         <!-- Divider -->
@@ -101,13 +105,14 @@
         </form>
 
         <script nonce="{{ csp_nonce }}">
-        // CSRF: set hidden input value from cookie as fallback, and send via header
+        // CSRF: set hidden input values from cookie as fallback, and send via header
         (function() {
             var csrf = readCookie('csrf_token');
-            var hiddenInput = document.querySelector('input[name="csrf_token"]');
-            if (hiddenInput && csrf) hiddenInput.value = csrf;
+            document.querySelectorAll('input[name="csrf_token"]').forEach(function(input) {
+                if (csrf) input.value = csrf;
+            });
         })();
-        // Form submits normally — the browser handles the 303 redirect
+        // Forms submit normally — the browser handles the 303 redirect
         // and sends cookies correctly. Using fetch() with redirect:'follow'
         // causes Chromium to skip sending cookies on the redirect follow-up,
         // which breaks session establishment over HTTPS.

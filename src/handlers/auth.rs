@@ -34,32 +34,52 @@ async fn check_lockout(database: &Db, username: &str, ip: &str) -> bool {
     }
 }
 
-/// Check if TOTP enforcement requires MFA for this user.
-/// Returns true if TOTP is mandatory and the user has it enrolled.
+/// Outcome of the TOTP enforcement gate for one login.
+enum TotpGate {
+    /// TOTP is not required for this user; login proceeds normally.
+    None,
+    /// TOTP is required and enrolled; send the user through the MFA page.
+    Mfa,
+    /// TOTP is required but not enrolled; create the session and send the
+    /// user to the enrollment page so they can set it up.
+    Enroll,
+}
+
+/// Apply the TOTP enforcement policy to a user about to be logged in.
+///
+/// AdminsOnly: admins must pass TOTP, and must enroll before their first
+/// login counts. All: every user must enroll and pass TOTP. A user who
+/// should be enrolled but is not is sent to the enrollment page rather
+/// than silently skipping MFA (the pre-fix behavior).
 async fn check_totp_enforcement(
     db: &Db,
     user_id: i64,
     role: &str,
     enforcement: &TotpEnforcement,
-) -> bool {
+) -> TotpGate {
+    let db_clone = db.clone();
+    let enrolled = tokio::task::spawn_blocking(move || db::user_totp_enabled(&db_clone, user_id))
+        .await
+        .unwrap_or(Ok(false))
+        .unwrap_or(false);
+
     match enforcement {
-        TotpEnforcement::Off => false,
+        TotpEnforcement::Off => TotpGate::None,
         TotpEnforcement::AdminsOnly => {
             if role != "admin" {
-                return false;
+                TotpGate::None
+            } else if enrolled {
+                TotpGate::Mfa
+            } else {
+                TotpGate::Enroll
             }
-            let db_clone = db.clone();
-            tokio::task::spawn_blocking(move || db::user_totp_enabled(&db_clone, user_id))
-                .await
-                .unwrap_or(Ok(false))
-                .unwrap_or(false)
         }
         TotpEnforcement::All => {
-            let db_clone = db.clone();
-            tokio::task::spawn_blocking(move || db::user_totp_enabled(&db_clone, user_id))
-                .await
-                .unwrap_or(Ok(false))
-                .unwrap_or(false)
+            if enrolled {
+                TotpGate::Mfa
+            } else {
+                TotpGate::Enroll
+            }
         }
     }
 }
@@ -214,6 +234,34 @@ pub async fn login_submit(
 ) -> Response {
     let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
 
+    // SAML SSO start: the login page's SAML button posts here with `saml=1`
+    // (no username/password yet). The chain's SAML provider builds a signed
+    // AuthnRequest and answers with the IdP redirect; the lockout check is
+    // skipped because there is no password to validate.
+    if form.saml {
+        let auth_request = AuthRequest {
+            client_ip,
+            ..AuthRequest::default()
+        };
+        return match auth_chain.authenticate(&auth_request).await {
+            crate::auth_provider::AuthResult::Redirect(url) => {
+                Redirect::temporary(&url).into_response()
+            }
+            crate::auth_provider::AuthResult::Failure(msg) => {
+                tracing::warn!(client_ip = %client_ip, "SAML login start failed: {msg}");
+                Redirect::to("/?error=saml_auth_failed").into_response()
+            }
+            crate::auth_provider::AuthResult::Unavailable(msg) => {
+                tracing::error!("SAML auth provider unavailable: {msg}");
+                Redirect::to("/?error=saml_unavailable").into_response()
+            }
+            crate::auth_provider::AuthResult::Success { .. } => {
+                tracing::warn!(client_ip = %client_ip, "SAML login start unexpectedly succeeded without credentials");
+                Redirect::to("/?error=saml_auth_failed").into_response()
+            }
+        };
+    }
+
     // Reject if too many recent failed attempts (brute-force lockout)
     if check_lockout(&database, &form.username, &client_ip.to_string()).await {
         return Redirect::to("/?error=account_locked").into_response();
@@ -287,8 +335,12 @@ pub async fn login_submit(
                 .map(|t| t.enforcement)
                 .unwrap_or(TotpEnforcement::Off);
 
-            if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
-            {
+            let totp_gate =
+                check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement)
+                    .await;
+
+            // Enrolled users go through the MFA page before any session exists.
+            if matches!(totp_gate, TotpGate::Mfa) {
                 let ttl_secs = 300; // 5 minutes for MFA pending
                 return redirect_to_mfa(
                     &database,
@@ -388,6 +440,16 @@ pub async fn login_submit(
                 }
             }
 
+            // Enforcement requires enrollment but the user has no TOTP yet:
+            // the session is created so the enrollment page (behind
+            // require_auth) is reachable, and the user is sent straight
+            // there. Subsequent logins must pass the MFA page.
+            let redirect_to = if matches!(totp_gate, TotpGate::Enroll) {
+                "/account/totp.html"
+            } else {
+                "/connections.html"
+            };
+
             let session_cookie = format!(
                 "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
                 session_token,
@@ -402,7 +464,7 @@ pub async fn login_submit(
 
             (
                 AppendHeaders([(header::SET_COOKIE, session_cookie)]),
-                Redirect::to("/connections.html"),
+                Redirect::to(redirect_to),
             )
                 .into_response()
         }
@@ -465,7 +527,15 @@ pub struct MfaQueryParams {
 }
 
 /// GET /auth/mfa — TOTP verification page.
-pub async fn mfa_page(Query(params): Query<MfaQueryParams>) -> Response {
+///
+/// Rendered as a self-contained page because it sits outside the template
+/// tree (no site session yet). The inline script carries the CSP nonce from
+/// the security-headers middleware; without it the script never runs and
+/// the native form POST carries no CSRF token.
+pub async fn mfa_page(
+    Query(params): Query<MfaQueryParams>,
+    Extension(nonce): Extension<CspNonce>,
+) -> Response {
     let error_html = match params.error.as_deref() {
         Some("expired") => {
             r#"<p style="color:#ef4444;text-align:center;margin-bottom:1rem;font-size:0.875rem;">Session expired. Please log in again.</p>"#
@@ -512,49 +582,36 @@ pub async fn mfa_page(Query(params): Query<MfaQueryParams>) -> Response {
         <h1 class="mfa-title">Multi-Factor Authentication</h1>
         {error_html}
         <form method="POST" action="/auth/mfa" id="mfa-form">
+            <input type="hidden" name="csrf_token" value="">
             <div class="form-group">
                 <label for="code">Verification Code</label>
                 <input type="text" id="code" name="code" maxlength="6" pattern="[0-9]{{6}}" autocomplete="one-time-code" required autofocus>
             </div>
             <button type="submit" class="btn" id="mfa-submit">Verify</button>
         </form>
-        <script>
+        <script nonce="{nonce}">
         // CSRF: the csrf_token cookie is readable by JS (not HttpOnly), so
-        // submit via fetch with the X-CSRF-Token header.
+        // the hidden field is filled from it and the middleware's form-body
+        // peek accepts the POST. The form submits natively — the browser
+        // handles the 303 redirect and its session cookie, which
+        // fetch()+redirect:'follow' does not reliably do in Chromium.
         (function() {{
-            var form = document.getElementById('mfa-form');
-            form.addEventListener('submit', function(evt) {{
-                evt.preventDefault();
-                var btn = document.getElementById('mfa-submit');
-                btn.disabled = true;
-                var csrf = (function() {{
-                    var parts = document.cookie.split(';');
-                    for (var i = 0; i < parts.length; i++) {{
-                        var part = parts[i].trim();
-                        if (part.indexOf('csrf_token=') === 0) return decodeURIComponent(part.substring(11));
-                    }}
-                    return null;
-                }})();
-                fetch('/auth/mfa', {{
-                    method: 'POST',
-                    headers: csrf ? {{ 'X-CSRF-Token': csrf }} : {{}},
-                    body: new URLSearchParams(new FormData(form)),
-                    credentials: 'same-origin',
-                    redirect: 'follow'
-                }}).then(function(resp) {{
-                    if (resp.redirected) {{ location.href = resp.url; }}
-                    else if (resp.ok) {{ location.href = '/'; }}
-                    else {{ location.href = '/auth/mfa?error=invalid_code'; }}
-                }}).catch(function() {{
-                    btn.disabled = false;
-                    location.href = '/auth/mfa?error=expired';
-                }});
-            }});
+            var csrf = (function() {{
+                var parts = document.cookie.split(';');
+                for (var i = 0; i < parts.length; i++) {{
+                    var part = parts[i].trim();
+                    if (part.indexOf('csrf_token=') === 0) return decodeURIComponent(part.substring(11));
+                }}
+                return null;
+            }})();
+            var hidden = document.querySelector('input[name="csrf_token"]');
+            if (hidden && csrf) hidden.value = csrf;
         }})();
         </script>
     </div>
 </body>
-</html>"#
+</html>"#,
+        nonce = nonce.0
     );
 
     Html(html).into_response()
@@ -719,10 +776,19 @@ pub async fn mfa_submit(
 #[derive(serde::Deserialize)]
 pub struct LoginFormData {
     /// Account identifier, matched against the auth chain providers.
+    /// Defaulted so the SAML button's form (which carries no credentials)
+    /// still deserializes.
+    #[serde(default)]
     pub username: String,
     /// Plaintext password handed to the configured providers for
     /// verification.
+    #[serde(default)]
     pub password: String,
+    /// Set by the login page's SAML button (hidden `saml=1` field): starts
+    /// the SAML SSO flow instead of password auth. The form then carries no
+    /// username or password.
+    #[serde(default)]
+    pub saml: bool,
 }
 
 // ── SAML handlers ──────────────────────────────────────────────────────────
@@ -813,8 +879,12 @@ pub async fn saml_acs(
 
             // Check TOTP enforcement before creating session
             let effective_role = role.clone().unwrap_or_else(|| user.role.clone());
-            if check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement).await
-            {
+            let totp_gate =
+                check_totp_enforcement(&database, user.id, &effective_role, &totp_enforcement)
+                    .await;
+
+            // Enrolled users go through the MFA page before any session exists.
+            if matches!(totp_gate, TotpGate::Mfa) {
                 let ttl_secs = 300; // 5 minutes for MFA pending
                 return redirect_to_mfa(
                     &database,
@@ -866,11 +936,17 @@ pub async fn saml_acs(
                 .await;
             }
 
-            // Redirect to RelayState if present, otherwise /connections.html
-            let redirect_to = form
-                .RelayState
-                .filter(|n| n.starts_with('/') && !n.starts_with("//") && !n.contains("://"))
-                .unwrap_or_else(|| "/connections.html".to_string());
+            // Redirect to RelayState if present, otherwise /connections.html.
+            // An enforcement-required user without TOTP is sent to the
+            // enrollment page instead (the session exists, so the page is
+            // reachable; subsequent logins must pass the MFA page).
+            let redirect_to = if matches!(totp_gate, TotpGate::Enroll) {
+                "/account/totp.html".to_string()
+            } else {
+                form.RelayState
+                    .filter(|n| n.starts_with('/') && !n.starts_with("//") && !n.contains("://"))
+                    .unwrap_or_else(|| "/connections.html".to_string())
+            };
 
             let session_cookie = format!(
                 "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
