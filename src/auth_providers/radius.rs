@@ -398,6 +398,21 @@ impl ChallengeStore {
 // RadiusClient — UDP transport
 // ---------------------------------------------------------------------------
 
+/// Resolve a RADIUS server address from a hostname or IP literal.
+///
+/// Fails loudly instead of silently falling back to 127.0.0.1: a typo'd or
+/// unresolvable hostname is a misconfiguration the operator must see, not
+/// a login path that quietly probes localhost.
+fn resolve_server_addr(hostname: &str, port: u16) -> Result<SocketAddr, String> {
+    if let Ok(ip) = hostname.parse::<IpAddr>() {
+        return Ok(SocketAddr::new(ip, port));
+    }
+    std::net::ToSocketAddrs::to_socket_addrs(&(hostname, port))
+        .map_err(|e| format!("cannot resolve RADIUS hostname '{hostname}': {e}"))?
+        .next()
+        .ok_or_else(|| format!("RADIUS hostname '{hostname}' resolved to no addresses"))
+}
+
 /// Low-level RADIUS client that handles UDP transport.
 struct RadiusClient {
     server_addr: SocketAddr,
@@ -407,17 +422,14 @@ struct RadiusClient {
 }
 
 impl RadiusClient {
-    fn new(config: &RadiusConfig) -> Self {
-        let ip: Ipv4Addr = config
-            .hostname
-            .parse()
-            .unwrap_or(Ipv4Addr::new(127, 0, 0, 1));
-        Self {
-            server_addr: SocketAddr::new(IpAddr::V4(ip), config.port),
+    fn new(config: &RadiusConfig) -> Result<Self, String> {
+        let server_addr = resolve_server_addr(&config.hostname, config.port)?;
+        Ok(Self {
+            server_addr,
             shared_secret: config.shared_secret.as_bytes().to_vec(),
             timeout: Duration::from_secs(config.timeout_secs),
             retries: config.retries,
-        }
+        })
     }
 
     /// Send an Access-Request and receive the response.
@@ -496,7 +508,11 @@ impl RadiusClient {
 /// RADIUS authentication provider.
 pub struct RadiusProvider {
     config: RadiusConfig,
-    client: RadiusClient,
+    /// Client for continuing Access-Challenge exchanges. Constructed at
+    /// startup; an Err records a bad server address (unresolvable
+    /// hostname) so challenge continuations fail loudly instead of
+    /// silently talking to 127.0.0.1.
+    client: Result<RadiusClient, String>,
     challenge_store: ChallengeStore,
     /// Monotonically increasing packet ID.
     next_id: std::sync::atomic::AtomicU8,
@@ -589,8 +605,14 @@ impl AuthProvider for RadiusProvider {
                 };
 
                 // Send Access-Request with State attribute and response
+                let client = match &self.client {
+                    Ok(c) => c,
+                    Err(e) => {
+                        return AuthResult::Unavailable(format!("RADIUS configuration error: {e}"))
+                    }
+                };
                 let id = self.next_packet_id();
-                match self.client.send_access_request(
+                match client.send_access_request(
                     id,
                     &challenge.username,
                     &response_value,
@@ -664,15 +686,18 @@ impl RadiusProvider {
     ) -> AuthResult {
         let id = self.next_packet_id();
         // Clone owned data for spawn_blocking (needs 'static)
-        let client = RadiusClient::new(&self.config);
         let username_owned = username.to_string();
         let password_owned = password.to_string();
         let nas_id = self.config.nas_identifier.clone();
         let nas_ip_owned = nas_ip.copied();
         let username_for_log = username_owned.clone();
 
-        // Run the blocking UDP I/O in a blocking thread
+        // Run the blocking DNS + UDP I/O in a blocking thread. An
+        // unresolvable server address fails loudly (Unavailable) instead
+        // of silently falling back to 127.0.0.1.
+        let config = self.config.clone();
         let result = tokio::task::spawn_blocking(move || {
+            let client = RadiusClient::new(&config)?;
             client.send_access_request(
                 id,
                 &username_owned,
@@ -760,6 +785,48 @@ mod tests {
         assert_eq!(cfg.nas_identifier, "persea");
         assert_eq!(cfg.auth_protocol, AuthProtocol::Pap);
         assert_eq!(cfg.mode, RadiusMode::Primary);
+    }
+
+    #[test]
+    fn resolve_server_addr_accepts_ip_literals() {
+        let addr = resolve_server_addr("10.0.0.1", 1812).unwrap();
+        assert_eq!(addr, "10.0.0.1:1812".parse::<SocketAddr>().unwrap());
+    }
+
+    #[test]
+    fn resolve_server_addr_unresolvable_hostname_fails_loudly() {
+        // A hostname that cannot resolve must produce an error naming the
+        // hostname, never a silent 127.0.0.1 fallback.
+        let err = resolve_server_addr("no-such-host.invalid", 1812).unwrap_err();
+        assert!(err.contains("no-such-host.invalid"), "got: {err}");
+    }
+
+    #[test]
+    fn radius_provider_reports_bad_hostname_at_use_time() {
+        // Provider construction stays infallible (main.rs builds providers
+        // without Results); the misconfiguration surfaces on the first
+        // authentication as an Unavailable with the hostname in it.
+        let config = RadiusConfig {
+            hostname: "no-such-host.invalid".into(),
+            ..Default::default()
+        };
+        let provider = RadiusProvider::new(config);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            provider
+                .authenticate(&AuthRequest {
+                    username: Some("user".into()),
+                    password: Some("pass".into()),
+                    ..Default::default()
+                })
+                .await
+        });
+        match result {
+            AuthResult::Unavailable(msg) => {
+                assert!(msg.contains("no-such-host.invalid"), "got: {msg}")
+            }
+            other => panic!("expected Unavailable, got {other}"),
+        }
     }
 
     #[test]
