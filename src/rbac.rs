@@ -420,30 +420,28 @@ pub fn check_connection_permission(
         let __db_route_arg_0 = connection_id.to_string();
         let __db_route_arg_1 = permission.as_str().to_string();
         let __db_route_arg_2 = folder_path;
-        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
-            async move {
-                let on_connection = crate::db::rbac_check_connection_permission_pool(
-                    pool,
-                    user_id,
-                    __db_route_arg_0,
-                    __db_route_arg_1.clone(),
-                )
-                .await?;
-                if on_connection {
-                    return Ok(true);
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| async move {
+            let on_connection = crate::db::rbac_check_connection_permission_pool(
+                pool,
+                user_id,
+                __db_route_arg_0,
+                __db_route_arg_1.clone(),
+            )
+            .await?;
+            if on_connection {
+                return Ok(true);
+            }
+            match __db_route_arg_2 {
+                Some(folder) => {
+                    crate::db::rbac_check_group_object_permission_pool(
+                        pool,
+                        user_id,
+                        folder,
+                        __db_route_arg_1,
+                    )
+                    .await
                 }
-                match __db_route_arg_2 {
-                    Some(folder) => {
-                        crate::db::rbac_check_group_object_permission_pool(
-                            pool,
-                            user_id,
-                            folder,
-                            __db_route_arg_1,
-                        )
-                        .await
-                    }
-                    None => Ok(false),
-                }
+                None => Ok(false),
             }
         });
     }
@@ -1111,8 +1109,8 @@ mod tests {
 
         // The folder must exist in the address book for the connection's
         // folder path to resolve.
-        let folder_id = crate::db::create_ab_folder(&db, "shared", "Clients", "", "", false)
-            .unwrap();
+        let folder_id =
+            crate::db::create_ab_folder(&db, "shared", "Clients", "", "", false).unwrap();
         crate::db::create_ab_entry(
             &db,
             folder_id,

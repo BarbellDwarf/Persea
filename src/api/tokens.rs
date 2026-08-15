@@ -617,7 +617,10 @@ pub async fn list_credential_variables(
                             &cred.credential_data,
                         )
                         .map_err(|e| {
-                            tracing::error!(entry_id = entry.id, "failed to decrypt credential: {e}");
+                            tracing::error!(
+                                entry_id = entry.id,
+                                "failed to decrypt credential: {e}"
+                            );
                             AppError::Internal("failed to decrypt credential — wrong key?".into())
                         })?;
                         match cred.credential_type.as_str() {

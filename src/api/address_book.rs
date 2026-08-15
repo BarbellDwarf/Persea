@@ -108,8 +108,7 @@ pub(crate) fn folder_allowed_for_user(
                     .map(|g| g.trim().to_string())
                     .filter(|g| !g.is_empty())
                     .collect();
-                groups.is_empty()
-                    || groups.iter().any(|g| user_groups.iter().any(|ug| ug == g))
+                groups.is_empty() || groups.iter().any(|g| user_groups.iter().any(|ug| ug == g))
             }),
             Err(_) => false,
         },
