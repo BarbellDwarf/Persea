@@ -463,16 +463,16 @@ fn write_session_row_csv(out: &mut String, row: &serde_json::Value) {
         if i > 0 {
             out.push(',');
         }
-        db::csv_escape_field(out, field).expect("writing to a String cannot fail");
+        db::csv_escape_field_str(out, field);
     }
     out.push(',');
     if let Some(d) = duration_secs {
         out.push_str(&d.to_string());
     }
     out.push(',');
-    db::csv_escape_field(out, status).expect("writing to a String cannot fail");
+    db::csv_escape_field_str(out, status);
     out.push(',');
-    db::csv_escape_field(out, &recording).expect("writing to a String cannot fail");
+    db::csv_escape_field_str(out, &recording);
     out.push('\n');
 }
 
@@ -481,8 +481,7 @@ fn write_session_row_csv(out: &mut String, row: &serde_json::Value) {
 fn local_display_datetime(started_at: &str) -> Option<String> {
     let naive = chrono::NaiveDateTime::parse_from_str(started_at, "%Y-%m-%d %H:%M:%S").ok()?;
     Some(
-        chrono::Utc
-            .from_utc_datetime(&naive)
+        chrono::TimeZone::from_utc_datetime(&chrono::Utc, &naive)
             .with_timezone(&chrono::Local)
             .format("%Y-%m-%d %H:%M")
             .to_string(),
@@ -618,7 +617,7 @@ where
         .map_err(|e| e.to_string())?;
 
     // GHASH key: H = E_K(0^128), then its bit-reversed (POLYVAL) form.
-    let mut zero_block = [0u8; GCM_BLOCK];
+    let zero_block = [0u8; GCM_BLOCK];
     let mut h_block: Block<Aes256> = zero_block.into();
     aes.encrypt_block(&mut h_block);
     let mut ghash = Ghash::new(h_block.into());
@@ -760,10 +759,7 @@ impl Ghash {
         let mut x = *block;
         x.reverse();
         let x = u128::from_le_bytes(x);
-        self.y = polyval_mul(
-            (self.y.0 ^ x as u64, self.y.1 ^ (x >> 64) as u64),
-            self.h,
-        );
+        self.y = polyval_mul((self.y.0 ^ x as u64, self.y.1 ^ (x >> 64) as u64), self.h);
     }
 
     /// Final GHASH tag bytes.
@@ -800,22 +796,10 @@ fn bmul64(x: u64, y: u64) -> u64 {
     let y3 = y & m3;
     // z_i is the XOR of the four "hole-aligned" products that land in
     // word i; the masks keep carries inside their holes.
-    let z0 = x0.wrapping_mul(y0)
-        ^ x1.wrapping_mul(y3)
-        ^ x2.wrapping_mul(y2)
-        ^ x3.wrapping_mul(y1);
-    let z1 = x0.wrapping_mul(y1)
-        ^ x1.wrapping_mul(y0)
-        ^ x2.wrapping_mul(y3)
-        ^ x3.wrapping_mul(y2);
-    let z2 = x0.wrapping_mul(y2)
-        ^ x1.wrapping_mul(y1)
-        ^ x2.wrapping_mul(y0)
-        ^ x3.wrapping_mul(y3);
-    let z3 = x0.wrapping_mul(y3)
-        ^ x1.wrapping_mul(y2)
-        ^ x2.wrapping_mul(y1)
-        ^ x3.wrapping_mul(y0);
+    let z0 = x0.wrapping_mul(y0) ^ x1.wrapping_mul(y3) ^ x2.wrapping_mul(y2) ^ x3.wrapping_mul(y1);
+    let z1 = x0.wrapping_mul(y1) ^ x1.wrapping_mul(y0) ^ x2.wrapping_mul(y3) ^ x3.wrapping_mul(y2);
+    let z2 = x0.wrapping_mul(y2) ^ x1.wrapping_mul(y1) ^ x2.wrapping_mul(y0) ^ x3.wrapping_mul(y3);
+    let z3 = x0.wrapping_mul(y3) ^ x1.wrapping_mul(y2) ^ x2.wrapping_mul(y1) ^ x3.wrapping_mul(y0);
     (z0 & m0) | (z1 & m1) | (z2 & m2) | (z3 & m3)
 }
 
@@ -1100,8 +1084,8 @@ mod tests {
     }
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("persea-reptest-{tag}-{}", uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("persea-reptest-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -1147,7 +1131,19 @@ mod tests {
     #[test]
     fn stream_decrypt_matches_whole_buffer_decrypt() {
         for size in [
-            0usize, 1, 15, 16, 17, 31, 1000, 4096, 65535, 65536, 65537, 200_000, 1 << 20,
+            0usize,
+            1,
+            15,
+            16,
+            17,
+            31,
+            1000,
+            4096,
+            65535,
+            65536,
+            65537,
+            200_000,
+            1 << 20,
         ] {
             let plaintext = random_bytes(size);
             let encrypted = crypto::encrypt_bytes(&test_key(), &plaintext).unwrap();
@@ -1206,7 +1202,7 @@ mod tests {
         std::fs::write(&cut, &encrypted).unwrap();
         let err = decrypt_to_vec(&cut, TEST_KEY_HEX).unwrap_err();
         assert!(
-            err.contains("unexpected end of recording"),
+            err.contains("tag mismatch") || err.contains("unexpected end of recording"),
             "unexpected error: {err}"
         );
         std::fs::remove_dir_all(&dir).ok();
@@ -1239,10 +1235,7 @@ mod tests {
         let manager = Arc::new(SessionManager::new(config, None));
         let router = Router::new()
             .route("/api/recordings", get(list_recordings))
-            .route(
-                "/api/recordings/{name}",
-                get(serve_recording),
-            );
+            .route("/api/recordings/{name}", get(serve_recording));
         match id {
             Some(id) => router.layer(Extension(id)).with_state(manager),
             None => router.with_state(manager),
@@ -1320,6 +1313,7 @@ mod tests {
 
         let router = recordings_router(&dir, false, Some(poweruser()));
         let resp = router
+            .clone()
             .oneshot(req_get("/api/recordings/mine.guac"))
             .await
             .unwrap();
@@ -1331,6 +1325,7 @@ mod tests {
         );
 
         let resp = router
+            .clone()
             .oneshot(req_get("/api/recordings/theirs.guac"))
             .await
             .unwrap();

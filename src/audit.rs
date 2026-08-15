@@ -539,8 +539,7 @@ pub fn export_events_csv(db: &Db, filters: &AuditFilters) -> rusqlite::Result<St
             if i > 0 {
                 out.push(',');
             }
-            crate::db::csv_escape_field(&mut out, field)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
+            crate::db::csv_escape_field_str(&mut out, field);
         }
         out.push('\n');
     }

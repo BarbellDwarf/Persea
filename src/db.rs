@@ -2682,6 +2682,14 @@ pub fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Res
     Ok(())
 }
 
+/// CSV-escape into a `String` (wraps [`csv_escape_field`], which needs an
+/// `io::Write`; `String` does not implement it).
+pub fn csv_escape_field_str(out: &mut String, field: &str) {
+    let mut buf = Vec::new();
+    csv_escape_field(&mut buf, field).expect("writing to a Vec cannot fail");
+    out.push_str(&String::from_utf8_lossy(&buf));
+}
+
 /// Top connections by session count and total hours.
 pub fn top_connections(db: &Db, limit: u32) -> rusqlite::Result<Vec<serde_json::Value>> {
     db_route!(db, top_connections_pool, limit);

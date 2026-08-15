@@ -740,10 +740,7 @@ mod tests {
             serde_json::json!({"host": "<b>bold</b>"}),
         );
         let router = router(db, Some(identity("admin@example.com", "Admin", "admin")));
-        let resp = router
-            .oneshot(req_get("/api/audit/events"))
-            .await
-            .unwrap();
+        let resp = router.oneshot(req_get("/api/audit/events")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let html = body_string(resp).await;
         assert!(
@@ -755,7 +752,10 @@ mod tests {
             html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
             "source_ip must be escaped: {html}"
         );
-        assert!(!html.contains("<script>alert(1)</script>"), "raw ip leaked: {html}");
+        assert!(
+            !html.contains("<script>alert(1)</script>"),
+            "raw ip leaked: {html}"
+        );
         assert!(
             html.contains("&lt;b&gt;bold&lt;/b&gt;"),
             "details must be escaped: {html}"
@@ -775,10 +775,7 @@ mod tests {
             serde_json::Value::Null,
         );
         let router = router(db, Some(identity("admin@example.com", "Admin", "admin")));
-        let resp = router
-            .oneshot(req_get("/api/audit/events"))
-            .await
-            .unwrap();
+        let resp = router.oneshot(req_get("/api/audit/events")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let html = body_string(resp).await;
         assert!(
@@ -789,17 +786,17 @@ mod tests {
             html.contains("failure'&gt;&lt;script&gt;alert(1)&lt;/script&gt;"),
             "outcome must be escaped: {html}"
         );
-        assert!(!html.contains("><script>"), "raw outcome tag leaked: {html}");
+        assert!(
+            !html.contains("><script>"),
+            "raw outcome tag leaked: {html}"
+        );
     }
 
     #[tokio::test]
     async fn audit_fragment_requires_admin() {
         let db = test_db();
         let router = router(db, Some(identity("viewer@example.com", "Viewer", "viewer")));
-        let resp = router
-            .oneshot(req_get("/api/audit/events"))
-            .await
-            .unwrap();
+        let resp = router.oneshot(req_get("/api/audit/events")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 }
