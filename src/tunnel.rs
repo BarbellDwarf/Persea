@@ -6,6 +6,12 @@
 //! the real target.
 //!
 //! Supports multi-hop chains: You → hop0 → hop1 → ... → target.
+//!
+//! Local listeners bind loopback only (127.0.0.1) for the lifetime of the
+//! session and are never reachable from the network. Caveat: while a session
+//! is active, any process on this host can connect to a listener and pivot
+//! through the jump host, so the persea host must be trusted by everyone
+//! allowed to open sessions.
 
 use russh::client;
 use russh::keys::key::PrivateKeyWithHashAlg;
@@ -36,8 +42,12 @@ pub struct JumpHost {
     /// PEM private key for public-key authentication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub private_key: Option<String>,
-    /// SSH server public key in OpenSSH format (e.g. "ssh-ed25519 AAAA...").
-    /// Stored on first verification and checked on subsequent connections.
+    /// SSH server host key to verify, either the SHA-256 fingerprint
+    /// (e.g. "SHA256:...") or the server public key in OpenSSH format
+    /// (e.g. "ssh-ed25519 AAAA..."). A public key is hashed to its
+    /// fingerprint before comparison. When unset, the key is accepted on
+    /// first contact (TOFU) and the fingerprint is recorded in known_hosts
+    /// for subsequent connections.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_key: Option<String>,
 }
@@ -97,8 +107,11 @@ pub struct TunnelConfig {
     pub target_host: String,
     /// TCP port the tunnel forwards to.
     pub target_port: u16,
-    /// Expected SSH server host key in OpenSSH format. If set, the connection
-    /// is rejected when the server presents a different key.
+    /// Expected SSH server host key, either the SHA-256 fingerprint
+    /// ("SHA256:...") or the server public key in OpenSSH format
+    /// ("ssh-ed25519 AAAA..."). A public key is hashed to its fingerprint
+    /// before comparison. If set, the connection is rejected when the
+    /// server presents a different key.
     pub expected_host_key: Option<String>,
     /// Path to the known_hosts file for trust-on-first-use persistence.
     pub known_hosts_path: Option<PathBuf>,
@@ -136,6 +149,23 @@ pub fn fingerprint_openssh_key(openssh_key: &str) -> Result<String, String> {
     )
     .map_err(|e| format!("invalid host key: {}", e))?;
     Ok(pubkey.fingerprint(HashAlg::Sha256).to_string())
+}
+
+/// Normalize a configured host key to its SHA-256 fingerprint form.
+///
+/// Accepts either the fingerprint itself ("SHA256:...") or the server
+/// public key in OpenSSH format ("ssh-ed25519 AAAA..."); a public key is
+/// hashed to its fingerprint so both can be compared against the key the
+/// server presents.
+pub fn normalize_host_key(expected: &str) -> Result<String, String> {
+    let trimmed = expected.trim();
+    if trimmed
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("sha256:"))
+    {
+        return Ok(format!("SHA256:{}", trimmed[7..].trim()));
+    }
+    fingerprint_openssh_key(trimmed)
 }
 
 /// Read the known_hosts file and return the pinned fingerprint for `host:port`,
@@ -252,9 +282,22 @@ impl client::Handler for TunnelHandler {
             return Ok(true);
         };
 
-        // Parse the stored fingerprint and compare
-        let expected_str = expected.as_str();
-        if expected_str == fingerprint.to_string() {
+        // The stored key may be a fingerprint or an OpenSSH public key;
+        // normalize it to a fingerprint before comparing.
+        let expected_fp = match normalize_host_key(expected) {
+            Ok(fp) => fp,
+            Err(e) => {
+                tracing::error!(
+                    hop = self.hop_index,
+                    host = %self.jump_host,
+                    error = %e,
+                    "Configured SSH host key could not be parsed — \
+                     update the host key in the address book"
+                );
+                return Ok(false);
+            }
+        };
+        if expected_fp == fingerprint.to_string() {
             tracing::debug!(
                 hop = self.hop_index,
                 host = %self.jump_host,
@@ -266,7 +309,7 @@ impl client::Handler for TunnelHandler {
             tracing::error!(
                 hop = self.hop_index,
                 host = %self.jump_host,
-                expected = %expected_str,
+                expected = %expected_fp,
                 actual = %fingerprint,
                 "SSH HOST KEY MISMATCH — possible MITM attack! \
                  Update the host key in the address book if the server was re-provisioned."
@@ -490,7 +533,12 @@ pub async fn start(config: TunnelConfig, hop_index: usize) -> Result<SshTunnel, 
         config.jump_username
     );
 
-    // Bind a local TCP listener on an OS-assigned port
+    // Bind a local TCP listener on an OS-assigned port. Loopback only: the
+    // port is unreachable from the network and exists only for the lifetime
+    // of the SSH session (guacd or the next hop connects while the session
+    // is active). Local-only caveat: while the session runs, any process on
+    // this host can connect to the port and pivot through the jump host —
+    // the persea host must be trusted by everyone allowed to open sessions.
     let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|e| {
         TunnelError::Bind(hop_index, format!("failed to bind local listener: {}", e))
     })?;
@@ -716,6 +764,49 @@ mod tests {
     fn fingerprint_openssh_key_empty_string() {
         let result = fingerprint_openssh_key("");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn normalize_host_key_fingerprint_passthrough() {
+        assert_eq!(
+            normalize_host_key("SHA256:ldyiXa1JQakitNU5tErauu8DvWQ1dZ7aXu+rm7KQuog").unwrap(),
+            "SHA256:ldyiXa1JQakitNU5tErauu8DvWQ1dZ7aXu+rm7KQuog"
+        );
+    }
+
+    #[test]
+    fn normalize_host_key_lowercase_fingerprint_prefix() {
+        assert_eq!(normalize_host_key("sha256:abc").unwrap(), "SHA256:abc");
+    }
+
+    #[test]
+    fn normalize_host_key_openssh_public_key() {
+        assert_eq!(
+            normalize_host_key(
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILagOJFgwaMNhBWQINinKOXmqS4Gh5NgxgriXwdOoINJ"
+            )
+            .unwrap(),
+            "SHA256:ldyiXa1JQakitNU5tErauu8DvWQ1dZ7aXu+rm7KQuog"
+        );
+    }
+
+    #[test]
+    fn normalize_host_key_invalid_input() {
+        assert!(normalize_host_key("not-a-key").is_err());
+        assert!(normalize_host_key("").is_err());
+    }
+
+    #[test]
+    fn normalize_host_key_empty_fingerprint_prefix() {
+        assert_eq!(normalize_host_key("SHA256:").unwrap(), "SHA256:");
+    }
+
+    #[test]
+    fn normalize_host_key_trims_whitespace() {
+        assert_eq!(
+            normalize_host_key("  SHA256:abc  ").unwrap(),
+            "SHA256:abc"
+        );
     }
 
     #[test]
