@@ -142,11 +142,12 @@ presets. Useful for integration code that must adapt to the server.
 Requires authentication. Returns the current user's name, email, role,
 group memberships, auth source, and whether Vault is configured.
 
-### `GET /auth/login`, `GET /auth/callback`, `GET /auth/logout`
+### `GET /auth/login`, `GET /auth/callback`, `POST /auth/logout`
 
 Browser flow: `/auth/login` redirects to the OIDC provider (when
-configured), `/auth/callback` completes the login, `/auth/logout`
-clears the session cookie. (`POST /auth/login` is the local database
+configured), `/auth/callback` completes the login, `POST /auth/logout`
+clears the session cookie (CSRF-protected, form field `csrf_token` or
+`X-CSRF-Token` header). (`POST /auth/login` is the local database
 login form; the UI uses it, scripts normally don't need to.)
 
 ## Sessions
@@ -373,12 +374,12 @@ display geometry, and the `spice_*` / `proxmox_*` fields). The
 (a `has_proxmox_token_secret` boolean indicates whether one is stored),
 and it is preserved on update when omitted.
 
-## Quick connect (`GET /api/connect`)
+## Quick connect (`POST /api/connect`)
 
 A convenience endpoint for external integrations (e.g. NetBox Custom
 Links). Creates a session and redirects the browser to the client page;
 if the user is not authenticated and OIDC is configured, it redirects
-to SSO login and back.
+to SSO login and back. POST-only (a GET could be triggered cross-site).
 
 - **Ad-hoc mode** (poweruser+): `/api/connect?hostname=10.0.1.50&protocol=ssh`
 - **Connections mode** (operator+): `/api/connect?scope=shared&folder=production&entry=web-server-01`

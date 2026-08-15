@@ -17,7 +17,7 @@
         <button id="theme-toggle" class="btn btn-sm" style="padding:6px 10px;display:flex;align-items:center;gap:4px" title="Theme: Auto (click to cycle)">
             <span class="theme-icon"></span>
         </button>
-        <a href="/auth/logout" class="btn btn-sm btn-danger" style="padding:6px 12px;font-size:12px">Logout</a>
+        <a href="/auth/logout" id="logout-btn" class="btn btn-sm btn-danger" style="padding:6px 12px;font-size:12px">Logout</a>
     </div>
 </header>
 
@@ -102,5 +102,29 @@ document.getElementById('theme-toggle')?.addEventListener('click', function() {
             banner.style.display = 'flex';
         })
         .catch(function() { /* offline: banner stays hidden */ });
+})();
+
+// ── Logout: POST with CSRF (GET logout is gone; a cross-site GET could log users out) ──
+(function() {
+    var btn = document.getElementById('logout-btn');
+    if (!btn) return;
+    btn.addEventListener('click', function(evt) {
+        evt.preventDefault();
+        var csrf = null;
+        document.cookie.split(';').forEach(function(part) {
+            part = part.trim();
+            if (part.indexOf('csrf_token=') === 0) csrf = decodeURIComponent(part.substring(11));
+        });
+        fetch('/auth/logout', {
+            method: 'POST',
+            headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+            credentials: 'same-origin',
+            redirect: 'follow'
+        }).then(function(resp) {
+            location.href = '/';
+        }).catch(function() {
+            location.href = '/';
+        });
+    });
 })();
 </script>

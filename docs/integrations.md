@@ -232,8 +232,8 @@ needs an extra scope to include groups in the token, add it to
 6. Group-to-role mappings are evaluated (highest matching role wins).
 7. A session cookie is set and the user lands in the application.
 
-**Logout.** `GET /auth/logout` clears the session cookie and deletes the auth
-session from the database.
+**Logout.** `POST /auth/logout` clears the session cookie and deletes the auth
+session from the database (CSRF-protected).
 
 ### Authentik setup guide
 

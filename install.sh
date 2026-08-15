@@ -237,6 +237,9 @@ xvnc_path = "Xvnc"
 chromium_path = "chromium"
 display_range_start = 100
 display_range_end = 199
+
+[storage]
+encryption_key = "$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 TOMLEOF
 
         if [[ $NO_TLS -eq 0 ]]; then
