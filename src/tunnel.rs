@@ -803,10 +803,7 @@ mod tests {
 
     #[test]
     fn normalize_host_key_trims_whitespace() {
-        assert_eq!(
-            normalize_host_key("  SHA256:abc  ").unwrap(),
-            "SHA256:abc"
-        );
+        assert_eq!(normalize_host_key("  SHA256:abc  ").unwrap(), "SHA256:abc");
     }
 
     #[test]
