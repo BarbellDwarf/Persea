@@ -7,6 +7,7 @@ use super::{CredentialDefaultScope, StorageBackend, StorageKey, VaultState};
 use crate::auth::{client_ip, role_level, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
+use crate::rbac;
 use axum::{
     extract::{ConnectInfo, Path, Query},
     Extension, Json,
@@ -535,7 +536,12 @@ pub async fn list_credential_variables(
     backend: Option<Extension<StorageBackend>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = match identity {
-        Some(Extension(ref id)) if id.has_role("operator") => id.clone(),
+        Some(Extension(ref id))
+            if id.has_role("operator")
+                || rbac::identity_has_custom_permission(&database, id, "read") =>
+        {
+            id.clone()
+        }
         _ => return Err(AppError::Forbidden("operator role required".into())),
     };
 
@@ -568,9 +574,19 @@ pub async fn list_credential_variables(
         .collect();
 
     while let Some((scope, path)) = stack.pop() {
-        // Skip folders the user cannot access (same rule as the address book:
-        // empty description = unrestricted, otherwise entries' allowed_groups).
-        if !super::address_book::folder_allowed_for_user(&database, &scope, &path, id.groups()) {
+        // Skip folders the user cannot access (same rule as ab_list_folders:
+        // admins bypass, RBAC Read grants on the folder count, otherwise the
+        // folder's ACL decides).
+        if !id.has_role("admin")
+            && !super::address_book::folder_allowed_for_user(&database, &scope, &path, id.groups())
+            && !rbac::identity_has_object_permission(
+                &database,
+                &id,
+                "connection_group",
+                &path,
+                rbac::ObjectPermission::Read,
+            )
+        {
             continue;
         }
 
@@ -600,7 +616,10 @@ pub async fn list_credential_variables(
                             enc_key_parsed.as_ref().unwrap(),
                             &cred.credential_data,
                         )
-                        .unwrap_or(cred.credential_data.clone());
+                        .map_err(|e| {
+                            tracing::error!(entry_id = entry.id, "failed to decrypt credential: {e}");
+                            AppError::Internal("failed to decrypt credential — wrong key?".into())
+                        })?;
                         match cred.credential_type.as_str() {
                             "password" => fields.push(Some(decrypted)),
                             "private_key" => fields.push(Some(decrypted)),
@@ -891,4 +910,175 @@ pub async fn admin_addressbook_audit(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;
     Ok(Json(json!(entries)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::{VaultBackends, VaultCell};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use serde_json::Value;
+    use std::sync::Arc;
+    use tower::ServiceExt;
+
+    fn test_db() -> Db {
+        db::init_db(std::path::Path::new(":memory:")).expect("Failed to create test DB")
+    }
+
+    fn test_vault_state() -> VaultState {
+        let cell: VaultCell = Arc::new(tokio::sync::RwLock::new(None));
+        Arc::new(VaultBackends {
+            default: cell.clone(),
+            shared: cell.clone(),
+            local: cell,
+        })
+    }
+
+    fn admin_identity() -> AuthIdentity {
+        AuthIdentity::User {
+            email: "admin@test.com".to_string(),
+            name: "Admin".to_string(),
+            role: "admin".to_string(),
+            groups: Vec::new(),
+        }
+    }
+
+    fn build_router(db: Db, vault: VaultState, storage_key: Option<String>) -> axum::Router {
+        use axum::routing::get;
+        let mut router = axum::Router::new()
+            .route(
+                "/api/tokens/credential-variables",
+                get(super::list_credential_variables),
+            )
+            .layer(Extension(db))
+            .layer(Extension(vault));
+        if let Some(key) = storage_key {
+            router = router.layer(Extension(StorageKey(Some(key))));
+        }
+        router
+    }
+
+    fn identity_req(uri: &str, identity: AuthIdentity) -> Request<Body> {
+        let mut req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        req.extensions_mut().insert(identity);
+        req
+    }
+
+    async fn body_json(response: axum::response::Response) -> Value {
+        serde_json::from_slice(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn admin_sees_credential_variables_in_all_folders() {
+        let db = test_db();
+        db::create_ab_folder(&db, "shared", "Public", "", "", false).unwrap();
+        let public = db::get_ab_folder(&db, "shared", "Public").unwrap();
+        db::create_ab_entry(
+            &db,
+            public.id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "$aws_access_key_id",
+            "{}",
+            "",
+        )
+        .unwrap();
+        // A folder restricted to a group the admin is not in must still be
+        // scanned: admins bypass the folder ACL like ab_list_folders does.
+        db::create_ab_folder(&db, "shared", "Sec", "", "ops", false).unwrap();
+        let sec = db::get_ab_folder(&db, "shared", "Sec").unwrap();
+        db::create_ab_entry(
+            &db,
+            sec.id,
+            "db1",
+            "DB 1",
+            "ssh",
+            "10.0.0.2",
+            Some(22),
+            "$db_password",
+            "{}",
+            "",
+        )
+        .unwrap();
+
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(identity_req(
+                "/api/tokens/credential-variables",
+                admin_identity(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["variables"]["aws_access_key_id"], 1);
+        assert_eq!(body["variables"]["db_password"], 1);
+        assert_eq!(body["variables"].as_object().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn credential_decrypt_failure_propagates_not_plaintext() {
+        let db = test_db();
+        db::create_ab_folder(&db, "shared", "Public", "", "", false).unwrap();
+        let folder = db::get_ab_folder(&db, "shared", "Public").unwrap();
+        let entry_id = db::create_ab_entry(
+            &db,
+            folder.id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap();
+        // Legacy plaintext row (no enc:v1: prefix): the decrypt must fail
+        // loudly instead of feeding the raw value into the variable scan.
+        db::store_ab_credential(&db, entry_id, "password", "legacy-plaintext").unwrap();
+
+        let key = "0000000000000000000000000000000000000000000000000000000000000001".to_string();
+        let app = build_router(db.clone(), test_vault_state(), Some(key));
+        let response = app
+            .oneshot(identity_req(
+                "/api/tokens/credential-variables",
+                admin_identity(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8_lossy(&bytes).to_string();
+        assert!(
+            !text.contains("legacy-plaintext"),
+            "the raw stored credential must never be echoed back"
+        );
+    }
+
+    #[test]
+    fn operator_without_groups_sees_unrestricted_folders() {
+        let db = test_db();
+        db::create_ab_folder(&db, "shared", "Public", "", "", false).unwrap();
+        db::create_ab_folder(&db, "shared", "Sec", "", "ops", false).unwrap();
+        assert!(
+            crate::api::folder_allowed_for_user(&db, "shared", "Public", &[]),
+            "a folder without an ACL is visible to any user"
+        );
+        assert!(
+            !crate::api::folder_allowed_for_user(&db, "shared", "Sec", &[]),
+            "a folder with an ACL denies users without groups"
+        );
+    }
 }
