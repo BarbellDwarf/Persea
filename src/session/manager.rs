@@ -589,18 +589,18 @@ impl SessionManager {
             TcpStream::connect(&self.config.guacd_addr),
         )
         .await
-            .map_err(|_| {
-                SessionError::GuacdConnection(format!(
-                    "timeout connecting to guacd at {}",
-                    self.config.guacd_addr
-                ))
-            })?
-            .map_err(|e| {
-                SessionError::GuacdConnection(format!(
-                    "failed to connect to guacd at {}: {}",
-                    self.config.guacd_addr, e
-                ))
-            })?;
+        .map_err(|_| {
+            SessionError::GuacdConnection(format!(
+                "timeout connecting to guacd at {}",
+                self.config.guacd_addr
+            ))
+        })?
+        .map_err(|e| {
+            SessionError::GuacdConnection(format!(
+                "failed to connect to guacd at {}: {}",
+                self.config.guacd_addr, e
+            ))
+        })?;
 
         // Same socket tuning as `guacd::apply_keepalive`.
         {
@@ -629,17 +629,9 @@ impl SessionManager {
                         ))
                     })?
                     .to_owned();
-            Box::new(
-                connector
-                    .connect(server_name, tcp)
-                    .await
-                    .map_err(|e| {
-                        SessionError::GuacdConnection(format!(
-                            "TLS handshake with guacd failed: {}",
-                            e
-                        ))
-                    })?,
-            )
+            Box::new(connector.connect(server_name, tcp).await.map_err(|e| {
+                SessionError::GuacdConnection(format!("TLS handshake with guacd failed: {}", e))
+            })?)
         } else {
             Box::new(tcp)
         };
@@ -1044,12 +1036,14 @@ impl SessionManager {
                     }
                     Ok(Err(e)) => {
                         tracing::error!(session_id = %id, error = %e, "Reconnect: deferred guacd connection failed");
-                        self.mark_connect_failed(id, SessionStatus::Disconnected).await;
+                        self.mark_connect_failed(id, SessionStatus::Disconnected)
+                            .await;
                         return None;
                     }
                     Err(_) => {
                         tracing::error!(session_id = %id, "Reconnect: deferred guacd connection timed out");
-                        self.mark_connect_failed(id, SessionStatus::Disconnected).await;
+                        self.mark_connect_failed(id, SessionStatus::Disconnected)
+                            .await;
                         return None;
                     }
                 }
@@ -1349,9 +1343,7 @@ impl SessionManager {
             for (id, session) in sessions.iter() {
                 let session = session.lock().await;
                 match session.status {
-                    SessionStatus::Completed
-                    | SessionStatus::Error
-                    | SessionStatus::Expired => {
+                    SessionStatus::Completed | SessionStatus::Error | SessionStatus::Expired => {
                         let age = now.signed_duration_since(session.created_at);
                         if age.to_std().unwrap_or_default() > delay {
                             to_remove.push(*id);
@@ -1733,8 +1725,7 @@ mod tests {
 
     fn test_manager() -> SessionManager {
         let mut config = Config::default();
-        let tmp =
-            std::env::temp_dir().join(format!("persea-mgr-test-{}", uuid::Uuid::new_v4()));
+        let tmp = std::env::temp_dir().join(format!("persea-mgr-test-{}", uuid::Uuid::new_v4()));
         config.recording_path = Some(tmp.clone());
         config.xvnc_path = "/bin/true".into();
         config.chromium_path = "/bin/true".into();

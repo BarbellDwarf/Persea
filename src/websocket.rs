@@ -690,9 +690,8 @@ async fn handle_ws(
                 // onerror with the reason and disconnects), so the 11th viewer
                 // sees WHY the stream closed instead of a silent drop.
                 let mut ws = ws;
-                let instr =
-                    crate::protocol::Instruction::new("error", vec![message, "512".into()])
-                        .encode();
+                let instr = crate::protocol::Instruction::new("error", vec![message, "512".into()])
+                    .encode();
                 let _ = ws.send(Message::Text(instr.into())).await;
                 let _ = ws.close().await;
                 return;
@@ -724,7 +723,11 @@ async fn handle_ws(
                 if watch_cancel.is_cancelled() {
                     return;
                 }
-                if !watch_manager.validate_share_token(sid, &token).await.is_valid() {
+                if !watch_manager
+                    .validate_share_token(sid, &token)
+                    .await
+                    .is_valid()
+                {
                     tracing::warn!(
                         session_id = %sid,
                         "Shadow token expired during session; ending shadow connection"
@@ -1455,7 +1458,7 @@ async fn ws_to_guacd_inner(
                     }
                     filtered
                 } else {
-                    text
+                    text.to_string()
                 };
 
                 // Log clipboard instructions from browser → guacd
@@ -1908,18 +1911,33 @@ mod tests {
         // No identity: fail closed.
         assert!(!owner_path_authorized(None, Some("alice")));
         // The creator is authorized; anyone else is not.
-        assert!(owner_path_authorized(Some(&test_identity("alice", "operator")), Some("alice")));
+        assert!(owner_path_authorized(
+            Some(&test_identity("alice", "operator")),
+            Some("alice")
+        ));
         assert!(!owner_path_authorized(
             Some(&test_identity("mallory", "operator")),
             Some("alice")
         ));
         // Admins are exempt regardless of the creator.
-        assert!(owner_path_authorized(Some(&test_identity("root", "admin")), Some("alice")));
+        assert!(owner_path_authorized(
+            Some(&test_identity("root", "admin")),
+            Some("alice")
+        ));
         // A viewer-role creator may still reconnect their own session.
-        assert!(owner_path_authorized(Some(&test_identity("alice", "viewer")), Some("alice")));
+        assert!(owner_path_authorized(
+            Some(&test_identity("alice", "viewer")),
+            Some("alice")
+        ));
         // Unknown session (no creator row): only an admin passes.
-        assert!(!owner_path_authorized(Some(&test_identity("alice", "operator")), None));
-        assert!(owner_path_authorized(Some(&test_identity("root", "admin")), None));
+        assert!(!owner_path_authorized(
+            Some(&test_identity("alice", "operator")),
+            None
+        ));
+        assert!(owner_path_authorized(
+            Some(&test_identity("root", "admin")),
+            None
+        ));
     }
 
     // ── Redirect-log redaction ────────────────────────────────────────
@@ -1940,7 +1958,10 @@ mod tests {
             "https://persea.example.com/ws/abc?ticket=***&foo=bar"
         );
         // No query: unchanged.
-        assert_eq!(redact_ws_query("https://persea.example.com/ws/abc"), "https://persea.example.com/ws/abc");
+        assert_eq!(
+            redact_ws_query("https://persea.example.com/ws/abc"),
+            "https://persea.example.com/ws/abc"
+        );
         // A value containing '=' stays masked (only the key is inspected).
         assert_eq!(
             redact_ws_query("https://persea.example.com/ws/abc?token=a=b"),

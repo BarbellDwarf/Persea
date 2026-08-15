@@ -718,10 +718,7 @@ mod tests {
         fs::write(&guac_path, b"segment1").unwrap();
         // Reconnect with encryption off (or on): the plaintext segment is
         // appended to, never recreated.
-        assert_eq!(
-            recording_open_mode(&guac_path, None),
-            RecordingOpen::Append
-        );
+        assert_eq!(recording_open_mode(&guac_path, None), RecordingOpen::Append);
         assert_eq!(
             recording_open_mode(&guac_path, Some(&test_key_hex())),
             RecordingOpen::Append
@@ -764,7 +761,10 @@ mod tests {
 
         // No key configured: record nothing rather than truncate the
         // encrypted segment.
-        assert_eq!(recording_open_mode(&guac_path, None), RecordingOpen::Unavailable);
+        assert_eq!(
+            recording_open_mode(&guac_path, None),
+            RecordingOpen::Unavailable
+        );
         assert!(guac_path.with_extension("guac.enc").exists());
         fs::remove_dir_all(&dir).ok();
     }
