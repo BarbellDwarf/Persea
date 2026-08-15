@@ -19,12 +19,8 @@ pub struct SetupForm {
     /// Managed backend URL (Postgres/MySQL); empty keeps the SQLite file.
     #[serde(default)]
     pub db_url: String,
-    /// guacd run mode, "embedded" or "external".
-    pub guacd_mode: String,
-    /// guacd TCP address used in external mode.
+    /// guacd TCP address the server connects to.
     pub guacd_addr: String,
-    /// Path to the guacd binary used in embedded mode.
-    pub guacd_path: String,
     /// Email of the admin account the wizard creates.
     pub admin_email: String,
     /// Display name of the admin account.
@@ -59,28 +55,22 @@ fn detect_ips() -> Vec<String> {
     ips
 }
 
-/// Detect if guacd binary exists.
-fn detect_guacd_path() -> String {
-    for path in &["/usr/sbin/guacd", "/usr/local/sbin/guacd", "/usr/bin/guacd"] {
-        if std::path::Path::new(path).exists() {
-            return path.to_string();
+/// Escape a value for embedding in a TOML basic string so crafted input
+/// cannot break out of the quoted literal or inject further keys.
+fn toml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
         }
     }
-    // Check PATH
-    if let Ok(output) = std::process::Command::new("which").arg("guacd").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !path.is_empty() {
-                return path;
-            }
-        }
-    }
-    "/usr/sbin/guacd".to_string()
-}
-
-/// Detect if running in Docker.
-fn detect_docker() -> bool {
-    std::path::Path::new("/.dockerenv").exists() || std::env::var("DOCKER_CONTAINER").is_ok()
+    out
 }
 
 /// Human-readable label for the active backend (setup page indicator).
@@ -124,8 +114,6 @@ pub async fn setup_page(
         .first()
         .cloned()
         .unwrap_or_else(|| "0.0.0.0:8089".to_string());
-    let guacd_path = detect_guacd_path();
-    let docker = detect_docker();
 
     // When the process was started with `db_url`, the pool is already the
     // store: prefill the wizard with the configured URL and show which
@@ -145,13 +133,7 @@ pub async fn setup_page(
         db_path: config.db_path.to_string_lossy().to_string(),
         db_url,
         backend,
-        guacd_mode: if docker {
-            "external".to_string()
-        } else {
-            "embedded".to_string()
-        },
         guacd_addr: "127.0.0.1:4822".to_string(),
-        guacd_path,
         admin_email: String::new(),
         admin_name: String::new(),
         csp_nonce: nonce.0.clone(),
@@ -168,9 +150,7 @@ fn error_response(site_title: &str, error: String, form: &SetupForm, nonce: &str
         db_path: form.db_path.clone(),
         db_url: form.db_url.clone(),
         backend: current_backend(),
-        guacd_mode: form.guacd_mode.clone(),
         guacd_addr: form.guacd_addr.clone(),
-        guacd_path: form.guacd_path.clone(),
         admin_email: form.admin_email.clone(),
         admin_name: form.admin_name.clone(),
         csp_nonce: nonce.to_string(),
@@ -317,17 +297,7 @@ pub async fn setup_submit(
     }
 
     // Write config file
-    let guacd_section = if form.guacd_mode == "embedded" {
-        format!(
-            "guacd_mode = \"embedded\"\nguacd_path = \"{}\"",
-            form.guacd_path
-        )
-    } else {
-        format!(
-            "guacd_mode = \"external\"\nguacd_addr = \"{}\"",
-            form.guacd_addr
-        )
-    };
+    let guacd_line = format!("guacd_addr = \"{}\"", toml_escape(&form.guacd_addr));
 
     // Feature stubs — written commented-out so a half-filled config never
     // breaks startup with missing required fields.
@@ -347,9 +317,9 @@ pub async fn setup_submit(
     // A provided db_url replaces db_path in the generated config: the next
     // start connects the SQLx pool and stores ALL app data in that backend.
     let db_line = if db_url.is_empty() {
-        format!("db_path = \"{}\"", form.db_path)
+        format!("db_path = \"{}\"", toml_escape(&form.db_path))
     } else {
-        format!("db_url = \"{}\"", db_url.replace('"', "\\\""))
+        format!("db_url = \"{}\"", toml_escape(&db_url))
     };
 
     let config = format!(
@@ -364,7 +334,10 @@ session_max_duration_secs = 28800
 session_cleanup_delay_secs = 300
 session_history_retention_days = 90
 {}"#,
-        form.listen_addr, db_line, guacd_section, feature_sections
+        toml_escape(&form.listen_addr),
+        db_line,
+        guacd_line,
+        feature_sections
     );
 
     // Write to config path (same as the --config arg, or default location)
@@ -381,7 +354,7 @@ session_history_retention_days = 90
     tracing::info!(
         email = %form.admin_email,
         listen = %form.listen_addr,
-        guacd_mode = %form.guacd_mode,
+        guacd_addr = %form.guacd_addr,
         db_url_set = !db_url.is_empty(),
         "Setup completed"
     );
