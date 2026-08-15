@@ -290,9 +290,13 @@ where
                 };
                 if !token_matches {
                     let path = req.uri().path().to_string();
+                    // Never log the token values themselves: they are
+                    // bearer credentials. Presence flags keep the log
+                    // diagnostic (was anything sent at all?) without
+                    // leaking the tokens.
                     tracing::warn!(
-                        expected = %incoming_cookie.as_deref().unwrap_or("none"),
-                        received = %effective.as_deref().unwrap_or("none"),
+                        had_cookie = incoming_cookie.is_some(),
+                        had_token = effective.is_some(),
                         path = %path,
                         "CSRF token mismatch"
                     );
