@@ -85,13 +85,39 @@ impl DockerDriver {
         })
     }
 
+    /// FNV-1a hash, used for stable per-username name suffixes.
+    fn fnv1a(value: &str) -> u64 {
+        value.bytes().fold(0xcbf29ce484222325_u64, |hash, b| {
+            hash.wrapping_mul(0x100000001b3) ^ u64::from(b)
+        })
+    }
+
+    /// Short stable hash of the RAW username. Sanitization collapses
+    /// distinct identities (`a_b`, `a-b`, `a@b` all become `a-b`); the
+    /// hash keeps them on distinct containers, because container reuse
+    /// resets the RDP password to the current caller's.
+    fn username_hash(username: &str) -> String {
+        format!("{:08x}", Self::fnv1a(username) as u32)
+    }
+
     /// Container name for a VDI session.
     fn container_name(spec: &ContainerSpec) -> String {
         let username = Self::sanitize_name_suffix(&spec.username);
+        let hash = Self::username_hash(&spec.username);
         match Self::entry_name(spec.entry_key.as_deref()) {
-            Some(entry_name) => format!("persea-vdi-{}-{}", username, entry_name),
-            None => format!("persea-vdi-{}", username),
+            Some(entry_name) => format!("persea-vdi-{}-{}-{}", username, hash, entry_name),
+            None => format!("persea-vdi-{}-{}", username, hash),
         }
+    }
+
+    /// Defense in depth for the home bind-mount path: reject usernames
+    /// carrying a path separator or traversal component. The session layer
+    /// sanitizes already, this guards any future caller that skips it.
+    fn username_safe_for_mount(username: &str) -> bool {
+        !username.is_empty()
+            && !username.contains('/')
+            && !username.contains('\\')
+            && !username.contains("..")
     }
 
     /// Candidate host ports to ask Docker to bind. Without a configured range,
@@ -102,9 +128,7 @@ impl DockerDriver {
         };
 
         let len = end as u32 - start as u32 + 1;
-        let hash = username.bytes().fold(0xcbf29ce484222325_u64, |hash, b| {
-            hash.wrapping_mul(0x100000001b3) ^ b as u64
-        });
+        let hash = Self::fnv1a(username);
         let offset = (hash % len as u64) as u32;
 
         (0..len)
@@ -556,19 +580,55 @@ impl DockerDriver {
 
                 // Persistent home directory bind mount
                 let binds = if let Some(ref base) = spec.home_base {
-                    let base_path = std::path::Path::new(base);
-                    let host_path = base_path.join(&spec.username);
-                    // Verify no path traversal (username is sanitized but belt-and-suspenders)
-                    if !host_path.starts_with(base_path) {
-                        return Err(VdiError::Docker("path traversal in home_base".into()));
+                    // Defense in depth: the session layer sanitizes the
+                    // username; this guarantees no separator or traversal
+                    // component can reach the mount path even if a future
+                    // caller skips that step.
+                    if !Self::username_safe_for_mount(&spec.username) {
+                        return Err(VdiError::Docker(
+                            "invalid VDI username for home bind mount".into(),
+                        ));
                     }
-                    // Ensure host directory exists
-                    if let Err(e) = std::fs::create_dir_all(&host_path) {
-                        tracing::warn!(path = ?host_path, "Failed to create VDI home dir: {}", e);
+                    // Containment is verified on canonicalized paths, not
+                    // on the raw string: `base/../../etc` passes a lexical
+                    // `starts_with(base)` check but not a canonical one.
+                    std::fs::create_dir_all(base).map_err(|e| {
+                        VdiError::Docker(format!(
+                            "failed to create VDI home base '{}': {}",
+                            base, e
+                        ))
+                    })?;
+                    let base_path = std::fs::canonicalize(base).map_err(|e| {
+                        VdiError::Docker(format!(
+                            "failed to resolve VDI home base '{}': {}",
+                            base, e
+                        ))
+                    })?;
+                    let host_path = base_path.join(&spec.username);
+                    std::fs::create_dir_all(&host_path).map_err(|e| {
+                        VdiError::Docker(format!(
+                            "failed to create VDI home directory '{}': {}",
+                            host_path.display(),
+                            e
+                        ))
+                    })?;
+                    // The directory exists now, so canonicalize it and
+                    // require the result to stay inside the base.
+                    let resolved = std::fs::canonicalize(&host_path).map_err(|e| {
+                        VdiError::Docker(format!(
+                            "failed to canonicalize VDI home directory '{}': {}",
+                            host_path.display(),
+                            e
+                        ))
+                    })?;
+                    if !resolved.starts_with(&base_path) {
+                        return Err(VdiError::Docker(
+                            "path traversal in VDI home base".into(),
+                        ));
                     }
                     let mount = format!(
                         "{}:/home/{}:nosuid,nodev",
-                        host_path.display(),
+                        resolved.display(),
                         spec.username
                     );
                     tracing::info!(mount = %mount, "VDI home directory bind mount");
@@ -926,7 +986,7 @@ mod tests {
         assert!(DockerDriver::container_name(&spec("@@@", None)).starts_with("persea-vdi-"));
         assert_eq!(
             DockerDriver::container_name(&spec("alice", None)),
-            "persea-vdi-alice"
+            format!("persea-vdi-alice-{}", DockerDriver::username_hash("alice"))
         );
     }
 
@@ -934,11 +994,17 @@ mod tests {
     fn container_name_appends_sanitized_entry_name() {
         assert_eq!(
             DockerDriver::container_name(&spec("user", Some("shared/desktops/Dev Desktop"))),
-            "persea-vdi-user-dev-desktop"
+            format!(
+                "persea-vdi-user-{}-dev-desktop",
+                DockerDriver::username_hash("user")
+            )
         );
         assert_eq!(
             DockerDriver::container_name(&spec("user", Some("shared/desktops/accounting_vdi"))),
-            "persea-vdi-user-accounting-vdi"
+            format!(
+                "persea-vdi-user-{}-accounting-vdi",
+                DockerDriver::username_hash("user")
+            )
         );
     }
 
@@ -946,8 +1012,63 @@ mod tests {
     fn container_name_uses_final_entry_key_segment() {
         assert_eq!(
             DockerDriver::container_name(&spec("user", Some("team-a/folder/vdi.one"))),
-            "persea-vdi-user-vdi-one"
+            format!(
+                "persea-vdi-user-{}-vdi-one",
+                DockerDriver::username_hash("user")
+            )
         );
+    }
+
+    #[test]
+    fn container_name_distinct_when_sanitized_forms_collide() {
+        // `a_b`, `a-b`, and `a@b` all sanitize to `a-b`; the raw-username
+        // hash must keep their containers distinct, or container reuse
+        // would reset one user's password to another's.
+        let names: Vec<String> = ["a_b", "a-b", "a@b"]
+            .iter()
+            .map(|u| DockerDriver::container_name(&spec(u, None)))
+            .collect();
+        assert_eq!(names.len(), 3);
+        assert_ne!(names[0], names[1]);
+        assert_ne!(names[0], names[2]);
+        assert_ne!(names[1], names[2]);
+    }
+
+    #[test]
+    fn container_name_deterministic_per_username() {
+        // The same raw username must always map to the same container,
+        // or the reuse-on-reconnect behaviour is lost.
+        assert_eq!(
+            DockerDriver::container_name(&spec("alice", None)),
+            DockerDriver::container_name(&spec("alice", None))
+        );
+        assert_eq!(
+            DockerDriver::container_name(&spec("alice", Some("shared/desktops/Dev"))),
+            DockerDriver::container_name(&spec("alice", Some("shared/desktops/Dev")))
+        );
+    }
+
+    #[test]
+    fn username_hash_stable_and_distinct() {
+        assert_eq!(
+            DockerDriver::username_hash("alice"),
+            DockerDriver::username_hash("alice")
+        );
+        assert_ne!(
+            DockerDriver::username_hash("alice"),
+            DockerDriver::username_hash("bob")
+        );
+    }
+
+    #[test]
+    fn username_safe_for_mount_rejects_traversal() {
+        assert!(DockerDriver::username_safe_for_mount("alice"));
+        assert!(DockerDriver::username_safe_for_mount("alice_bob"));
+        assert!(!DockerDriver::username_safe_for_mount("alice/bob"));
+        assert!(!DockerDriver::username_safe_for_mount("alice\\bob"));
+        assert!(!DockerDriver::username_safe_for_mount("../alice"));
+        assert!(!DockerDriver::username_safe_for_mount(".."));
+        assert!(!DockerDriver::username_safe_for_mount(""));
     }
 
     #[test]

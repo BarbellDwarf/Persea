@@ -24,6 +24,10 @@ const TMUX_DETACH_WRAPPER: &str = "tmux attach-session -d 2>/dev/null || tmux ne
 /// records.
 const RDP_CLIENT_NAME_MAX_CHARS: usize = 32;
 
+/// Maximum jump-host hops in a chain. Every hop spawns an SSH session and
+/// a local listener, so unbounded chains are a resource-exhaustion risk.
+const MAX_JUMP_HOST_HOPS: usize = 8;
+
 /// Expand the `[rdp] client_name_template` into the RDP `client-name`
 /// value: `{user}` = the persea identity that created the session,
 /// `{host}` = the resolved client hostname (or IP). Any other placeholder
@@ -145,6 +149,69 @@ impl ProtocolDefaults {
     }
 }
 
+/// Resolve the container username for a VDI session. The per-entry
+/// override wins when set; otherwise the operator's identity (the part
+/// before any `@` domain) is used. Either way the result is reduced to
+/// `[a-z0-9_]` so it is safe in the home bind-mount path, the
+/// `VDI_USERNAME` env var, and `chpasswd`. The override is additionally
+/// rejected outright when it contains a path separator or a traversal
+/// component: it becomes part of a host path, and mapping `..` away
+/// would silently change the identity a baked-in account expects.
+fn vdi_container_username(
+    container_username: Option<&str>,
+    created_by: &str,
+) -> Result<String, SessionError> {
+    let raw = match container_username.filter(|s| !s.is_empty()) {
+        Some(raw) => raw,
+        None => {
+            return Ok(created_by
+                .split('@')
+                .next()
+                .unwrap_or(created_by)
+                .to_lowercase()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect::<String>())
+        }
+    };
+    if raw.contains('/') || raw.contains('\\') || raw.contains("..") {
+        return Err(SessionError::ValidationError(
+            "container_username must not contain '/', '\\', or '..'".into(),
+        ));
+    }
+    let sanitized = raw
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        return Err(SessionError::ValidationError(
+            "container_username must contain at least one letter or digit".into(),
+        ));
+    }
+    Ok(sanitized)
+}
+
+/// Count sessions in Pending|Active state: the only states that hold a
+/// live connection, and therefore the only ones that should count
+/// against the global session cap. Terminal states (completed, expired,
+/// errored, logged out) stay in the map until the cleanup reaper runs
+/// and must not block new sessions.
+async fn count_live_sessions(
+    sessions: &std::collections::HashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<Session>>>,
+) -> usize {
+    let mut count = 0usize;
+    for session in sessions.values() {
+        if matches!(
+            session.lock().await.status,
+            SessionStatus::Pending | SessionStatus::Active
+        ) {
+            count += 1;
+        }
+    }
+    count
+}
+
 impl SessionManager {
     /// Create a new session: connect to guacd, perform handshake, return session info.
     /// `client_ip` is the connecting client's IP (from the HTTP layer,
@@ -156,21 +223,13 @@ impl SessionManager {
         created_by: String,
         client_ip: Option<String>,
     ) -> Result<SessionInfo, SessionError> {
-        // Enforce session limits (only count active/pending sessions)
+        // Enforce the per-user session limit (only counts Pending|Active
+        // sessions). The global limit is enforced under the sessions map
+        // write lock at insert time, so concurrent creates cannot race
+        // past it.
         {
             let sessions = self.sessions.read().await;
-            let max_global = self.config.max_sessions;
             let max_per_user = self.config.max_sessions_per_user;
-
-            if max_global > 0 {
-                let active_count = sessions.values().count(); // includes all states still in HashMap
-                if active_count >= max_global {
-                    return Err(SessionError::ValidationError(format!(
-                        "maximum concurrent sessions reached ({})",
-                        max_global
-                    )));
-                }
-            }
 
             if max_per_user > 0 {
                 let mut user_count = 0usize;
@@ -271,6 +330,13 @@ impl SessionManager {
         // and the generic tunnel setup after the match uses them for the other
         // session types.
         let jump_hops: Vec<tunnel::JumpHost> = if let Some(hops) = req.jump_hosts {
+            if hops.len() > MAX_JUMP_HOST_HOPS {
+                return Err(SessionError::ValidationError(format!(
+                    "jump host chain is too long: at most {} hops are supported (got {})",
+                    MAX_JUMP_HOST_HOPS,
+                    hops.len()
+                )));
+            }
             hops
         } else if let Some(ref jh) = req.jump_host {
             if !jh.is_empty() {
@@ -969,26 +1035,19 @@ impl SessionManager {
                 }
 
                 // Username: per-entry override if set (for images with baked-in
-                // accounts that don't honour VDI_USERNAME), otherwise derive
+                // accounts that don't honour VDI_USERNAME), otherwise derived
                 // from the operator's identity. The derived form is also used
                 // as the deterministic container-name suffix, so containers
                 // are scoped per-operator. When the override is set the same
                 // container is shared by everyone connecting with that entry,
                 // which is the desired behaviour for shared baked-in accounts.
-                let vdi_username = vdi_params
-                    .and_then(|s| s.container_username.as_ref())
-                    .filter(|s| !s.is_empty())
-                    .cloned()
-                    .unwrap_or_else(|| {
-                        created_by
-                            .split('@')
-                            .next()
-                            .unwrap_or(&created_by)
-                            .to_lowercase()
-                            .chars()
-                            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-                            .collect::<String>()
-                    });
+                // Both forms are sanitized; the override is rejected if it
+                // carries a path separator or traversal component (it becomes
+                // part of the home bind-mount path).
+                let vdi_username = vdi_container_username(
+                    vdi_params.and_then(|s| s.container_username.as_deref()),
+                    &created_by,
+                )?;
                 let vdi_password = vdi_params
                     .and_then(|s| s.container_password.as_ref())
                     .filter(|s| !s.is_empty())
@@ -1423,10 +1482,22 @@ impl SessionManager {
         self.publish_session_started(&session);
         let session = tokio::sync::Mutex::new(session);
 
-        self.sessions
-            .write()
-            .await
-            .insert(session_id, std::sync::Arc::new(session));
+        // Enforce the global session cap inside the same write-lock
+        // critical section as the insert: a check-then-insert elsewhere
+        // races with concurrent creates and lets the map exceed the cap.
+        // Only Pending|Active sessions count — terminal states linger in
+        // the map until the cleanup reaper removes them.
+        {
+            let mut sessions = self.sessions.write().await;
+            let max_global = self.config.max_sessions;
+            if max_global > 0 && count_live_sessions(&sessions).await >= max_global {
+                return Err(SessionError::ValidationError(format!(
+                    "maximum concurrent sessions reached ({})",
+                    max_global
+                )));
+            }
+            sessions.insert(session_id, std::sync::Arc::new(session));
+        }
 
         crate::metrics::session_total_inc();
 
@@ -1539,6 +1610,11 @@ impl SessionManager {
             // Mark the registry row expired only when the session was
             // still pending — a session that already connected must keep its
             // live status.
+            if was_pending {
+                // Close the history row too: a pending session that never
+                // connected is "expired", not stuck "active" forever.
+                publisher.end_session_history(session_id, "expired", 0, false);
+            }
             if was_pending && registry_ha {
                 if let Some(ref db) = registry_db {
                     let db = db.clone();
@@ -1742,16 +1818,26 @@ async fn check_allowed_network(
         )));
     }
 
-    // Resolve hostname to IP addresses (spawn_blocking to avoid blocking tokio)
+    // Resolve hostname to IP addresses (spawn_blocking to avoid blocking
+    // tokio), with a 3s budget so a hanging resolver cannot stall session
+    // creation indefinitely (mirrors `resolve_client_host`).
     let host_owned = host.to_owned();
     let addrs: Vec<std::net::SocketAddr> =
-        tokio::task::spawn_blocking(move || format!("{}:{}", host_owned, port).to_socket_addrs())
-            .await
-            .map_err(|e| SessionError::ValidationError(format!("DNS task join error: {}", e)))?
-            .map_err(|e| {
-                SessionError::ValidationError(format!("failed to resolve host '{}': {}", host, e))
-            })?
-            .collect();
+        tokio::time::timeout(Duration::from_secs(3), tokio::task::spawn_blocking(move || {
+            format!("{}:{}", host_owned, port).to_socket_addrs()
+        }))
+        .await
+        .map_err(|_| {
+            SessionError::ValidationError(format!(
+                "DNS resolution for host '{}' timed out",
+                host
+            ))
+        })?
+        .map_err(|e| SessionError::ValidationError(format!("DNS task join error: {}", e)))?
+        .map_err(|e| {
+            SessionError::ValidationError(format!("failed to resolve host '{}': {}", host, e))
+        })?
+        .collect();
 
     if addrs.is_empty() {
         return Err(SessionError::ValidationError(format!(
@@ -2360,5 +2446,141 @@ mod tests {
             .is_ok(),
             "non-vSphere entries must not be gated by enable_vmware"
         );
+    }
+
+    // ── VDI container username sanitization ──
+
+    #[test]
+    fn vdi_username_derives_from_identity_without_domain() {
+        assert_eq!(
+            vdi_container_username(None, "Alice.Smith@corp.example").unwrap(),
+            "alice_smith"
+        );
+        assert_eq!(
+            vdi_container_username(None, "bob@example.com").unwrap(),
+            "bob"
+        );
+    }
+
+    #[test]
+    fn vdi_username_empty_override_falls_through_to_identity() {
+        assert_eq!(
+            vdi_container_username(Some(""), "alice").unwrap(),
+            "alice"
+        );
+        assert_eq!(
+            vdi_container_username(Some(""), "alice@corp").unwrap(),
+            "alice"
+        );
+    }
+
+    #[test]
+    fn vdi_username_sanitizes_override_to_safe_charset() {
+        assert_eq!(
+            vdi_container_username(Some("Vdi-User@corp"), "alice").unwrap(),
+            "vdi_user_corp"
+        );
+        assert_eq!(
+            vdi_container_username(Some("bench001"), "alice").unwrap(),
+            "bench001"
+        );
+    }
+
+    #[test]
+    fn vdi_username_rejects_path_traversal_in_override() {
+        // The override becomes part of the host bind-mount path; a
+        // separator or traversal component must be rejected outright.
+        for bad in ["../alice", "a/b", "a\\b", "..", "a..b", "sub/../../etc"] {
+            let err = vdi_container_username(Some(bad), "alice").unwrap_err();
+            assert!(
+                format!("{}", err).contains("container_username must not contain"),
+                "input {:?} got: {}",
+                bad,
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn vdi_username_rejects_override_with_no_alphanumerics() {
+        assert!(vdi_container_username(Some("@@@"), "alice").is_err());
+        assert!(vdi_container_username(Some("___"), "alice").is_err());
+    }
+
+    // ── Global session limit counting ──
+
+    fn test_session(status: SessionStatus) -> Session {
+        Session {
+            id: Uuid::new_v4(),
+            session_type: SessionType::Ssh,
+            status,
+            created_at: Utc::now(),
+            hostname: "test-host".into(),
+            username: "alice".into(),
+            url: None,
+            banner: None,
+            guacd_stream: None,
+            connection_id: "conn-test".into(),
+            share_token: "share-token".into(),
+            width: 1024,
+            height: 768,
+            active_connections: 0,
+            created_by: "alice".into(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+            browser_session: None,
+            deferred_params: None,
+            drive_path: None,
+            drive_enabled: false,
+            tunnels: Vec::new(),
+            container_id: None,
+            container_name: None,
+            recording_enabled: false,
+            address_book_entry: None,
+            address_book_folder: None,
+            entry_display_name: None,
+            max_recordings: None,
+            login_script_handle: None,
+            shadow_tokens: Vec::new(),
+            share_allowed: true,
+            fullscreen_on_connect: false,
+            autohide_side_tabs: false,
+            last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
+            source_ip: None,
+            user_id: Some("alice".into()),
+        }
+    }
+
+    #[tokio::test]
+    async fn live_session_count_excludes_terminal_states() {
+        // The global cap must count only Pending|Active sessions; the
+        // terminal states linger in the map until the cleanup reaper runs.
+        let mut map: std::collections::HashMap<
+            Uuid,
+            std::sync::Arc<tokio::sync::Mutex<Session>>,
+        > = std::collections::HashMap::new();
+        for status in [
+            SessionStatus::Pending,
+            SessionStatus::Active,
+            SessionStatus::Completed,
+            SessionStatus::Error,
+            SessionStatus::Expired,
+            SessionStatus::Disconnected,
+            SessionStatus::LoggedOut,
+        ] {
+            map.insert(
+                Uuid::new_v4(),
+                std::sync::Arc::new(tokio::sync::Mutex::new(test_session(status))),
+            );
+        }
+        assert_eq!(count_live_sessions(&map).await, 2);
+    }
+
+    #[tokio::test]
+    async fn live_session_count_empty_map_is_zero() {
+        let map: std::collections::HashMap<
+            Uuid,
+            std::sync::Arc<tokio::sync::Mutex<Session>>,
+        > = std::collections::HashMap::new();
+        assert_eq!(count_live_sessions(&map).await, 0);
     }
 }
