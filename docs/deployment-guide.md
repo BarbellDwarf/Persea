@@ -389,6 +389,21 @@ Check the persea logs for `Vault: authenticated via AppRole` to confirm. The ful
 
 ![Connections page](screenshots/connections.png)
 
+### Jump hosts and SSH tunnels
+
+A connection entry can route through one or more SSH jump hosts (bastions). The server opens an SSH connection to each jump host and forwards the target's port over an SSH `direct-tcpip` channel; guacd then connects to a local listener instead of the real target. Multi-hop chains are supported, each hop reached through the previous one.
+
+Each jump host can carry a `host_key`, accepted in either of two forms:
+
+- `SHA256:...` — the jump host's SHA-256 host-key fingerprint, or
+- `ssh-ed25519 AAAA...` — the server public key in OpenSSH format (a public key is hashed to its fingerprint before comparison).
+
+On every connection the jump host must present the matching key, otherwise the tunnel refuses to start.
+
+**Trust on first use (TOFU).** A jump host without a `host_key` is accepted on first contact and its fingerprint is recorded in the `known_hosts` file next to the database, then verified on every later connection. First-use acceptance is unauthenticated: an attacker who can intercept the first connection gets pinned in place of the real server. Pin the key before first use (probe button in the admin UI, or `ssh-keyscan` on the bastion) whenever the initial connection could be observed, and re-pin after the jump host is re-provisioned.
+
+**Local-only listener.** Each tunnel binds a loopback listener (`127.0.0.1`, OS-assigned port) that exists only while the owning session runs. It is never reachable from the network. Local caveat: while the session is active, any process on the persea host can connect to the port and pivot through the jump host, so only trusted users and software should be able to run on the persea server.
+
 ## Step 7 (optional): gate the login page with Knocknoc
 
 [Knocknoc](https://knocknoc.io) removes the login page from the internet entirely. Instead of exposing persea's login to scanners and password-guessing bots, Knocknoc requires users to authenticate (SSO + MFA) at the network layer first; only then can their traffic reach persea.
