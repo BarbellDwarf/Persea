@@ -622,9 +622,7 @@ impl DockerDriver {
                         ))
                     })?;
                     if !resolved.starts_with(&base_path) {
-                        return Err(VdiError::Docker(
-                            "path traversal in VDI home base".into(),
-                        ));
+                        return Err(VdiError::Docker("path traversal in VDI home base".into()));
                     }
                     let mount = format!(
                         "{}:/home/{}:nosuid,nodev",

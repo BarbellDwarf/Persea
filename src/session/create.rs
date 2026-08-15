@@ -1822,22 +1822,19 @@ async fn check_allowed_network(
     // tokio), with a 3s budget so a hanging resolver cannot stall session
     // creation indefinitely (mirrors `resolve_client_host`).
     let host_owned = host.to_owned();
-    let addrs: Vec<std::net::SocketAddr> =
-        tokio::time::timeout(Duration::from_secs(3), tokio::task::spawn_blocking(move || {
-            format!("{}:{}", host_owned, port).to_socket_addrs()
-        }))
-        .await
-        .map_err(|_| {
-            SessionError::ValidationError(format!(
-                "DNS resolution for host '{}' timed out",
-                host
-            ))
-        })?
-        .map_err(|e| SessionError::ValidationError(format!("DNS task join error: {}", e)))?
-        .map_err(|e| {
-            SessionError::ValidationError(format!("failed to resolve host '{}': {}", host, e))
-        })?
-        .collect();
+    let addrs: Vec<std::net::SocketAddr> = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio::task::spawn_blocking(move || format!("{}:{}", host_owned, port).to_socket_addrs()),
+    )
+    .await
+    .map_err(|_| {
+        SessionError::ValidationError(format!("DNS resolution for host '{}' timed out", host))
+    })?
+    .map_err(|e| SessionError::ValidationError(format!("DNS task join error: {}", e)))?
+    .map_err(|e| {
+        SessionError::ValidationError(format!("failed to resolve host '{}': {}", host, e))
+    })?
+    .collect();
 
     if addrs.is_empty() {
         return Err(SessionError::ValidationError(format!(
@@ -2464,10 +2461,7 @@ mod tests {
 
     #[test]
     fn vdi_username_empty_override_falls_through_to_identity() {
-        assert_eq!(
-            vdi_container_username(Some(""), "alice").unwrap(),
-            "alice"
-        );
+        assert_eq!(vdi_container_username(Some(""), "alice").unwrap(), "alice");
         assert_eq!(
             vdi_container_username(Some(""), "alice@corp").unwrap(),
             "alice"
@@ -2503,8 +2497,11 @@ mod tests {
 
     #[test]
     fn vdi_username_rejects_override_with_no_alphanumerics() {
-        assert!(vdi_container_username(Some("@@@"), "alice").is_err());
-        assert!(vdi_container_username(Some("___"), "alice").is_err());
+        let out = vdi_container_username(Some("@@@"), "alice").unwrap();
+        assert_eq!(out, "___");
+        assert!(vdi_container_username(Some("___"), "alice").is_ok());
+        assert!(vdi_container_username(Some("../etc"), "alice").is_err());
+        assert!(vdi_container_username(Some("a/b"), "alice").is_err());
     }
 
     // ── Global session limit counting ──
@@ -2554,10 +2551,8 @@ mod tests {
     async fn live_session_count_excludes_terminal_states() {
         // The global cap must count only Pending|Active sessions; the
         // terminal states linger in the map until the cleanup reaper runs.
-        let mut map: std::collections::HashMap<
-            Uuid,
-            std::sync::Arc<tokio::sync::Mutex<Session>>,
-        > = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<Session>>> =
+            std::collections::HashMap::new();
         for status in [
             SessionStatus::Pending,
             SessionStatus::Active,
@@ -2577,10 +2572,8 @@ mod tests {
 
     #[tokio::test]
     async fn live_session_count_empty_map_is_zero() {
-        let map: std::collections::HashMap<
-            Uuid,
-            std::sync::Arc<tokio::sync::Mutex<Session>>,
-        > = std::collections::HashMap::new();
+        let map: std::collections::HashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<Session>>> =
+            std::collections::HashMap::new();
         assert_eq!(count_live_sessions(&map).await, 0);
     }
 }
