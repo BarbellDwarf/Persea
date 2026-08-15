@@ -1769,8 +1769,12 @@ impl SamlProvider {
             None => None,
         };
 
-        match parse_saml_response(&xml, &self.config, &metadata.certificate, request_id.as_deref())
-        {
+        match parse_saml_response(
+            &xml,
+            &self.config,
+            &metadata.certificate,
+            request_id.as_deref(),
+        ) {
             Ok(attrs) => {
                 // Replay protection: record the assertion ID once the
                 // response has passed signature and time validation, and

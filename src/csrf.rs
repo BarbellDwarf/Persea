@@ -315,8 +315,7 @@ where
                             .unwrap_or_else(|_| Response::new(Body::empty())));
                     }
                     let body_text =
-                        serde_json::json!({"error": "CSRF token missing or invalid"})
-                            .to_string();
+                        serde_json::json!({"error": "CSRF token missing or invalid"}).to_string();
                     return Ok(Response::builder()
                         .status(StatusCode::FORBIDDEN)
                         .header(header::CONTENT_TYPE, "application/json")

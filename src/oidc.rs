@@ -1022,7 +1022,10 @@ mod tests {
             ),
         ]);
         let (ip, ua) = client_fingerprint_inputs(&headers, "198.51.100.7".parse().unwrap());
-        assert_eq!(ip, "198.51.100.7", "forwarded headers must not leak into the fingerprint");
+        assert_eq!(
+            ip, "198.51.100.7",
+            "forwarded headers must not leak into the fingerprint"
+        );
         assert_eq!(ua, "UA");
     }
 
