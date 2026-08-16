@@ -1,0 +1,61 @@
+# docker compose for persea with a MySQL backend.
+#
+# persea stores all data (users, connections, session history, audit log)
+# in MySQL instead of the bundled SQLite file. The database must be
+# reachable before persea starts: its entrypoint runs the schema migrations
+# and creates the first-run admin API key against the database, so the
+# persea service waits for the db healthcheck (depends_on with
+# condition: service_healthy).
+#
+# Run:
+#   docker compose -f docs/examples/docker-compose.mysql.yml up -d
+#
+# Replace every change-me value first: the application password appears
+# twice (MYSQL_PASSWORD in the db service below and inside PERSEA_DB_URL)
+# and the two must match. Replace the storage key with your own
+# (openssl rand -hex 32); it must never change after the first start, or
+# stored credentials become undecryptable.
+#
+# The port is published on the host loopback only, for a same-host reverse
+# proxy. For direct access without a proxy, change "127.0.0.1:8089:8089"
+# to "8089:8089".
+
+services:
+  persea:
+    image: ghcr.io/persea-grove/persea:latest
+    container_name: persea
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8089:8089"
+    volumes:
+      - persea-data:/opt/persea/data
+      - persea-recordings:/opt/persea/recordings
+      - persea-tls:/opt/persea/tls
+    environment:
+      PERSEA_DB_URL: mysql://persea:change-me@db:3306/persea
+      PERSEA_STORAGE_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: persea
+      MYSQL_USER: persea
+      MYSQL_PASSWORD: change-me
+      MYSQL_ROOT_PASSWORD: change-me-root
+    volumes:
+      - persea-db:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  persea-data:
+  persea-recordings:
+  persea-tls:
+  persea-db:
