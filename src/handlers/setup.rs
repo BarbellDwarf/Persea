@@ -136,7 +136,10 @@ fn storage_section_for(config_path: &str) -> String {
             section.trim_end(),
             generate_storage_key()
         ),
-        None => format!("[storage]\nencryption_key = \"{}\"\n", generate_storage_key()),
+        None => format!(
+            "[storage]\nencryption_key = \"{}\"\n",
+            generate_storage_key()
+        ),
     }
 }
 
