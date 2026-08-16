@@ -184,9 +184,7 @@ pub async fn setup_submit(
     if form.admin_email.is_empty() || form.admin_password.len() < min_len {
         return error_response(
             &site_title.0,
-            format!(
-                "Email is required and password must be at least {min_len} characters long."
-            ),
+            format!("Email is required and password must be at least {min_len} characters long."),
             &form,
             min_len,
             &nonce.0,

@@ -79,13 +79,20 @@ async fn short_password_rerenders_wizard_with_error() {
     let router = test_router(db.clone(), Config::default());
 
     let resp = router.oneshot(setup_post("abcdefghij")).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::OK, "validation failure re-renders, no redirect");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "validation failure re-renders, no redirect"
+    );
     let text = body_text(resp).await;
     assert!(
         text.contains("at least 15 characters"),
         "policy error must be visible in the re-rendered wizard, got: {text}"
     );
-    assert!(text.contains("Complete Setup"), "wizard form must re-render");
+    assert!(
+        text.contains("Complete Setup"),
+        "wizard form must re-render"
+    );
     assert_eq!(db::count_users(&db).unwrap(), 0, "no user may be created");
 }
 
@@ -95,8 +102,15 @@ async fn valid_password_creates_admin_and_redirects_to_login() {
     let db = test_db();
     let router = test_router(db.clone(), Config::default());
 
-    let resp = router.oneshot(setup_post("supersecretpass123")).await.unwrap();
-    assert_eq!(resp.status(), StatusCode::SEE_OTHER, "valid submit redirects exactly once");
+    let resp = router
+        .oneshot(setup_post("supersecretpass123"))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::SEE_OTHER,
+        "valid submit redirects exactly once"
+    );
     let loc = resp
         .headers()
         .get(header::LOCATION)
@@ -104,7 +118,10 @@ async fn valid_password_creates_admin_and_redirects_to_login() {
     assert_eq!(loc, Some("/?setup=complete"));
 
     assert_eq!(db::count_users(&db).unwrap(), 1);
-    assert!(!needs_setup(&db), "wizard must no longer be needed after setup");
+    assert!(
+        !needs_setup(&db),
+        "wizard must no longer be needed after setup"
+    );
 
     // The stored hash verifies against the submitted password: the admin
     // can log in with it.
