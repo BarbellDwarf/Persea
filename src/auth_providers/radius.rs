@@ -364,10 +364,15 @@ impl ChallengeStore {
         }
     }
 
-    /// Insert a challenge and return its ID.
+    /// Insert a challenge and return its ID. Expired challenges are
+    /// pruned first so abandoned exchanges cannot grow the store
+    /// without bound.
     pub async fn insert(&self, challenge: RadiusChallenge) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        self.inner.lock().await.insert(id.clone(), challenge);
+        let mut map = self.inner.lock().await;
+        let now = chrono::Utc::now();
+        map.retain(|_, ch| (now - ch.created_at).num_seconds() < self.ttl_secs as i64);
+        map.insert(id.clone(), challenge);
         id
     }
 
@@ -939,6 +944,38 @@ mod tests {
             };
             let id = store.insert(ch).await;
             assert!(store.take(&id).await.is_none());
+        });
+    }
+
+    #[test]
+    fn challenge_store_prunes_expired_on_insert() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let store = ChallengeStore::new(60);
+            // An abandoned exchange that was never taken back must not
+            // accumulate: the next insert prunes it.
+            let stale = RadiusChallenge {
+                state: vec![1],
+                username: "alice".into(),
+                challenge_message: "stale".into(),
+                created_at: chrono::Utc::now() - chrono::Duration::seconds(120),
+            };
+            let stale_id = store.insert(stale).await;
+            let live = RadiusChallenge {
+                state: vec![2],
+                username: "bob".into(),
+                challenge_message: "fresh".into(),
+                created_at: chrono::Utc::now(),
+            };
+            store.insert(live).await;
+
+            assert_eq!(store.len().await, 1);
+            // The stale challenge is gone (take would have removed it on
+            // access, but it was pruned before anyone asked).
+            assert!(store.take(&stale_id).await.is_none());
+            // Only the live challenge remains; the stale one was pruned
+            // at insert time, never taken.
+            assert_eq!(store.len().await, 1);
         });
     }
 

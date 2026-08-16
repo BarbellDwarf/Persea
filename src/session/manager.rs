@@ -19,8 +19,10 @@ use uuid::Uuid;
 
 /// Upper bound on a single guacd interaction (connect, join, or one
 /// instruction read). A stalled guacd must never hold up the session map,
-/// so every guacd I/O from the manager runs inside this budget.
-const GUACD_IO_TIMEOUT: Duration = Duration::from_secs(15);
+/// so every guacd I/O from the manager runs inside this budget. Shared by
+/// the reconnect path and session creation so a stalled guacd fails fast
+/// everywhere.
+pub(crate) const GUACD_IO_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Map a guacd socket I/O error onto the join error surface.
 fn join_io_error(e: std::io::Error) -> SessionError {
@@ -651,15 +653,9 @@ impl SessionManager {
         }
 
         // The connection is already configured; only the per-user
-        // read-only flag is meaningful.
-        let arg_values: Vec<String> = args_instruction
-            .args
-            .iter()
-            .map(|name| match name.as_str() {
-                "read-only" => if read_only { "true" } else { "false" }.into(),
-                _ => String::new(),
-            })
-            .collect();
+        // read-only flag is meaningful (shared mapping with
+        // `guacd::join_connection`).
+        let arg_values = guacd::join_arg_values(&args_instruction.args, read_only);
 
         Self::send_join_handshake(&mut stream, width, height, dpi).await?;
 
@@ -1621,14 +1617,15 @@ impl SessionManager {
         expired
     }
 
-    /// Count active/pending sessions belonging to `user_id` (matched against
-    /// `created_by`).
+    /// Count active/pending sessions belonging to `user_id` (matched
+    /// against the session's `user_id`, the stable identity; falls back
+    /// to `created_by` for sessions that predate identity keying).
     pub async fn get_user_session_count(&self, user_id: &str) -> usize {
         let sessions = self.sessions.read().await;
         let mut count = 0usize;
         for session in sessions.values() {
             let session = session.lock().await;
-            if session.created_by == user_id
+            if session.user_id.as_deref().unwrap_or(&session.created_by) == user_id
                 && matches!(
                     session.status,
                     SessionStatus::Pending | SessionStatus::Active
@@ -1877,5 +1874,85 @@ mod tests {
         // join.
         mgr.mark_owner_connected(id);
         assert!(mgr.reserve_viewer_slot(id, 10).await.is_ok());
+    }
+
+    // ── Shadow join wire format ───────────────────────────────────────
+
+    /// Mock guacd for a join: answers `select` with the join args list,
+    /// then returns the parsed `connect` args once the client sends them.
+    /// `None` when the client never sends a `connect`.
+    async fn mock_guacd_join(
+        listener: tokio::net::TcpListener,
+    ) -> tokio::task::JoinHandle<Option<Vec<String>>> {
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut parser = crate::protocol::InstructionParser::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    return None;
+                }
+                let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                for instr in parser.receive(&chunk).into_iter().flatten() {
+                    if instr.opcode == "select" {
+                        sock.write_all(
+                            Instruction::new("args", vec!["read-only".into(), "hostname".into()])
+                                .encode()
+                                .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                    } else if instr.opcode == "connect" {
+                        sock.write_all(
+                            Instruction::new("ready", vec!["conn-1".into()])
+                                .encode()
+                                .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                        return Some(instr.args);
+                    }
+                }
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn join_connection_sends_read_only_true_for_shadow() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = mock_guacd_join(listener).await;
+
+        let mut config = Config::default();
+        config.guacd_addr = addr.to_string();
+        let mgr = SessionManager::new(config, None);
+        let stream = mgr
+            .join_connection("conn-1", 800, 600, 96, true)
+            .await
+            .unwrap();
+        drop(stream);
+
+        let connect_args = server.await.unwrap().expect("mock guacd saw the connect");
+        assert_eq!(connect_args, vec!["true".to_string(), String::new()]);
+    }
+
+    #[tokio::test]
+    async fn join_connection_sends_read_only_false_for_share_viewer() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = mock_guacd_join(listener).await;
+
+        let mut config = Config::default();
+        config.guacd_addr = addr.to_string();
+        let mgr = SessionManager::new(config, None);
+        let stream = mgr
+            .join_connection("conn-1", 800, 600, 96, false)
+            .await
+            .unwrap();
+        drop(stream);
+
+        let connect_args = server.await.unwrap().expect("mock guacd saw the connect");
+        assert_eq!(connect_args, vec!["false".to_string(), String::new()]);
     }
 }

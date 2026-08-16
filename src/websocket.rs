@@ -523,12 +523,29 @@ pub async fn ws_handler(
         .into_response()
 }
 
+/// Stable identity key for ownership checks: the email for user
+/// identities, the key name for API keys. Display names are non-unique
+/// and user-controllable, so they must never be the sole key.
+fn identity_key(id: &AuthIdentity) -> &str {
+    match id {
+        AuthIdentity::ApiKey(name) => name,
+        AuthIdentity::User { email, .. } => email,
+    }
+}
+
 /// Whether an identity may connect as the session owner: the session's
 /// creator itself, or any admin. Share/shadow tokens take their own path
-/// and never satisfy this check. Extracted for test.
+/// and never satisfy this check. The creator is matched against the
+/// stable identity (email, API-key name) first; the display-name leg
+/// covers sessions whose stored creator is a legacy display name (created
+/// before identity keying or via paths outside this fix). Extracted for
+/// test.
 fn owner_path_authorized(identity: Option<&AuthIdentity>, creator: Option<&str>) -> bool {
     match identity {
-        Some(id) => id.has_role("admin") || creator == Some(id.display_name()),
+        Some(id) => {
+            id.has_role("admin")
+                || creator.is_some_and(|c| c == identity_key(id) || c == id.display_name())
+        }
         None => false,
     }
 }
@@ -1520,10 +1537,25 @@ async fn ws_to_guacd_inner(
 }
 
 /// Opcodes a read-only (shadow) connection must not send to guacd:
-/// keyboard, mouse, clipboard, and argv input. Everything else (sync,
-/// size, disconnect, get, …) forwards unchanged.
+/// keyboard, mouse, and clipboard input, argv, and the whole
+/// file-transfer family (`get`, `file`, `blob`, `end`, `body`, `size`,
+/// `ack`) — a shadow viewer must neither start nor feed a transfer.
+/// Everything else (sync, disconnect, …) forwards unchanged.
 fn shadow_blocked_opcode(opcode: &str) -> bool {
-    matches!(opcode, "key" | "mouse" | "clipboard" | "argv")
+    matches!(
+        opcode,
+        "key"
+            | "mouse"
+            | "clipboard"
+            | "argv"
+            | "get"
+            | "file"
+            | "blob"
+            | "end"
+            | "body"
+            | "size"
+            | "ack"
+    )
 }
 
 /// Filter browser to guacd wire text for a shadow (view-only) connection:
@@ -1940,6 +1972,65 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn owner_path_keys_on_stable_identity_not_display_name() {
+        // The creator is stored as the stable identity (email): a user
+        // whose display name collides with the creator's display name
+        // must not take over the session.
+        let collider = AuthIdentity::User {
+            email: "mallory@example.com".into(),
+            name: "Alice".into(),
+            role: "operator".into(),
+            groups: Vec::new(),
+        };
+        assert!(!owner_path_authorized(
+            Some(&collider),
+            Some("alice@example.com")
+        ));
+        // The real owner matches on email even when the display name
+        // differs from the stored creator.
+        let owner = AuthIdentity::User {
+            email: "alice@example.com".into(),
+            name: "Alice Smith".into(),
+            role: "operator".into(),
+            groups: Vec::new(),
+        };
+        assert!(owner_path_authorized(
+            Some(&owner),
+            Some("alice@example.com")
+        ));
+        // Legacy sessions stored the display name: the display-name leg
+        // keeps their creators authorized until the session is recreated
+        // under the stable-identity scheme.
+        assert!(owner_path_authorized(Some(&owner), Some("Alice Smith")));
+        let legacy_collider = AuthIdentity::User {
+            email: "mallory@example.com".into(),
+            name: "Alice Smith".into(),
+            role: "operator".into(),
+            groups: Vec::new(),
+        };
+        assert!(!owner_path_authorized(
+            Some(&legacy_collider),
+            Some("alice@example.com")
+        ));
+    }
+
+    #[test]
+    fn owner_path_api_key_matches_its_name() {
+        // API key identities have no email; the key name is the stable
+        // identity and the stored creator.
+        assert!(owner_path_authorized(
+            Some(&AuthIdentity::ApiKey("deploy-key".into())),
+            Some("deploy-key")
+        ));
+        // API keys are admin-role identities by design (auth.rs role()),
+        // so they are exempt from the ownership match like any admin.
+        assert!(owner_path_authorized(
+            Some(&AuthIdentity::ApiKey("deploy-key".into())),
+            Some("other-key")
+        ));
+    }
+
     // ── Redirect-log redaction ────────────────────────────────────────
 
     #[test]
@@ -1984,11 +2075,23 @@ mod tests {
     }
 
     #[test]
+    fn shadow_filter_drops_every_file_transfer_opcode() {
+        // Shadow viewers must not be able to start or feed a file
+        // transfer in either direction.
+        let dropped: Vec<String> = ["get", "file", "blob", "end", "body", "size", "ack"]
+            .iter()
+            .map(|op| {
+                let instr = Instruction::new(*op, vec!["1".into(), "x".into()]).encode();
+                filter_read_only_input(&instr)
+            })
+            .collect();
+        assert!(dropped.iter().all(|s| s.is_empty()), "got: {:?}", dropped);
+    }
+
+    #[test]
     fn shadow_filter_keeps_other_opcodes() {
         let sync = Instruction::new("sync", vec!["123".into()]).encode();
         assert_eq!(filter_read_only_input(&sync), sync);
-        let size = Instruction::new("size", vec!["1024".into(), "768".into()]).encode();
-        assert_eq!(filter_read_only_input(&size), size);
         let disconnect = Instruction::new("disconnect", Vec::new()).encode();
         assert_eq!(filter_read_only_input(&disconnect), disconnect);
     }
@@ -1999,6 +2102,17 @@ mod tests {
         let sync = Instruction::new("sync", vec!["7".into()]).encode();
         let mouse = Instruction::new("mouse", vec!["10".into(), "20".into(), "1".into()]).encode();
         let mixed = format!("{}{}{}", key, sync, mouse);
+        assert_eq!(filter_read_only_input(&mixed), sync);
+    }
+
+    #[test]
+    fn shadow_filter_mixed_message_drops_transfer_with_sync() {
+        // A transfer attempt interleaved with a sync: only the sync
+        // survives, the file-transfer instructions are dropped.
+        let get = Instruction::new("get", vec!["5".into(), "report.txt".into()]).encode();
+        let sync = Instruction::new("sync", vec!["7".into()]).encode();
+        let blob = Instruction::new("blob", vec!["5".into(), "AAAAAA==".into()]).encode();
+        let mixed = format!("{}{}{}", get, sync, blob);
         assert_eq!(filter_read_only_input(&mixed), sync);
     }
 
