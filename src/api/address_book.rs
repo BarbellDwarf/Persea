@@ -62,13 +62,14 @@ pub(crate) fn folder_allowed_for_user(
     folder_name: &str,
     user_groups: &[String],
 ) -> bool {
-    if user_groups.is_empty() {
-        return false;
-    }
-    // Walk up the slash-path hierarchy: a folder without its own ACL
-    // inherits from its nearest ancestor that has one (`inherit_from_parent`
-    // is the default for migrated/imported trees, so the subtree must not
-    // silently open up). A folder WITH an ACL is evaluated directly.
+    // Own ACL first; a folder without one walks up the slash-path hierarchy
+    // while inheritance is enabled (`inherit_from_parent` is the default for
+    // migrated/imported trees, so a subtree must not silently open up). A
+    // folder whose chain has no ACL is unrestricted — in particular, users
+    // without groups (e.g. DB accounts) can see it. The entry-level
+    // fallback (legacy/import data stored allowed_groups per entry) runs
+    // only after the ancestor walk finds no ACL, so a child folder under a
+    // restricted parent stays restricted.
     let mut current = folder_name.to_string();
     loop {
         let folder = match db::get_ab_folder(db, scope, &current) {
@@ -78,43 +79,40 @@ pub(crate) fn folder_allowed_for_user(
         };
         let groups = folder_groups(&folder);
         if !groups.is_empty() {
-            return groups.iter().any(|g| user_groups.iter().any(|ug| ug == g));
-        }
-        if current == folder_name || folder.inherit_from_parent {
-            // The folder itself defines no ACL: fall back to entry-level
-            // groups (legacy/import data stored allowed_groups per entry).
-            if current == folder_name {
-                match db::list_ab_entries(db, folder.id) {
-                    Ok(entries) => {
-                        if entries.iter().all(|entry| {
-                            let groups: Vec<String> = entry
-                                .allowed_groups
-                                .split(',')
-                                .map(|g| g.trim().to_string())
-                                .filter(|g| !g.is_empty())
-                                .collect();
-                            if groups.is_empty() {
-                                true
-                            } else {
-                                groups.iter().any(|g| user_groups.iter().any(|ug| ug == g))
-                            }
-                        }) {
-                            return true;
-                        }
-                    }
-                    Err(_) => return false,
-                }
-            }
-            // If the target folder has no ACL and no entry grants access,
-            // continue up the tree only when inheritance is enabled.
-            if !folder.inherit_from_parent {
+            // The folder (or an inheriting ancestor) defines an ACL:
+            // group-less users are denied, everyone else needs membership.
+            if user_groups.is_empty() {
                 return false;
             }
+            return groups.iter().any(|g| user_groups.iter().any(|ug| ug == g));
+        }
+        // No ACL here. Inheritance disabled ends the walk: the folder below
+        // is unrestricted, so higher ancestors cannot restrict it either.
+        if !folder.inherit_from_parent {
+            break;
         }
         match current.rsplit_once('/') {
             Some((parent, _)) if !parent.is_empty() => current = parent.to_string(),
-            _ => return false,
+            _ => break,
         }
+    }
+    // No ACL on the folder or any inheriting ancestor: fall back to the
+    // entry-level groups. The folder is unrestricted when every entry is
+    // ungrouped or matches one of the user's groups.
+    match db::get_ab_folder(db, scope, folder_name) {
+        Ok(folder) => match db::list_ab_entries(db, folder.id) {
+            Ok(entries) => entries.iter().all(|entry| {
+                let groups: Vec<String> = entry
+                    .allowed_groups
+                    .split(',')
+                    .map(|g| g.trim().to_string())
+                    .filter(|g| !g.is_empty())
+                    .collect();
+                groups.is_empty() || groups.iter().any(|g| user_groups.iter().any(|ug| ug == g))
+            }),
+            Err(_) => false,
+        },
+        Err(_) => false,
     }
 }
 
@@ -2625,7 +2623,8 @@ pub async fn quick_connect(
         query.folder.as_ref(),
         query.entry.as_ref(),
     ) {
-        if !id.has_role("operator") {
+        let has_global_connect = rbac::identity_has_custom_permission(&database, &id, "connect");
+        if !id.has_role("operator") && !has_global_connect {
             return quick_connect_error(
                 StatusCode::FORBIDDEN,
                 "Operator role or higher required for address book connections.",
@@ -2639,8 +2638,45 @@ pub async fn quick_connect(
             );
         }
 
-        if check_folder_access_db(&database, scope, folder, &id).is_err() {
-            return quick_connect_error(StatusCode::FORBIDDEN, "No access to this folder.");
+        // Same gate as ab_connect_entry: folder ACL, then RBAC Connect,
+        // then entry ACL. Custom-role holders with global `connect` bypass
+        // it (the bundle is global, exactly like ab_connect_entry).
+        if !has_global_connect {
+            if check_folder_access_db(&database, scope, folder, &id).is_err() {
+                return quick_connect_error(StatusCode::FORBIDDEN, "No access to this folder.");
+            }
+
+            // RBAC connection permission check (skip for admin role)
+            if !id.has_role("admin") {
+                if let Some(db_ref) = manager.db() {
+                    let db_rbac = db_ref.clone();
+                    let email = id.display_name().to_string();
+                    let conn_id = format!("{}/{}/{}", scope, folder, entry);
+                    let has_perm = tokio::task::spawn_blocking(move || {
+                        // Look up user by email to get numeric ID
+                        let user = db::get_user_by_email(&db_rbac, &email).ok();
+                        match user {
+                            Some(u) => rbac::check_connection_permission(
+                                &db_rbac,
+                                u.id,
+                                &conn_id,
+                                rbac::ObjectPermission::Connect,
+                            )
+                            .unwrap_or(false),
+                            // Unknown user — deny
+                            None => false,
+                        }
+                    })
+                    .await
+                    .unwrap_or(false);
+                    if !has_perm {
+                        return quick_connect_error(
+                            StatusCode::FORBIDDEN,
+                            "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.",
+                        );
+                    }
+                }
+            }
         }
 
         // Metadata always comes from the DB.
@@ -2662,6 +2698,14 @@ pub async fn quick_connect(
                 );
             }
         };
+
+        // Entry ACL: a restricted entry stays restricted even inside an
+        // accessible folder (same gate as ab_connect_entry).
+        if !has_global_connect {
+            if let Err(e) = check_entry_access_db(&database, folder_rec.id, entry, &id) {
+                return quick_connect_error(StatusCode::FORBIDDEN, &e.to_string());
+            }
+        }
         let mut ab_entry = ab_entry_from_db(&entry_rec);
 
         if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
@@ -3521,5 +3565,174 @@ mod tests {
             .unwrap();
         let body = body_json(response).await;
         assert_eq!(body, json!([]), "feature is off by default");
+    }
+
+    // ── Address book ACL hardening (persea#33) ─────────────────────────────
+
+    fn insert_user_with_groups(db: &Db, email: &str, role: &str, groups: &[&str]) -> String {
+        let groups: Vec<String> = groups.iter().map(|g| g.to_string()).collect();
+        let user = db::upsert_user(db, email, email, None, role, &groups).unwrap();
+        db::create_auth_session(db, user.id, 3600).unwrap()
+    }
+
+    fn build_quick_connect_router(db: Db, vault: VaultState) -> axum::Router {
+        use axum::routing::get;
+        let manager: AppState = Arc::new(crate::session::SessionManager::new_with_db(
+            crate::config::Config::default(),
+            None,
+            db.clone(),
+        ));
+        axum::Router::new()
+            .route("/api/connect", get(super::quick_connect))
+            .with_state(manager)
+            .layer(axum::middleware::from_fn(crate::auth::optional_auth))
+            .layer(Extension(vault))
+            .layer(Extension(OidcEnabled(false)))
+            .layer(Extension(db))
+    }
+
+    #[test]
+    fn folder_allowed_db_user_sees_unrestricted_folder() {
+        let db = test_db();
+        db::create_ab_folder(&db, "shared", "Public", "", "", false).unwrap();
+        let groups: Vec<String> = Vec::new();
+        assert!(
+            folder_allowed_for_user(&db, "shared", "Public", &groups),
+            "a folder without an ACL must be visible to users without groups"
+        );
+    }
+
+    #[test]
+    fn folder_allowed_restricted_parent_stays_restricted() {
+        let db = test_db();
+        db::create_ab_folder(&db, "shared", "Clients", "", "ops", false).unwrap();
+        db::create_ab_folder(&db, "shared", "Clients/Acme", "", "", true).unwrap();
+        let folder = db::get_ab_folder(&db, "shared", "Clients/Acme").unwrap();
+        db::create_ab_entry(
+            &db,
+            folder.id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap();
+
+        let ops: Vec<String> = vec!["ops".to_string()];
+        let other: Vec<String> = vec!["other".to_string()];
+        assert!(
+            !folder_allowed_for_user(&db, "shared", "Clients/Acme", &other),
+            "a child folder under a restricted parent must not open up via ungrouped entries"
+        );
+        assert!(folder_allowed_for_user(&db, "shared", "Clients/Acme", &ops));
+    }
+
+    #[tokio::test]
+    async fn quick_connect_denied_for_entry_restricted_groups() {
+        let db = test_db();
+        db::create_ab_folder(&db, "shared", "Clients", "", "team", false).unwrap();
+        let folder = db::get_ab_folder(&db, "shared", "Clients").unwrap();
+        db::create_ab_entry(
+            &db,
+            folder.id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "ops",
+        )
+        .unwrap();
+
+        let session = insert_user_with_groups(&db, "alice@test.com", "operator", &["team"]);
+        let user = db::get_user_by_email(&db, "alice@test.com").unwrap();
+        rbac::grant_connection_permission(
+            &db,
+            &format!("u:{}", user.id),
+            "shared/Clients/web1",
+            rbac::ObjectPermission::Connect,
+        )
+        .unwrap();
+
+        let app = build_quick_connect_router(db.clone(), test_vault_state());
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "quick connect must enforce the entry ACL even when the folder and the RBAC Connect grant allow it"
+        );
+    }
+
+    #[tokio::test]
+    async fn quick_connect_requires_rbac_connect_grant() {
+        let db = test_db();
+        db::create_ab_folder(&db, "shared", "Clients", "", "", false).unwrap();
+        let folder = db::get_ab_folder(&db, "shared", "Clients").unwrap();
+        db::create_ab_entry(
+            &db,
+            folder.id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap();
+
+        let session = insert_user_with_groups(&db, "bob@test.com", "operator", &[]);
+        let user = db::get_user_by_email(&db, "bob@test.com").unwrap();
+
+        let app = build_quick_connect_router(db.clone(), test_vault_state());
+        let denied = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            denied.status(),
+            StatusCode::FORBIDDEN,
+            "quick connect without an RBAC Connect grant must be denied"
+        );
+
+        rbac::grant_connection_permission(
+            &db,
+            &format!("u:{}", user.id),
+            "shared/Clients/web1",
+            rbac::ObjectPermission::Connect,
+        )
+        .unwrap();
+        let allowed = app
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            allowed.status(),
+            StatusCode::OK,
+            "with the Connect grant the credential prompt is served"
+        );
     }
 }

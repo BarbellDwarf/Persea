@@ -399,25 +399,50 @@ pub fn grant_group_permission(
 ///
 /// Resolution order (fail-closed):
 /// 1. Direct user permission on the connection
-/// 2. Group permission on the connection (user must be member of the group)
-/// 3. Group permission on any ancestor connection group (recursive CTE walks `parent_id`)
-/// 4. Denied if none match
+/// 2. Direct user permission on the connection's address-book folder
+/// 3. Group permission on the connection (user must be member of the group)
+/// 4. Group permission on the connection's address-book folder
+/// 5. Group permission on any ancestor connection group (recursive CTE walks `parent_id`)
+/// 6. Denied if none match
 pub fn check_connection_permission(
     db: &Db,
     user_id: i64,
     connection_id: &str,
     permission: ObjectPermission,
 ) -> rusqlite::Result<bool> {
+    // Address-book connections are keyed "scope/folder/entry". Folder-level
+    // grants (`connection_group` objects, keyed by the folder path) cascade
+    // to the entries beneath the folder, so the folder path is resolved here
+    // and seeded into the walk below. Non-address-book ids resolve to no
+    // folder and keep the old behavior.
+    let folder_path = ab_folder_path_for_connection(db, connection_id);
     if crate::db::pool_active() {
         let __db_route_arg_0 = connection_id.to_string();
         let __db_route_arg_1 = permission.as_str().to_string();
-        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
-            crate::db::rbac_check_connection_permission_pool(
+        let __db_route_arg_2 = folder_path;
+        return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| async move {
+            let on_connection = crate::db::rbac_check_connection_permission_pool(
                 pool,
                 user_id,
                 __db_route_arg_0,
-                __db_route_arg_1,
+                __db_route_arg_1.clone(),
             )
+            .await?;
+            if on_connection {
+                return Ok(true);
+            }
+            match __db_route_arg_2 {
+                Some(folder) => {
+                    crate::db::rbac_check_group_object_permission_pool(
+                        pool,
+                        user_id,
+                        folder,
+                        __db_route_arg_1,
+                    )
+                    .await
+                }
+                None => Ok(false),
+            }
         });
     }
     let conn = db.lock().unwrap();
@@ -437,12 +462,30 @@ pub fn check_connection_permission(
         return Ok(true);
     }
 
-    // 2+3. Group permissions on the connection or ancestor groups via recursive CTE.
-    // The CTE walks from the connection's group_id up through parent_id chain.
-    // For each group in the chain, check if the user is a member and has the permission.
-    // (SQLite requires the recursive term to reference the CTE via JOIN, not
-    // via an IN-subquery — a subquery reference makes prepare fail with
-    // "circular reference", which turned every check into a silent deny.)
+    // 2. Direct user permission on the connection's address-book folder
+    if let Some(folder) = folder_path.as_deref() {
+        let direct_folder: bool = conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM rbac_permissions
+                WHERE entity_id = ?1 AND entity_type = 'user'
+                  AND object_type = 'connection_group' AND object_id = ?2
+                  AND permission = ?3
+            )",
+            params![user_id, folder, permission.as_str()],
+            |row| row.get(0),
+        )?;
+        if direct_folder {
+            return Ok(true);
+        }
+    }
+
+    // 3+4+5. Group permissions on the connection, its address-book folder,
+    // or ancestor groups via recursive CTE. The CTE walks from the granted
+    // groups up through parent_id chain; the user must be a member of one
+    // of the groups in the chain. (SQLite requires the recursive term to
+    // reference the CTE via JOIN, not via an IN-subquery — a subquery
+    // reference makes prepare fail with "circular reference", which turned
+    // every check into a silent deny.)
     let inherited: bool = conn.query_row(
         "WITH RECURSIVE group_ancestors(group_id) AS (
             -- Base: groups granted directly on this connection
@@ -450,6 +493,12 @@ pub fn check_connection_permission(
             FROM rbac_permissions
             WHERE entity_type = 'group' AND object_type = 'connection'
               AND object_id = ?2 AND permission = ?3
+            UNION
+            -- Base: groups granted on the connection's address-book folder
+            SELECT DISTINCT entity_id
+            FROM rbac_permissions
+            WHERE entity_type = 'group' AND object_type = 'connection_group'
+              AND object_id = ?4 AND permission = ?3
             UNION
             -- Walk ancestor groups via parent_id
             SELECT g.parent_id
@@ -470,10 +519,37 @@ pub fn check_connection_permission(
             INNER JOIN group_ancestors ga ON ug.group_id = ga.group_id
             WHERE ug.user_id = ?1
         )",
-        params![user_id, connection_id, permission.as_str()],
+        params![
+            user_id,
+            connection_id,
+            permission.as_str(),
+            folder_path.unwrap_or_default()
+        ],
         |row| row.get(0),
     )?;
     Ok(inherited)
+}
+
+/// Address-book folder path for a connection id ("scope/folder/entry"),
+/// resolved against the address book so only real folders seed the grant
+/// walk. `None` for non-address-book connection ids.
+fn ab_folder_path_for_connection(db: &Db, connection_id: &str) -> Option<String> {
+    let mut parts: Vec<&str> = connection_id.split('/').collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let scope = parts[0];
+    let entry = parts.pop().unwrap_or_default();
+    if scope.is_empty() || entry.is_empty() {
+        return None;
+    }
+    let folder = parts[1..].join("/");
+    if folder.is_empty() {
+        return None;
+    }
+    crate::db::get_ab_folder(db, scope, &folder)
+        .ok()
+        .map(|_| folder)
 }
 
 /// List all permissions for a connection.
@@ -1011,5 +1087,73 @@ mod tests {
         assert_eq!(parse_entity_ref("u:42"), ("user", "42"));
         assert_eq!(parse_entity_ref("g:abc"), ("group", "abc"));
         assert_eq!(parse_entity_ref("bare"), ("user", "bare"));
+    }
+
+    #[test]
+    fn folder_connect_grant_cascades_to_entries() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO users (email, name, role) VALUES ('member@test.com', 'Member', 'viewer')",
+            [],
+        )
+        .unwrap();
+        let member_id: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO users (email, name, role) VALUES ('outsider@test.com', 'Outsider', 'viewer')",
+            [],
+        )
+        .unwrap();
+        let outsider_id: i64 = conn.last_insert_rowid();
+        drop(conn);
+
+        // The folder must exist in the address book for the connection's
+        // folder path to resolve.
+        let folder_id =
+            crate::db::create_ab_folder(&db, "shared", "Clients", "", "", false).unwrap();
+        crate::db::create_ab_entry(
+            &db,
+            folder_id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap();
+
+        let group_id = create_group(&db, "devops", None, None).unwrap();
+        add_user_to_group(&db, member_id, &group_id).unwrap();
+        grant_group_permission(
+            &db,
+            &format!("g:{}", group_id),
+            "Clients",
+            ObjectPermission::Connect,
+        )
+        .unwrap();
+
+        assert!(
+            check_connection_permission(
+                &db,
+                member_id,
+                "shared/Clients/web1",
+                ObjectPermission::Connect
+            )
+            .unwrap(),
+            "a Connect grant on the folder must cascade to entries beneath it"
+        );
+        assert!(
+            !check_connection_permission(
+                &db,
+                outsider_id,
+                "shared/Clients/web1",
+                ObjectPermission::Connect
+            )
+            .unwrap(),
+            "a user outside the granted group stays denied"
+        );
     }
 }
