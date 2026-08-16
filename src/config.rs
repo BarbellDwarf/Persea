@@ -1,5 +1,6 @@
 //! TOML configuration loading and defaults.
 
+use crate::db::Db;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -1584,7 +1585,7 @@ fn default_recording_path() -> PathBuf {
 /// On Windows, the installer's `--init` bootstrap places the config in
 /// `%ProgramData%\persea\config.toml`. `cfg!()` keeps this function
 /// compilable on every target; on non-Windows it always returns `None`.
-fn windows_default_config_path() -> Option<String> {
+pub(crate) fn windows_default_config_path() -> Option<String> {
     if !cfg!(windows) {
         return None;
     }
@@ -2260,6 +2261,150 @@ impl Config {
             .as_ref()
             .map(|p| p.history)
             .unwrap_or_else(default_password_history)
+    }
+}
+
+/// Generate a fresh storage encryption key: 32 random bytes encoded as 64
+/// hex chars (the same format as `openssl rand -hex 32`).
+pub fn generate_encryption_key() -> String {
+    use rand::RngExt;
+    let mut buf = [0u8; 32];
+    rand::rng().fill(&mut buf);
+    hex::encode(buf)
+}
+
+/// Persist `key` as `[storage].encryption_key` in the TOML file at `path`,
+/// creating the file and the section when absent. An existing
+/// `encryption_key` entry in the section is replaced in place; reusing a
+/// present section keeps the file valid, since a second `[storage]` header
+/// would be a TOML error. Returns `Err` when the write fails or when a
+/// verification read after the write does not contain the key (a write
+/// that reports success but drops the data would lose the key on restart).
+pub fn persist_storage_encryption_key(path: &str, key: &str) -> std::io::Result<()> {
+    let entry = format!("encryption_key = \"{}\"", key);
+    let content = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<&str> = content.lines().collect();
+
+    let section_at = lines.iter().position(|l| storage_section_header(l));
+    let replace_at = if let Some(hdr) = section_at {
+        let mut section_end = lines.len();
+        for (off, l) in lines[(hdr + 1)..].iter().enumerate() {
+            if is_table_header(l.trim()) {
+                section_end = hdr + 1 + off;
+                break;
+            }
+        }
+        lines[(hdr + 1)..section_end]
+            .iter()
+            .position(|l| l.trim().starts_with("encryption_key"))
+            .map(|off| hdr + 1 + off)
+    } else {
+        None
+    };
+
+    if let Some(idx) = replace_at {
+        lines[idx] = entry.as_str();
+    } else if let Some(hdr) = section_at {
+        lines.insert(hdr + 1, entry.as_str());
+    } else {
+        if !lines.is_empty() {
+            lines.push("");
+        }
+        lines.push("[storage]");
+        lines.push(entry.as_str());
+    }
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    std::fs::write(path, out)?;
+
+    let check = std::fs::read_to_string(path).unwrap_or_default();
+    if !check.contains(&entry) {
+        return Err(std::io::Error::other(
+            "verification read after write did not contain the key",
+        ));
+    }
+    Ok(())
+}
+
+/// Whether a line is the `[storage]` table header (allowing a trailing
+/// comment). A nested table like `[storage.foo]` does not match.
+fn storage_section_header(line: &str) -> bool {
+    let t = line.trim();
+    t == "[storage]"
+        || t.starts_with("[storage] ")
+        || t.starts_with("[storage]\t")
+        || t.starts_with("[storage]#")
+}
+
+/// Whether a trimmed line looks like a TOML table header, i.e. the start
+/// of the next section.
+fn is_table_header(line: &str) -> bool {
+    line.starts_with('[') && line.ends_with(']')
+}
+
+/// Outcome of the startup storage-key guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StorageKeyGuard {
+    /// A key is configured (config file or env) or was generated and
+    /// persisted; the server may start.
+    Ready,
+    /// The store already holds encrypted credentials and no key is
+    /// configured; a fresh key could not decrypt them.
+    RefuseExistingCredentials,
+    /// A fresh key was generated but could not be persisted to the config
+    /// file; it would be lost on restart.
+    RefuseUnwritable { path: String, error: String },
+    /// The store could not be inspected for existing credentials.
+    RefuseStoreCheckFailed { error: String },
+}
+
+/// Startup guard for the DB credential storage key. With the DB backend
+/// active and no key configured, a store that holds no encrypted
+/// credentials yet gets a generated key persisted into the config file, so
+/// a fresh install can bind and serve /setup without manual key setup.
+/// Fails closed when the store already holds encrypted credentials (a
+/// fresh key could not decrypt them) or when the generated key cannot be
+/// persisted to the config file (it would be lost on restart). The key is
+/// never logged.
+pub fn ensure_db_storage_key(
+    config: &mut Config,
+    database: &Db,
+    config_path: &str,
+) -> StorageKeyGuard {
+    // The vault backend keeps credentials outside the DB; no key needed.
+    if config
+        .storage
+        .as_ref()
+        .map(|s| s.backend == "vault")
+        .unwrap_or(false)
+    {
+        return StorageKeyGuard::Ready;
+    }
+    if config.storage_encryption_key().is_some() {
+        return StorageKeyGuard::Ready;
+    }
+    match crate::db::has_encrypted_credentials(database) {
+        Ok(true) => StorageKeyGuard::RefuseExistingCredentials,
+        Ok(false) => {
+            let key = generate_encryption_key();
+            match persist_storage_encryption_key(config_path, &key) {
+                Ok(()) => {
+                    config
+                        .storage
+                        .get_or_insert_with(StorageConfig::default)
+                        .encryption_key = Some(key);
+                    StorageKeyGuard::Ready
+                }
+                Err(e) => StorageKeyGuard::RefuseUnwritable {
+                    path: config_path.to_string(),
+                    error: e.to_string(),
+                },
+            }
+        }
+        Err(e) => StorageKeyGuard::RefuseStoreCheckFailed {
+            error: e.to_string(),
+        },
     }
 }
 
