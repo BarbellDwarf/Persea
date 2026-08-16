@@ -524,17 +524,33 @@ pub async fn connect_and_handshake(
     Ok((stream, connection_id))
 }
 
+/// Map the args guacd advertises for a join to per-user connect values:
+/// the connection is already configured, so only the `read-only` flag is
+/// meaningful. Shadow (view-only) joins pass `true`, telling guacd to
+/// reject the joining user's input at the protocol level. Extracted for
+/// test.
+pub(crate) fn join_arg_values(args: &[String], read_only: bool) -> Vec<String> {
+    args.iter()
+        .map(|name| match name.as_str() {
+            "read-only" => if read_only { "true" } else { "false" }.into(),
+            _ => String::new(),
+        })
+        .collect()
+}
+
 /// Join an existing guacd connection by its connection_id.
 ///
 /// Opens a new TCP connection to guacd and sends `select` with the connection_id
 /// instead of a protocol name. guacd routes this to the existing session process,
-/// allowing multiple users to share the same session.
+/// allowing multiple users to share the same session. `read_only` joins (shadow
+/// viewers) tell guacd to reject the joining user's input.
 pub async fn join_connection(
     guacd_addr: &str,
     connection_id: &str,
     width: u32,
     height: u32,
     dpi: u32,
+    read_only: bool,
     tls: Option<&tokio_rustls::TlsConnector>,
 ) -> Result<GuacdStream, GuacdError> {
     let tcp = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(guacd_addr))
@@ -575,15 +591,10 @@ pub async fn join_connection(
 
     tracing::debug!("Join args: {:?}", args_instruction.args);
 
-    // For joining, send empty values for all args (the connection is already configured)
-    let arg_values: Vec<String> = args_instruction
-        .args
-        .iter()
-        .map(|name| match name.as_str() {
-            "read-only" => "false".into(),
-            _ => String::new(),
-        })
-        .collect();
+    // For joining, send empty values for all args (the connection is
+    // already configured) except `read-only`, which the caller controls:
+    // shadow (view-only) joins set it to `true`.
+    let arg_values = join_arg_values(&args_instruction.args, read_only);
 
     // Send handshake instructions (joining user — h264 inherited from session)
     send_handshake(&mut stream, width, height, dpi, false).await?;
@@ -875,6 +886,21 @@ mod tests {
         let parsed = Instruction::parse(s.output()).unwrap();
         assert_eq!(parsed.args[0], "10.0.0.5");
         assert_eq!(parsed.args[3], "secret");
+    }
+    #[test]
+    fn join_args_read_only_true_for_shadow() {
+        // Shadow joins must advertise read-only=true to guacd so the
+        // protocol layer rejects the viewer's input even if a message
+        // slips past the WebSocket-side filter.
+        let args = vec!["read-only".to_string(), "hostname".to_string()];
+        assert_eq!(
+            join_arg_values(&args, true),
+            vec!["true".to_string(), String::new()]
+        );
+        assert_eq!(
+            join_arg_values(&args, false),
+            vec!["false".to_string(), String::new()]
+        );
     }
     #[tokio::test]
     async fn full_handshake_sequence_ssh() {

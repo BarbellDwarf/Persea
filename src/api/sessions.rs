@@ -71,6 +71,11 @@ pub async fn create_session(
             "authentication required to create a session".into(),
         ));
     };
+    // Sessions are keyed on the stable identity (email / API-key name),
+    // not the display name: display names are non-unique and
+    // user-controllable, so ownership and the per-user session quota
+    // must not depend on them.
+    let creator_identity = identity_key(id).to_string();
     if !id.has_role("poweruser") {
         // Custom role holders with the global `create_session` system
         // permission may start ad-hoc sessions from any role floor.
@@ -175,7 +180,7 @@ pub async fn create_session(
     );
 
     match manager
-        .create_session(req, admin_name.clone(), Some(client_ip.to_string()))
+        .create_session(req, creator_identity.clone(), Some(client_ip.to_string()))
         .await
     {
         Ok(info) => {
@@ -223,12 +228,80 @@ pub async fn create_session(
     }
 }
 
+/// Stable identity key used for session ownership and quota checks: the
+/// email for user identities, the key name for API keys. Display names
+/// are non-unique and user-controllable, so they must never key
+/// ownership.
+fn identity_key(id: &AuthIdentity) -> &str {
+    match id {
+        AuthIdentity::ApiKey(name) => name,
+        AuthIdentity::User { email, .. } => email,
+    }
+}
+
+/// Whether `creator` (a session's stored `created_by`) belongs to this
+/// identity. The stable identity (email / API-key name) is matched
+/// first; the display-name leg covers sessions whose stored creator is
+/// a legacy display name (created before identity keying or via paths
+/// outside this fix).
+fn session_owned_by(id: &AuthIdentity, creator: &str) -> bool {
+    creator == identity_key(id) || creator == id.display_name()
+}
+
+/// FNV-1a hash, the same scheme the VDI driver uses for its stable
+/// per-username container-name suffixes.
+fn fnv1a(value: &str) -> u64 {
+    value.bytes().fold(0xcbf29ce484222325_u64, |hash, b| {
+        hash.wrapping_mul(0x100000001b3) ^ u64::from(b)
+    })
+}
+
+/// Container username for the current identity: the same derivation the
+/// session-creation path uses (no per-entry override): the identity's
+/// local part before any `@`, lowercased, non-alphanumerics mapped to
+/// `_`.
+fn vdi_container_username(identity: &AuthIdentity) -> String {
+    identity_key(identity)
+        .split('@')
+        .next()
+        .unwrap_or_default()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// Deterministic container-name prefix for a VDI container username:
+/// `persea-vdi-{user}-{hash}`, mirroring the driver's naming (dash
+/// sanitization plus the FNV-1a hash of the raw username). Ownership of
+/// a container name is decided by this prefix, never by display name.
+fn vdi_container_prefix(container_username: &str) -> String {
+    let dashed: String = container_username
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    format!(
+        "persea-vdi-{}-{:08x}",
+        dashed,
+        fnv1a(container_username) as u32
+    )
+}
+
+/// Whether a container name is owned by the caller: exact prefix match,
+/// or an entry-suffixed name under it.
+fn vdi_container_owned_by(name: &str, prefix: &str) -> bool {
+    name == prefix || name.starts_with(&format!("{}-", prefix))
+}
+
 fn redact_share_url(
     mut info: crate::session::SessionInfo,
     identity: &Option<Extension<AuthIdentity>>,
 ) -> crate::session::SessionInfo {
     let is_owner_or_admin = match identity {
-        Some(Extension(id)) => id.has_role("admin") || id.display_name() == info.created_by,
+        Some(Extension(id)) => id.has_role("admin") || session_owned_by(id, &info.created_by),
         None => false,
     };
     if !is_owner_or_admin {
@@ -249,16 +322,18 @@ pub async fn list_sessions(
         .as_ref()
         .map(|Extension(id)| id.has_role("admin"))
         .unwrap_or(false);
-    let owner = identity
-        .as_ref()
-        .map(|Extension(id)| id.display_name().to_string());
+    let identity_ref = identity.as_ref().map(|Extension(id)| id);
     let show_all = q.all && is_admin;
 
     let mut sessions: Vec<_> = manager
         .list_sessions()
         .await
         .into_iter()
-        .filter(|s| show_all || owner.as_deref().map(|o| s.created_by == o).unwrap_or(false))
+        .filter(|s| {
+            show_all
+                || identity_ref
+                    .is_some_and(|id| session_owned_by(id, &s.created_by))
+        })
         .map(|s| redact_share_url(s, &identity))
         .collect();
     // Sort by creation time descending (most recent first)
@@ -286,7 +361,8 @@ pub struct RecentSessionsQuery {
 /// Scoped strictly to the caller's own history: `query_session_history`
 /// matches `created_by` with LIKE, so the wider page is pulled and then
 /// exact-filtered here — a like-named user's rows can neither displace
-/// nor leak into this list.
+/// nor leak into this list. Two LIKE passes cover both the stable
+/// identity and the legacy display-name key.
 pub async fn recent_connections(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -299,18 +375,40 @@ pub async fn recent_connections(
     };
     let limit = q.limit.unwrap_or(10).clamp(1, 50) as usize;
     let user = id.display_name().to_string();
+    let key = identity_key(&id).to_string();
 
-    let (rows, _) = tokio::task::spawn_blocking({
-        let user = user.clone();
-        move || db::query_session_history(&database, Some(&user), None, None, None, None, 200, 0)
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    .map_err(|e| AppError::Internal(format!("failed to query session history: {e}")))?;
+    // Two LIKE passes: the display name (legacy rows) and the stable
+    // identity (rows created under identity keying). Rows matching both
+    // patterns are deduped by session_id below.
+    let mut all_rows: Vec<serde_json::Value> = Vec::new();
+    for who in [user.clone(), key.clone()] {
+        let db_clone = database.clone();
+        let who_clone = who.clone();
+        let (rows, _) = tokio::task::spawn_blocking(move || {
+            db::query_session_history(&db_clone, Some(&who_clone), None, None, None, None, 200, 0)
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(|e| AppError::Internal(format!("failed to query session history: {e}")))?;
+        all_rows.extend(rows);
+    }
+    let mut seen = std::collections::HashSet::new();
+    all_rows.retain(|r| seen.insert(r["session_id"].as_str().unwrap_or("").to_string()));
+    // Newest first; the seeded/inserted timestamps are zero-padded
+    // RFC3339-ish strings, so lexicographic order matches chronological.
+    all_rows.sort_by(|a, b| {
+        b["started_at"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(a["started_at"].as_str().unwrap_or(""))
+    });
 
-    let recent: Vec<serde_json::Value> = rows
+    let recent: Vec<serde_json::Value> = all_rows
         .into_iter()
-        .filter(|r| r["created_by"].as_str() == Some(user.as_str()))
+        .filter(|r| {
+            let created_by = r["created_by"].as_str();
+            created_by == Some(user.as_str()) || created_by == Some(key.as_str())
+        })
         .take(limit)
         .map(|mut r| {
             let sid = r["session_id"].as_str().unwrap_or("").to_string();
@@ -338,7 +436,7 @@ pub async fn get_session(
                 .unwrap_or(false);
             let is_owner = identity
                 .as_ref()
-                .map(|Extension(id)| info.created_by == id.display_name())
+                .map(|Extension(id)| session_owned_by(id, &info.created_by))
                 .unwrap_or(false);
             if !is_admin && !is_owner {
                 return Err(AppError::Session("session not found".into()));
@@ -388,7 +486,7 @@ pub async fn delete_session(
 
     if !id_inner.has_role("admin") {
         if let Some(creator) = manager.get_session_creator(id).await {
-            if creator != id_inner.display_name() {
+            if !session_owned_by(&id_inner, &creator) {
                 return Err(AppError::Forbidden(
                     "you can only delete your own sessions".into(),
                 ));
@@ -454,7 +552,7 @@ pub async fn delete_session(
         // Audit: session end
         if let Some(db_audit) = manager.db().cloned() {
             let sid = id.to_string();
-            let user_id = id_inner.display_name().to_string();
+            let user_id = identity_key(&id_inner).to_string();
             let ip_audit = ip.to_string();
             if let Err(e) = tokio::task::spawn_blocking(move || {
                 let _ = audit::log_event(
@@ -503,7 +601,7 @@ pub async fn put_session_thumbnail(
         .unwrap_or(false);
     let is_owner = identity
         .as_ref()
-        .map(|Extension(id)| info.created_by == id.display_name())
+        .map(|Extension(id)| session_owned_by(id, &info.created_by))
         .unwrap_or(false);
     if !is_admin && !is_owner {
         return StatusCode::NOT_FOUND.into_response();
@@ -548,7 +646,7 @@ pub async fn get_session_thumbnail(
         .unwrap_or(false);
     let is_owner = identity
         .as_ref()
-        .map(|Extension(id)| info.created_by == id.display_name())
+        .map(|Extension(id)| session_owned_by(id, &info.created_by))
         .unwrap_or(false);
     if !is_admin && !is_owner {
         return StatusCode::NOT_FOUND.into_response();
@@ -594,7 +692,7 @@ pub async fn shadow_session(
         .await
         .ok_or_else(|| AppError::Session("session not found".into()))?;
 
-    let admin_email = id_inner.display_name().to_string();
+    let admin_email = identity_key(&id_inner).to_string();
     // For a session hosted by another instance, the shadow token is
     // persisted on the shared registry row (the in-memory session — and its
     // token list — lives on the owning instance). Either instance can then
@@ -678,16 +776,10 @@ pub async fn list_vdi_containers(
         .await
         .unwrap_or_default();
 
-    let current_user = id
-        .display_name()
-        .split('@')
-        .next()
-        .unwrap_or("")
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect::<String>();
-
+    // Containers are scoped per identity: the container username is
+    // derived from the stable identity, so a display-name collision
+    // cannot surface another user's desktops.
+    let current_user = vdi_container_username(id);
     containers.retain(|c| c.username == current_user);
 
     for c in &mut containers {
@@ -723,18 +815,13 @@ pub async fn get_vdi_container_thumbnail(
     let Some(Extension(id)) = identity else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    let current_user = id
-        .display_name()
-        .split('@')
-        .next()
-        .unwrap_or("")
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-        .collect::<String>();
-    let owns = !current_user.is_empty()
-        && (name == format!("persea-vdi-{}", current_user)
-            || name.starts_with(&format!("persea-vdi-{}-", current_user)));
+    // Ownership is decided by the same sanitize+hash scheme the driver
+    // uses for container names: the identity's container username plus
+    // the FNV-1a hash of it. The old sanitized-display-name prefix let
+    // `alice` claim `persea-vdi-alice-smith-…`; the hash disambiguates.
+    let container_username = vdi_container_username(&id);
+    let owns = !container_username.is_empty()
+        && vdi_container_owned_by(&name, &vdi_container_prefix(&container_username));
     if !id.has_role("admin") && !owns {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -856,7 +943,7 @@ async fn resolve_drive_session(
     };
     let allowed = identity
         .as_ref()
-        .map(|Extension(id)| id.has_role("admin") || info.created_by == id.display_name())
+        .map(|Extension(id)| id.has_role("admin") || session_owned_by(id, &info.created_by))
         .unwrap_or(false);
     if !allowed {
         return Err(AppError::Forbidden(
@@ -2033,5 +2120,86 @@ mod drive_tests {
         // A matching fd and path verify clean.
         verify_drive_file_fd(&file, &a).await.unwrap();
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    fn user(email: &str, name: &str) -> AuthIdentity {
+        AuthIdentity::User {
+            email: email.to_string(),
+            name: name.to_string(),
+            role: "operator".into(),
+            groups: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn identity_key_prefers_email_over_display_name() {
+        assert_eq!(identity_key(&user("alice@example.com", "Alice")), "alice@example.com");
+        assert_eq!(identity_key(&AuthIdentity::ApiKey("deploy".into())), "deploy");
+    }
+
+    #[test]
+    fn session_owned_by_matches_stable_identity_first() {
+        // Email-keyed session: only the owner's email matches; a user
+        // with the same display name is not the owner.
+        let owner = user("alice@example.com", "Alice Smith");
+        assert!(session_owned_by(&owner, "alice@example.com"));
+        let collider = user("mallory@example.com", "Alice Smith");
+        assert!(!session_owned_by(&collider, "alice@example.com"));
+        // Legacy display-name-keyed session: the display-name leg keeps
+        // the creator authorized.
+        assert!(session_owned_by(&owner, "Alice Smith"));
+    }
+
+    #[test]
+    fn vdi_container_username_derives_from_identity() {
+        assert_eq!(vdi_container_username(&user("alice@example.com", "Alice")), "alice");
+        assert_eq!(vdi_container_username(&user("a.b+tag@corp.com", "A B")), "a_b_tag");
+        assert_eq!(vdi_container_username(&AuthIdentity::ApiKey("deploy".into())), "deploy");
+    }
+
+    #[test]
+    fn vdi_container_prefix_matches_driver_scheme() {
+        // The prefix is `persea-vdi-{dash-sanitized}-{fnv1a:08x}`: the
+        // same shape the driver produces (entry-suffixed names extend it).
+        let prefix = vdi_container_prefix("alice");
+        assert_eq!(prefix, format!("persea-vdi-alice-{:08x}", fnv1a("alice") as u32));
+        assert!(prefix.starts_with("persea-vdi-alice-"));
+        assert_eq!(prefix.len(), "persea-vdi-alice-".len() + 8);
+    }
+
+    #[test]
+    fn vdi_container_owned_exact_and_entry_suffixed() {
+        let prefix = vdi_container_prefix("alice");
+        assert!(vdi_container_owned_by(&prefix, &prefix));
+        assert!(vdi_container_owned_by(&format!("{}-web-server", prefix), &prefix));
+        // A different user's container (different hash) is not owned.
+        let mallory = vdi_container_prefix("mallory");
+        assert!(!vdi_container_owned_by(&mallory, &prefix));
+    }
+
+    #[test]
+    fn vdi_container_ownership_hash_disambiguates_name_prefixes() {
+        // `alice` must not own `alice-smith`'s containers: the dashed
+        // prefix matches but the hash differs.
+        let alice = vdi_container_prefix("alice");
+        let alice_smith = vdi_container_prefix("alice_smith");
+        assert_ne!(alice, alice_smith);
+        assert!(alice_smith.starts_with(&format!("persea-vdi-alice-")));
+        assert!(!vdi_container_owned_by(&alice_smith, &alice));
+    }
+
+    #[test]
+    fn vdi_container_ownership_distinguishes_sanitize_collisions() {
+        // Usernames that dash-sanitize to the same form still hash
+        // differently, so neither claims the other's containers.
+        let a = vdi_container_prefix("a_b");
+        let b = vdi_container_prefix("a-b");
+        assert_ne!(a, b);
+        assert!(!vdi_container_owned_by(&a, &b));
     }
 }

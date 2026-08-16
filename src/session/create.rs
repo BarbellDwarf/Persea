@@ -192,6 +192,26 @@ fn vdi_container_username(
     Ok(sanitized)
 }
 
+/// Bound the session-creation guacd handshake with the same
+/// [`super::manager::GUACD_IO_TIMEOUT`] the reconnect path uses: a
+/// stalled guacd must fail session creation instead of hanging the
+/// create request. The timeout is injectable for test.
+async fn handshake_with_timeout(
+    guacd_addr: &str,
+    params: &guacd::ConnectionParams,
+    tls: Option<&tokio_rustls::TlsConnector>,
+    timeout: std::time::Duration,
+) -> Result<(crate::guacd::GuacdStream, String), SessionError> {
+    tokio::time::timeout(timeout, guacd::connect_and_handshake(guacd_addr, params, tls))
+        .await
+        .map_err(|_| {
+            SessionError::GuacdConnection(
+                "timeout connecting to guacd during session-creation handshake".into(),
+            )
+        })?
+        .map_err(|e| SessionError::GuacdConnection(e.to_string()))
+}
+
 /// Count sessions in Pending|Active state: the only states that hold a
 /// live connection, and therefore the only ones that should count
 /// against the global session cap. Terminal states (completed, expired,
@@ -226,7 +246,9 @@ impl SessionManager {
         // Enforce the per-user session limit (only counts Pending|Active
         // sessions). The global limit is enforced under the sessions map
         // write lock at insert time, so concurrent creates cannot race
-        // past it.
+        // past it. `created_by` carries the caller's stable identity
+        // (email / API-key name; see api::sessions::create_session), so
+        // the quota keys on the identity rather than a display name.
         {
             let sessions = self.sessions.read().await;
             let max_per_user = self.config.max_sessions_per_user;
@@ -1361,9 +1383,14 @@ impl SessionManager {
                         }
                     },
                     async {
-                        guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
-                            .await
-                            .map_err(|e| e.to_string())
+                        handshake_with_timeout(
+                            &guacd_addr,
+                            &conn_params,
+                            guacd_tls.as_ref(),
+                            super::manager::GUACD_IO_TIMEOUT,
+                        )
+                        .await
+                        .map_err(|e| e.to_string())
                     }
                 )
                 .map_err(SessionError::GuacdConnection)?;
@@ -1372,9 +1399,13 @@ impl SessionManager {
                 if let Some((h, p, nets)) = pending_net_check.take() {
                     check_allowed_network(&h, p, &nets).await?;
                 }
-                guacd::connect_and_handshake(&guacd_addr, &conn_params, guacd_tls.as_ref())
-                    .await
-                    .map_err(|e| SessionError::GuacdConnection(e.to_string()))?
+                handshake_with_timeout(
+                    &guacd_addr,
+                    &conn_params,
+                    guacd_tls.as_ref(),
+                    super::manager::GUACD_IO_TIMEOUT,
+                )
+                .await?
             };
 
             tracing::info!(
@@ -2575,5 +2606,54 @@ mod tests {
         let map: std::collections::HashMap<Uuid, std::sync::Arc<tokio::sync::Mutex<Session>>> =
             std::collections::HashMap::new();
         assert_eq!(count_live_sessions(&map).await, 0);
+    }
+
+    #[tokio::test]
+    async fn handshake_times_out_when_guacd_stalls() {
+        // A guacd that accepts the TCP connection but never speaks must
+        // fail session creation through the same timeout wrapper the
+        // reconnect path uses, instead of hanging the create request.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let stall = tokio::spawn(async move {
+            let (_sock, _) = listener.accept().await.unwrap();
+            // Hold the connection open without ever answering.
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        });
+
+        let params = guacd::ConnectionParams::Ssh(Box::new(guacd::SshParams {
+            hostname: "127.0.0.1".into(),
+            port: 22,
+            username: "alice".into(),
+            password: None,
+            private_key: None,
+            width: 800,
+            height: 600,
+            dpi: 96,
+            enable_sftp: false,
+            sftp_disable_download: false,
+            sftp_disable_upload: false,
+            disable_copy: false,
+            disable_paste: false,
+            scrollback: 1000,
+            typescript_path: None,
+            typescript_name: None,
+            create_typescript_path: false,
+            command: None,
+        }));
+        let err = handshake_with_timeout(
+            &addr.to_string(),
+            &params,
+            None,
+            std::time::Duration::from_millis(300),
+        )
+        .await
+        .unwrap_err();
+        stall.abort();
+        assert!(
+            format!("{}", err).contains("timeout"),
+            "expected a timeout error, got: {}",
+            err
+        );
     }
 }
