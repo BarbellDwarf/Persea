@@ -1,6 +1,6 @@
 //! OIDC authentication — login, callback, logout handlers.
 
-use crate::auth::{extract_cookie, TrustedProxies};
+use crate::auth::{client_ip, extract_cookie, TrustedProxies};
 use crate::config::OidcConfig;
 use crate::csrf::TlsEnabled;
 use crate::db::{self, Db};
@@ -22,6 +22,7 @@ use serde_json::json;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
+use subtle::ConstantTimeEq;
 use tokio::sync::Mutex;
 
 /// The concrete CoreClient type after from_provider_metadata + set_redirect_uri.
@@ -76,21 +77,21 @@ fn derive_fingerprint_key(client_secret: &str) -> [u8; 32] {
 }
 
 /// Extract the client fingerprint inputs (IP + User-Agent) from the
-/// request headers. Mirrors how the callback compares the cookie against
-/// the current request, so both sides must use this same helper.
-fn client_fingerprint_inputs(headers: &axum::http::HeaderMap) -> (String, String) {
-    let ip = headers
-        .get("x-forwarded-for")
-        .or_else(|| headers.get("x-real-ip"))
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
+/// request. The IP is the proxy-gated `client_ip()` result — never the raw
+/// `X-Forwarded-For`/`X-Real-IP` headers, which any client can forge when
+/// the socket peer is not a trusted proxy. Mirrors how the callback
+/// compares the cookie against the current request, so both sides must use
+/// this same helper.
+fn client_fingerprint_inputs(
+    headers: &axum::http::HeaderMap,
+    client_ip: std::net::IpAddr,
+) -> (String, String) {
     let ua = headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown")
         .to_string();
-    (ip, ua)
+    (client_ip.to_string(), ua)
 }
 
 /// HMAC-SHA256 fingerprint of (IP, User-Agent) keyed by the server-side
@@ -261,7 +262,8 @@ pub async fn login(
     // secret (H01): the state token alone is public (it rides in the auth
     // URL), so keying with it would let an attacker who knows the
     // victim's IP + UA forge the cookie.
-    let (ip, ua) = client_fingerprint_inputs(&headers);
+    let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
+    let (ip, ua) = client_fingerprint_inputs(&headers, client_ip);
     let fingerprint = state_fingerprint(&oidc.fingerprint_key, &ip, &ua);
     let cookie_value = format!("{}:{}", state_key, fingerprint);
 
@@ -374,19 +376,24 @@ pub async fn callback(
     // Cookie format is "state_key:fingerprint" — verify both
     let state_cookie = extract_cookie(&headers, "persea_oidc_state");
     // Format: `state_key:fingerprint` (provider name lives in its own
-    // cookie). Old 2-part cookies parse identically.
-    let (ip, ua) = client_fingerprint_inputs(&headers);
+    // cookie). Old 2-part cookies parse identically. Both comparisons are
+    // constant-time: state and fingerprint are bearer credentials.
+    let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
+    let (ip, ua) = client_fingerprint_inputs(&headers, client_ip);
     let cookie_valid = match state_cookie.as_deref() {
         Some(cookie_val) => match cookie_val.split_once(':') {
             Some((cookie_state, cookie_fingerprint)) => {
-                if cookie_state != state {
+                if !bool::from(cookie_state.as_bytes().ct_eq(state.as_bytes())) {
                     false
                 } else {
                     // Verify fingerprint matches current request, keyed by
                     // the server-side secret (H01) — same construction as
                     // the login handler.
                     let current_fp = state_fingerprint(&oidc.fingerprint_key, &ip, &ua);
-                    cookie_fingerprint == current_fp
+                    cookie_fingerprint
+                        .as_bytes()
+                        .ct_eq(current_fp.as_bytes())
+                        .into()
                 }
             }
             None => false,
@@ -578,8 +585,11 @@ pub async fn callback(
             .into_response();
     }
 
-    // Check TOTP enforcement before creating session
-    let totp_required = {
+    // Check TOTP enforcement before creating session (mirrors the gate in
+    // handlers/auth.rs): AdminsOnly requires admins enrolled, All requires
+    // every user enrolled. A user who must enroll but has no TOTP is sent
+    // to the enrollment page with a session, not silently logged in.
+    let (totp_required, enroll_required) = {
         let db_check = database.clone();
         let uid = user.id;
         let role_for_check = effective_role.clone();
@@ -591,9 +601,15 @@ pub async fn callback(
             .unwrap_or(false);
 
         match enforcement {
-            TotpEnforcement::Off => false,
-            TotpEnforcement::AdminsOnly => has_totp && role_for_check == "admin",
-            TotpEnforcement::All => has_totp,
+            TotpEnforcement::Off => (false, false),
+            TotpEnforcement::AdminsOnly => {
+                if role_for_check != "admin" {
+                    (false, false)
+                } else {
+                    (has_totp, !has_totp)
+                }
+            }
+            TotpEnforcement::All => (has_totp, !has_totp),
         }
     };
 
@@ -693,10 +709,16 @@ pub async fn callback(
         .await;
     }
 
-    // Check for post-login redirect cookie
-    let redirect_to = extract_cookie(&headers, "persea_next")
-        .filter(|n| n.starts_with('/') && !n.starts_with("//") && !n.contains("://"))
-        .unwrap_or_else(|| "/addressbook.html".to_string());
+    // Check for post-login redirect cookie. An enforcement-required user
+    // without TOTP is sent to the enrollment page instead (the session
+    // exists, so the page is reachable; subsequent logins must pass MFA).
+    let redirect_to = if enroll_required {
+        "/account/totp.html".to_string()
+    } else {
+        extract_cookie(&headers, "persea_next")
+            .filter(|n| n.starts_with('/') && !n.starts_with("//") && !n.contains("://"))
+            .unwrap_or_else(|| "/addressbook.html".to_string())
+    };
 
     // Set session cookie and redirect; clear OIDC state and next cookies
     let sec = crate::csrf::cookie_secure_attr(
@@ -980,6 +1002,32 @@ mod tests {
     }
 
     // ── State fingerprint (H01) ────────────────────────────────────────
+
+    #[test]
+    fn fingerprint_ignores_forged_forwarded_headers() {
+        // The fingerprint IP comes from the proxy-gated client_ip(), never
+        // from client-supplied X-Forwarded-For / X-Real-IP.
+        let headers = axum::http::HeaderMap::from_iter([
+            (
+                axum::http::header::USER_AGENT,
+                axum::http::HeaderValue::from_static("UA"),
+            ),
+            (
+                "x-forwarded-for".parse().unwrap(),
+                axum::http::HeaderValue::from_static("203.0.113.66"),
+            ),
+            (
+                "x-real-ip".parse().unwrap(),
+                axum::http::HeaderValue::from_static("203.0.113.66"),
+            ),
+        ]);
+        let (ip, ua) = client_fingerprint_inputs(&headers, "198.51.100.7".parse().unwrap());
+        assert_eq!(
+            ip, "198.51.100.7",
+            "forwarded headers must not leak into the fingerprint"
+        );
+        assert_eq!(ua, "UA");
+    }
 
     #[test]
     fn fingerprint_deterministic_for_same_key_and_inputs() {

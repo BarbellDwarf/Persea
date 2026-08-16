@@ -14,9 +14,19 @@ use quick_xml::Reader;
 use ring::digest;
 use ring::signature::{self, RsaKeyPair};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};
+
+/// How long an issued AuthnRequest ID stays valid for the InResponseTo
+/// check on the ACS callback. Long enough for a browser round trip, short
+/// enough that stale entries cannot accumulate.
+const PENDING_REQUEST_TTL: Duration = Duration::from_secs(600);
+/// How long a consumed assertion ID is remembered. Assertions carry their
+/// own NotOnOrAfter (minutes), so a day of memory covers every replay
+/// window without unbounded growth (entries are pruned on each use).
+const CONSUMED_ASSERTION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -1080,40 +1090,43 @@ pub struct SamlAttributes {
     pub attributes: HashMap<String, Vec<String>>,
 }
 
-/// Parse and validate a base64-encoded SAMLResponse from the ACS callback.
-pub fn parse_saml_response(
-    saml_response: &str,
-    config: &SamlConfig,
-    idp_cert_pem: &str,
-    request_id: Option<&str>,
-) -> Result<SamlAttributes, String> {
-    // 1. Base64-decode
+/// Decode a base64-encoded SAMLResponse and inflate it if deflate-compressed.
+fn decode_saml_response(saml_response: &str) -> Result<String, String> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(saml_response)
         .map_err(|e| format!("SAMLResponse base64 decode failed: {e}"))?;
 
-    // 2. Try deflate decompression
+    // Deflate is optional: the HTTP-Redirect binding compresses, the
+    // HTTP-POST binding does not. Try decompression first, fall back to the
+    // raw bytes.
     let xml_bytes = match decompress_deflate(&decoded) {
         Ok(decompressed) => decompressed,
         Err(_) => decoded,
     };
 
-    let xml = String::from_utf8(xml_bytes)
-        .map_err(|e| format!("SAMLResponse is not valid UTF-8: {e}"))?;
+    String::from_utf8(xml_bytes).map_err(|e| format!("SAMLResponse is not valid UTF-8: {e}"))
+}
 
-    // 3. Validate signature if in strict mode (obtains verified element)
+/// Parse and validate a decoded SAMLResponse XML from the ACS callback.
+pub fn parse_saml_response(
+    xml: &str,
+    config: &SamlConfig,
+    idp_cert_pem: &str,
+    request_id: Option<&str>,
+) -> Result<SamlAttributes, String> {
+    // 1. Validate signature if in strict mode (obtains verified element)
     let verified_element = if config.strict_mode && !idp_cert_pem.is_empty() {
-        Some(validate_response_signature(&xml, idp_cert_pem, request_id)?)
+        Some(validate_response_signature(xml, idp_cert_pem, request_id)?)
     } else {
         None
     };
 
-    let assertion_xml = verified_element.as_deref().unwrap_or(&xml);
+    let assertion_xml = verified_element.as_deref().unwrap_or(xml);
 
-    // 4. Parse attributes from verified element (not raw document)
+    // 2. Parse attributes from verified element (not raw document)
     let attrs = parse_assertion_xml(assertion_xml)?;
 
-    // 5. Validate audience restriction against verified element
+    // 3. Validate audience restriction against verified element
     if config.strict_mode && !idp_cert_pem.is_empty() {
         let audiences = extract_audiences(assertion_xml);
         if !audiences.is_empty() && !audiences.contains(&config.entity_id) {
@@ -1124,7 +1137,7 @@ pub fn parse_saml_response(
         }
     }
 
-    // 6. Check time conditions if in strict mode (against verified element)
+    // 4. Check time conditions if in strict mode (against verified element)
     if config.strict_mode {
         validate_time_conditions(assertion_xml)?;
     }
@@ -1615,17 +1628,36 @@ pub struct SamlProvider {
     config: SamlConfig,
     /// Cached IdP metadata.
     idp_metadata: std::sync::OnceLock<IdpMetadata>,
-    /// The AuthnRequest ID we sent, held until the ACS callback arrives.
-    pending_request_id: std::sync::Mutex<Option<String>>,
+    /// AuthnRequest IDs we issued, keyed by ID with the issue time. One
+    /// entry per flow, so concurrent logins cannot clobber each other's
+    /// InResponseTo binding.
+    pending_requests: std::sync::Mutex<HashMap<String, Instant>>,
+    /// Assertion IDs already consumed on the ACS callback, with the time
+    /// they were first seen. A replayed response carrying the same ID is
+    /// rejected.
+    consumed_assertions: std::sync::Mutex<HashMap<String, Instant>>,
 }
 
 impl SamlProvider {
     /// Create a provider from the given config. IdP metadata loads lazily on first use.
+    ///
+    /// Refuses to start with `strict_mode = false` while a certificate is
+    /// configured: non-strict mode skips signature, audience, and time
+    /// validation, and a configured certificate signals a real deployment
+    /// where silently accepting unsigned responses is a security hole. Test
+    /// setups without a certificate may still use non-strict mode.
     pub fn new(config: SamlConfig) -> Self {
+        assert!(
+            config.strict_mode || config.certificate.is_none(),
+            "SAML strict_mode=false refused while a certificate is configured: \
+             non-strict mode skips signature, audience, and time validation; \
+             remove the certificate or set strict_mode = true"
+        );
         Self {
             config,
             idp_metadata: std::sync::OnceLock::new(),
-            pending_request_id: std::sync::Mutex::new(None),
+            pending_requests: std::sync::Mutex::new(HashMap::new()),
+            consumed_assertions: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -1686,8 +1718,13 @@ impl AuthProvider for SamlProvider {
 
         match build_authn_request(&self.config, &metadata.sso_url) {
             Ok((id, _xml, redirect_url)) => {
-                // Store the request ID so InResponseTo can be verified on callback.
-                *self.pending_request_id.lock().unwrap() = Some(id);
+                // Store the request ID per flow so InResponseTo can be
+                // verified on callback. Concurrent logins each get their
+                // own slot; stale entries are pruned on each insert.
+                let mut pending = self.pending_requests.lock().unwrap();
+                let now = Instant::now();
+                pending.retain(|_, issued| now.duration_since(*issued) < PENDING_REQUEST_TTL);
+                pending.insert(id.clone(), now);
                 AuthResult::Redirect(redirect_url)
             }
             Err(e) => AuthResult::Failure(format!("Failed to build SAML AuthnRequest: {e}")),
@@ -1707,16 +1744,45 @@ impl SamlProvider {
             Err(e) => return AuthResult::Unavailable(format!("SAML IdP metadata error: {e}")),
         };
 
-        // Retrieve and clear the pending request ID for InResponseTo verification.
-        let request_id = self.pending_request_id.lock().unwrap().take();
+        // Decode once here (base64 + optional deflate) so the InResponseTo
+        // can be matched against the per-flow pending map before the full
+        // validation pass.
+        let xml = match decode_saml_response(saml_response_b64) {
+            Ok(x) => x,
+            Err(e) => return AuthResult::Failure(format!("SAML response decode failed: {e}")),
+        };
+
+        // Resolve the AuthnRequest ID this response answers. The entry is
+        // consumed whether validation passes or fails, so a failed response
+        // cannot be retried against the same flow. IdP-initiated SSO
+        // carries no InResponseTo and is allowed through: the replay cache
+        // below still protects against assertion reuse.
+        let request_id = match extract_in_response_to(&xml) {
+            Some(irt) => match self.take_request_id(Some(&irt)) {
+                Some(_) => Some(irt),
+                None => {
+                    return AuthResult::Failure(
+                        "SAML response references an unknown or expired AuthnRequest".into(),
+                    );
+                }
+            },
+            None => None,
+        };
 
         match parse_saml_response(
-            saml_response_b64,
+            &xml,
             &self.config,
             &metadata.certificate,
             request_id.as_deref(),
         ) {
             Ok(attrs) => {
+                // Replay protection: record the assertion ID once the
+                // response has passed signature and time validation, and
+                // reject any later response carrying the same ID.
+                let assertion_id = extract_assertion_id(&xml).unwrap_or_default();
+                if !assertion_id.is_empty() && !self.consume_assertion(&assertion_id) {
+                    return AuthResult::Failure("SAML assertion replay detected".into());
+                }
                 let groups = extract_groups(&attrs, self.config.groups_attribute.as_deref());
                 AuthResult::Success {
                     subject: attrs.name_id.clone(),
@@ -1727,6 +1793,31 @@ impl SamlProvider {
             }
             Err(e) => AuthResult::Failure(format!("SAML response validation failed: {e}")),
         }
+    }
+
+    /// Consume the pending AuthnRequest entry matching a response's
+    /// InResponseTo. Returns the matched ID, or None when the response
+    /// references a request we never issued (or one that expired). Stale
+    /// entries are pruned on every call.
+    fn take_request_id(&self, in_response_to: Option<&str>) -> Option<String> {
+        let mut pending = self.pending_requests.lock().unwrap();
+        let now = Instant::now();
+        pending.retain(|_, issued| now.duration_since(*issued) < PENDING_REQUEST_TTL);
+        let irt = in_response_to?;
+        pending.remove(irt).map(|_| irt.to_string())
+    }
+
+    /// Record an assertion ID as consumed. Returns false when the ID was
+    /// already consumed within the replay window.
+    fn consume_assertion(&self, assertion_id: &str) -> bool {
+        let mut consumed = self.consumed_assertions.lock().unwrap();
+        let now = Instant::now();
+        consumed.retain(|_, seen| now.duration_since(*seen) < CONSUMED_ASSERTION_TTL);
+        if consumed.contains_key(assertion_id) {
+            return false;
+        }
+        consumed.insert(assertion_id.to_string(), now);
+        true
     }
 }
 
@@ -1927,5 +2018,88 @@ mod tests {
         let result = provider.authenticate(&request).await;
         // No IdP metadata configured → Unavailable, or invalid XML → Failure
         assert!(!matches!(result, AuthResult::Success { .. }));
+    }
+
+    #[test]
+    fn strict_mode_disabled_with_certificate_is_refused_at_startup() {
+        let config = SamlConfig {
+            strict_mode: false,
+            certificate: Some("MIICpDCCAYwCCQDU...".into()),
+            ..Default::default()
+        };
+        let result = std::panic::catch_unwind(|| SamlProvider::new(config));
+        assert!(
+            result.is_err(),
+            "strict_mode=false with a configured certificate must be refused"
+        );
+    }
+
+    #[test]
+    fn strict_mode_disabled_without_certificate_is_allowed() {
+        let config = SamlConfig {
+            strict_mode: false,
+            ..Default::default()
+        };
+        let provider = SamlProvider::new(config);
+        assert!(!provider.config().strict_mode);
+    }
+
+    #[test]
+    fn request_ids_are_per_flow_not_a_global_slot() {
+        // Two concurrent logins each hold their own pending AuthnRequest
+        // ID; consuming one must not clobber the other (the pre-fix single
+        // Mutex<Option> slot could not represent both).
+        let provider = SamlProvider::new(SamlConfig::default());
+        provider
+            .pending_requests
+            .lock()
+            .unwrap()
+            .insert("_flow-a".into(), Instant::now());
+        provider
+            .pending_requests
+            .lock()
+            .unwrap()
+            .insert("_flow-b".into(), Instant::now());
+
+        assert_eq!(
+            provider.take_request_id(Some("_flow-a")),
+            Some("_flow-a".into())
+        );
+        assert!(provider.take_request_id(Some("_flow-a")).is_none());
+        assert_eq!(
+            provider.take_request_id(Some("_flow-b")),
+            Some("_flow-b".into())
+        );
+        assert!(provider.take_request_id(Some("_flow-b")).is_none());
+        assert!(provider.take_request_id(Some("_never-issued")).is_none());
+    }
+
+    #[test]
+    fn consumed_assertion_rejected_on_replay() {
+        // The same assertion ID must only authenticate once (replay
+        // protection); distinct IDs pass.
+        let provider = SamlProvider::new(SamlConfig::default());
+        assert!(provider.consume_assertion("_assertion-1"));
+        assert!(
+            !provider.consume_assertion("_assertion-1"),
+            "replayed assertion ID must be rejected"
+        );
+        assert!(provider.consume_assertion("_assertion-2"));
+    }
+
+    #[test]
+    fn decode_saml_response_handles_plain_and_inflated() {
+        // Plain (HTTP-POST binding): raw XML, no compression.
+        let xml = "<samlp:Response></samlp:Response>";
+        let b64 = base64::engine::general_purpose::STANDARD.encode(xml.as_bytes());
+        assert_eq!(decode_saml_response(&b64).unwrap(), xml);
+
+        // Deflated (HTTP-Redirect binding): inflate and compare.
+        let deflated = deflate_encode(xml.as_bytes());
+        let b64_deflated = base64::engine::general_purpose::STANDARD.encode(&deflated);
+        assert_eq!(decode_saml_response(&b64_deflated).unwrap(), xml);
+
+        // Garbage input fails loudly.
+        assert!(decode_saml_response("not base64!!").is_err());
     }
 }

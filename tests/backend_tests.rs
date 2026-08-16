@@ -120,7 +120,7 @@ async fn run_backend_test(label: &str, url_env: &str, expected_backend: &str) {
     let db_path = tmp.join("admin.db").display().to_string();
     let write_config = |port: u16| {
         format!(
-            "listen_addr = \"127.0.0.1:{port}\"\ndb_url = \"{db_url}\"\ndb_path = \"{db_path}\"\n"
+            "listen_addr = \"127.0.0.1:{port}\"\ndb_url = \"{db_url}\"\ndb_path = \"{db_path}\"\n[storage]\nencryption_key = \"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"\n"
         )
     };
 

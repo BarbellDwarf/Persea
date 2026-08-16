@@ -141,11 +141,16 @@ impl LdapProvider {
     }
 
     /// Search for a user by username and return (user_dn, entry).
+    ///
+    /// Ok(None) means the search succeeded but matched no user. Search or
+    /// result-code errors are Err — but callers must treat both the same
+    /// as "invalid credentials" so unknown users are indistinguishable
+    /// from wrong passwords.
     fn find_user(
         &self,
         conn: &mut LdapConn,
         username: &str,
-    ) -> Result<(String, SearchEntry), String> {
+    ) -> Result<Option<(String, SearchEntry)>, String> {
         let filter = self
             .config
             .user_search_filter
@@ -173,15 +178,15 @@ impl LdapProvider {
             entries.into_iter().map(SearchEntry::construct).collect();
 
         match search_entries.len() {
-            0 => Err(format!("no LDAP user found for '{username}'")),
+            0 => Ok(None),
             1 => {
                 let entry = search_entries.into_iter().next().unwrap();
                 let dn = entry.dn.clone();
                 debug!("LDAP found user: dn={dn}");
-                Ok((dn, entry))
+                Ok(Some((dn, entry)))
             }
             _ => Err(format!(
-                "ambiguous: {} LDAP users matched '{username}'",
+                "ambiguous: {} LDAP users matched the search filter",
                 search_entries.len()
             )),
         }
@@ -200,6 +205,12 @@ impl LdapProvider {
             ));
         }
         Ok(())
+    }
+
+    /// A DN that cannot match a real user, used to burn an equivalent bind
+    /// round trip when the searched username does not exist.
+    fn synthetic_dn(&self) -> String {
+        format!("cn=notfound,{}", self.config.user_search_base)
     }
 
     /// Resolve groups for a user DN.
@@ -300,10 +311,20 @@ impl AuthProvider for LdapProvider {
             return AuthResult::Unavailable(e);
         }
 
-        // 2. Find the user entry.
+        // 2. Find the user entry. An unknown user and a failed bind must
+        // produce identical results and comparable timing, or the search
+        // doubles as a username oracle. A synthetic bind with the supplied
+        // password burns the same round trips as the real user bind below.
         let (user_dn, entry) = match self.find_user(&mut conn, &username) {
-            Ok(v) => v,
-            Err(e) => return AuthResult::Failure(e),
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                let _ = self.bind_as_user(&self.synthetic_dn(), &password);
+                return AuthResult::Failure("invalid credentials".into());
+            }
+            Err(e) => {
+                debug!("LDAP user search failed for '{username}': {e}");
+                return AuthResult::Failure("invalid credentials".into());
+            }
         };
 
         // 3. Bind as the user to verify password.
@@ -502,5 +523,17 @@ mod tests {
     fn check_result_error() {
         let err = LdapProvider::check_result(32, "no such object", "test").unwrap_err();
         assert!(err.contains("no such object"));
+    }
+
+    #[test]
+    fn synthetic_dn_cannot_match_a_real_user() {
+        // The dummy bind target for unknown users lives under the search
+        // base with an RDN no real entry uses, so it always rejects.
+        let provider = make_provider(None, None);
+        assert_eq!(
+            provider.synthetic_dn(),
+            "cn=notfound,ou=u",
+            "synthetic DN must be a non-matching entry under the search base"
+        );
     }
 }

@@ -90,7 +90,10 @@ jobs:
           components: rustfmt, clippy
           rustflags: ""
       - run: cargo build
-      - run: |
+      - name: Start persea and verify /api/health
+        env:
+          PERSEA_STORAGE_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        run: |
           # Start the server and poll /api/health until it is ready (the
           # fixed sleep raced slower runners — cold caches can take >5s).
           ./target/debug/persea --config /dev/null &
@@ -153,6 +156,8 @@ jobs:
           cat > /tmp/persea-db-ci.toml <<EOF
           db_url = "${{ matrix.db_url }}"
           db_path = "/tmp/persea-db-ci-admin.db"
+          [storage]
+          encryption_key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
           EOF
 
           # Run migrations for this backend + create an admin key so the
@@ -247,6 +252,8 @@ jobs:
         run: npx playwright install chromium
         working-directory: tests/playwright
       - name: Start persea (HTTP)
+        env:
+          PERSEA_STORAGE_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
         run: |
           ./target/release/persea --config /dev/null &
           SERVER_PID=$!
@@ -278,6 +285,8 @@ jobs:
           [tls]
           cert_path = "/tmp/persea-test-cert.pem"
           key_path = "/tmp/persea-test-key.pem"
+          [storage]
+          encryption_key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
           EOF
           ./target/release/persea --config /tmp/persea-test-config.toml &
           SERVER_PID=$!

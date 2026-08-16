@@ -15,6 +15,7 @@ use std::task::{Context, Poll};
 use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{header, HeaderMap, Method, Request, Response, StatusCode};
+use subtle::ConstantTimeEq;
 use tower::{Layer, Service};
 
 use crate::auth::TrustedProxies;
@@ -22,6 +23,15 @@ use crate::auth::TrustedProxies;
 /// Name of the CSRF double-submit token cookie.
 pub const CSRF_COOKIE: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 32;
+
+/// POST path of the SAML Assertion Consumer Service.
+///
+/// Exempt from the double-submit check: the IdP POSTs the SAMLResponse here
+/// with no browser session and no CSRF cookie, and the signed assertion is
+/// itself the authentication. The exemption is a path check in this module,
+/// never route wiring, so every CSRF-guarded router (the SAML routes are
+/// behind `CsrfLayer` in main.rs) picks it up automatically.
+pub const SAML_ACS_PATH: &str = "/auth/saml/acs";
 
 /// Whether Persea terminates TLS itself (set at startup from the server
 /// config). The process runs exactly one listener mode, so this is a
@@ -219,7 +229,10 @@ where
             // response without generating a fresh token each time.
             let incoming_cookie = extract_cookie(req.headers(), CSRF_COOKIE);
 
-            if is_state_changing(&method) {
+            // The SAML ACS callback is exempt: the IdP posts the assertion
+            // with no browser cookie, and signature validation is the
+            // authentication (see `SAML_ACS_PATH`).
+            if is_state_changing(&method) && req.uri().path() != SAML_ACS_PATH {
                 let header_token = req
                     .headers()
                     .get("x-csrf-token")
@@ -266,39 +279,48 @@ where
                 };
 
                 let effective = header_token.or(form_token);
-                match (&incoming_cookie, &effective) {
-                    (Some(c), Some(h)) if c == h => { /* valid */ }
-                    _ => {
-                        let path = req.uri().path().to_string();
-                        tracing::warn!(
-                            expected = %incoming_cookie.as_deref().unwrap_or("none"),
-                            received = %effective.as_deref().unwrap_or("none"),
-                            path = %path,
-                            "CSRF token mismatch"
-                        );
-                        // The login form is a plain (non-fetch) POST — a raw
-                        // JSON body here would navigate the
-                        // browser straight to it instead of showing on the
-                        // login page. Redirect back with a friendly error
-                        // instead, matching how every other login failure
-                        // is surfaced. All other endpoints (admin UI, API)
-                        // are fetch/htmx-driven and expect JSON.
-                        if path == "/auth/login" {
-                            return Ok(Response::builder()
-                                .status(StatusCode::SEE_OTHER)
-                                .header(header::LOCATION, "/?error=csrf_failed")
-                                .body(Body::empty())
-                                .unwrap_or_else(|_| Response::new(Body::empty())));
-                        }
-                        let body_text =
-                            serde_json::json!({"error": "CSRF token missing or invalid"})
-                                .to_string();
+                // Constant-time comparison: the token is a bearer credential
+                // and its length is fixed (hex-encoded random bytes), so a
+                // timing side channel here would leak nothing about the
+                // token's value — but compare in constant time anyway, per
+                // the codebase's secrets policy.
+                let token_matches = match (&incoming_cookie, &effective) {
+                    (Some(c), Some(h)) => c.as_bytes().ct_eq(h.as_bytes()).into(),
+                    _ => false,
+                };
+                if !token_matches {
+                    let path = req.uri().path().to_string();
+                    // Never log the token values themselves: they are
+                    // bearer credentials. Presence flags keep the log
+                    // diagnostic (was anything sent at all?) without
+                    // leaking the tokens.
+                    tracing::warn!(
+                        had_cookie = incoming_cookie.is_some(),
+                        had_token = effective.is_some(),
+                        path = %path,
+                        "CSRF token mismatch"
+                    );
+                    // The login form is a plain (non-fetch) POST — a raw
+                    // JSON body here would navigate the
+                    // browser straight to it instead of showing on the
+                    // login page. Redirect back with a friendly error
+                    // instead, matching how every other login failure
+                    // is surfaced. All other endpoints (admin UI, API)
+                    // are fetch/htmx-driven and expect JSON.
+                    if path == "/auth/login" {
                         return Ok(Response::builder()
-                            .status(StatusCode::FORBIDDEN)
-                            .header(header::CONTENT_TYPE, "application/json")
-                            .body(Body::from(body_text))
+                            .status(StatusCode::SEE_OTHER)
+                            .header(header::LOCATION, "/?error=csrf_failed")
+                            .body(Body::empty())
                             .unwrap_or_else(|_| Response::new(Body::empty())));
                     }
+                    let body_text =
+                        serde_json::json!({"error": "CSRF token missing or invalid"}).to_string();
+                    return Ok(Response::builder()
+                        .status(StatusCode::FORBIDDEN)
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(body_text))
+                        .unwrap_or_else(|_| Response::new(Body::empty())));
                 }
             }
 
@@ -442,6 +464,55 @@ mod tests {
             .unwrap())
         .await;
         assert_eq!(resp.status(), StatusCode::OK, "matching token must pass");
+    }
+
+    #[tokio::test]
+    async fn saml_acs_post_is_exempt_from_csrf() {
+        // The IdP POSTs the SAMLResponse with no browser cookie; the signed
+        // assertion is the authentication. The exemption lives here, as a
+        // path check, not in route wiring.
+        let resp = run(Request::post(SAML_ACS_PATH)
+            .body(Body::from("SAMLResponse=abc123"))
+            .unwrap())
+        .await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "SAML ACS POST must bypass the CSRF check"
+        );
+        // The response still carries the double-submit cookie so any
+        // subsequent browser navigation keeps a token.
+        assert!(
+            resp.headers()
+                .get(header::SET_COOKIE)
+                .is_some_and(|v| v.to_str().is_ok_and(|s| s.starts_with("csrf_token="))),
+            "ACS response must still set the CSRF cookie"
+        );
+    }
+
+    #[tokio::test]
+    async fn saml_acs_is_the_only_exempt_path() {
+        // Near-misses (/auth/saml, /auth/saml/acs/anything) must NOT be
+        // exempt — the exemption is exact-path only.
+        for path in ["/auth/saml", "/auth/saml/acs/", "/auth/saml/metadata"] {
+            let resp = run(Request::post(path).body(Body::empty()).unwrap()).await;
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN, "path {path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn mismatched_tokens_rejected() {
+        let first = run(Request::get("/").body(Body::empty()).unwrap()).await;
+        let token = cookie_value(&first, CSRF_COOKIE)
+            .expect("csrf cookie")
+            .to_string();
+        let resp = run(Request::post("/")
+            .header(header::COOKIE, format!("{CSRF_COOKIE}={token}"))
+            .header("x-csrf-token", "deadbeefdeadbeefdeadbeefdeadbeef")
+            .body(Body::empty())
+            .unwrap())
+        .await;
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
