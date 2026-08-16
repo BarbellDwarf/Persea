@@ -973,7 +973,9 @@ mod tests {
             // The stale challenge is gone (take would have removed it on
             // access, but it was pruned before anyone asked).
             assert!(store.take(&stale_id).await.is_none());
-            assert_eq!(store.len().await, 0);
+            // Only the live challenge remains; the stale one was pruned
+            // at insert time, never taken.
+            assert_eq!(store.len().await, 1);
         });
     }
 
