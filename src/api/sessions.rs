@@ -329,11 +329,7 @@ pub async fn list_sessions(
         .list_sessions()
         .await
         .into_iter()
-        .filter(|s| {
-            show_all
-                || identity_ref
-                    .is_some_and(|id| session_owned_by(id, &s.created_by))
-        })
+        .filter(|s| show_all || identity_ref.is_some_and(|id| session_owned_by(id, &s.created_by)))
         .map(|s| redact_share_url(s, &identity))
         .collect();
     // Sort by creation time descending (most recent first)
@@ -2138,8 +2134,14 @@ mod identity_tests {
 
     #[test]
     fn identity_key_prefers_email_over_display_name() {
-        assert_eq!(identity_key(&user("alice@example.com", "Alice")), "alice@example.com");
-        assert_eq!(identity_key(&AuthIdentity::ApiKey("deploy".into())), "deploy");
+        assert_eq!(
+            identity_key(&user("alice@example.com", "Alice")),
+            "alice@example.com"
+        );
+        assert_eq!(
+            identity_key(&AuthIdentity::ApiKey("deploy".into())),
+            "deploy"
+        );
     }
 
     #[test]
@@ -2157,9 +2159,18 @@ mod identity_tests {
 
     #[test]
     fn vdi_container_username_derives_from_identity() {
-        assert_eq!(vdi_container_username(&user("alice@example.com", "Alice")), "alice");
-        assert_eq!(vdi_container_username(&user("a.b+tag@corp.com", "A B")), "a_b_tag");
-        assert_eq!(vdi_container_username(&AuthIdentity::ApiKey("deploy".into())), "deploy");
+        assert_eq!(
+            vdi_container_username(&user("alice@example.com", "Alice")),
+            "alice"
+        );
+        assert_eq!(
+            vdi_container_username(&user("a.b+tag@corp.com", "A B")),
+            "a_b_tag"
+        );
+        assert_eq!(
+            vdi_container_username(&AuthIdentity::ApiKey("deploy".into())),
+            "deploy"
+        );
     }
 
     #[test]
@@ -2167,7 +2178,10 @@ mod identity_tests {
         // The prefix is `persea-vdi-{dash-sanitized}-{fnv1a:08x}`: the
         // same shape the driver produces (entry-suffixed names extend it).
         let prefix = vdi_container_prefix("alice");
-        assert_eq!(prefix, format!("persea-vdi-alice-{:08x}", fnv1a("alice") as u32));
+        assert_eq!(
+            prefix,
+            format!("persea-vdi-alice-{:08x}", fnv1a("alice") as u32)
+        );
         assert!(prefix.starts_with("persea-vdi-alice-"));
         assert_eq!(prefix.len(), "persea-vdi-alice-".len() + 8);
     }
@@ -2176,7 +2190,10 @@ mod identity_tests {
     fn vdi_container_owned_exact_and_entry_suffixed() {
         let prefix = vdi_container_prefix("alice");
         assert!(vdi_container_owned_by(&prefix, &prefix));
-        assert!(vdi_container_owned_by(&format!("{}-web-server", prefix), &prefix));
+        assert!(vdi_container_owned_by(
+            &format!("{}-web-server", prefix),
+            &prefix
+        ));
         // A different user's container (different hash) is not owned.
         let mallory = vdi_container_prefix("mallory");
         assert!(!vdi_container_owned_by(&mallory, &prefix));

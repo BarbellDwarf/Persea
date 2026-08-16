@@ -202,14 +202,17 @@ async fn handshake_with_timeout(
     tls: Option<&tokio_rustls::TlsConnector>,
     timeout: std::time::Duration,
 ) -> Result<(crate::guacd::GuacdStream, String), SessionError> {
-    tokio::time::timeout(timeout, guacd::connect_and_handshake(guacd_addr, params, tls))
-        .await
-        .map_err(|_| {
-            SessionError::GuacdConnection(
-                "timeout connecting to guacd during session-creation handshake".into(),
-            )
-        })?
-        .map_err(|e| SessionError::GuacdConnection(e.to_string()))
+    tokio::time::timeout(
+        timeout,
+        guacd::connect_and_handshake(guacd_addr, params, tls),
+    )
+    .await
+    .map_err(|_| {
+        SessionError::GuacdConnection(
+            "timeout connecting to guacd during session-creation handshake".into(),
+        )
+    })?
+    .map_err(|e| SessionError::GuacdConnection(e.to_string()))
 }
 
 /// Count sessions in Pending|Active state: the only states that hold a

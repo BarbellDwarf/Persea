@@ -1897,12 +1897,9 @@ mod tests {
                 for instr in parser.receive(&chunk).into_iter().flatten() {
                     if instr.opcode == "select" {
                         sock.write_all(
-                            Instruction::new(
-                                "args",
-                                vec!["read-only".into(), "hostname".into()],
-                            )
-                            .encode()
-                            .as_bytes(),
+                            Instruction::new("args", vec!["read-only".into(), "hostname".into()])
+                                .encode()
+                                .as_bytes(),
                         )
                         .await
                         .unwrap();
@@ -1930,7 +1927,10 @@ mod tests {
         let mut config = Config::default();
         config.guacd_addr = addr.to_string();
         let mgr = SessionManager::new(config, None);
-        let stream = mgr.join_connection("conn-1", 800, 600, 96, true).await.unwrap();
+        let stream = mgr
+            .join_connection("conn-1", 800, 600, 96, true)
+            .await
+            .unwrap();
         drop(stream);
 
         let connect_args = server.await.unwrap().expect("mock guacd saw the connect");
@@ -1946,7 +1946,10 @@ mod tests {
         let mut config = Config::default();
         config.guacd_addr = addr.to_string();
         let mgr = SessionManager::new(config, None);
-        let stream = mgr.join_connection("conn-1", 800, 600, 96, false).await.unwrap();
+        let stream = mgr
+            .join_connection("conn-1", 800, 600, 96, false)
+            .await
+            .unwrap();
         drop(stream);
 
         let connect_args = server.await.unwrap().expect("mock guacd saw the connect");

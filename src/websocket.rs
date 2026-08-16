@@ -1544,8 +1544,17 @@ async fn ws_to_guacd_inner(
 fn shadow_blocked_opcode(opcode: &str) -> bool {
     matches!(
         opcode,
-        "key" | "mouse" | "clipboard" | "argv" | "get" | "file" | "blob" | "end" | "body"
-            | "size" | "ack"
+        "key"
+            | "mouse"
+            | "clipboard"
+            | "argv"
+            | "get"
+            | "file"
+            | "blob"
+            | "end"
+            | "body"
+            | "size"
+            | "ack"
     )
 }
 
@@ -1974,7 +1983,10 @@ mod tests {
             role: "operator".into(),
             groups: Vec::new(),
         };
-        assert!(!owner_path_authorized(Some(&collider), Some("alice@example.com")));
+        assert!(!owner_path_authorized(
+            Some(&collider),
+            Some("alice@example.com")
+        ));
         // The real owner matches on email even when the display name
         // differs from the stored creator.
         let owner = AuthIdentity::User {
@@ -1983,7 +1995,10 @@ mod tests {
             role: "operator".into(),
             groups: Vec::new(),
         };
-        assert!(owner_path_authorized(Some(&owner), Some("alice@example.com")));
+        assert!(owner_path_authorized(
+            Some(&owner),
+            Some("alice@example.com")
+        ));
         // Legacy sessions stored the display name: the display-name leg
         // keeps their creators authorized until the session is recreated
         // under the stable-identity scheme.
