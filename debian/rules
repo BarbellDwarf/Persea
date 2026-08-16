@@ -43,8 +43,9 @@ override_dh_auto_install:
 	# Static web assets
 	cp -r static/* debian/persea/opt/persea/static/
 
-	# Default config (marked as conffile)
-	install -m 644 debian/config.toml.default debian/persea/opt/persea/config.toml
+	# Default config (marked as conffile). 0600: the postinst bootstraps a
+	# storage encryption key into it, so it must never be world-readable.
+	install -m 600 debian/config.toml.default debian/persea/opt/persea/config.toml
 
 	# ldconfig drop-in so guacd can find its libs
 	echo "/opt/persea/lib" > debian/persea/etc/ld.so.conf.d/persea.conf

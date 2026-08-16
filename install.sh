@@ -257,6 +257,29 @@ TOMLEOF
         info "Config already exists at $PREFIX/config.toml (not overwritten)"
     fi
 
+    # Generate a storage encryption key if the config has none: the server
+    # refuses to start without one (credentials would sit in plaintext).
+    # TOML-aware: inserts into an existing [storage] table, appends one only
+    # when absent, so admin-modified configs never get a duplicate table.
+    # Mirrors debian/postinst and the Docker entrypoint; respects an
+    # admin-set key (a re-run over an existing config is the common case).
+    if ! grep -q '^encryption_key' "$PREFIX/config.toml" 2>/dev/null; then
+        local KEY
+        KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+        if grep -q '^\[storage\]' "$PREFIX/config.toml" 2>/dev/null; then
+            sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$PREFIX/config.toml"
+        else
+            {
+                echo ""
+                echo "[storage]"
+                echo "encryption_key = \"$KEY\""
+            } >> "$PREFIX/config.toml"
+        fi
+        info "Generated storage encryption key."
+    fi
+    # The config now holds the encryption key: not world-readable.
+    chmod 600 "$PREFIX/config.toml"
+
     # Create persea system user (if not exists)
     if ! id -u persea >/dev/null 2>&1; then
         useradd --system --create-home --home-dir /home/persea --shell /usr/sbin/nologin persea
@@ -264,6 +287,19 @@ TOMLEOF
     fi
 
     chown -R persea:persea "$PREFIX/data" "$PREFIX/recordings"
+
+    # The SQLite DB holds session tokens and encrypted credentials: never
+    # world-readable. Pre-create it with owner-only perms so the first
+    # service start (as persea) never creates a 0644 file; fix up existing
+    # files (re-run path). The data dir itself is locked to the service
+    # account.
+    local DB="$PREFIX/data/persea.db"
+    if [[ ! -f "$DB" ]]; then
+        touch "$DB"
+    fi
+    chown persea:persea "$DB"
+    chmod 600 "$DB"
+    chmod 750 "$PREFIX/data"
 
     # Chromium policy: web session hardening (block file dialogs, printing, extensions, etc.)
     # DeveloperToolsAvailability=0: DevTools/CDP allowed (needed for login scripts).

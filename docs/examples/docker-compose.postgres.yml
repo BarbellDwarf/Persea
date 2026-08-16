@@ -36,7 +36,10 @@ services:
       - persea-tls:/opt/persea/tls
     environment:
       PERSEA_DB_URL: postgres://persea:change-me@db:5432/persea
-      PERSEA_STORAGE_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      # Not a valid key: persea refuses to start with it, so a forgotten
+      # replacement fails loudly in the logs instead of silently shipping
+      # a known key. Generate your own with: openssl rand -hex 32
+      PERSEA_STORAGE_KEY: "CHANGE_ME_openssl_rand_hex_32"
 
   db:
     image: postgres:17

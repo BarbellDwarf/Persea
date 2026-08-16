@@ -136,6 +136,18 @@ fi
 # The config now holds the encryption key: not world-readable.
 chmod 600 "$CONFIG"
 
+# The SQLite DB holds session tokens and encrypted credentials: never
+# world-readable. Pre-create it with owner-only perms so the first service
+# start (as persea) never creates a 0644 file; fix up existing files
+# (upgrade path). The data dir itself is locked to the service account.
+DB="/opt/persea/data/persea.db"
+if [ ! -f "$DB" ]; then
+    touch "$DB"
+fi
+chown persea:persea "$DB"
+chmod 600 "$DB"
+chmod 750 /opt/persea/data
+
 # Update shared library cache for guacd libs
 ldconfig
 

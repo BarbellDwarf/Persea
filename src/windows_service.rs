@@ -5,6 +5,15 @@
 //! runs as LocalSystem and keeps its data in `%ProgramData%\persea`
 //! (database, recordings, certificates, config).
 //!
+//! Data protection trade-off: the NSIS installer strips inherited ACLs on
+//! `%ProgramData%\persea` and grants access to SYSTEM and Administrators
+//! only, so local Users cannot read the database or config (which holds
+//! the credential encryption key). The service itself still runs as
+//! LocalSystem, a high-privilege account: the ACL lockdown protects
+//! persea's data from other local users, not the machine from the service.
+//! A least-privilege account (for example NetworkService) would require
+//! granting that account access to the data root and is a future option.
+//!
 //! When the process is started by the SCM, `dispatch()` hands control to
 //! the service dispatcher, which runs the server on its own tokio runtime
 //! and forwards SCM stop requests to the server's graceful shutdown path.

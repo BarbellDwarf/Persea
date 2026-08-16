@@ -278,7 +278,7 @@ fi
 %{_prefix}/lib/*.so*
 %{_libdir}/freerdp3/
 %{_prefix}/static/
-%config(noreplace) %attr(0640,persea,persea) %{_prefix}/config.toml
+%config(noreplace) %attr(0600,persea,persea) %{_prefix}/config.toml
 %dir %attr(0750,persea,persea) %{_prefix}/data
 %dir %attr(0750,persea,persea) %{_prefix}/recordings
 %dir %attr(0750,persea,persea) %{_prefix}/tls

@@ -96,7 +96,50 @@ else
     info "Config already exists at $PREFIX/config.toml (not overwritten)"
 fi
 
+# Generate a storage encryption key if the config has none: the server
+# refuses to start without one (credentials would sit in plaintext).
+# TOML-aware: inserts into an existing [storage] table, appends one only
+# when absent, so admin-modified configs never get a duplicate table.
+# Mirrors debian/postinst and the Docker entrypoint; respects an
+# admin-set key.
+if ! grep -q '^encryption_key' "$PREFIX/config.toml" 2>/dev/null; then
+    KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    if grep -q '^\[storage\]' "$PREFIX/config.toml" 2>/dev/null; then
+        sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$PREFIX/config.toml"
+    else
+        {
+            echo ""
+            echo "[storage]"
+            echo "encryption_key = \"$KEY\""
+        } >> "$PREFIX/config.toml"
+    fi
+    info "Generated storage encryption key."
+fi
+# The config now holds the encryption key: not world-readable.
+chmod 600 "$PREFIX/config.toml"
+
 chown -R persea:persea "$PREFIX/data" "$PREFIX/recordings"
+
+# The SQLite DB holds session tokens and encrypted credentials: never
+# world-readable. Pre-create it with owner-only perms so the first service
+# start (as persea) never creates a 0644 file; fix up existing files
+# (re-run path). The data dir itself is locked to the service account.
+DB="$PREFIX/data/persea.db"
+if [ ! -f "$DB" ]; then
+    touch "$DB"
+fi
+chown persea:persea "$DB"
+chmod 600 "$DB"
+chmod 750 "$PREFIX/data"
+
+# FreeRDP 3 plugins (RDPDR/RDPSND channels: drive redirection, audio,
+# printing) — install next to the system FreeRDP libraries so freerdp finds
+# them at runtime. Mirrors the .deb layout.
+FREERDP_PLUGIN_DIR="$(pkg-config --variable=libdir freerdp3 2>/dev/null || echo /usr/lib/x86_64-linux-gnu)/freerdp3"
+if [ -d "$SCRIPT_DIR/lib/freerdp3" ]; then
+    mkdir -p "$FREERDP_PLUGIN_DIR"
+    cp -a "$SCRIPT_DIR/lib/freerdp3/"*.so* "$FREERDP_PLUGIN_DIR/" 2>/dev/null || true
+fi
 
 # ---------------------------------------------------------------------------
 # Step 3: ldconfig
