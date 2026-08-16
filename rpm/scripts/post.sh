@@ -1,11 +1,32 @@
 #!/bin/sh
-# persea RPM %post scriptlet — cert bootstrap, SELinux, firewalld.
-# The cert + secure_cookies logic mirrors install.sh / debian/postinst.
+# persea RPM %post scriptlet — storage key, cert bootstrap, SELinux, firewalld.
+# The storage key + cert + secure_cookies logic mirrors the root persea.spec
+# %post and install.sh / debian/postinst.
 set -e
 
 # Ensure data directories have correct ownership
 chown -R persea:persea /opt/persea/data
 chown -R persea:persea /opt/persea/recordings
+
+# Generate a storage encryption key if the config has none: the server
+# refuses to start without one (credentials would sit in plaintext).
+# Mirrors the root persea.spec %post and the secure_cookies pattern below.
+CONFIG="/opt/persea/config.toml"
+if [ -f "$CONFIG" ] && ! grep -qE '^[[:space:]]*encryption_key[[:space:]]*=' "$CONFIG" 2>/dev/null; then
+    KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    if grep -q '^\[storage\]' "$CONFIG" 2>/dev/null; then
+        # Insert into the existing [storage] section — a second [storage]
+        # header is invalid TOML ("duplicate key") and breaks config loading.
+        sed -i "/^\[storage\]/a encryption_key = \"$KEY\"" "$CONFIG"
+    else
+        {
+            echo ""
+            echo "[storage]"
+            echo "encryption_key = \"$KEY\""
+        } >> "$CONFIG"
+    fi
+    echo "Generated storage encryption key."
+fi
 
 # Generate a self-signed TLS certificate if none exists
 if [ ! -f /opt/persea/tls/cert.pem ] || [ ! -f /opt/persea/tls/key.pem ]; then
@@ -20,7 +41,6 @@ if [ ! -f /opt/persea/tls/cert.pem ] || [ ! -f /opt/persea/tls/key.pem ]; then
     # Self-signed certs cause browsers to block Secure cookies even after
     # clicking through the cert warning — disable the Secure attribute so
     # login actually works. Mirrors install.sh and the Docker entrypoint.
-    CONFIG="/opt/persea/config.toml"
     if ! grep -q 'secure_cookies' "$CONFIG" 2>/dev/null; then
         if grep -q '^\[tls\]' "$CONFIG" 2>/dev/null; then
             # Insert into the existing [tls] section — a second [tls] header
