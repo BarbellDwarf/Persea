@@ -784,6 +784,14 @@ fn write_self_signed_cert(
     std::fs::write(&key_path, signing_key.serialize_pem())
         .map_err(|e| format!("failed to write key.pem: {}", e))?;
 
+    // The private key must not be world-readable: 0600 on Unix (a no-op
+    // on Windows, where the file inherits the directory ACL).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600));
+    }
+
     Ok((cert_path, key_path))
 }
 
@@ -816,6 +824,19 @@ fn cmd_init() {
             eprintln!("FATAL: --init failed to create {}: {}", dir.display(), e);
             std::process::exit(1);
         }
+    }
+
+    // Secure directory permissions: the data dirs hold the TLS key, the
+    // credential database, and session recordings, so they are 0700 on
+    // Unix (a no-op on Windows, where ACLs govern). The static dir serves
+    // public assets and stays 0755.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for dir in [&root, &tls_dir, &db_dir, &recordings_dir] {
+            let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        }
+        let _ = std::fs::set_permissions(&static_dir, std::fs::Permissions::from_mode(0o755));
     }
 
     // Self-signed cert (rcgen; no openssl), mirroring install.sh — the
@@ -1999,6 +2020,20 @@ async fn run_server(
         session_create_route = session_create_route.layer(GovernorLayer::new(conf));
     }
 
+    // Password change (self-service) — always rate-limited per IP: the
+    // endpoint verifies the current password, so it is a guessing surface
+    // even for authenticated users.
+    let password_rate_conf = GovernorConfigBuilder::default()
+        .per_second(1)
+        .burst_size(5)
+        .key_extractor(SmartIpKeyExtractor)
+        .finish()
+        .expect("Failed to build password change rate limit config");
+    let password_route = Router::new()
+        .route("/api/me/password", post(handlers::account::change_password))
+        .with_state(manager.clone())
+        .layer(GovernorLayer::new(password_rate_conf));
+
     // API routes that require authentication
     let mut api_routes = Router::new()
         .route("/api/sessions", get(api::list_sessions))
@@ -2121,8 +2156,6 @@ async fn run_server(
             delete(api::delete_group_mapping),
         )
         .route("/api/me", get(api::me).put(api::update_me))
-        // Password change (self-service) — enforced against the password policy
-        .route("/api/me/password", post(handlers::account::change_password))
         // User API token self-service
         .route("/api/me/tokens", get(api::list_my_tokens))
         .route("/api/me/tokens", post(api::create_my_token))
@@ -2296,6 +2329,7 @@ async fn run_server(
             delete(handlers::rbac::delete_custom_role),
         )
         .merge(session_create_route)
+        .merge(password_route)
         .with_state(manager.clone());
     if rate_limit_enabled {
         let conf = GovernorConfigBuilder::default()
@@ -2359,12 +2393,18 @@ async fn run_server(
         .layer(middleware::from_fn(auth::optional_auth))
         .layer(Extension(database.clone()));
 
-    // Prometheus metrics endpoint
-    let metrics_route = Router::new().route("/metrics", get(api::metrics));
+    // Operational endpoints: /metrics and /api/docs are admin-only. The
+    // handlers enforce the role; optional_auth populates the identity from
+    // an admin API key (Prometheus scrapers) or a session cookie.
+    let admin_ops_route = Router::new()
+        .route("/metrics", get(api::metrics))
+        .route("/api/docs", get(api::get_docs))
+        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(database.clone()))
+        .layer(Extension(trusted_proxies.clone()));
 
     // Unauthenticated stateful routes
     let unauth_routes = Router::new()
-        .route("/api/docs", get(api::get_docs))
         .route("/api/sessions/{id}/banner", get(api::get_session_banner))
         .route("/client/{session_id}", get(serve_client_page))
         .with_state(manager.clone());
@@ -2395,6 +2435,7 @@ async fn run_server(
     let auth_pages = Router::new()
         .route("/", get(handlers::auth::login_page))
         .route("/auth/mfa", get(handlers::auth::mfa_page))
+        .route("/auth/enroll", get(handlers::auth::enroll_page))
         .with_state(manager.clone())
         .merge(login_rate_limited)
         .layer(csrf::CsrfLayer)
@@ -2403,13 +2444,45 @@ async fn run_server(
         .layer(Extension(auth_chain.clone()))
         .layer(Extension(trusted_proxies.clone()));
 
+    // TOTP self-service: enrollment (reachable with the pending-MFA
+    // cookie from the enrollment path — no session powers) and management
+    // (full session required). The handlers resolve the identity
+    // themselves; optional_auth only populates it when a session or API
+    // key is present.
+    let totp_routes = Router::new()
+        .route(
+            "/api/me/totp",
+            get(handlers::account::totp_status).delete(handlers::account::totp_disable),
+        )
+        .route("/api/me/totp/enroll", post(handlers::account::totp_enroll))
+        .route("/api/me/totp/verify", post(handlers::account::totp_verify))
+        .with_state(manager.clone())
+        .layer(csrf::CsrfLayer)
+        .layer(middleware::from_fn(auth::optional_auth))
+        .layer(Extension(database.clone()))
+        .layer(Extension(trusted_proxies.clone()));
+
     // SAML routes (if configured)
     let mut saml_routes = Router::new();
     if let Some(ref sp) = saml_provider {
         let sp_acs = sp.clone();
         let sp_meta = sp.clone();
-        saml_routes = Router::new()
+        // The ACS callback is CSRF-exempt and unauthenticated (the signed
+        // assertion is the authentication), so it gets its own per-IP rate
+        // limit like the login POST — a flood of bogus responses must not
+        // reach the signature validator.
+        let acs_rate_conf = GovernorConfigBuilder::default()
+            .per_second(5)
+            .burst_size(10)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .expect("Failed to build SAML ACS rate limit config");
+        let acs_route = Router::new()
             .route("/auth/saml/acs", post(handlers::auth::saml_acs))
+            .with_state(manager.clone())
+            .layer(GovernorLayer::new(acs_rate_conf));
+        saml_routes = Router::new()
+            .merge(acs_route)
             .route("/auth/saml/metadata", get(handlers::auth::saml_metadata))
             .with_state(manager.clone())
             .layer(csrf::CsrfLayer)
@@ -2513,12 +2586,13 @@ async fn run_server(
         .route("/api/auth/status", get(api::auth_status))
         .merge(api_routes)
         .merge(health_route)
-        .merge(metrics_route)
+        .merge(admin_ops_route)
         .merge(ws_route)
         .merge(connect_route)
         .merge(setup_routes)
         .merge(auth_pages)
         .merge(saml_routes)
+        .merge(totp_routes)
         .merge(unauth_routes)
         .merge(html_routes);
 
@@ -3149,6 +3223,70 @@ mod tests {
         assert!(
             saw_429,
             "no requests were throttled — rate-limit not applied"
+        );
+    }
+
+    #[tokio::test]
+    async fn saml_acs_route_is_rate_limited_per_ip() {
+        use axum::extract::ConnectInfo;
+        use axum::{body::Body, http::Request, routing::post, Router};
+        use tower::ServiceExt;
+
+        // Same wiring as the SAML ACS route in run_server: the handler
+        // behind a per-IP GovernorLayer. A burst of bogus responses from
+        // one IP must be throttled before reaching the signature
+        // validator.
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let manager: AppState = Arc::new(crate::session::SessionManager::new_with_db(
+            crate::config::Config::default(),
+            None,
+            db.clone(),
+        ));
+        let sp = Arc::new(crate::auth_providers::saml::SamlProvider::new(
+            crate::auth_providers::saml::SamlConfig::default(),
+        ));
+        let chain = Arc::new(crate::auth_chain::AuthChain::empty());
+
+        let acs_rate_conf = GovernorConfigBuilder::default()
+            .per_second(5)
+            .burst_size(10)
+            .key_extractor(SmartIpKeyExtractor)
+            .finish()
+            .expect("governor config");
+
+        let app: Router = Router::new()
+            .route("/auth/saml/acs", post(handlers::auth::saml_acs))
+            .with_state(manager)
+            .layer(GovernorLayer::new(acs_rate_conf))
+            .layer(csrf::CsrfLayer)
+            .layer(Extension(sp))
+            .layer(Extension(chain))
+            .layer(Extension(db))
+            .layer(Extension(crate::auth::TrustedProxies(Vec::new())))
+            .layer(Extension(crate::totp::TotpEnforcement::Off))
+            .layer(Extension(crate::csrf::TlsEnabled(false)));
+
+        let mut saw_429 = false;
+        for _ in 0..30 {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/auth/saml/acs")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("x-forwarded-for", "203.0.113.99")
+                .extension(ConnectInfo(
+                    "127.0.0.1:8080".parse::<SocketAddr>().unwrap(),
+                ))
+                .body(Body::from("SAMLResponse=abc"))
+                .unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            if resp.status() == StatusCode::TOO_MANY_REQUESTS {
+                saw_429 = true;
+                break;
+            }
+        }
+        assert!(
+            saw_429,
+            "the SAML ACS route must be rate-limited per IP"
         );
     }
 
