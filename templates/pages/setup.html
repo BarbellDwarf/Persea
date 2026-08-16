@@ -21,16 +21,12 @@
             <svg class="alert-icon" viewBox="0 0 20 20" fill="currentColor" width="18" height="18">
                 <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/>
             </svg>
-            <span>
-            {% if error == 'failed' %}Setup failed. Please check your configuration and try again.
-            {% elif error == 'network_error' %}Network error. Please check your connection.
-            {% else %}{{ error | escape }}
-            {% endif %}
-            </span>
+            <span>{{ error | escape }}</span>
         </div>
         {% endif %}
 
         <form method="POST" action="/setup">
+            <input type="hidden" name="csrf_token" value="">
 
             <!-- Server -->
             <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:20px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)">Server</h3>
@@ -98,7 +94,8 @@
             <div class="form-group">
                 <label class="form-label" for="admin_password">Password</label>
                 <input type="password" id="admin_password" name="admin_password" class="form-input"
-                       placeholder="Minimum 8 characters" required minlength="8">
+                       placeholder="Minimum {{ password_min_length }} characters" required
+                       minlength="{{ password_min_length }}">
             </div>
 
             <!-- Feature Flags -->
@@ -129,33 +126,19 @@
         </form>
 
         <script nonce="{{ csp_nonce }}">
-        // CSRF: submit via fetch with the X-CSRF-Token header (same pattern as
-        // the login form). The server responds with a redirect on success or
-        // an error page; follow it.
-        document.querySelector('form[action="/setup"]').addEventListener('submit', function(evt) {
-            evt.preventDefault();
-            var btn = this.querySelector('button[type="submit"]');
-            btn.disabled = true;
+        // CSRF: copy the csrf_token cookie into the hidden form field; the
+        // form submits natively and the CSRF middleware accepts the field.
+        // The browser handles the 303 redirect and sends cookies correctly.
+        // Using fetch() with redirect:'follow' causes Chromium to skip
+        // sending cookies on the redirect follow-up, and a non-redirected
+        // 200 (server-side validation error) must re-render the wizard with
+        // the error visible instead of bouncing to /.
+        (function() {
             var csrf = readCookie('csrf_token');
-            fetch('/setup', {
-                method: 'POST',
-                headers: csrf ? { 'X-CSRF-Token': csrf } : {},
-                body: new URLSearchParams(new FormData(evt.target)),
-                credentials: 'same-origin',
-                redirect: 'follow'
-            }).then(function(resp) {
-                if (resp.redirected) {
-                    location.href = resp.url;
-                } else if (resp.ok) {
-                    location.href = '/';
-                } else {
-                    location.href = '/setup?error=failed';
-                }
-            }).catch(function() {
-                btn.disabled = false;
-                location.href = '/setup?error=network_error';
+            document.querySelectorAll('input[name="csrf_token"]').forEach(function(input) {
+                if (csrf) input.value = csrf;
             });
-        });
+        })();
         </script>
     </div>
 </div>

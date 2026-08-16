@@ -49,6 +49,10 @@ pub mod drive;
 /// HTML/JSON rendering.
 pub mod error;
 pub mod guacd;
+/// HTTP handlers for pages, the setup wizard, and management APIs. Also
+/// compiled into the binary crate via `mod handlers` in main.rs; the lib
+/// copy exists so integration tests can exercise the real handlers.
+pub mod handlers;
 pub mod import;
 pub mod metrics;
 pub mod migrate;
@@ -67,6 +71,10 @@ pub mod settings_merge;
 pub mod slugify;
 /// minijinja template rendering and error page helpers.
 pub mod templates;
+/// CSP nonce carried as a request extension by the security headers
+/// middleware; re-exported at the crate root so the lib copy of the
+/// handlers (which use `crate::CspNonce`) resolves it.
+pub use templates::CspNonce;
 #[cfg(test)]
 pub mod testing;
 pub mod thumbnails;

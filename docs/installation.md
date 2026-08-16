@@ -205,7 +205,7 @@ The first time you open the web interface (before any user account exists), pers
 **Admin Account**
 - **Email**: the admin's login name (for example `admin@example.com`).
 - **Display Name**: the name shown in the interface.
-- **Password**: at least 8 characters, and at least the password-policy minimum (15 characters by default). Pick something long; this is the master account.
+- **Password**: at least the password-policy minimum (15 characters by default; configure it via `password.min_length` in `config.toml`). Pick something long; this is the master account.
 
 **Features**: tick the optional features you plan to use (Proxmox VE, VMware vSphere, Session Recording, SSH Tunnels, Web Browser Sessions, and VDI Containers). Recording, tunnels, and Proxmox are ticked by default and need no further setup. The VMware checkbox writes a commented-out configuration template for you. The others are switched on by adding their configuration sections to `config.toml` (see the [Deployment Guide](deployment-guide.md) and the [Configuration reference](configuration.md)).
 
