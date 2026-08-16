@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Setup — {{ site_title }}{% endblock %}
+{% block title %}Setup — {{ site_title | escape }}{% endblock %}
 
 {% block body %}
 <div class="login-wrapper">
@@ -7,13 +7,13 @@
 
         <div class="login-logo">
             {% if logo_url is defined and logo_url %}
-            <img src="{{ logo_url }}" alt="{{ site_title }}" style="height:40px">
+            <img src="{{ logo_url | escape }}" alt="{{ site_title | escape }}" style="height:40px">
             {% else %}
             <div class="login-logo-icon">ps</div>
             {% endif %}
         </div>
 
-        <h1 class="login-title">{{ site_title }} Setup</h1>
+        <h1 class="login-title">{{ site_title | escape }} Setup</h1>
         <p class="login-subtitle">Configure your installation</p>
 
         {% if error %}
@@ -38,19 +38,19 @@
             <div class="form-group">
                 <label class="form-label" for="listen_addr">Listen Address</label>
                 <input type="text" id="listen_addr" name="listen_addr" class="form-input"
-                       value="{{ listen_addr }}" placeholder="0.0.0.0:8089">
+                       value="{{ listen_addr | escape }}" placeholder="0.0.0.0:8089">
             </div>
 
             <div class="form-group">
                 <label class="form-label" for="db_path">Database Path</label>
                 <input type="text" id="db_path" name="db_path" class="form-input"
-                       value="{{ db_path }}" placeholder="/opt/persea/data/persea.db">
+                       value="{{ db_path | escape }}" placeholder="/opt/persea/data/persea.db">
             </div>
 
             <div class="form-group">
                 {% if backend %}
                 <div style="margin:0 0 10px;padding:10px 12px;background:rgba(34,197,94,.1);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-secondary)">
-                    This server stores its data in <strong>{{ backend }}</strong>
+                    This server stores its data in <strong>{{ backend | escape }}</strong>
                     (configured via <code>db_url</code>) — the admin account below
                     will be created there. Keep the Database URL filled in.
                 </div>
@@ -71,23 +71,13 @@
             <h3 style="font-size:14px;font-weight:600;color:var(--text-primary);margin:20px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--border)">guacd</h3>
 
             <div class="form-group">
-                <label class="form-label" for="guacd_mode">Mode</label>
-                <select id="guacd_mode" name="guacd_mode" class="form-input">
-                    <option value="embedded" {% if guacd_mode == 'embedded' %}selected{% endif %}>Embedded (run guacd on this server)</option>
-                    <option value="external" {% if guacd_mode == 'external' %}selected{% endif %}>External (connect to remote guacd)</option>
-                </select>
-            </div>
-
-            <div class="form-group" id="guacd-addr-group" style="{% if guacd_mode == 'embedded' %}display:none{% endif %}">
                 <label class="form-label" for="guacd_addr">guacd Address</label>
                 <input type="text" id="guacd_addr" name="guacd_addr" class="form-input"
-                       value="{{ guacd_addr }}" placeholder="127.0.0.1:4822">
-            </div>
-
-            <div class="form-group" id="guacd-path-group" style="{% if guacd_mode == 'external' %}display:none{% endif %}">
-                <label class="form-label" for="guacd_path">guacd Binary Path</label>
-                <input type="text" id="guacd_path" name="guacd_path" class="form-input"
-                       value="{{ guacd_path }}" placeholder="/usr/sbin/guacd">
+                       value="{{ guacd_addr | escape }}" placeholder="127.0.0.1:4822">
+                <p style="margin:6px 0 0;font-size:12px;color:var(--text-secondary)">
+                    TCP address of the guacd server persea connects to. Run
+                    guacd separately (the setup wizard no longer starts it).
+                </p>
             </div>
 
             <!-- Admin Account -->
@@ -96,13 +86,13 @@
             <div class="form-group">
                 <label class="form-label" for="admin_email">Email</label>
                 <input type="email" id="admin_email" name="admin_email" class="form-input"
-                       value="{{ admin_email }}" placeholder="admin@example.com" required>
+                       value="{{ admin_email | escape }}" placeholder="admin@example.com" required>
             </div>
 
             <div class="form-group">
                 <label class="form-label" for="admin_name">Display Name</label>
                 <input type="text" id="admin_name" name="admin_name" class="form-input"
-                       value="{{ admin_name }}" placeholder="Administrator" required>
+                       value="{{ admin_name | escape }}" placeholder="Administrator" required>
             </div>
 
             <div class="form-group">
@@ -169,11 +159,4 @@
         </script>
     </div>
 </div>
-
-<script nonce="{{ csp_nonce }}">
-document.getElementById('guacd_mode').addEventListener('change', function() {
-    document.getElementById('guacd-addr-group').style.display = this.value === 'external' ? '' : 'none';
-    document.getElementById('guacd-path-group').style.display = this.value === 'embedded' ? '' : 'none';
-});
-</script>
 {% endblock %}

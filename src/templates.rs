@@ -1,12 +1,24 @@
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
-use minijinja::Environment;
+use minijinja::{AutoEscape, Environment};
 use serde::Serialize;
 use std::sync::{Arc, LazyLock};
 
 /// Template environment shared across requests.
 static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     let mut env = Environment::new();
+
+    // Autoescape all HTML templates: every `{{ }}` is HTML-escaped at render
+    // time unless the value is explicitly marked safe (`| safe`). Reflected
+    // values (site_title, logo_url, setup form fields, error messages) are
+    // escaped by default instead of on a per-interpolation basis.
+    env.set_auto_escape_callback(|name| {
+        if name.ends_with(".html") {
+            AutoEscape::Html
+        } else {
+            AutoEscape::None
+        }
+    });
 
     // Register templates
     env.add_template("base.html", include_str!("../templates/base.html"))
@@ -808,12 +820,8 @@ pub struct SetupTemplate {
     /// when a SQLx pool is installed (db_url configured); None = legacy
     /// SQLite file mode.
     pub backend: Option<String>,
-    /// guacd run mode, "embedded" or "external".
-    pub guacd_mode: String,
-    /// guacd TCP address used in external mode.
+    /// guacd TCP address the server connects to, e.g. "127.0.0.1:4822".
     pub guacd_addr: String,
-    /// Path to the guacd binary used in embedded mode.
-    pub guacd_path: String,
     /// Email address of the admin account the wizard creates.
     pub admin_email: String,
     /// Display name of the admin account.
