@@ -201,3 +201,33 @@ async fn mixed_toggles_resolve_independently() {
     assert_eq!(caps["desktop_transfers"], true);
     assert_eq!(caps["desktop_pairing"], COMPILED_DESKTOP_PAIRING);
 }
+
+#[tokio::test]
+async fn anonymous_get_sets_the_csrf_bootstrap_cookie() {
+    // The documented CSRF bootstrap contract (src/api/sessions.rs): an
+    // anonymous GET to /api/auth/status must set `Set-Cookie: csrf_token=...`
+    // so Bearer-only clients (desktop pairing, drive upload) can capture the
+    // double-submit token. main.rs wraps the route in CsrfLayer; this test
+    // mirrors that wiring.
+    let router = test_router(Some(test_db())).layer(persea::csrf::CsrfLayer);
+    let resp = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/auth/status")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let set_cookie = resp
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .expect("response must set a cookie");
+    assert!(
+        set_cookie.starts_with("csrf_token="),
+        "bootstrap cookie missing: {set_cookie}"
+    );
+}

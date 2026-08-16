@@ -2508,9 +2508,18 @@ async fn run_server(
 
     let html_routes = protected_html_routes.merge(public_html_routes);
 
+    // CSRF bootstrap endpoint for Bearer-only clients (desktop app pairing,
+    // drive upload): the documented contract (src/api/sessions.rs) says an
+    // anonymous GET here captures `Set-Cookie: csrf_token=...`. The route
+    // must therefore sit behind CsrfLayer like every other route; it stays
+    // anonymous because CsrfLayer only enforces on state-changing methods.
+    let auth_status_route = Router::new()
+        .route("/api/auth/status", get(api::auth_status))
+        .layer(csrf::CsrfLayer);
+
     // Build full router (all Router<()> at this point)
     let mut app: Router<()> = Router::new()
-        .route("/api/auth/status", get(api::auth_status))
+        .merge(auth_status_route)
         .merge(api_routes)
         .merge(health_route)
         .merge(metrics_route)
