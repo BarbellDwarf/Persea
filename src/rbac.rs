@@ -403,7 +403,10 @@ pub fn grant_group_permission(
 /// 3. Group permission on the connection (user must be member of the group)
 /// 4. Group permission on the connection's address-book folder
 /// 5. Group permission on any ancestor connection group (recursive CTE walks `parent_id`)
-/// 6. Denied if none match
+/// 6. Folder grants cascade down the slash-path hierarchy: a grant on
+///    "Clients" applies to entries in "Clients/Acme" (direct user and
+///    group grants on every ancestor folder)
+/// 7. Denied if none match
 pub fn check_connection_permission(
     db: &Db,
     user_id: i64,
@@ -420,6 +423,10 @@ pub fn check_connection_permission(
         let __db_route_arg_0 = connection_id.to_string();
         let __db_route_arg_1 = permission.as_str().to_string();
         let __db_route_arg_2 = folder_path;
+        let __db_route_arg_3 = __db_route_arg_2
+            .as_deref()
+            .map(ab_folder_ancestors)
+            .unwrap_or_default();
         return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| async move {
             let on_connection = crate::db::rbac_check_connection_permission_pool(
                 pool,
@@ -433,13 +440,29 @@ pub fn check_connection_permission(
             }
             match __db_route_arg_2 {
                 Some(folder) => {
-                    crate::db::rbac_check_group_object_permission_pool(
+                    if crate::db::rbac_check_group_object_permission_pool(
                         pool,
                         user_id,
                         folder,
-                        __db_route_arg_1,
+                        __db_route_arg_1.clone(),
                     )
-                    .await
+                    .await?
+                    {
+                        return Ok(true);
+                    }
+                    for ancestor in &__db_route_arg_3 {
+                        if crate::db::rbac_check_group_object_permission_pool(
+                            pool,
+                            user_id,
+                            ancestor.clone(),
+                            __db_route_arg_1.clone(),
+                        )
+                        .await?
+                        {
+                            return Ok(true);
+                        }
+                    }
+                    Ok(false)
                 }
                 None => Ok(false),
             }
@@ -523,11 +546,41 @@ pub fn check_connection_permission(
             user_id,
             connection_id,
             permission.as_str(),
-            folder_path.unwrap_or_default()
+            folder_path.as_deref().unwrap_or("")
         ],
         |row| row.get(0),
     )?;
-    Ok(inherited)
+    drop(conn);
+    if inherited {
+        return Ok(true);
+    }
+
+    // 6. Folder grants cascade down the slash-path hierarchy: a Connect
+    // grant on "Clients" applies to entries in "Clients/Acme". Each
+    // ancestor folder runs the same direct-user + group-CTE walk.
+    if let Some(folder) = folder_path.as_deref() {
+        for ancestor in ab_folder_ancestors(folder) {
+            if check_group_object_permission(db, user_id, &ancestor, permission)? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// Slash-path ancestors of a folder, deepest first, excluding the folder
+/// itself: "Clients/Acme" → ["Clients"].
+fn ab_folder_ancestors(folder: &str) -> Vec<String> {
+    let mut ancestors = Vec::new();
+    let mut current = folder;
+    while let Some((parent, _)) = current.rsplit_once('/') {
+        if parent.is_empty() {
+            break;
+        }
+        ancestors.push(parent.to_string());
+        current = parent;
+    }
+    ancestors
 }
 
 /// Address-book folder path for a connection id ("scope/folder/entry"),
@@ -1154,6 +1207,75 @@ mod tests {
             )
             .unwrap(),
             "a user outside the granted group stays denied"
+        );
+    }
+
+    #[test]
+    fn folder_connect_grant_cascades_to_subfolder_entries() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO users (email, name, role) VALUES ('member@test.com', 'Member', 'viewer')",
+            [],
+        )
+        .unwrap();
+        let member_id: i64 = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO users (email, name, role) VALUES ('outsider@test.com', 'Outsider', 'viewer')",
+            [],
+        )
+        .unwrap();
+        let outsider_id: i64 = conn.last_insert_rowid();
+        drop(conn);
+
+        // The entry lives in a subfolder; the Connect grant sits on the
+        // parent folder and must cascade down the slash-path hierarchy.
+        crate::db::create_ab_folder(&db, "shared", "Clients", "", "", false).unwrap();
+        crate::db::create_ab_folder(&db, "shared", "Clients/Acme", "", "", true).unwrap();
+        let sub = crate::db::get_ab_folder(&db, "shared", "Clients/Acme").unwrap();
+        crate::db::create_ab_entry(
+            &db,
+            sub.id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap();
+
+        let group_id = create_group(&db, "devops", None, None).unwrap();
+        add_user_to_group(&db, member_id, &group_id).unwrap();
+        grant_group_permission(
+            &db,
+            &format!("g:{}", group_id),
+            "Clients",
+            ObjectPermission::Connect,
+        )
+        .unwrap();
+
+        assert!(
+            check_connection_permission(
+                &db,
+                member_id,
+                "shared/Clients/Acme/web1",
+                ObjectPermission::Connect
+            )
+            .unwrap(),
+            "a Connect grant on a parent folder must cascade to entries in subfolders"
+        );
+        assert!(
+            !check_connection_permission(
+                &db,
+                outsider_id,
+                "shared/Clients/Acme/web1",
+                ObjectPermission::Connect
+            )
+            .unwrap(),
+            "a user outside the granted group stays denied in subfolders"
         );
     }
 }
