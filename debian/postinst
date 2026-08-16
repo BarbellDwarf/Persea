@@ -116,17 +116,25 @@ chown -R persea:persea /opt/persea/tls
 
 # Generate a storage encryption key if the config has none: the server
 # refuses to start without one (credentials would sit in plaintext).
+# TOML-aware: inserts into an existing [storage] table, appends one only
+# when absent, so admin-modified configs never get a duplicate table.
 # Mirrors install.sh and the Docker entrypoint; respects an admin-set key.
 CONFIG="/opt/persea/config.toml"
+KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 if ! grep -q '^encryption_key' "$CONFIG" 2>/dev/null; then
-    KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    {
-        echo ""
-        echo "[storage]"
-        echo "encryption_key = \"$KEY\""
-    } >> "$CONFIG"
+    if grep -q '^\[storage\]' "$CONFIG" 2>/dev/null; then
+        sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$CONFIG"
+    else
+        {
+            echo ""
+            echo "[storage]"
+            echo "encryption_key = \"$KEY\""
+        } >> "$CONFIG"
+    fi
     echo "Generated storage encryption key."
 fi
+# The config now holds the encryption key: not world-readable.
+chmod 600 "$CONFIG"
 
 # Update shared library cache for guacd libs
 ldconfig
