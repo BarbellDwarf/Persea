@@ -1095,8 +1095,7 @@ mod tests {
     async fn admin_list_user_tokens_filters_by_path_email() {
         use axum::routing::get;
         let db = test_db();
-        let alice = db::upsert_user(&db, "alice@test.com", "Alice", None, "viewer", &[])
-            .unwrap();
+        let alice = db::upsert_user(&db, "alice@test.com", "Alice", None, "viewer", &[]).unwrap();
         let bob = db::upsert_user(&db, "bob@test.com", "Bob", None, "viewer", &[]).unwrap();
         db::create_user_token(&db, alice.id, "alice-token", None, None).unwrap();
         db::create_user_token(&db, bob.id, "bob-token", None, None).unwrap();

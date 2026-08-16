@@ -623,7 +623,11 @@ async fn poweruser_cannot_admin_tokens() {
     let session = setup_session(&db, "pu@test.com", "poweruser");
     let router = test_router(db);
     let resp = router
-        .oneshot(sess_req("GET", "/api/admin/users/pu%40test.com/tokens", &session))
+        .oneshot(sess_req(
+            "GET",
+            "/api/admin/users/pu%40test.com/tokens",
+            &session,
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);

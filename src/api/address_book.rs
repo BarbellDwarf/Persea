@@ -3689,11 +3689,36 @@ mod tests {
         assert!(!folder_allowed_for_user(&db, "shared", "Clients", &other));
         assert!(!folder_allowed_for_user(&db, "shared", "Clients", &none));
         assert!(folder_allowed_for_user(&db, "shared", "Clients/Acme", &ops));
-        assert!(!folder_allowed_for_user(&db, "shared", "Clients/Acme", &other));
-        assert!(!folder_allowed_for_user(&db, "shared", "Clients/Acme", &none));
-        assert!(folder_allowed_for_user(&db, "shared", "Clients/Acme/Prod", &ops));
-        assert!(!folder_allowed_for_user(&db, "shared", "Clients/Acme/Prod", &other));
-        assert!(!folder_allowed_for_user(&db, "shared", "Clients/Acme/Prod", &none));
+        assert!(!folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme",
+            &other
+        ));
+        assert!(!folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme",
+            &none
+        ));
+        assert!(folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme/Prod",
+            &ops
+        ));
+        assert!(!folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme/Prod",
+            &other
+        ));
+        assert!(!folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme/Prod",
+            &none
+        ));
 
         assert!(folder_allowed_for_user(&db, "shared", "Public", &none));
         assert!(folder_allowed_for_user(&db, "shared", "Public/Open", &none));
