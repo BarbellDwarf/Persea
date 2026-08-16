@@ -6,13 +6,109 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!--
-Release checklist (delete this comment before tagging v1.0.0):
+Release checklist (delete this comment before tagging v1.0.1):
 - [ ] `cargo test` + `cargo fmt --check` green on the final commit
 - [ ] CI green for the final push (`gh run list`)
-- [ ] Tag `v1.0.0` (annotated) and push it
+- [ ] Tag `v1.0.1` (annotated) and push it
 - [ ] Release workflow green (deb/rpm/Windows artifacts, guacd pin untouched)
 - [ ] Push the beta image + beta pre-release (`gh workflow run beta.yml --ref main`) after the tag
 -->
+
+## [1.0.1] - 2026-08-16
+
+Security and correctness release: the full 2026-08-14 review stack, new
+logo, docs examples, CI/action and dependency updates.
+
+### Added
+
+- **New logo** — web UI (login page, favicons, live state-dot variant)
+  and the inline sidebar/login art, from the new brand tile.
+- **Deployment examples** — `docs/examples/`: docker-compose files for
+  SQLite, PostgreSQL, and MySQL backends, a complete nginx reverse-proxy
+  config (TLS termination, WebSocket upgrade headers), and a guided
+  Let's Encrypt section with a SIGHUP renew hook that uses persea's TLS
+  hot-reload.
+
+### Fixed
+
+- **TOTP MFA login was impossible**: the MFA page script was blocked by
+  CSP (no nonce) and the fallback POST failed CSRF. Enrollment modes
+  (AdminsOnly/All) are now actually enforced.
+- **SAML SSO was dead**: the ACS endpoint rejected every IdP POST
+  (CSRF) and the login button hit a GET on a POST-only route. Also
+  hardened: per-flow request IDs, consumed-assertion replay protection,
+  and a refusal to run `strict_mode=false` with a configured cert.
+- **Address-book ACL bypasses**: quick-connect skipped entry ACLs and
+  RBAC Connect grants; folder ACL inheritance could open restricted
+  parents; database-provider users were denied every folder; folder
+  Connect grants now cascade to entries.
+- **Browser-session SSRF block inverted**: the Chromium `--host-rules`
+  EXCLUDE re-enabled localhost and cloud-metadata access from web
+  sessions; the metadata block now holds regardless of allowlist.
+- **VDI**: home bind-mount path traversal via `container_username`;
+  container-name collisions let colliding users reuse each other's
+  containers.
+- **Session takeover**: the WebSocket owner path checked role only, so
+  any operator could hijack another user's pending/disconnected
+  session. Shadow/share viewers could type into sessions; they are now
+  read-only with token expiry re-checked.
+- **Recordings**: an owner reconnect destroyed the previous segment;
+  playback loaded whole files into RAM (now streamed); audit-chain
+  writes were serialized on the SQLx backends.
+- **Reaping**: reconnectable Disconnected sessions were removed by the
+  cleanup reaper; pending sessions that timed out stayed "active" in
+  history forever; idle reaps recorded duration 0.
+- **Session limits**: the global cap counted terminal states and raced
+  concurrent creates; now counts only live sessions under the insert
+  lock.
+- **XSS**: stored XSS in the audit-events fragment; template autoescape
+  was disabled globally (site_title/logo_url/setup reflections); audit
+  CSV exports lacked formula neutralization.
+- **Protocol framing**: lengths were byte-counted where guacd counts
+  characters, mis-framing non-ASCII connect arguments.
+- **Drive uploads**: slowloris body streams (now idle-timed) and a
+  symlink-swap write (O_NOFOLLOW + fd verification).
+- **Tunnels**: the documented OpenSSH public-key `host_key` never
+  matched the fingerprint comparison; both formats are accepted now.
+- **Connection details panel** showed raw backend enum values for RDP
+  security mode, authentication package, folder scope, and the protocol
+  badge; the edit modal's frontend names are shown instead.
+- Stale `tailwind.min.css` (missing classes current templates use).
+
+### Changed
+
+- **Storage key required at startup**: the server refuses to run with
+  the DB backend and no `[storage].encryption_key` / `PERSEA_STORAGE_KEY`
+  (credentials would sit in plaintext). `install.sh` and the Docker
+  entrypoint generate one; existing installs must add it (see
+  deployment guide).
+- **Session targets default to loopback-only** (`127.0.0.0/8`, `::1/128`)
+  instead of all RFC1918 space, matching the documented default.
+- `/api/connect` and `/auth/logout` are POST-only; logout is
+  CSRF-protected.
+- Cross-user reports/recordings exports are admin-only; powerusers see
+  their own sessions.
+- `/admin/*` page shells require the admin role.
+- Auth-chain misconfiguration fails startup instead of silently falling
+  back to database-only auth.
+- VDI container names carry a per-user hash; jump-host chains are
+  capped at 8 hops.
+- Credential variables no longer fall back to plaintext reads; `--init`
+  creates the static directory.
+- GitHub Actions bumped (`actions/setup-node` v7,
+  `peter-evans/create-pull-request` v8); CI boot steps supply the
+  storage key.
+- Dependencies: `config` 0.15.25, `tokio-tungstenite` 0.30,
+  `thiserror` 2.0.20, `async-trait` 0.1.92.
+
+### Security
+
+The fixes above close: stored XSS and CSV injection, CSRF gaps, the
+inverted SSRF block, VDI path traversal, session hijacking, plaintext
+credential fallbacks, LDAP user enumeration (uniform errors/timing),
+non-constant-time comparisons (CSRF/OIDC state), OIDC fingerprint
+spoofing via forwarded headers, RADIUS hostname misconfiguration, and
+SAML replay/identity-spoofing paths.
 
 ## [1.0.0] - 2026-08-14
 
