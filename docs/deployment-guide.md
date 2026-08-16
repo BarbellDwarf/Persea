@@ -158,13 +158,14 @@ guacd_cert_path = "/opt/persea/tls/cert.pem"   # TLS between persea and guacd
 # Trust the reverse proxy's X-Forwarded-For header
 trusted_proxies = ["127.0.0.1/32"]
 
-# Which networks sessions may connect to (prevents sessions into unintended hosts)
+# Which networks sessions may connect to (prevents sessions into unintended hosts).
+# Defaults are loopback only; the private ranges below are explicit opt-ins:
 ssh_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 rdp_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 vnc_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
 ```
 
-A CIDR (for example `10.0.0.0/8`) describes a range of network addresses; the allowlists above mean "sessions may only connect to hosts inside these ranges". Every protocol has one, and the defaults already cover the private network ranges plus localhost. If a session to a legitimate target fails, check the relevant list first.
+A CIDR (for example `10.0.0.0/8`) describes a range of network addresses; the allowlists above mean "sessions may only connect to hosts inside these ranges". Every protocol has one, and all four default to loopback only (`127.0.0.0/8`, `::1/128`) — private network ranges are never implicit. If a session to a legitimate target fails, check the relevant list first.
 
 ### Environment variables
 
@@ -188,12 +189,12 @@ Every setting can also be supplied as an environment variable: the `PERSEA_` pre
 | max_sessions_per_user | `PERSEA_MAX_SESSIONS_PER_USER` | `50` | Concurrent sessions per user |
 | max_viewers | `PERSEA_MAX_VIEWERS` | `10` | Extra viewers allowed per shared session |
 | rdp.client_name_template | `PERSEA_RDP__CLIENT_NAME_TEMPLATE` | `{user}@{host}` | RDP client-name template (`{user}` = persea user, `{host}` = resolved client hostname or IP; empty disables) |
-| ssh/rdp/vnc_allowed_networks | `PERSEA_SSH_ALLOWED_NETWORKS` etc. | private ranges + loopback | Target address allowlists per protocol |
+| ssh/rdp/vnc_allowed_networks | `PERSEA_SSH_ALLOWED_NETWORKS` etc. | loopback only | Target address allowlists per protocol |
 | web_allowed_networks | `PERSEA_WEB_ALLOWED_NETWORKS` | loopback only | Allowed URL hosts for web browser sessions |
 | trusted_proxies | `PERSEA_TRUSTED_PROXIES` | empty | Proxy addresses whose `X-Forwarded-For` is trusted |
 | rate_limit | `PERSEA_RATE_LIMIT` | `false` | Extra API rate limiting (usually handled by the proxy) |
 | tls.secure_cookies | `PERSEA_TLS__SECURE_COOKIES` | `true` | Must be `false` when serving HTTPS with a self-signed certificate (see [Troubleshooting](troubleshooting.md)) |
-| storage.encryption_key | `PERSEA_STORAGE__ENCRYPTION_KEY` | unset | Key that encrypts stored connection credentials (also settable as `PERSEA_STORAGE_KEY`) |
+| storage.encryption_key | `PERSEA_STORAGE__ENCRYPTION_KEY` | unset | Key that encrypts stored connection credentials (also settable as `PERSEA_STORAGE_KEY`); required when `backend = "db"` — startup refuses without it |
 
 The full reference, including the `[auth]`, `[vault]`, `[oidc]`, `[recording]`, `[drive]`, `[vdi]`, and `[theme]` sections, is in the [Configuration guide](configuration.md).
 
@@ -339,6 +340,8 @@ persea must be restarted after the change. The login page then shows a sign-in b
 
 Provider-specific walkthroughs (Authentik, JumpCloud, Entra ID, …) are in [Integrations](integrations.md). SAML, LDAP, and RADIUS are available as alternatives under `[auth]`: see the [Configuration guide](configuration.md).
 
+**Auth providers configured on the Admin → Auth page.** Providers added there are stored in the `auth_providers` table of the app database. Their secret fields (OIDC `client_secret`, LDAP `bind_password`, RADIUS `secret`, SAML `private_key`) are stored as plaintext JSON — this is a documented trade-off, not an oversight, and persea logs a warning at startup listing any enabled provider that carries secrets. Keep the app database and its backups as restricted as the config file; there is no per-provider encryption because Vault-backed deployments have no storage key and pre-existing rows would become undecryptable.
+
 ### Remove the bootstrap API key
 
 Once sign-in works and you have an admin user, delete the automation key from [Step 2](#step-2-first-run-setup); it is full-admin and skips MFA:
@@ -364,7 +367,7 @@ backend = "db"        # "db" (default) or "vault"
 encryption_key = "…"  # 64-char hex; generate with: openssl rand -hex 32
 ```
 
-The database backend works out of the box and is the recommended default. The `encryption_key` is required when `backend = "db"` and must not change afterwards; changing it makes stored credentials undecryptable.
+The database backend works out of the box and is the recommended default. The `encryption_key` is required when `backend = "db"` — persea refuses to start without it (or with a malformed key) so plaintext credentials can never be written by accident. The key must not change afterwards; changing it makes stored credentials undecryptable.
 
 Alternatively, store credentials in HashiCorp Vault or OpenBao (`[storage] backend = "vault"`), for example to keep secrets in a central store. Setup: install Vault, enable KV v2, create a policy for `secret/data/persea/*`, enable AppRole auth, then:
 

@@ -205,7 +205,9 @@ display_range_end = 199
 #
 # Control which hosts sessions can connect to. Each is a list of CIDR ranges.
 # Hostnames are resolved and checked against the allowlist.
-# Default for all three: ["127.0.0.0/8", "::1/128"] (localhost only).
+# Default for all four: ["127.0.0.0/8", "::1/128"] (loopback only). The
+# private ranges in the examples below are explicit opt-ins — nothing outside
+# loopback is reachable unless you add it.
 
 # SSH session targets
 # Env: PERSEA_SSH_ALLOWED_NETWORKS (use double underscore for nested values)
@@ -326,7 +328,8 @@ web_allowed_networks = ["127.0.0.0/8", "::1/128"]
 
 # [storage]
 # backend = "db"   # "db" (default) or "vault"
-# # encryption_key for DB-stored credentials. Required when backend = "db".
+# # encryption_key for DB-stored credentials. Required when backend = "db":
+# # persea refuses to start without it.
 # # Generate with: openssl rand -hex 32
 # # Can also be set via PERSEA_STORAGE_KEY env var.
 # encryption_key = ""

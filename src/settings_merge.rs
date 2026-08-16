@@ -88,11 +88,15 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
             "listen_addr" if !value.is_empty() => config.listen_addr = value.clone(),
             "guacd_addr" if !value.is_empty() => config.guacd_addr = value.clone(),
             "tls_cert_path" if !value.is_empty() => {
+                // A TLS section synthesized from DB settings must not flip
+                // secure_cookies on: the listener may be plain HTTP (e.g.
+                // stale cert paths behind a reverse proxy) and Secure cookies
+                // over HTTP break login.
                 let tls = config.tls.get_or_insert(crate::config::TlsConfig {
                     cert_path: None,
                     key_path: None,
                     guacd_cert_path: None,
-                    secure_cookies: true,
+                    secure_cookies: false,
                 });
                 tls.cert_path = Some(std::path::PathBuf::from(value));
             }
@@ -101,7 +105,7 @@ pub fn apply_db_settings(config: &mut crate::config::Config, settings: &[(String
                     cert_path: None,
                     key_path: None,
                     guacd_cert_path: None,
-                    secure_cookies: true,
+                    secure_cookies: false,
                 });
                 tls.key_path = Some(std::path::PathBuf::from(value));
             }
@@ -250,6 +254,23 @@ mod tests {
     fn toggle_enabled_defaults_when_unset() {
         assert!(toggle_enabled(&[], "enable_rdp", true));
         assert!(!toggle_enabled(&[], "enable_rdp", false));
+    }
+
+    #[test]
+    fn synthesized_tls_defaults_secure_cookies_off() {
+        let mut config = Config::default();
+        assert!(config.tls.is_none());
+        let settings = vec![("tls_cert_path".to_string(), "/tls/cert.pem".to_string())];
+        apply_db_settings(&mut config, &settings);
+        let tls = config.tls.unwrap();
+        assert_eq!(
+            tls.cert_path,
+            Some(std::path::PathBuf::from("/tls/cert.pem"))
+        );
+        assert!(
+            !tls.secure_cookies,
+            "synthesized TLS must not flip Secure cookies on for a plain-HTTP listener"
+        );
     }
 
     #[test]
