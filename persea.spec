@@ -99,6 +99,18 @@ fi
 
 %post
 chown -R persea:persea %{_prefix}/data %{_prefix}/recordings
+# Generate a storage encryption key if the config has none: the server
+# refuses to start without one (credentials would sit in plaintext).
+CONFIG="%{_prefix}/config.toml"
+if ! grep -q '^encryption_key' "$CONFIG" 2>/dev/null; then
+    KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    {
+        echo ""
+        echo "[storage]"
+        echo "encryption_key = \"$KEY\""
+    } >> "$CONFIG"
+    echo "Generated storage encryption key."
+fi
 # Generate self-signed TLS certificate if none exists
 if [ ! -f %{_prefix}/tls/cert.pem ] || [ ! -f %{_prefix}/tls/key.pem ]; then
     CERT_HOSTNAME=$(hostname -f 2>/dev/null || hostname)

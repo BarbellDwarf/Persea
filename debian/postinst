@@ -114,6 +114,20 @@ if [ ! -f /opt/persea/tls/cert.pem ] || [ ! -f /opt/persea/tls/key.pem ]; then
 fi
 chown -R persea:persea /opt/persea/tls
 
+# Generate a storage encryption key if the config has none: the server
+# refuses to start without one (credentials would sit in plaintext).
+# Mirrors install.sh and the Docker entrypoint; respects an admin-set key.
+CONFIG="/opt/persea/config.toml"
+if ! grep -q '^encryption_key' "$CONFIG" 2>/dev/null; then
+    KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    {
+        echo ""
+        echo "[storage]"
+        echo "encryption_key = \"$KEY\""
+    } >> "$CONFIG"
+    echo "Generated storage encryption key."
+fi
+
 # Update shared library cache for guacd libs
 ldconfig
 
