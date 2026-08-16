@@ -558,21 +558,93 @@ const GCM_NONCE_LEN: usize = 12;
 const GCM_TAG_LEN: usize = 16;
 const GCM_BLOCK: usize = 16;
 
-/// Encrypted recordings at or below this size are decrypted whole (the
-/// tag is then verified before the first byte is served, so a tampered
-/// file fails closed). Larger recordings stream through the bounded-
-/// memory decryptor.
+/// Encrypted recordings at or below this size are decrypted whole into a
+/// single buffer. Larger recordings stream through the bounded-memory
+/// decryptor, which reads the file twice: once to verify the tag, then
+/// once to decrypt. Both paths reject tampered files before any
+/// plaintext is served.
 const STREAM_DECRYPT_THRESHOLD: u64 = 32 * 1024 * 1024;
+
+/// Compute the expected AES-GCM tag for the ciphertext starting at the
+/// file's current offset and spanning `ct_len` bytes.
+///
+/// Only GHASH is run here, never decryption, so this pass produces no
+/// plaintext: the tag can be compared against the stored one before a
+/// single byte is released. Memory stays bounded (64 KiB read buffer)
+/// regardless of recording size.
+fn gcm_expected_tag(
+    aes: &Aes256,
+    file: &mut std::fs::File,
+    nonce: &[u8; GCM_NONCE_LEN],
+    ct_len: u64,
+) -> Result<[u8; GCM_TAG_LEN], String> {
+    // GHASH key: H = E_K(0^128), then its bit-reversed (POLYVAL) form.
+    let zero_block = [0u8; GCM_BLOCK];
+    let mut h_block: Block<Aes256> = zero_block.into();
+    aes.encrypt_block(&mut h_block);
+    let mut ghash = Ghash::new(h_block.into());
+
+    // Tag mask: E_K(J0), J0 = nonce || 0x00000001.
+    let mut j0 = [0u8; GCM_BLOCK];
+    j0[..GCM_NONCE_LEN].copy_from_slice(nonce);
+    j0[GCM_BLOCK - 1] = 1;
+    let mut j0_block: Block<Aes256> = j0.into();
+    aes.encrypt_block(&mut j0_block);
+    let tag_mask: [u8; GCM_BLOCK] = j0_block.into();
+
+    // Absorb the ciphertext in 16-byte blocks, zero-padding the final
+    // partial block.
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut pending = [0u8; GCM_BLOCK];
+    let mut pending_len = 0usize;
+    let mut remaining = ct_len;
+
+    while remaining > 0 {
+        let want = buf.len().min(remaining as usize);
+        let n = file.read(&mut buf[..want]).map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Err("unexpected end of recording".into());
+        }
+        remaining -= n as u64;
+        let mut pos = 0usize;
+        while pos < n {
+            let take = (n - pos).min(GCM_BLOCK - pending_len);
+            pending[pending_len..pending_len + take].copy_from_slice(&buf[pos..pos + take]);
+            pending_len += take;
+            pos += take;
+            if pending_len == GCM_BLOCK {
+                ghash.update_block(&pending);
+                pending_len = 0;
+            }
+        }
+    }
+    if pending_len > 0 {
+        let mut padded = [0u8; GCM_BLOCK];
+        padded[..pending_len].copy_from_slice(&pending[..pending_len]);
+        ghash.update_block(&padded);
+    }
+
+    // GHASH length block: AAD length (0) || ciphertext length, in bits.
+    let mut len_block = [0u8; GCM_BLOCK];
+    len_block[8..].copy_from_slice(&(ct_len * 8).to_be_bytes());
+    ghash.update_block(&len_block);
+
+    let mut expected = ghash.finalize();
+    for (e, m) in expected.iter_mut().zip(tag_mask.iter()) {
+        *e ^= *m;
+    }
+    Ok(expected)
+}
 
 /// Stream a `.guac.enc` recording as decrypted plaintext chunks.
 ///
 /// The on-disk format is `nonce(12) || ciphertext || tag(16)` produced by
 /// `crypto::encrypt_bytes`, a single AES-256-GCM message. AES-GCM
-/// authenticates the whole message with one trailing tag, so a stream can
-/// only verify the tag at the end: chunks are emitted as they decrypt and
-/// a tag mismatch aborts the stream (the client sees a truncated
-/// download). Files at or below [`STREAM_DECRYPT_THRESHOLD`] are
-/// decrypted whole instead, which verifies before serving.
+/// authenticates the whole message with one trailing tag, so the
+/// ciphertext is read once and the tag verified before any plaintext is
+/// released: a tampered or truncated file yields no output at all. The
+/// authenticated ciphertext is then read a second time and decrypted in
+/// 64 KiB chunks, keeping memory bounded regardless of recording size.
 ///
 /// The keystream is AES-256 over the GCM counter blocks (J0 = nonce ||
 /// 0x00000001; the first data block uses counter value 2, matching
@@ -616,19 +688,17 @@ where
     file.seek(SeekFrom::Start(GCM_NONCE_LEN as u64))
         .map_err(|e| e.to_string())?;
 
-    // GHASH key: H = E_K(0^128), then its bit-reversed (POLYVAL) form.
-    let zero_block = [0u8; GCM_BLOCK];
-    let mut h_block: Block<Aes256> = zero_block.into();
-    aes.encrypt_block(&mut h_block);
-    let mut ghash = Ghash::new(h_block.into());
+    // Authenticate the whole ciphertext before releasing any plaintext:
+    // a tampered or truncated recording fails here, emitting nothing.
+    let expected = gcm_expected_tag(&aes, &mut file, &nonce, ct_len)?;
+    use subtle::ConstantTimeEq;
+    if !bool::from(expected.ct_eq(&stored_tag)) {
+        return Err("recording failed authentication (tag mismatch)".into());
+    }
 
-    // Tag mask: E_K(J0), J0 = nonce || 0x00000001.
-    let mut j0 = [0u8; GCM_BLOCK];
-    j0[..GCM_NONCE_LEN].copy_from_slice(&nonce);
-    j0[GCM_BLOCK - 1] = 1;
-    let mut j0_block: Block<Aes256> = j0.into();
-    aes.encrypt_block(&mut j0_block);
-    let tag_mask: [u8; GCM_BLOCK] = j0_block.into();
+    // Second pass: the ciphertext is authenticated, so decrypt and emit.
+    file.seek(SeekFrom::Start(GCM_NONCE_LEN as u64))
+        .map_err(|e| e.to_string())?;
 
     let mut counter: u32 = 2;
     let mut buf = vec![0u8; 64 * 1024];
@@ -652,9 +722,7 @@ where
             pending_len += take;
             pos += take;
             if pending_len == GCM_BLOCK {
-                // Authenticate the block...
-                ghash.update_block(&pending);
-                // ...then decrypt it: keystream = E_K(nonce || counter).
+                // Decrypt the block: keystream = E_K(nonce || counter).
                 let mut ctr_block = [0u8; GCM_BLOCK];
                 ctr_block[..GCM_NONCE_LEN].copy_from_slice(&nonce);
                 ctr_block[GCM_NONCE_LEN..].copy_from_slice(&counter.to_be_bytes());
@@ -679,11 +747,8 @@ where
         emit(&out[..out_len])?;
     }
 
-    // Final partial block: zero-padded for GHASH, keystream truncated.
+    // Final partial block: keystream truncated.
     if pending_len > 0 {
-        let mut padded = [0u8; GCM_BLOCK];
-        padded[..pending_len].copy_from_slice(&pending[..pending_len]);
-        ghash.update_block(&padded);
         let mut ctr_block = [0u8; GCM_BLOCK];
         ctr_block[..GCM_NONCE_LEN].copy_from_slice(&nonce);
         ctr_block[GCM_NONCE_LEN..].copy_from_slice(&counter.to_be_bytes());
@@ -694,20 +759,6 @@ where
             pending[i] ^= keystream[i];
         }
         emit(&pending[..pending_len])?;
-    }
-
-    // GHASH length block: AAD length (0) || ciphertext length, in bits.
-    let mut len_block = [0u8; GCM_BLOCK];
-    len_block[8..].copy_from_slice(&(ct_len * 8).to_be_bytes());
-    ghash.update_block(&len_block);
-
-    let mut expected = ghash.finalize();
-    for (e, m) in expected.iter_mut().zip(tag_mask.iter()) {
-        *e ^= *m;
-    }
-    use subtle::ConstantTimeEq;
-    if !bool::from(expected.ct_eq(&stored_tag)) {
-        return Err("recording failed authentication (tag mismatch)".into());
     }
     Ok(())
 }
@@ -942,9 +993,9 @@ pub async fn serve_recording(
             .unwrap_or(0);
         if enc_size > STREAM_DECRYPT_THRESHOLD {
             // Multi-hundred-MB recordings must not be decrypted into a
-            // single heap buffer (OOM). Stream instead: a worker decrypts
-            // 64 KiB chunks into a bounded channel while the response
-            // body drains it.
+            // single heap buffer (OOM). Stream instead: a worker verifies
+            // the tag, then decrypts 64 KiB chunks into a bounded channel
+            // while the response body drains it.
             let (tx, rx) = tokio::sync::mpsc::channel(8);
             let log_name = name.clone();
             tokio::task::spawn_blocking(move || {
@@ -1185,6 +1236,52 @@ mod tests {
     }
 
     #[test]
+    fn stream_decrypt_emits_nothing_when_tag_does_not_verify() {
+        // Above the whole-buffer threshold: forces the streaming path.
+        let plaintext = random_bytes((STREAM_DECRYPT_THRESHOLD + 1) as usize);
+        let mut encrypted = crypto::encrypt_bytes(&test_key(), &plaintext).unwrap();
+        // Flip one bit in the middle of the ciphertext body.
+        let mid = encrypted.len() / 2;
+        encrypted[mid] ^= 0x01;
+        let dir = temp_dir("stream-no-emit");
+        let path = dir.join("s.guac.enc");
+        std::fs::write(&path, &encrypted).unwrap();
+
+        let mut emitted = 0usize;
+        let err = decrypt_recording_stream(&path, TEST_KEY_HEX, |chunk| {
+            emitted += chunk.len();
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(emitted, 0, "no plaintext may be released before the tag verifies");
+        assert!(err.contains("tag mismatch"), "unexpected error: {err}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn stream_decrypt_truncated_file_emits_nothing() {
+        let plaintext = random_bytes((STREAM_DECRYPT_THRESHOLD + 1) as usize);
+        let mut encrypted = crypto::encrypt_bytes(&test_key(), &plaintext).unwrap();
+        encrypted.truncate(encrypted.len() - 20);
+        let dir = temp_dir("stream-no-emit-trunc");
+        let path = dir.join("s.guac.enc");
+        std::fs::write(&path, &encrypted).unwrap();
+
+        let mut emitted = 0usize;
+        let err = decrypt_recording_stream(&path, TEST_KEY_HEX, |chunk| {
+            emitted += chunk.len();
+            Ok(())
+        })
+        .unwrap_err();
+        assert_eq!(emitted, 0, "no plaintext may be released for a truncated file");
+        assert!(
+            err.contains("tag mismatch") || err.contains("unexpected end of recording"),
+            "unexpected error: {err}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn stream_decrypt_rejects_truncated_and_empty_files() {
         let dir = temp_dir("stream-truncated");
         let empty = dir.join("empty.guac.enc");
@@ -1364,6 +1461,41 @@ mod tests {
         let got = body_bytes(resp).await;
         assert_eq!(got.len(), plaintext.len());
         assert_eq!(got, plaintext);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn serve_corrupt_encrypted_recording_aborts_without_plaintext() {
+        let dir = temp_dir("serve-corrupt");
+        // Above the whole-buffer threshold: forces the streaming path.
+        let plaintext = random_bytes((STREAM_DECRYPT_THRESHOLD + 1) as usize);
+        let src = dir.join("big.guac");
+        std::fs::write(&src, &plaintext).unwrap();
+        write_meta(&src, &meta("Alice")).unwrap();
+        crate::recording::encrypt_recording_file(&src, TEST_KEY_HEX).unwrap();
+        // Flip one bit in the middle of the ciphertext body (after the
+        // 12-byte nonce).
+        let enc = dir.join("big.guac.enc");
+        let mut data = std::fs::read(&enc).unwrap();
+        let mid = data.len() / 2;
+        data[mid] ^= 0x01;
+        std::fs::write(&enc, &data).unwrap();
+
+        let router = recordings_router(&dir, true, Some(poweruser()));
+        let resp = router
+            .oneshot(req_get("/api/recordings/big.guac"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        // The streaming body must abort with the authentication error and
+        // carry no plaintext.
+        let err = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("tag mismatch"),
+            "unexpected error: {err}"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
