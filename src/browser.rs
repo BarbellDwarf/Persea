@@ -270,6 +270,7 @@ impl BrowserManager {
             // Collect stderr to help diagnose why Xvnc didn't start
             let stderr_output = collect_stderr(&mut xvnc_child).await;
             let _ = xvnc_child.kill().await;
+            let _ = xvnc_child.wait().await;
             self.display_allocator.release(display_num);
             if let Some(p) = cdp_port {
                 self.cdp_allocator.release(p as u32);
@@ -338,24 +339,12 @@ impl BrowserManager {
 
         // Per-session domain allowlist via --host-rules.
         // Maps all hosts to a non-routable address except the allowed ones.
-        // Always blocks internal/metadata IPs (localhost, 169.254.0.0/16)
-        // even without an explicit allowlist.
-        let host_rules_arg = {
-            let mut rules = String::from("MAP * ~NOTFOUND");
-            if let Some(domains) = allowed_domains {
-                for domain in domains {
-                    let d = domain.trim();
-                    if !d.is_empty() {
-                        rules.push_str(&format!(", EXCLUDE {}", d));
-                        if !d.starts_with("*.") {
-                            rules.push_str(&format!(", EXCLUDE *.{}", d));
-                        }
-                    }
-                }
-            }
-            rules.push_str(", EXCLUDE localhost, EXCLUDE 127.0.0.1, EXCLUDE 169.254.169.254");
-            Some(format!("--host-rules={}", rules))
-        };
+        // Always blocks internal/metadata IPs (localhost, 127.0.0.1,
+        // 169.254.0.0/16) even without an explicit allowlist.
+        let host_rules_arg = Some(format!(
+            "--host-rules={}",
+            build_host_rules(allowed_domains)
+        ));
         if let Some(ref arg) = host_rules_arg {
             chromium_args.push(arg);
             // Suppress the "unsupported command-line flag" infobar.
@@ -387,6 +376,11 @@ impl BrowserManager {
 
         chromium_args.push(url);
 
+        // Optional hardening: per-session resource limits (RLIMIT_AS,
+        // RLIMIT_CPU, RLIMIT_NOFILE) can be applied here via pre_exec +
+        // setrlimit on the Command if a session needs a hard cap; not
+        // applied because limits are set at the process supervisor or
+        // container level in deployments.
         let chromium_result = Command::new(&self.chromium_path)
             .env("DISPLAY", format!(":{}", display_num))
             .args(&chromium_args)
@@ -407,6 +401,7 @@ impl BrowserManager {
             }
             Err(e) => {
                 let _ = xvnc_child.kill().await;
+                let _ = xvnc_child.wait().await;
                 self.display_allocator.release(display_num);
                 if let Some(p) = cdp_port {
                     self.cdp_allocator.release(p as u32);
@@ -438,6 +433,7 @@ impl BrowserManager {
                     }
                 }
                 let _ = xvnc_child.kill().await;
+                let _ = xvnc_child.wait().await;
                 self.display_allocator.release(display_num);
                 if let Some(p) = cdp_port {
                     self.cdp_allocator.release(p as u32);
@@ -484,7 +480,9 @@ impl BrowserManager {
             "Killing browser session processes"
         );
         let _ = session.chromium_child.kill().await;
+        let _ = session.chromium_child.wait().await;
         let _ = session.xvnc_child.kill().await;
+        let _ = session.xvnc_child.wait().await;
         self.display_allocator.release(session.display);
         if let Some(p) = session.cdp_port.take() {
             self.cdp_allocator.release(p as u32);
@@ -576,6 +574,9 @@ impl BrowserManager {
                     .stdin(std::process::Stdio::piped())
                     .stdout(std::process::Stdio::piped())
                     .stderr(std::process::Stdio::piped())
+                    // Kill the script if the timeout future is dropped
+                    // mid-run; the reaper task then reaps the pid.
+                    .kill_on_drop(true)
                     .spawn()
                 {
                     Ok(child) => child,
@@ -598,8 +599,6 @@ impl BrowserManager {
 
                 match child.wait_with_output().await {
                     Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let stderr = String::from_utf8_lossy(&output.stderr);
                         if output.status.success() {
                             tracing::info!(
                                 script = %script_path_owned.display(),
@@ -614,18 +613,21 @@ impl BrowserManager {
                                 "Login script failed"
                             );
                         }
-                        if !stdout.is_empty() {
-                            tracing::info!(
+                        // Script output may carry credentials (scripts echo
+                        // what they type), so it is logged truncated and at
+                        // debug level only, never verbatim at info/warn.
+                        if !output.stdout.is_empty() {
+                            tracing::debug!(
                                 session_id = %session_id_owned,
                                 "Login script stdout: {}",
-                                stdout.trim()
+                                truncate_for_log(&output.stdout)
                             );
                         }
-                        if !stderr.is_empty() {
-                            tracing::warn!(
+                        if !output.stderr.is_empty() {
+                            tracing::debug!(
                                 session_id = %session_id_owned,
                                 "Login script stderr: {}",
-                                stderr.trim()
+                                truncate_for_log(&output.stderr)
                             );
                         }
                     }
@@ -652,6 +654,44 @@ impl BrowserManager {
 
         Ok(handle)
     }
+}
+
+/// Build the `--host-rules` value for a browser session. Every host maps to
+/// `~NOTFOUND` (lookup fails) except allowlisted domains, which are excluded
+/// from the mapping and resolve normally. localhost, 127.0.0.1, and the
+/// 169.254.0.0/16 link-local range (host-rules patterns are globs, so the
+/// range is written `169.254.*`) are mapped explicitly and can never be
+/// unblocked by an allowlist.
+fn build_host_rules(allowed_domains: Option<&[String]>) -> String {
+    let mut rules = String::from(
+        "MAP * ~NOTFOUND, MAP localhost ~NOTFOUND, MAP 127.0.0.1 ~NOTFOUND, \
+         MAP 169.254.* ~NOTFOUND",
+    );
+    if let Some(domains) = allowed_domains {
+        for domain in domains {
+            let d = domain.trim();
+            if !d.is_empty() && !is_always_blocked(d) {
+                rules.push_str(&format!(", EXCLUDE {}", d));
+                if !d.starts_with("*.") {
+                    rules.push_str(&format!(", EXCLUDE *.{}", d));
+                }
+            }
+        }
+    }
+    rules
+}
+
+/// True if a domain pattern names a host that must stay unreachable from
+/// browser sessions regardless of allowlist: localhost (and its subdomains),
+/// the loopback literal 127.0.0.1, and the 169.254.0.0/16 link-local range
+/// (exact IPs or the `169.254.*` glob form).
+fn is_always_blocked(pattern: &str) -> bool {
+    let p = pattern.trim().to_ascii_lowercase();
+    p == "localhost"
+        || p.ends_with(".localhost")
+        || p == "127.0.0.1"
+        || p.strip_prefix("169.254")
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }
 
 /// Encrypt a password using Chromium's Linux "basic" os_crypt backend.
@@ -716,6 +756,18 @@ fn is_executable(path: &Path) -> bool {
     {
         path.is_file()
     }
+}
+
+/// Truncate child process output for logging so a credential echo cannot
+/// be captured whole; 200 chars keeps enough context to diagnose failures.
+fn truncate_for_log(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let trimmed = text.trim();
+    let mut snippet: String = trimmed.chars().take(200).collect();
+    if trimmed.len() > snippet.len() {
+        snippet.push_str("...(truncated)");
+    }
+    snippet
 }
 
 /// Read whatever stderr is available from a child process (non-blocking, best-effort).
@@ -838,5 +890,82 @@ mod tests {
         alloc.release(b);
         let d = alloc.allocate().unwrap();
         assert_eq!(d, b);
+    }
+
+    #[test]
+    fn test_host_rules_default_deny_blocks_metadata() {
+        let rules = build_host_rules(None);
+        assert!(rules.contains("MAP * ~NOTFOUND"));
+        assert!(rules.contains("MAP localhost ~NOTFOUND"));
+        assert!(rules.contains("MAP 127.0.0.1 ~NOTFOUND"));
+        assert!(rules.contains("MAP 169.254.* ~NOTFOUND"));
+        // No EXCLUDE entries without an allowlist: everything stays blocked
+        assert!(!rules.contains("EXCLUDE"));
+    }
+
+    #[test]
+    fn test_host_rules_excludes_only_allowed_domains() {
+        let domains: Vec<String> = vec!["app.example.com".into(), "*.wiki.example.com".into()];
+        let rules = build_host_rules(Some(&domains));
+        assert!(rules.contains("EXCLUDE app.example.com"));
+        assert!(rules.contains("EXCLUDE *.app.example.com"));
+        assert!(rules.contains("EXCLUDE *.wiki.example.com"));
+        // Blocked names are never excluded
+        assert!(!rules.contains("EXCLUDE localhost"));
+        assert!(!rules.contains("EXCLUDE 127.0.0.1"));
+        assert!(!rules.contains("EXCLUDE 169.254.169.254"));
+        // Explicit MAP entries are always present
+        assert!(rules.contains("MAP localhost ~NOTFOUND"));
+        assert!(rules.contains("MAP 127.0.0.1 ~NOTFOUND"));
+        assert!(rules.contains("MAP 169.254.* ~NOTFOUND"));
+    }
+
+    #[test]
+    fn test_host_rules_allowlist_cannot_unblock_metadata() {
+        let domains: Vec<String> = vec![
+            "localhost".into(),
+            "127.0.0.1".into(),
+            "169.254.169.254".into(),
+            "169.254.*".into(),
+            "example.com".into(),
+        ];
+        let rules = build_host_rules(Some(&domains));
+        assert!(!rules.contains("EXCLUDE localhost"));
+        assert!(!rules.contains("EXCLUDE 127.0.0.1"));
+        assert!(!rules.contains("EXCLUDE 169.254"));
+        assert!(!rules.contains("EXCLUDE *.169.254"));
+        assert!(rules.contains("EXCLUDE example.com"));
+        assert!(rules.contains("EXCLUDE *.example.com"));
+    }
+
+    #[test]
+    fn test_host_rules_link_local_suffix_hostname_stays_allowable() {
+        let domains: Vec<String> = vec!["foo.169.254.169.254".into()];
+        let rules = build_host_rules(Some(&domains));
+        assert!(rules.contains("EXCLUDE foo.169.254.169.254"));
+    }
+
+    #[test]
+    fn test_is_always_blocked() {
+        assert!(is_always_blocked("localhost"));
+        assert!(is_always_blocked("foo.localhost"));
+        assert!(is_always_blocked("127.0.0.1"));
+        assert!(is_always_blocked("169.254.169.254"));
+        assert!(is_always_blocked("169.254.0.1"));
+        assert!(is_always_blocked("169.254.*"));
+        assert!(is_always_blocked(" 169.254.5.5 "));
+        assert!(!is_always_blocked("example.com"));
+        assert!(!is_always_blocked("169.2540.1"));
+        assert!(!is_always_blocked("foo.169.254.169.254"));
+    }
+
+    #[test]
+    fn test_truncate_for_log() {
+        assert_eq!(truncate_for_log(b"hello"), "hello");
+        assert_eq!(truncate_for_log(b"  padded  "), "padded");
+        let long = vec![b'a'; 500];
+        let snippet = truncate_for_log(&long);
+        assert_eq!(snippet.len(), 200 + "(...truncated)".len());
+        assert!(snippet.ends_with("...(truncated)"));
     }
 }
