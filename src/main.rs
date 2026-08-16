@@ -2176,7 +2176,10 @@ async fn run_server(
             get(api::list_credential_variables),
         )
         // Admin token management
-        .route("/api/admin/user-tokens", get(api::admin_list_user_tokens))
+        .route(
+            "/api/admin/users/{email}/tokens",
+            get(api::admin_list_user_tokens),
+        )
         .route("/api/admin/user-tokens", post(api::admin_create_user_token))
         .route(
             "/api/admin/user-tokens/{id}",
