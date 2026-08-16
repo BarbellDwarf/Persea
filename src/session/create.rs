@@ -2640,7 +2640,7 @@ mod tests {
             typescript_name: None,
             create_typescript_path: false,
             command: None,
-        }));
+        });
         let result = handshake_with_timeout(
             &addr.to_string(),
             &params,
