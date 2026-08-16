@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS address_book_folders (
     name        VARCHAR(512) NOT NULL,
     description TEXT,
     allowed_groups TEXT NOT NULL DEFAULT (''),
-    inherit_from_parent TINYINT(1) NOT NULL DEFAULT 0,
+    inherit_from_parent TINYINT(1) NOT NULL DEFAULT 1,
     created_at  VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     updated_at  VARCHAR(64) NOT NULL DEFAULT (DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')),
     UNIQUE KEY uq_ab_folder (scope, name)

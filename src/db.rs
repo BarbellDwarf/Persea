@@ -528,7 +528,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             name        TEXT NOT NULL,
             description TEXT DEFAULT '',
             allowed_groups TEXT NOT NULL DEFAULT '',
-            inherit_from_parent INTEGER NOT NULL DEFAULT 0,
+            inherit_from_parent INTEGER NOT NULL DEFAULT 1,
             created_at  TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE(scope, name)
@@ -583,7 +583,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
     // databases get the columns, fresh ones already have them.
     for ddl in [
         "ALTER TABLE address_book_folders ADD COLUMN allowed_groups TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE address_book_folders ADD COLUMN inherit_from_parent INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE address_book_folders ADD COLUMN inherit_from_parent INTEGER NOT NULL DEFAULT 1",
     ] {
         if let Err(e) = conn.execute(ddl, []) {
             if !e.to_string().contains("duplicate column") {
