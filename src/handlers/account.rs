@@ -299,8 +299,7 @@ pub async fn totp_disable(
         crate::totp::verify_user_code(&db_clone, user_id, &code, skew)
     })
     .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    .unwrap_or(false);
+    .map_err(|e| AppError::Internal(e.to_string()))?;
     if !valid {
         return Ok(Json(serde_json::json!({"ok": false, "error": "Invalid code"})));
     }
