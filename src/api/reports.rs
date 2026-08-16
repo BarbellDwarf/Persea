@@ -1253,7 +1253,10 @@ mod tests {
             Ok(())
         })
         .unwrap_err();
-        assert_eq!(emitted, 0, "no plaintext may be released before the tag verifies");
+        assert_eq!(
+            emitted, 0,
+            "no plaintext may be released before the tag verifies"
+        );
         assert!(err.contains("tag mismatch"), "unexpected error: {err}");
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -1273,7 +1276,10 @@ mod tests {
             Ok(())
         })
         .unwrap_err();
-        assert_eq!(emitted, 0, "no plaintext may be released for a truncated file");
+        assert_eq!(
+            emitted, 0,
+            "no plaintext may be released for a truncated file"
+        );
         assert!(
             err.contains("tag mismatch") || err.contains("unexpected end of recording"),
             "unexpected error: {err}"
