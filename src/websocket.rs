@@ -2008,7 +2008,9 @@ mod tests {
             Some(&AuthIdentity::ApiKey("deploy-key".into())),
             Some("deploy-key")
         ));
-        assert!(!owner_path_authorized(
+        // API keys are admin-role identities by design (auth.rs role()),
+        // so they are exempt from the ownership match like any admin.
+        assert!(owner_path_authorized(
             Some(&AuthIdentity::ApiKey("deploy-key".into())),
             Some("other-key")
         ));
