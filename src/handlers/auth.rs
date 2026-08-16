@@ -12,7 +12,7 @@ use crate::auth_chain::AuthChain;
 use crate::auth_provider::AuthRequest;
 use crate::csrf::TlsEnabled;
 use crate::db::{self, Db};
-use crate::templates::LoginPageTemplate;
+use crate::templates::{AccountTotpTemplate, LoginPageTemplate};
 use crate::totp::TotpEnforcement;
 use crate::CspNonce;
 
@@ -40,8 +40,9 @@ enum TotpGate {
     None,
     /// TOTP is required and enrolled; send the user through the MFA page.
     Mfa,
-    /// TOTP is required but not enrolled; create the session and send the
-    /// user to the enrollment page so they can set it up.
+    /// TOTP is required but not enrolled; send the user to the enrollment
+    /// page with a pending-MFA cookie. No session is minted until the
+    /// factor is verified on the MFA page.
     Enroll,
 }
 
@@ -50,7 +51,8 @@ enum TotpGate {
 /// AdminsOnly: admins must pass TOTP, and must enroll before their first
 /// login counts. All: every user must enroll and pass TOTP. A user who
 /// should be enrolled but is not is sent to the enrollment page rather
-/// than silently skipping MFA (the pre-fix behavior).
+/// than silently skipping MFA (the pre-fix behavior minted a full
+/// session at the Enroll gate).
 async fn check_totp_enforcement(
     db: &Db,
     user_id: i64,
@@ -84,12 +86,15 @@ async fn check_totp_enforcement(
     }
 }
 
-/// Create a pending MFA record and redirect to the MFA page.
+/// Create a pending MFA record and redirect to the given target with the
+/// pending-MFA cookie. Used by the MFA gate (target `/auth/mfa`) and the
+/// enrollment gate (target `/auth/enroll`); neither mints a session.
 /// Returns the response with the MFA pending cookie set.
 async fn redirect_to_mfa(
     db: &Db,
     user: &db::User,
     ttl_secs: u64,
+    target: &str,
     headers: &HeaderMap,
     tls_enabled: bool,
     trusted_proxies: Option<&TrustedProxies>,
@@ -121,16 +126,21 @@ async fn redirect_to_mfa(
         }
     };
 
+    // The enrollment target needs a Path=/ cookie so the enrollment page
+    // and the TOTP self-service API can read it; the MFA target keeps the
+    // cookie scoped to the MFA page.
+    let cookie_path = if target == "/auth/enroll" { "/" } else { "/auth/mfa" };
     let mfa_cookie = format!(
-        "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age={}",
+        "persea_mfa_pending={}; Path={}; HttpOnly;{} SameSite=Lax; Max-Age={}",
         pending_token,
+        cookie_path,
         crate::csrf::cookie_secure_attr(headers, tls_enabled, trusted_proxies, peer_ip),
         ttl_secs
     );
 
     (
         AppendHeaders([(header::SET_COOKIE, mfa_cookie)]),
-        Redirect::to("/auth/mfa"),
+        Redirect::to(target),
     )
         .into_response()
 }
@@ -346,6 +356,27 @@ pub async fn login_submit(
                     &database,
                     &user,
                     ttl_secs,
+                    "/auth/mfa",
+                    &headers,
+                    tls_enabled.0,
+                    Some(&trusted_proxies),
+                    Some(addr.ip()),
+                )
+                .await;
+            }
+
+            // Enforcement requires enrollment but the user has no TOTP
+            // yet: no session is minted. The pending-MFA cookie reaches
+            // the enrollment page only; the session is created after the
+            // factor is verified on the MFA page, so never enrolling
+            // means never getting in.
+            if matches!(totp_gate, TotpGate::Enroll) {
+                let ttl_secs = 300; // 5 minutes for MFA pending
+                return redirect_to_mfa(
+                    &database,
+                    &user,
+                    ttl_secs,
+                    "/auth/enroll",
                     &headers,
                     tls_enabled.0,
                     Some(&trusted_proxies),
@@ -440,15 +471,9 @@ pub async fn login_submit(
                 }
             }
 
-            // Enforcement requires enrollment but the user has no TOTP yet:
-            // the session is created so the enrollment page (behind
-            // require_auth) is reachable, and the user is sent straight
-            // there. Subsequent logins must pass the MFA page.
-            let redirect_to = if matches!(totp_gate, TotpGate::Enroll) {
-                "/account/totp.html"
-            } else {
-                "/connections.html"
-            };
+            // Both enforcement gates (MFA and enrollment) returned above,
+            // so no factor is required and the session is safe to mint.
+            let redirect_to = "/connections.html";
 
             let session_cookie = format!(
                 "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
@@ -770,6 +795,58 @@ pub async fn mfa_submit(
         .into_response()
 }
 
+/// GET /auth/enroll — TOTP enrollment page for users the enforcement
+/// gate requires to enroll before their first login.
+///
+/// Reachable only with a valid pending-MFA cookie (set by the login
+/// handlers when enrollment is required). No session is minted until the
+/// factor is verified on the MFA page; the pending cookie grants access
+/// to this page and the TOTP self-service API only. A user who is
+/// already enrolled (e.g. enrollment completed in an earlier pending
+/// flow) is sent to the MFA page to finish the login.
+pub async fn enroll_page(
+    State(state): State<crate::api::AppState>,
+    headers: HeaderMap,
+    Extension(database): Extension<Db>,
+    Extension(nonce): Extension<CspNonce>,
+) -> Response {
+    let Some(token) = extract_cookie(&headers, "persea_mfa_pending") else {
+        return Redirect::to("/?error=login_required").into_response();
+    };
+    let db_clone = database.clone();
+    let pending = match tokio::task::spawn_blocking(move || db::get_pending_mfa(&db_clone, &token))
+        .await
+    {
+        Ok(Ok(Some(p))) => p,
+        _ => return Redirect::to("/?error=login_required").into_response(),
+    };
+
+    let db_check = database.clone();
+    let enrolled = tokio::task::spawn_blocking(move || db::user_totp_enabled(&db_check, pending.user_id))
+        .await
+        .unwrap_or(Ok(false))
+        .unwrap_or(false);
+    if enrolled {
+        return Redirect::to("/auth/mfa").into_response();
+    }
+
+    let site_title = state.config().site_title.clone();
+    let logo_url = state
+        .config()
+        .theme
+        .as_ref()
+        .and_then(|t| t.logo_url.clone())
+        .unwrap_or_default();
+    AccountTotpTemplate {
+        site_title,
+        logo_url,
+        is_admin: pending.user_role == "admin",
+        active_page: "totp".to_string(),
+        csp_nonce: nonce.0,
+    }
+    .into_response()
+}
+
 // ── Form data ──────────────────────────────────────────────────────────────
 
 /// Form body of the password login form (POST /auth/login).
@@ -890,6 +967,27 @@ pub async fn saml_acs(
                     &database,
                     &user,
                     ttl_secs,
+                    "/auth/mfa",
+                    &headers,
+                    tls_enabled.0,
+                    Some(&trusted_proxies),
+                    Some(addr.ip()),
+                )
+                .await;
+            }
+
+            // Enforcement requires enrollment but the user has no TOTP
+            // yet: no session is minted. The pending-MFA cookie reaches
+            // the enrollment page only; the session is created after the
+            // factor is verified on the MFA page, so never enrolling
+            // means never getting in.
+            if matches!(totp_gate, TotpGate::Enroll) {
+                let ttl_secs = 300; // 5 minutes for MFA pending
+                return redirect_to_mfa(
+                    &database,
+                    &user,
+                    ttl_secs,
+                    "/auth/enroll",
                     &headers,
                     tls_enabled.0,
                     Some(&trusted_proxies),
@@ -937,16 +1035,12 @@ pub async fn saml_acs(
             }
 
             // Redirect to RelayState if present, otherwise /connections.html.
-            // An enforcement-required user without TOTP is sent to the
-            // enrollment page instead (the session exists, so the page is
-            // reachable; subsequent logins must pass the MFA page).
-            let redirect_to = if matches!(totp_gate, TotpGate::Enroll) {
-                "/account/totp.html".to_string()
-            } else {
-                form.RelayState
-                    .filter(|n| n.starts_with('/') && !n.starts_with("//") && !n.contains("://"))
-                    .unwrap_or_else(|| "/connections.html".to_string())
-            };
+            // Both enforcement gates (MFA and enrollment) returned above,
+            // so no factor is required and the session is safe to mint.
+            let redirect_to = form
+                .RelayState
+                .filter(|n| crate::oidc::is_safe_redirect_path(n))
+                .unwrap_or_else(|| "/connections.html".to_string());
 
             let session_cookie = format!(
                 "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
@@ -1008,4 +1102,57 @@ pub async fn saml_metadata(
         xml,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db() -> Db {
+        db::init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    fn create_user(db: &Db, email: &str, role: &str) -> db::User {
+        let hash = crate::password::hash_password("s3cret-p@ss").unwrap();
+        db::create_user_with_password(db, email, email, &hash, role, "database").unwrap();
+        db::get_user_by_email(db, email).unwrap()
+    }
+
+    #[tokio::test]
+    async fn totp_gate_requires_enrollment_for_unenrolled_admin() {
+        let db = test_db();
+        let user = create_user(&db, "admin@example.com", "admin");
+        let gate =
+            check_totp_enforcement(&db, user.id, "admin", &TotpEnforcement::AdminsOnly).await;
+        assert!(
+            matches!(gate, TotpGate::Enroll),
+            "an unenrolled admin under AdminsOnly must be sent to enrollment"
+        );
+    }
+
+    #[tokio::test]
+    async fn totp_gate_off_never_requires() {
+        let db = test_db();
+        let user = create_user(&db, "u@example.com", "viewer");
+        let gate = check_totp_enforcement(&db, user.id, "viewer", &TotpEnforcement::Off).await;
+        assert!(matches!(gate, TotpGate::None));
+    }
+
+    #[tokio::test]
+    async fn totp_gate_enrolled_user_goes_to_mfa() {
+        let db = test_db();
+        let user = create_user(&db, "u@example.com", "viewer");
+        db::store_totp_secret(&db, user.id, "JBSWY3DPEHPK3PXP", "SHA1", 6, 30).unwrap();
+        let gate = check_totp_enforcement(&db, user.id, "viewer", &TotpEnforcement::All).await;
+        assert!(matches!(gate, TotpGate::Mfa));
+    }
+
+    #[tokio::test]
+    async fn totp_gate_non_admin_skipped_under_admins_only() {
+        let db = test_db();
+        let user = create_user(&db, "u@example.com", "viewer");
+        let gate =
+            check_totp_enforcement(&db, user.id, "viewer", &TotpEnforcement::AdminsOnly).await;
+        assert!(matches!(gate, TotpGate::None));
+    }
 }
