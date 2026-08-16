@@ -1,0 +1,67 @@
+name: Build guacd
+description: >-
+  Clone and build guacd from the persea fork of guacamole-server, with build
+  caching. Optionally installs into a DESTDIR (deb packaging) or starts guacd
+  in the background (screenshot jobs). Shared by release.yml, beta.yml, and
+  screenshots.yml so the recipe lives in one place.
+
+inputs:
+  guacd-repo:
+    description: Git URL of the guacamole-server fork
+    required: false
+    default: https://github.com/persea-grove/persea-guacamole-server.git
+  guacd-commit:
+    description: Commit to build; also the cache key component
+    required: false
+    default: d9218fe1
+  install-destdir:
+    description: DESTDIR to install guacd into; empty skips the install
+    required: false
+    default: ""
+  start-guacd:
+    description: Start guacd in the background after building
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Restore guacd build cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          /tmp/guacamole-server
+          /tmp/guacd-build
+        key: guacd-${{ runner.arch }}-${{ inputs.guacd-commit }}
+
+    - name: Clone and build guacd
+      shell: bash
+      env:
+        GUACD_REPO: ${{ inputs.guacd-repo }}
+        GUACD_COMMIT: ${{ inputs.guacd-commit }}
+      run: |
+        if [ ! -f /tmp/guacd-build/Makefile ]; then
+          git clone --depth 1 --branch persea-1.6.1-freerdp3 "$GUACD_REPO" /tmp/guacamole-server
+          git -C /tmp/guacamole-server checkout "$GUACD_COMMIT" 2>/dev/null || true
+          cd /tmp/guacamole-server && autoreconf -fi
+          mkdir /tmp/guacd-build && cd /tmp/guacd-build
+          /tmp/guacamole-server/configure \
+            --prefix=/opt/persea \
+            --with-ssh --with-vnc --with-rdp \
+            --without-telnet --without-kubernetes \
+            --disable-guacenc --disable-guaclog --disable-static
+        fi
+        make -C /tmp/guacd-build -j"$(nproc)"
+        if [ -n "${{ inputs.install-destdir }}" ]; then
+          make -C /tmp/guacd-build DESTDIR="${{ inputs.install-destdir }}" install
+        fi
+        if [ "${{ inputs.start-guacd }}" = "true" ]; then
+          /tmp/guacd-build/src/guacd -b 127.0.0.1 -L /tmp/guacd-build/guacd.log &
+          for i in $(seq 1 60); do
+            if bash -c 'echo > /dev/tcp/127.0.0.1/4822' 2>/dev/null; then
+              echo "guacd ready after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+        fi
