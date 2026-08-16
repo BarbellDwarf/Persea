@@ -47,6 +47,9 @@ mod settings_merge {
 mod templates {
     pub use persea::templates::*;
 }
+mod totp {
+    pub use persea::totp::*;
+}
 
 /// Stand-in for the binary crate's `CspNonce(String)`.
 #[derive(Clone)]
