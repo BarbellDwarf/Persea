@@ -152,7 +152,7 @@ proptest = "1"
 # Already in the dependency tree via axum's ws feature (locked at 0.29.0) —
 # used only by the teardown integration tests' WebSocket client. No new
 # crates enter the lock.
-tokio-tungstenite = "0.29"
+tokio-tungstenite = "0.30"
 
 [build-dependencies]
 pulldown-cmark = "0.13"
