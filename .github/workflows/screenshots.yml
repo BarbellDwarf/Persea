@@ -186,7 +186,7 @@ jobs:
       - name: Open regeneration PR
         if: github.event_name == 'workflow_dispatch' && steps.diff-check.outputs.changed == 'true'
         continue-on-error: true
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           add-paths: docs/screenshots
           branch: screenshots/regen
