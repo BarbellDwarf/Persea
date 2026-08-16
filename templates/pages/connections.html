@@ -1328,6 +1328,22 @@
             rows += detailRow(label, v);
         }
         function addOn(label, v) { if (v) rows += detailRow(label, 'On'); }
+        // Frontend names for backend enum values. Keep in sync with the
+        // edit-modal option labels (em-rdp-security / em-rdp-auth-pkg).
+        var SECURITY_LABELS = {
+            'nla': 'NLA (Network Level Authentication)',
+            'tls': 'TLS (SSL encryption)',
+            'rdp': 'RDP (standard encryption)'
+        };
+        var AUTH_PKG_LABELS = {
+            'kerberos': 'Kerberos',
+            'ntlm': 'NTLM'
+        };
+        var SCOPE_LABELS = { 'shared': 'Shared', 'user': 'User', 'domain': 'Domain' };
+        function frontendName(map, v) {
+            if (v === null || v === undefined || v === '') return '';
+            return map[v] || v;
+        }
 
         add('Hostname', e.hostname);
         add('Port', e.port);
@@ -1337,8 +1353,8 @@
         add('VM ID', e.proxmox_vmid);
         add('Username', e.username);
         add('Domain', e.domain);
-        add('Security', e.security);
-        add('Authentication package', e.auth_pkg);
+        add('Security', frontendName(SECURITY_LABELS, e.security));
+        add('Authentication package', frontendName(AUTH_PKG_LABELS, e.auth_pkg));
         add('Kerberos KDC', e.kdc_url);
         addOn('Ignore TLS errors', e.ignore_cert);
         add('Color depth (bits)', e.color_depth);
@@ -1355,7 +1371,7 @@
         var connection = detailSection('Connection', rows);
 
         rows = '';
-        add('Folder', folderPath + ' (' + scope + ')');
+        add('Folder', folderPath + ' (' + frontendName(SCOPE_LABELS, scope) + ')');
         add('Allowed groups', e.allowed_groups);
         add('Banner', e.banner);
         add('Jump hosts', jumpHostsLabel(e.jump_hosts));
@@ -1416,7 +1432,8 @@
             document.getElementById('detail-name').textContent = e.display_name || e.name;
             var proto = (e.session_type || '').toLowerCase();
             var badge = document.getElementById('detail-protocol');
-            badge.textContent = proto.toUpperCase();
+            var protoNames = { 'web': 'Web Browser', 'vdi': 'VDI Desktop', 'proxmox': 'Proxmox VE' };
+            badge.textContent = protoNames[proto] || proto.toUpperCase();
             badge.className = 'px-2 py-0.5 text-xs font-medium rounded border ' + protoClass(proto);
             document.getElementById('detail-host').textContent = entryHost(e) || '\u2014';
             var descEl = document.getElementById('detail-description');
