@@ -24,6 +24,12 @@ use crate::auth::TrustedProxies;
 pub const CSRF_COOKIE: &str = "csrf_token";
 const CSRF_TOKEN_LEN: usize = 32;
 
+/// Cap on the form body the CSRF middleware buffers for the token peek.
+/// Matches the app-level `DefaultBodyLimit`; a larger body is rejected
+/// (the peek yields no token, so the request fails the check closed)
+/// instead of being buffered into memory.
+const CSRF_PEEK_BODY_LIMIT: usize = 64 * 1024;
+
 /// POST path of the SAML Assertion Consumer Service.
 ///
 /// Exempt from the double-submit check: the IdP POSTs the SAMLResponse here
@@ -247,8 +253,8 @@ where
                         .unwrap_or("");
                     if ct.contains("application/x-www-form-urlencoded") {
                         let (parts, body) = req.into_parts();
-                        let (bytes_result, token) = match axum::body::to_bytes(body, usize::MAX)
-                            .await
+                        let (bytes_result, token) =
+                            match axum::body::to_bytes(body, CSRF_PEEK_BODY_LIMIT).await
                         {
                             Ok(bytes) => {
                                 let form = std::str::from_utf8(&bytes).unwrap_or("");
@@ -513,6 +519,32 @@ mod tests {
             .unwrap())
         .await;
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn form_peek_rejects_oversized_bodies() {
+        // Learn the token first.
+        let first = run(Request::get("/").body(Body::empty()).unwrap()).await;
+        let token = cookie_value(&first, CSRF_COOKIE)
+            .expect("csrf cookie")
+            .to_string();
+
+        // A form body larger than the peek cap: the middleware must not
+        // buffer it (memory bound) and must fail the check closed — the
+        // peek yields no token, so the request is rejected.
+        let big_value = "x".repeat(70 * 1024);
+        let body = format!("csrf_token={}&field={}", token, big_value);
+        let resp = run(Request::post("/")
+            .header(header::COOKIE, format!("{CSRF_COOKIE}={token}"))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap())
+        .await;
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "an oversized form body must fail the CSRF check closed"
+        );
     }
 
     #[tokio::test]

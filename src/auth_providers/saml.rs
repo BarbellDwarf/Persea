@@ -28,6 +28,12 @@ const PENDING_REQUEST_TTL: Duration = Duration::from_secs(600);
 /// window without unbounded growth (entries are pruned on each use).
 const CONSUMED_ASSERTION_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
+/// Maximum size of a decoded or decompressed SAMLResponse, enforced
+/// before any parsing or signature work. Deflate can expand a small
+/// input enormously (a 64 KiB body can decompress to tens of MiB), so
+/// the cap is the memory bound against deflate bombs.
+const MAX_SAML_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -710,6 +716,34 @@ fn extract_in_response_to(xml: &str) -> Option<String> {
     None
 }
 
+/// Extract the Recipient from `<saml:SubjectConfirmationData>`.
+fn extract_recipient(xml: &str) -> Option<String> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(ref e))
+            | Ok(quick_xml::events::Event::Empty(ref e)) => {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if local_name(&tag) == "SubjectConfirmationData" {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"Recipient" {
+                            return Some(String::from_utf8_lossy(&attr.value).to_string());
+                        }
+                    }
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    None
+}
+
 /// Extract Audience values from `AudienceRestriction` in a SAML assertion.
 fn extract_audiences(xml: &str) -> Vec<String> {
     let mut reader = Reader::from_str(xml);
@@ -783,15 +817,27 @@ fn deflate_encode(data: &[u8]) -> Vec<u8> {
     encoder.finish().expect("deflate finish")
 }
 
-/// Attempt deflate decompression.
-fn decompress_deflate(data: &[u8]) -> Result<Vec<u8>, String> {
+/// Why deflate decompression failed.
+enum DeflateError {
+    /// The input is not valid deflate; the caller may treat it as raw XML.
+    NotDeflate,
+    /// The input is deflate but decompresses past the cap — the caller
+    /// must reject, never fall back to the raw bytes.
+    TooLarge,
+}
+
+/// Attempt deflate decompression with an output cap.
+fn decompress_deflate(data: &[u8]) -> Result<Vec<u8>, DeflateError> {
     use flate2::read::DeflateDecoder;
     use std::io::Read;
-    let mut decoder = DeflateDecoder::new(data);
+    let mut decoder = DeflateDecoder::new(data).take(MAX_SAML_RESPONSE_BYTES as u64 + 1);
     let mut output = Vec::new();
     decoder
         .read_to_end(&mut output)
-        .map_err(|e| format!("Deflate decompression failed: {e}"))?;
+        .map_err(|_| DeflateError::NotDeflate)?;
+    if output.len() > MAX_SAML_RESPONSE_BYTES {
+        return Err(DeflateError::TooLarge);
+    }
     Ok(output)
 }
 
@@ -1091,20 +1137,71 @@ pub struct SamlAttributes {
 }
 
 /// Decode a base64-encoded SAMLResponse and inflate it if deflate-compressed.
+///
+/// Both the raw decoded bytes and the decompressed output are capped at
+/// [`MAX_SAML_RESPONSE_BYTES`]; a response past the cap is rejected before
+/// any parsing or signature validation.
 fn decode_saml_response(saml_response: &str) -> Result<String, String> {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(saml_response)
         .map_err(|e| format!("SAMLResponse base64 decode failed: {e}"))?;
 
+    // Cap the raw bytes too: incompressible data passes deflate through
+    // untouched, so the decoded size alone can exceed the cap.
+    if decoded.len() > MAX_SAML_RESPONSE_BYTES {
+        return Err(format!(
+            "SAMLResponse exceeds the {} byte cap",
+            MAX_SAML_RESPONSE_BYTES
+        ));
+    }
+
     // Deflate is optional: the HTTP-Redirect binding compresses, the
     // HTTP-POST binding does not. Try decompression first, fall back to the
-    // raw bytes.
+    // raw bytes — unless the output would exceed the cap, which is a
+    // rejection, not a fallback.
     let xml_bytes = match decompress_deflate(&decoded) {
         Ok(decompressed) => decompressed,
-        Err(_) => decoded,
+        Err(DeflateError::TooLarge) => {
+            return Err(format!(
+                "SAMLResponse deflate decompression exceeds the {} byte cap",
+                MAX_SAML_RESPONSE_BYTES
+            ));
+        }
+        Err(DeflateError::NotDeflate) => decoded,
     };
 
     String::from_utf8(xml_bytes).map_err(|e| format!("SAMLResponse is not valid UTF-8: {e}"))
+}
+
+/// Validate the Audience restriction against the SP entity ID. In strict
+/// mode the restriction must be present and contain the entity ID.
+fn validate_audience(assertion_xml: &str, entity_id: &str) -> Result<(), String> {
+    let audiences = extract_audiences(assertion_xml);
+    if audiences.is_empty() {
+        return Err("SAML assertion carries no Audience restriction".to_string());
+    }
+    if !audiences.contains(&entity_id) {
+        return Err(format!(
+            "SP entity ID '{}' not found in Audience restriction",
+            entity_id
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the SubjectConfirmationData Recipient against the configured
+/// ACS URL. Validated when present; an absent Recipient is tolerated
+/// (some IdPs omit it).
+fn validate_recipient(assertion_xml: &str, acs_url: &str) -> Result<(), String> {
+    if let Some(recipient) = extract_recipient(assertion_xml) {
+        if recipient != acs_url {
+            return Err(format!(
+                "SAML Recipient '{}' does not match the configured ACS URL '{}'",
+                recipient, acs_url
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Parse and validate a decoded SAMLResponse XML from the ACS callback.
@@ -1128,16 +1225,15 @@ pub fn parse_saml_response(
 
     // 3. Validate audience restriction against verified element
     if config.strict_mode && !idp_cert_pem.is_empty() {
-        let audiences = extract_audiences(assertion_xml);
-        if !audiences.is_empty() && !audiences.contains(&config.entity_id) {
-            return Err(format!(
-                "SP entity ID '{}' not found in Audience restriction",
-                config.entity_id
-            ));
-        }
+        validate_audience(assertion_xml, &config.entity_id)?;
     }
 
-    // 4. Check time conditions if in strict mode (against verified element)
+    // 4. Validate the Recipient against the configured ACS URL
+    if config.strict_mode && !idp_cert_pem.is_empty() {
+        validate_recipient(assertion_xml, &config.acs_url)?;
+    }
+
+    // 5. Check time conditions if in strict mode (against verified element)
     if config.strict_mode {
         validate_time_conditions(assertion_xml)?;
     }
@@ -1533,6 +1629,12 @@ fn validate_time_conditions(xml: &str) -> Result<(), String> {
 
     let now = Utc::now();
 
+    // Strict mode: an assertion without a NotOnOrAfter expiry is rejected —
+    // a response that never expires cannot be replayed safely.
+    if conditions_not_on_or_after.is_none() {
+        return Err("SAML assertion has no NotOnOrAfter condition".to_string());
+    }
+
     if let Some(t) = conditions_not_before {
         if now < t {
             return Err(format!("SAML assertion not yet valid (NotBefore: {t})"));
@@ -1635,6 +1737,12 @@ pub struct SamlProvider {
     /// Assertion IDs already consumed on the ACS callback, with the time
     /// they were first seen. A replayed response carrying the same ID is
     /// rejected.
+    ///
+    /// In-memory only: the cache does not survive a process restart, and
+    /// each instance keeps its own copy. This is a documented single-node
+    /// limitation — a replayed assertion is only rejected while the
+    /// instance that first saw it stays up. The assertion's own
+    /// NotOnOrAfter (minutes) bounds the replay window regardless.
     consumed_assertions: std::sync::Mutex<HashMap<String, Instant>>,
 }
 
@@ -1754,19 +1862,13 @@ impl SamlProvider {
 
         // Resolve the AuthnRequest ID this response answers. The entry is
         // consumed whether validation passes or fails, so a failed response
-        // cannot be retried against the same flow. IdP-initiated SSO
-        // carries no InResponseTo and is allowed through: the replay cache
-        // below still protects against assertion reuse.
-        let request_id = match extract_in_response_to(&xml) {
-            Some(irt) => match self.take_request_id(Some(&irt)) {
-                Some(_) => Some(irt),
-                None => {
-                    return AuthResult::Failure(
-                        "SAML response references an unknown or expired AuthnRequest".into(),
-                    );
-                }
-            },
-            None => None,
+        // cannot be retried against the same flow. In strict mode a response
+        // without InResponseTo is rejected outright: it cannot be proven to
+        // answer a request we issued, so IdP-initiated SSO requires
+        // strict_mode = false.
+        let request_id = match self.resolve_request_id(&xml) {
+            Ok(id) => id,
+            Err(e) => return AuthResult::Failure(e),
         };
 
         match parse_saml_response(
@@ -1792,6 +1894,31 @@ impl SamlProvider {
                 }
             }
             Err(e) => AuthResult::Failure(format!("SAML response validation failed: {e}")),
+        }
+    }
+
+    /// Resolve the AuthnRequest ID a response answers. The entry is
+    /// consumed whether validation passes or fails, so a failed response
+    /// cannot be retried against the same flow. In strict mode a response
+    /// without InResponseTo is rejected: it cannot be proven to answer a
+    /// request we issued, so IdP-initiated SSO requires strict_mode =
+    /// false. Non-strict mode allows it through (the replay cache below
+    /// still protects against assertion reuse).
+    fn resolve_request_id(&self, xml: &str) -> Result<Option<String>, String> {
+        match extract_in_response_to(xml) {
+            Some(irt) => match self.take_request_id(Some(&irt)) {
+                Some(_) => Ok(Some(irt)),
+                None => Err(
+                    "SAML response references an unknown or expired AuthnRequest".into(),
+                ),
+            },
+            None => {
+                if self.config.strict_mode {
+                    Err("SAML response carries no InResponseTo — IdP-initiated SSO requires strict_mode = false".into())
+                } else {
+                    Ok(None)
+                }
+            }
         }
     }
 
@@ -2101,5 +2228,130 @@ mod tests {
 
         // Garbage input fails loudly.
         assert!(decode_saml_response("not base64!!").is_err());
+    }
+
+    #[test]
+    fn deflate_cap_rejects_expansion_bombs() {
+        // 20 MiB of zeros deflates to a few KiB; decompressing it back
+        // must be rejected by the cap rather than allocating 20 MiB.
+        let bomb = vec![0u8; 20 * 1024 * 1024];
+        let compressed = deflate_encode(&bomb);
+        assert!(
+            compressed.len() < 1024 * 1024,
+            "test setup: zeros must compress"
+        );
+        assert!(matches!(
+            decompress_deflate(&compressed),
+            Err(DeflateError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn decode_saml_response_rejects_deflate_bomb() {
+        let bomb = vec![0u8; 20 * 1024 * 1024];
+        let compressed = deflate_encode(&bomb);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&compressed);
+        assert!(
+            decode_saml_response(&b64).is_err(),
+            "a deflate bomb must be rejected before signature validation"
+        );
+    }
+
+    #[test]
+    fn decode_saml_response_rejects_oversized_raw_input() {
+        // Incompressible data passes deflate through untouched; the raw
+        // decoded bytes must be capped too.
+        let big = vec![b'x'; 11 * 1024 * 1024];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&big);
+        assert!(decode_saml_response(&b64).is_err());
+    }
+
+    #[test]
+    fn strict_audience_required() {
+        let xml = r#"<Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><Subject><NameID>u@example.com</NameID></Subject></Assertion>"#;
+        assert!(validate_audience(xml, "https://persea.example.com/saml/metadata").is_err());
+    }
+
+    #[test]
+    fn strict_audience_mismatch_rejected() {
+        let xml = r#"<Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><Conditions><AudienceRestriction><Audience>https://other.example.com</Audience></AudienceRestriction></Conditions></Assertion>"#;
+        assert!(validate_audience(xml, "https://persea.example.com/saml/metadata").is_err());
+    }
+
+    #[test]
+    fn strict_audience_match_passes() {
+        let xml = r#"<Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><Conditions><AudienceRestriction><Audience>https://persea.example.com/saml/metadata</Audience></AudienceRestriction></Conditions></Assertion>"#;
+        assert!(validate_audience(xml, "https://persea.example.com/saml/metadata").is_ok());
+    }
+
+    #[test]
+    fn recipient_mismatch_rejected() {
+        let xml = r#"<Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><Subject><SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><SubjectConfirmationData Recipient="https://evil.example.com/acs"/></SubjectConfirmation></Subject></Assertion>"#;
+        assert!(validate_recipient(xml, "https://persea.example.com/auth/saml/acs").is_err());
+    }
+
+    #[test]
+    fn recipient_match_passes() {
+        let xml = r#"<Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><Subject><SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><SubjectConfirmationData Recipient="https://persea.example.com/auth/saml/acs"/></SubjectConfirmation></Subject></Assertion>"#;
+        assert!(validate_recipient(xml, "https://persea.example.com/auth/saml/acs").is_ok());
+    }
+
+    #[test]
+    fn recipient_absent_passes() {
+        // Recipient is validated when present; absent is tolerated (some
+        // IdPs omit it).
+        let xml = r#"<Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><Subject><SubjectConfirmation Method="urn:oasis:names:tc:SAML:2.0:cm:bearer"><SubjectConfirmationData NotOnOrAfter="2099-01-01T00:00:00Z"/></SubjectConfirmation></Subject></Assertion>"#;
+        assert!(validate_recipient(xml, "https://persea.example.com/auth/saml/acs").is_ok());
+    }
+
+    #[test]
+    fn time_conditions_require_not_on_or_after() {
+        let xml = r#"<Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><Conditions NotBefore="2000-01-01T00:00:00Z"/></Assertion>"#;
+        assert!(validate_time_conditions(xml).is_err());
+    }
+
+    #[test]
+    fn time_conditions_expired_rejected() {
+        let xml = r#"<Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><Conditions NotBefore="2000-01-01T00:00:00Z" NotOnOrAfter="2001-01-01T00:00:00Z"/></Assertion>"#;
+        assert!(validate_time_conditions(xml).is_err());
+    }
+
+    #[test]
+    fn time_conditions_valid_pass() {
+        let xml = r#"<Assertion xmlns="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"><Conditions NotBefore="2000-01-01T00:00:00Z" NotOnOrAfter="2099-01-01T00:00:00Z"/></Assertion>"#;
+        assert!(validate_time_conditions(xml).is_ok());
+    }
+
+    #[test]
+    fn strict_mode_rejects_response_without_in_response_to() {
+        let provider = SamlProvider::new(SamlConfig {
+            strict_mode: true,
+            ..Default::default()
+        });
+        let xml = r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"/></samlp:Response>"#;
+        assert!(
+            provider.resolve_request_id(xml).is_err(),
+            "strict mode must reject responses without InResponseTo"
+        );
+    }
+
+    #[test]
+    fn non_strict_mode_allows_idp_initiated_response() {
+        let provider = SamlProvider::new(SamlConfig {
+            strict_mode: false,
+            ..Default::default()
+        });
+        let xml = r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol"><saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"/></samlp:Response>"#;
+        assert!(provider.resolve_request_id(xml).unwrap().is_none());
+    }
+
+    #[test]
+    fn strict_mode_rejects_unknown_in_response_to() {
+        let provider = SamlProvider::new(SamlConfig {
+            strict_mode: true,
+            ..Default::default()
+        });
+        let xml = r#"<samlp:Response xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" InResponseTo="_never-issued"><saml:Assertion xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" ID="_a1"/></samlp:Response>"#;
+        assert!(provider.resolve_request_id(xml).is_err());
     }
 }
