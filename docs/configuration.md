@@ -97,16 +97,16 @@ reach.
 
 | Key | Default | What it controls |
 |-----|---------|------------------|
-| `ssh_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` | Allowed SSH session targets: private (RFC 1918) networks plus loopback. |
-| `rdp_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` | Allowed RDP session targets: private networks plus loopback. |
-| `vnc_allowed_networks` | `["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128"]` | Allowed VNC session targets: private networks plus loopback. |
+| `ssh_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed SSH session targets: loopback only by default. Use `["0.0.0.0/0", "::/0"]` to allow any host. |
+| `rdp_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed RDP session targets: loopback only by default. |
+| `vnc_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed VNC session targets: loopback only by default. |
 | `web_allowed_networks` | `["127.0.0.0/8", "::1/128"]` | Allowed hosts for web browser session URLs: loopback only by default. Use `["0.0.0.0/0", "::/0"]` to allow any host. |
 
 To reach targets on other networks (for example a VPN range or a public
 jump server), add the CIDR to the relevant list:
 
 ```toml
-ssh_allowed_networks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1/128", "172.20.0.0/16"]
+ssh_allowed_networks = ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.20.0.0/16"]
 ```
 
 **Note:** these are top-level TOML keys and must appear *before* any

@@ -270,6 +270,18 @@ if [ ! -f "$CONFIG_PATH" ]; then
     cp /opt/persea/config.toml.default "$CONFIG_PATH"
 fi
 
+# Generate a storage encryption key on first run if none is set: without
+# one the server refuses to start (credentials would sit in plaintext).
+if ! grep -q 'encryption_key' "$CONFIG_PATH" 2>/dev/null; then
+    KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+    {
+        echo ""
+        echo "[storage]"
+        echo "encryption_key = \"$KEY\""
+    } >> "$CONFIG_PATH"
+    echo "Generated storage encryption key."
+fi
+
 # Generate TLS cert at runtime if not already present (e.g. mounted)
 TLS_DIR="/opt/persea/tls"
 if [ ! -f "$TLS_DIR/cert.pem" ] || [ ! -f "$TLS_DIR/key.pem" ]; then

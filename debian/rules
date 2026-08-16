@@ -26,8 +26,8 @@ override_dh_auto_install:
 	install -d debian/persea/opt/persea/tls
 	install -d debian/persea/etc/ld.so.conf.d
 
-	# persea binary
-	install -m 755 target/release/persea debian/persea/opt/persea/bin/persea
+	# persea binary (CARGO_TARGET_DIR-aware so space-free builds work)
+	install -m 755 $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR)/release/persea,target/release/persea) debian/persea/opt/persea/bin/persea
 
 	# Drive setup helper script
 	install -m 755 scripts/drive-setup.sh debian/persea/opt/persea/bin/drive-setup.sh
