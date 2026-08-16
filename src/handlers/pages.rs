@@ -19,6 +19,24 @@ fn is_admin(identity: &Option<Extension<AuthIdentity>>) -> bool {
         .unwrap_or(false)
 }
 
+/// Gate an admin page shell: viewers and operators get a 403 error page
+/// instead of the UI shell. The shell itself is inert, but its partials
+/// (sidebar, header) leak admin-only navigation.
+fn require_admin_page(
+    identity: &Option<Extension<AuthIdentity>>,
+    nonce: &CspNonce,
+) -> Result<(), Response> {
+    if is_admin(identity) {
+        Ok(())
+    } else {
+        Err(crate::templates::render_error_page(
+            axum::http::StatusCode::FORBIDDEN,
+            "admin role required",
+            &nonce.0,
+        ))
+    }
+}
+
 /// Branding logo URL resolved from the startup ThemeData (config + DB
 /// settings overlay); empty string renders the sidebar/login placeholder.
 fn logo_url(theme: &ThemeData) -> String {
@@ -103,6 +121,9 @@ pub async fn admin_users_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
+    if let Err(resp) = require_admin_page(&identity, &nonce) {
+        return resp;
+    }
     let tmpl = AdminUsersTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
@@ -120,6 +141,9 @@ pub async fn admin_auth_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
+    if let Err(resp) = require_admin_page(&identity, &nonce) {
+        return resp;
+    }
     let tmpl = AdminAuthTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
@@ -137,6 +161,9 @@ pub async fn admin_groups_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
+    if let Err(resp) = require_admin_page(&identity, &nonce) {
+        return resp;
+    }
     let tmpl = AdminGroupsTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
@@ -154,6 +181,9 @@ pub async fn admin_audit_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
+    if let Err(resp) = require_admin_page(&identity, &nonce) {
+        return resp;
+    }
     let tmpl = AdminAuditTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
@@ -171,6 +201,9 @@ pub async fn admin_settings_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
+    if let Err(resp) = require_admin_page(&identity, &nonce) {
+        return resp;
+    }
     let tmpl = AdminSettingsTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
@@ -188,6 +221,9 @@ pub async fn admin_reports_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
+    if let Err(resp) = require_admin_page(&identity, &nonce) {
+        return resp;
+    }
     let tmpl = AdminReportsTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
@@ -208,6 +244,9 @@ pub async fn admin_tunnels_page(
     Extension(nonce): Extension<CspNonce>,
     Extension(db): Extension<Db>,
 ) -> Response {
+    if let Err(resp) = require_admin_page(&identity, &nonce) {
+        return resp;
+    }
     if !crate::settings_merge::read_toggle(&db, "enable_ssh_tunnels", true) {
         return crate::templates::render_error_page(
             axum::http::StatusCode::NOT_FOUND,
@@ -232,6 +271,9 @@ pub async fn admin_branding_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
+    if let Err(resp) = require_admin_page(&identity, &nonce) {
+        return resp;
+    }
     let tmpl = AdminBrandingTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),

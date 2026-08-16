@@ -503,8 +503,17 @@ pub async fn audit_events(
             "failure" | "error" => "bg-red-900/50 text-red-300 border-red-800",
             _ => "bg-emerald-900/50 text-emerald-300 border-emerald-800",
         };
+        // Every interpolated value is escaped: `user_id` is attacker-
+        // controlled (session rows store the caller's display name) and
+        // this fragment is swapped into the admin page via innerHTML.
+        let escaped_timestamp = html_escape(&event.timestamp.to_rfc3339());
+        let escaped_type = html_escape(&event.event_type);
+        let escaped_user = html_escape(event.user_id.as_deref().unwrap_or("-"));
+        let escaped_ip = html_escape(event.source_ip.as_deref().unwrap_or("-"));
+        let escaped_outcome = html_escape(&event.outcome);
         let escaped_details = html_escape(&details);
         let escaped_hash = html_escape(&event.event_hash);
+        let escaped_short_hash = html_escape(&short_hash_display);
         html.push_str(&format!(
             r#"<tr class="hover:bg-[var(--bg-hover)]/50">
 <td class="px-4 py-3 text-sm text-[var(--text-muted)] whitespace-nowrap">{}</td>
@@ -515,16 +524,16 @@ pub async fn audit_events(
 <td class="px-4 py-3 text-sm text-[var(--text-muted)] max-w-xs truncate" title="{}">{}</td>
 <td class="px-4 py-3 text-sm text-[var(--text-muted)] font-mono text-right" title="{}">{}</td>
 </tr>"#,
-            event.timestamp.to_rfc3339(),
-            event.event_type,
-            event.user_id.as_deref().unwrap_or("-"),
-            event.source_ip.as_deref().unwrap_or("-"),
+            escaped_timestamp,
+            escaped_type,
+            escaped_user,
+            escaped_ip,
             outcome_class,
-            event.outcome,
+            escaped_outcome,
             escaped_details,
             escaped_details,
             escaped_hash,
-            short_hash_display,
+            escaped_short_hash,
         ));
     }
 
@@ -653,4 +662,141 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audit::EventBuilder;
+    use crate::db::{self, Db};
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::get;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    fn test_db() -> Db {
+        db::init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    fn identity(email: &str, name: &str, role: &str) -> AuthIdentity {
+        AuthIdentity::User {
+            email: email.into(),
+            name: name.into(),
+            role: role.into(),
+            groups: vec![],
+        }
+    }
+
+    fn router(db: Db, id: Option<AuthIdentity>) -> Router {
+        let r = Router::new()
+            .route("/api/audit/events", get(audit_events))
+            .layer(Extension(db));
+        match id {
+            Some(id) => r.layer(Extension(id)),
+            None => r,
+        }
+    }
+
+    fn req_get(path: &str) -> Request<Body> {
+        Request::builder().uri(path).body(Body::empty()).unwrap()
+    }
+
+    async fn body_string(resp: axum::response::Response) -> String {
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    fn log(
+        db: &Db,
+        event_type: &str,
+        outcome: &str,
+        user_id: Option<&str>,
+        ip: Option<&str>,
+        details: serde_json::Value,
+    ) {
+        let mut b = EventBuilder::new(event_type, outcome);
+        if let Some(u) = user_id {
+            b = b.user_id(u);
+        }
+        if let Some(i) = ip {
+            b = b.source_ip(i);
+        }
+        let mut event = b.details(details).build();
+        crate::audit::log_event(db, &mut event).unwrap();
+    }
+
+    #[tokio::test]
+    async fn audit_fragment_escapes_user_controlled_fields() {
+        let db = test_db();
+        log(
+            &db,
+            "session_start",
+            "success",
+            Some("<img src=x onerror=alert(1)>"),
+            Some("<script>alert(1)</script>"),
+            serde_json::json!({"host": "<b>bold</b>"}),
+        );
+        let router = router(db, Some(identity("admin@example.com", "Admin", "admin")));
+        let resp = router.oneshot(req_get("/api/audit/events")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let html = body_string(resp).await;
+        assert!(
+            html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+            "user_id must be escaped: {html}"
+        );
+        assert!(!html.contains("<img src=x"), "raw user_id leaked: {html}");
+        assert!(
+            html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+            "source_ip must be escaped: {html}"
+        );
+        assert!(
+            !html.contains("<script>alert(1)</script>"),
+            "raw ip leaked: {html}"
+        );
+        assert!(
+            html.contains("&lt;b&gt;bold&lt;/b&gt;"),
+            "details must be escaped: {html}"
+        );
+        assert!(!html.contains("<b>bold</b>"), "raw details leaked: {html}");
+    }
+
+    #[tokio::test]
+    async fn audit_fragment_escapes_event_type_and_outcome() {
+        let db = test_db();
+        log(
+            &db,
+            "login\" onmouseover=\"x",
+            "failure'><script>alert(1)</script>",
+            None,
+            None,
+            serde_json::Value::Null,
+        );
+        let router = router(db, Some(identity("admin@example.com", "Admin", "admin")));
+        let resp = router.oneshot(req_get("/api/audit/events")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let html = body_string(resp).await;
+        assert!(
+            html.contains("login&quot; onmouseover=&quot;x"),
+            "event_type must be escaped: {html}"
+        );
+        assert!(
+            html.contains("failure'&gt;&lt;script&gt;alert(1)&lt;/script&gt;"),
+            "outcome must be escaped: {html}"
+        );
+        assert!(
+            !html.contains("><script>"),
+            "raw outcome tag leaked: {html}"
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_fragment_requires_admin() {
+        let db = test_db();
+        let router = router(db, Some(identity("viewer@example.com", "Viewer", "viewer")));
+        let resp = router.oneshot(req_get("/api/audit/events")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
 }

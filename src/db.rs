@@ -2682,6 +2682,14 @@ pub fn csv_escape_field(w: &mut dyn std::io::Write, field: &str) -> std::io::Res
     Ok(())
 }
 
+/// CSV-escape into a `String` (wraps [`csv_escape_field`], which needs an
+/// `io::Write`; `String` does not implement it).
+pub fn csv_escape_field_str(out: &mut String, field: &str) {
+    let mut buf = Vec::new();
+    csv_escape_field(&mut buf, field).expect("writing to a Vec cannot fail");
+    out.push_str(&String::from_utf8_lossy(&buf));
+}
+
 /// Top connections by session count and total hours.
 pub fn top_connections(db: &Db, limit: u32) -> rusqlite::Result<Vec<serde_json::Value>> {
     db_route!(db, top_connections_pool, limit);
@@ -9986,10 +9994,26 @@ async fn rbac_load_role_permissions_pool(
 
 // ── Audit hash chain (src/audit.rs) ────────────────────────────────────
 
+/// Serializes audit-chain writes on the SQLx backends. The tail-read and
+/// the insert in [`audit_log_event_pool`] must be atomic: two concurrent
+/// events that both read the same tail would insert two rows chaining to
+/// the same predecessor, forking the chain (verify_chain then reports it
+/// broken). The rusqlite path needs no extra guard, the connection mutex
+/// already serializes it. The per-process worker thread serializes most
+/// pool jobs anyway; the lock makes the guarantee explicit and holds it
+/// across the whole read, hash, and insert sequence regardless of how
+/// the pool store evolves.
+static AUDIT_CHAIN_WRITE_LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+
 pub(crate) async fn audit_log_event_pool(
     pool: &DbPool,
     mut event: AuditEvent,
 ) -> rusqlite::Result<i64> {
+    let _chain_guard = AUDIT_CHAIN_WRITE_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
     let prev_hash: String = match pool {
         DbPool::Postgres(p) => {
             pg_fetch_opt(

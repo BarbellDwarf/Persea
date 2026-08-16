@@ -520,33 +520,115 @@ pub fn export_events_csv(db: &Db, filters: &AuditFilters) -> rusqlite::Result<St
         } else {
             event.details.to_string()
         };
-        // Escape fields that might contain commas or quotes
-        let escape_csv = |s: &str| -> String {
-            if s.contains(',') || s.contains('"') || s.contains('\n') {
-                format!("\"{}\"", s.replace('"', "\"\""))
-            } else {
-                s.to_string()
+        // `db::csv_escape_field` neutralizes formula-triggering characters
+        // (`= + - @` and leading tabs/CRs) and quotes embedded commas:
+        // transfer-audit filenames are user-supplied, so without the
+        // neutralization `=cmd|...` would execute as a formula in Excel.
+        let fields = [
+            event.id.to_string(),
+            event.timestamp.to_rfc3339(),
+            event.event_type.clone(),
+            event.user_id.clone().unwrap_or_default(),
+            event.source_ip.clone().unwrap_or_default(),
+            event.outcome.clone(),
+            details_str,
+            event.session_id.clone().unwrap_or_default(),
+            event.event_hash.clone(),
+        ];
+        for (i, field) in fields.iter().enumerate() {
+            if i > 0 {
+                out.push(',');
             }
-        };
-
-        out.push_str(&escape_csv(&event.id.to_string()));
-        out.push(',');
-        out.push_str(&escape_csv(&event.timestamp.to_rfc3339()));
-        out.push(',');
-        out.push_str(&escape_csv(&event.event_type));
-        out.push(',');
-        out.push_str(&escape_csv(event.user_id.as_deref().unwrap_or("")));
-        out.push(',');
-        out.push_str(&escape_csv(event.source_ip.as_deref().unwrap_or("")));
-        out.push(',');
-        out.push_str(&escape_csv(&event.outcome));
-        out.push(',');
-        out.push_str(&escape_csv(&details_str));
-        out.push(',');
-        out.push_str(&escape_csv(event.session_id.as_deref().unwrap_or("")));
-        out.push(',');
-        out.push_str(&escape_csv(&event.event_hash));
+            crate::db::csv_escape_field_str(&mut out, field);
+        }
         out.push('\n');
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+
+    fn test_db() -> Db {
+        db::init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    fn log_event_with(db: &Db, user_id: &str, details: serde_json::Value) {
+        let mut event = EventBuilder::new("session_start", "success")
+            .user_id(user_id)
+            .source_ip("10.0.0.1")
+            .details(details)
+            .build();
+        log_event(db, &mut event).unwrap();
+    }
+
+    #[test]
+    fn csv_export_neutralizes_formula_characters() {
+        let db = test_db();
+        log_event_with(
+            &db,
+            "=cmd|'/C calc'!A0",
+            serde_json::json!({"filename": "=cmd|'/C calc'!A0"}),
+        );
+        log_event_with(
+            &db,
+            "=HYPERLINK(\"http://evil\",\"click\")",
+            serde_json::Value::Null,
+        );
+
+        let csv = export_events_csv(&db, &AuditFilters::default()).unwrap();
+        assert!(
+            csv.contains("'=cmd|'/C calc'!A0"),
+            "user_id formula prefix must be neutralized: {csv}"
+        );
+        assert!(
+            csv.contains("'=HYPERLINK"),
+            "quoted formula field must still carry the neutralization prefix: {csv}"
+        );
+        assert!(
+            !csv.contains(",=HYPERLINK"),
+            "raw formula must not appear unquoted: {csv}"
+        );
+    }
+
+    #[test]
+    fn csv_export_neutralizes_plus_dash_at_tab() {
+        let db = test_db();
+        log_event_with(&db, "+SUM(A1:A10)", serde_json::Value::Null);
+        log_event_with(&db, "-1+1", serde_json::Value::Null);
+        log_event_with(&db, "@SUM(A1:A10)", serde_json::Value::Null);
+        log_event_with(&db, "\tformula", serde_json::Value::Null);
+
+        let csv = export_events_csv(&db, &AuditFilters::default()).unwrap();
+        assert!(csv.contains("'+SUM(A1:A10)"));
+        assert!(csv.contains("'-1+1"));
+        assert!(csv.contains("'@SUM(A1:A10)"));
+        assert!(csv.contains("'\tformula"));
+    }
+
+    #[test]
+    fn csv_export_quotes_embedded_commas_and_quotes() {
+        let db = test_db();
+        log_event_with(&db, "user, with \"quotes\"", serde_json::Value::Null);
+
+        let csv = export_events_csv(&db, &AuditFilters::default()).unwrap();
+        assert!(
+            csv.contains("\"user, with \"\"quotes\"\"\""),
+            "comma/quote field must be quoted with doubled quotes: {csv}"
+        );
+    }
+
+    #[test]
+    fn csv_export_header_and_plain_fields() {
+        let db = test_db();
+        log_event_with(&db, "plain-user", serde_json::Value::Null);
+
+        let csv = export_events_csv(&db, &AuditFilters::default()).unwrap();
+        assert!(csv.starts_with(
+            "id,timestamp,event_type,user_id,source_ip,outcome,details,session_id,event_hash\n"
+        ));
+        assert!(csv.contains("plain-user"));
+    }
 }
