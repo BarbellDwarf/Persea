@@ -2621,7 +2621,7 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
         });
 
-        let params = guacd::ConnectionParams::Ssh(Box::new(guacd::SshParams {
+        let params = guacd::ConnectionParams::Ssh(guacd::SshParams {
             hostname: "127.0.0.1".into(),
             port: 22,
             username: "alice".into(),
@@ -2641,15 +2641,18 @@ mod tests {
             create_typescript_path: false,
             command: None,
         }));
-        let err = handshake_with_timeout(
+        let result = handshake_with_timeout(
             &addr.to_string(),
             &params,
             None,
             std::time::Duration::from_millis(300),
         )
-        .await
-        .unwrap_err();
+        .await;
         stall.abort();
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected a timeout error, got Ok"),
+        };
         assert!(
             format!("{}", err).contains("timeout"),
             "expected a timeout error, got: {}",
