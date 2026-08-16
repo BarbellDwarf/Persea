@@ -26,7 +26,10 @@ fn path_str(p: &Path) -> &str {
 /// Scratch directory, unique per call so parallel tests never collide.
 fn scratch_dir(tag: &str) -> std::path::PathBuf {
     let n = DIR_SEQ.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("persea-storage-key-{tag}-{}-{n}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "persea-storage-key-{tag}-{}-{n}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -68,7 +71,9 @@ fn fresh_store_generates_and_persists_key() {
     let outcome = ensure_db_storage_key(&mut config, &db, &path_str(&cfg_path));
     assert_eq!(outcome, StorageKeyGuard::Ready);
 
-    let key = config.storage_encryption_key().expect("key installed on config");
+    let key = config
+        .storage_encryption_key()
+        .expect("key installed on config");
     assert_eq!(key.len(), 64);
     assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
 
@@ -78,7 +83,10 @@ fn fresh_store_generates_and_persists_key() {
 
     // A restart picks the persisted key back up.
     let reloaded = Config::load(Some(path_str(&cfg_path)));
-    assert_eq!(reloaded.storage_encryption_key().as_deref(), Some(key.as_str()));
+    assert_eq!(
+        reloaded.storage_encryption_key().as_deref(),
+        Some(key.as_str())
+    );
 }
 
 #[test]
@@ -160,7 +168,10 @@ fn configured_key_is_left_alone() {
     let dir = scratch_dir("existing");
     let cfg_path = dir.join("config.toml");
     let key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-    let original = format!("[storage]\nbackend = \"db\"\nencryption_key = \"{}\"\n", key);
+    let original = format!(
+        "[storage]\nbackend = \"db\"\nencryption_key = \"{}\"\n",
+        key
+    );
     std::fs::write(&cfg_path, &original).unwrap();
 
     let db = test_db();
@@ -178,7 +189,11 @@ fn empty_key_in_file_is_replaced() {
     without_env_key();
     let dir = scratch_dir("empty-key");
     let cfg_path = dir.join("config.toml");
-    std::fs::write(&cfg_path, "[storage]\nbackend = \"db\"\nencryption_key = \"\"\n").unwrap();
+    std::fs::write(
+        &cfg_path,
+        "[storage]\nbackend = \"db\"\nencryption_key = \"\"\n",
+    )
+    .unwrap();
 
     let mut config = Config::load(Some(path_str(&cfg_path)));
     // An empty string key counts as "no key".
