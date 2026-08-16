@@ -2354,9 +2354,17 @@ pub enum StorageKeyGuard {
     RefuseExistingCredentials,
     /// A fresh key was generated but could not be persisted to the config
     /// file; it would be lost on restart.
-    RefuseUnwritable { path: String, error: String },
+    RefuseUnwritable {
+        /// Config file path that could not be written.
+        path: String,
+        /// Underlying write error.
+        error: String,
+    },
     /// The store could not be inspected for existing credentials.
-    RefuseStoreCheckFailed { error: String },
+    RefuseStoreCheckFailed {
+        /// Underlying store error.
+        error: String,
+    },
 }
 
 /// Startup guard for the DB credential storage key. With the DB backend
