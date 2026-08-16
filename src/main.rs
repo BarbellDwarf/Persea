@@ -3273,9 +3273,7 @@ mod tests {
                 .uri("/auth/saml/acs")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("x-forwarded-for", "203.0.113.99")
-                .extension(ConnectInfo(
-                    "127.0.0.1:8080".parse::<SocketAddr>().unwrap(),
-                ))
+                .extension(ConnectInfo("127.0.0.1:8080".parse::<SocketAddr>().unwrap()))
                 .body(Body::from("SAMLResponse=abc"))
                 .unwrap();
             let resp = app.clone().oneshot(req).await.unwrap();
@@ -3284,10 +3282,7 @@ mod tests {
                 break;
             }
         }
-        assert!(
-            saw_429,
-            "the SAML ACS route must be rate-limited per IP"
-        );
+        assert!(saw_429, "the SAML ACS route must be rate-limited per IP");
     }
 
     // ── Error-page negotiation ─────────────────────────────────────────

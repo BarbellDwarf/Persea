@@ -1908,9 +1908,7 @@ impl SamlProvider {
         match extract_in_response_to(xml) {
             Some(irt) => match self.take_request_id(Some(&irt)) {
                 Some(_) => Ok(Some(irt)),
-                None => Err(
-                    "SAML response references an unknown or expired AuthnRequest".into(),
-                ),
+                None => Err("SAML response references an unknown or expired AuthnRequest".into()),
             },
             None => {
                 if self.config.strict_mode {

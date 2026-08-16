@@ -129,7 +129,11 @@ async fn redirect_to_mfa(
     // The enrollment target needs a Path=/ cookie so the enrollment page
     // and the TOTP self-service API can read it; the MFA target keeps the
     // cookie scoped to the MFA page.
-    let cookie_path = if target == "/auth/enroll" { "/" } else { "/auth/mfa" };
+    let cookie_path = if target == "/auth/enroll" {
+        "/"
+    } else {
+        "/auth/mfa"
+    };
     let mfa_cookie = format!(
         "persea_mfa_pending={}; Path={}; HttpOnly;{} SameSite=Lax; Max-Age={}",
         pending_token,
@@ -814,18 +818,18 @@ pub async fn enroll_page(
         return Redirect::to("/?error=login_required").into_response();
     };
     let db_clone = database.clone();
-    let pending = match tokio::task::spawn_blocking(move || db::get_pending_mfa(&db_clone, &token))
-        .await
-    {
-        Ok(Ok(Some(p))) => p,
-        _ => return Redirect::to("/?error=login_required").into_response(),
-    };
+    let pending =
+        match tokio::task::spawn_blocking(move || db::get_pending_mfa(&db_clone, &token)).await {
+            Ok(Ok(Some(p))) => p,
+            _ => return Redirect::to("/?error=login_required").into_response(),
+        };
 
     let db_check = database.clone();
-    let enrolled = tokio::task::spawn_blocking(move || db::user_totp_enabled(&db_check, pending.user_id))
-        .await
-        .unwrap_or(Ok(false))
-        .unwrap_or(false);
+    let enrolled =
+        tokio::task::spawn_blocking(move || db::user_totp_enabled(&db_check, pending.user_id))
+            .await
+            .unwrap_or(Ok(false))
+            .unwrap_or(false);
     if enrolled {
         return Redirect::to("/auth/mfa").into_response();
     }

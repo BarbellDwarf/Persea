@@ -1272,7 +1272,13 @@ mod tests {
 
     #[test]
     fn safe_redirect_path_rejects_control_characters() {
-        for p in ["/foo\nbar", "/foo\r\nbar", "/foo\tbar", "/foo\x7fbar", "/foo\x00bar"] {
+        for p in [
+            "/foo\nbar",
+            "/foo\r\nbar",
+            "/foo\tbar",
+            "/foo\x7fbar",
+            "/foo\x00bar",
+        ] {
             assert!(!is_safe_redirect_path(p), "{p}");
         }
     }

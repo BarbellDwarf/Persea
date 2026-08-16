@@ -254,22 +254,25 @@ where
                     if ct.contains("application/x-www-form-urlencoded") {
                         let (parts, body) = req.into_parts();
                         let (bytes_result, token) =
-                            match axum::body::to_bytes(body, CSRF_PEEK_BODY_LIMIT).await
-                        {
-                            Ok(bytes) => {
-                                let form = std::str::from_utf8(&bytes).unwrap_or("");
-                                let tok = form.split('&').find_map(|pair| {
-                                    let (k, v) = pair.split_once('=')?;
-                                    if k == CSRF_COOKIE {
-                                        Some(urlencoding::decode(v).unwrap_or_default().to_string())
-                                    } else {
-                                        None
-                                    }
-                                });
-                                (Some(bytes), tok)
-                            }
-                            Err(_) => (None, None),
-                        };
+                            match axum::body::to_bytes(body, CSRF_PEEK_BODY_LIMIT).await {
+                                Ok(bytes) => {
+                                    let form = std::str::from_utf8(&bytes).unwrap_or("");
+                                    let tok = form.split('&').find_map(|pair| {
+                                        let (k, v) = pair.split_once('=')?;
+                                        if k == CSRF_COOKIE {
+                                            Some(
+                                                urlencoding::decode(v)
+                                                    .unwrap_or_default()
+                                                    .to_string(),
+                                            )
+                                        } else {
+                                            None
+                                        }
+                                    });
+                                    (Some(bytes), tok)
+                                }
+                                Err(_) => (None, None),
+                            };
                         // Always restore the request — either with original bytes or empty
                         let body = match bytes_result {
                             Some(b) => Body::from(b),

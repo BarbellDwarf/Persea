@@ -131,18 +131,21 @@ async fn resolve_totp_identity(
     if let Some(Extension(AuthIdentity::User { email, .. })) = identity {
         let db_clone = database.clone();
         let email_clone = email.clone();
-        let user = tokio::task::spawn_blocking(move || crate::db::get_user_by_email(&db_clone, &email_clone))
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let user = tokio::task::spawn_blocking(move || {
+            crate::db::get_user_by_email(&db_clone, &email_clone)
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .map_err(|e| AppError::Internal(e.to_string()))?;
         return Ok((user.id, email));
     }
     if let Some(token) = extract_cookie(headers, "persea_mfa_pending") {
         let db_clone = database.clone();
-        let pending = tokio::task::spawn_blocking(move || crate::db::get_pending_mfa(&db_clone, &token))
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let pending =
+            tokio::task::spawn_blocking(move || crate::db::get_pending_mfa(&db_clone, &token))
+                .await
+                .map_err(|e| AppError::Internal(e.to_string()))?
+                .map_err(|e| AppError::Internal(e.to_string()))?;
         if let Some(p) = pending {
             return Ok((p.user_id, p.user_email));
         }
@@ -165,10 +168,11 @@ pub async fn totp_status(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let (user_id, _) = resolve_totp_identity(identity, &database, &headers).await?;
     let db_clone = database.clone();
-    let enabled = tokio::task::spawn_blocking(move || crate::db::user_totp_enabled(&db_clone, user_id))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
-        .unwrap_or(false);
+    let enabled =
+        tokio::task::spawn_blocking(move || crate::db::user_totp_enabled(&db_clone, user_id))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .unwrap_or(false);
     Ok(Json(serde_json::json!({"enabled": enabled})))
 }
 
@@ -233,10 +237,11 @@ pub async fn totp_verify(
         .map(|t| t.skew)
         .unwrap_or(1);
     let db_clone = database.clone();
-    let secret = tokio::task::spawn_blocking(move || crate::db::get_totp_secret(&db_clone, user_id))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let secret =
+        tokio::task::spawn_blocking(move || crate::db::get_totp_secret(&db_clone, user_id))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .map_err(|e| AppError::Internal(e.to_string()))?;
     // Verify against the stored secret regardless of its enabled state:
     // the enrollment flow verifies a code BEFORE enabling the factor.
     let valid = match secret {
@@ -251,7 +256,9 @@ pub async fn totp_verify(
         None => false,
     };
     if !valid {
-        return Ok(Json(serde_json::json!({"ok": false, "error": "Invalid code. Try again."})));
+        return Ok(Json(
+            serde_json::json!({"ok": false, "error": "Invalid code. Try again."}),
+        ));
     }
     let db_clone = database.clone();
     tokio::task::spawn_blocking(move || crate::db::set_totp_enabled(&db_clone, user_id, true))
@@ -272,8 +279,8 @@ pub async fn totp_disable(
     headers: HeaderMap,
     Json(body): Json<TotpCodeRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let Extension(AuthIdentity::User { email, .. }) = identity
-        .ok_or_else(|| AppError::Forbidden("authentication required".into()))?
+    let Extension(AuthIdentity::User { email, .. }) =
+        identity.ok_or_else(|| AppError::Forbidden("authentication required".into()))?
     else {
         return Err(AppError::Forbidden(
             "API-key sessions cannot manage TOTP".into(),
@@ -281,10 +288,11 @@ pub async fn totp_disable(
     };
     let db_clone = database.clone();
     let email_clone = email.clone();
-    let user = tokio::task::spawn_blocking(move || crate::db::get_user_by_email(&db_clone, &email_clone))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let user =
+        tokio::task::spawn_blocking(move || crate::db::get_user_by_email(&db_clone, &email_clone))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .map_err(|e| AppError::Internal(e.to_string()))?;
     let skew = state
         .config()
         .auth
@@ -301,7 +309,9 @@ pub async fn totp_disable(
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?;
     if !valid {
-        return Ok(Json(serde_json::json!({"ok": false, "error": "Invalid code"})));
+        return Ok(Json(
+            serde_json::json!({"ok": false, "error": "Invalid code"}),
+        ));
     }
     let db_clone = database.clone();
     tokio::task::spawn_blocking(move || crate::db::delete_totp_secret(&db_clone, user_id))
@@ -412,8 +422,9 @@ mod tests {
     async fn totp_identity_resolves_from_pending_mfa_cookie() {
         let db = test_db();
         let user = create_user(&db, "u@example.com", "viewer");
-        let token = crate::db::create_pending_mfa(&db, user.id, "u@example.com", "U", "viewer", None, 300)
-            .unwrap();
+        let token =
+            crate::db::create_pending_mfa(&db, user.id, "u@example.com", "U", "viewer", None, 300)
+                .unwrap();
         let headers = HeaderMap::from_iter([(
             header::COOKIE,
             format!("persea_mfa_pending={token}").parse().unwrap(),
@@ -452,8 +463,9 @@ mod tests {
     async fn totp_identity_rejects_expired_pending_cookie() {
         let db = test_db();
         let user = create_user(&db, "u@example.com", "viewer");
-        let token = crate::db::create_pending_mfa(&db, user.id, "u@example.com", "U", "viewer", None, 1)
-            .unwrap();
+        let token =
+            crate::db::create_pending_mfa(&db, user.id, "u@example.com", "U", "viewer", None, 1)
+                .unwrap();
         // Force expiry: backdate the record.
         {
             let conn = db.lock().unwrap();
