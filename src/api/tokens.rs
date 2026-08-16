@@ -782,11 +782,12 @@ pub async fn admin_create_user_token(
     })))
 }
 
-/// `GET /api/admin/users/{email}/tokens`: list another user's
-/// tokens. Admin only.
+/// `GET /api/admin/users/{email}/tokens`: list one user's tokens.
+/// Admin only; `AppError::NotFound` for an unknown user.
 pub async fn admin_list_user_tokens(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
+    Path(email): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let id = identity
         .as_ref()
@@ -797,13 +798,18 @@ pub async fn admin_list_user_tokens(
     }
 
     let db_clone = database.clone();
-    let tokens = tokio::task::spawn_blocking(move || db::list_all_user_tokens(&db_clone))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))??;
+    let email_clone = email.clone();
+    let tokens = tokio::task::spawn_blocking(move || {
+        let user = db::get_user_by_email(&db_clone, &email_clone)
+            .map_err(|_| AppError::Session("user not found".into()))?;
+        db::list_user_tokens(&db_clone, user.id).map_err(|e| AppError::Internal(e.to_string()))
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))??;
 
     let entries: Vec<_> = tokens
         .into_iter()
-        .map(|(t, email)| {
+        .map(|t| {
             json!({
                 "id": t.id,
                 "user_id": t.user_id,
@@ -1083,5 +1089,48 @@ mod tests {
             !crate::api::folder_allowed_for_user(&db, "shared", "Sec", &[]),
             "a folder with an ACL denies users without groups"
         );
+    }
+
+    #[tokio::test]
+    async fn admin_list_user_tokens_filters_by_path_email() {
+        use axum::routing::get;
+        let db = test_db();
+        let alice = db::upsert_user(&db, "alice@test.com", "Alice", None, "viewer", &[]).unwrap();
+        let bob = db::upsert_user(&db, "bob@test.com", "Bob", None, "viewer", &[]).unwrap();
+        db::create_user_token(&db, alice.id, "alice-token", None, None).unwrap();
+        db::create_user_token(&db, bob.id, "bob-token", None, None).unwrap();
+
+        let app = axum::Router::new()
+            .route(
+                "/api/admin/users/{email}/tokens",
+                get(super::admin_list_user_tokens),
+            )
+            .layer(Extension(db));
+
+        // Alice's tokens only: bob's token must not leak into the listing.
+        let response = app
+            .clone()
+            .oneshot(identity_req(
+                "/api/admin/users/alice@test.com/tokens",
+                admin_identity(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        let arr = body.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "alice-token");
+        assert_eq!(arr[0]["email"], "alice@test.com");
+
+        // Unknown user: 404, not an empty list.
+        let response = app
+            .oneshot(identity_req(
+                "/api/admin/users/ghost@test.com/tokens",
+                admin_identity(),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -38,7 +38,7 @@ fn test_router(db: Db) -> Router {
             delete(persea::api::tokens::revoke_my_token),
         )
         .route(
-            "/api/admin/user-tokens",
+            "/api/admin/users/{email}/tokens",
             get(persea::api::tokens::admin_list_user_tokens),
         )
         .route(
@@ -493,13 +493,50 @@ async fn viewer_cannot_create_token() {
 async fn admin_list_tokens_empty() {
     let db = test_db();
     let key = create_admin(&db, "admin");
+    create_user(&db, "user@test.com", "User", "viewer");
     let router = test_router(db);
     let resp = router
-        .oneshot(admin_get(&key, "/api/admin/user-tokens"))
+        .oneshot(admin_get(&key, "/api/admin/users/user@test.com/tokens"))
         .await
         .unwrap();
     let json = body_json(resp).await;
     assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn admin_list_tokens_filters_by_path_email() {
+    let db = test_db();
+    let key = create_admin(&db, "admin");
+    create_user(&db, "alice@test.com", "Alice", "viewer");
+    create_user(&db, "bob@test.com", "Bob", "viewer");
+    let alice = db::get_user_by_email(&db, "alice@test.com").unwrap();
+    let bob = db::get_user_by_email(&db, "bob@test.com").unwrap();
+    db::create_user_token(&db, alice.id, "alice-token", None, None).unwrap();
+    db::create_user_token(&db, bob.id, "bob-token", None, None).unwrap();
+
+    let router = test_router(db);
+    let resp = router
+        .oneshot(admin_get(&key, "/api/admin/users/alice@test.com/tokens"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "only the path user's tokens must be listed");
+    assert_eq!(arr[0]["name"], "alice-token");
+    assert_eq!(arr[0]["email"], "alice@test.com");
+}
+
+#[tokio::test]
+async fn admin_list_tokens_unknown_user_404() {
+    let db = test_db();
+    let key = create_admin(&db, "admin");
+    let router = test_router(db);
+    let resp = router
+        .oneshot(admin_get(&key, "/api/admin/users/ghost@test.com/tokens"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
@@ -586,7 +623,11 @@ async fn poweruser_cannot_admin_tokens() {
     let session = setup_session(&db, "pu@test.com", "poweruser");
     let router = test_router(db);
     let resp = router
-        .oneshot(sess_req("GET", "/api/admin/user-tokens", &session))
+        .oneshot(sess_req(
+            "GET",
+            "/api/admin/users/pu%40test.com/tokens",
+            &session,
+        ))
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::FORBIDDEN);

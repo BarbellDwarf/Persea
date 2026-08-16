@@ -1,0 +1,11 @@
+-- Folder ACL inheritance defaults to true (persea#108) — SQLite backend.
+--
+-- SQLite cannot alter a column default without a table rebuild, and a
+-- rebuild is unsafe here: sqlx enables foreign_keys, so dropping the
+-- parent table would cascade-delete every address book entry. The
+-- default is never relied upon at runtime anyway — create_ab_folder
+-- always specifies the column — so the operative fix is the serde
+-- default in the API plus the DEFAULT 1 in 002_address-book.sql for
+-- fresh databases. This migration exists to keep the per-backend file
+-- sets in sync and is a no-op.
+SELECT 1;

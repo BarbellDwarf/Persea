@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS address_book_folders (
     name        TEXT NOT NULL,
     description TEXT DEFAULT '',
     allowed_groups TEXT NOT NULL DEFAULT '',
-    inherit_from_parent BOOLEAN NOT NULL DEFAULT FALSE,
+    inherit_from_parent BOOLEAN NOT NULL DEFAULT TRUE,
     created_at  TEXT NOT NULL DEFAULT to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
     updated_at  TEXT NOT NULL DEFAULT to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS'),
     UNIQUE(scope, name)

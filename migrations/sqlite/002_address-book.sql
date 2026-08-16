@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS address_book_folders (
     name        TEXT NOT NULL,
     description TEXT DEFAULT '',
     allowed_groups TEXT NOT NULL DEFAULT '',
-    inherit_from_parent INTEGER NOT NULL DEFAULT 0,
+    inherit_from_parent INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(scope, name)

@@ -134,7 +134,7 @@ fn build_test_router_with_vault_and_backend(
             delete(super::tokens::revoke_my_token),
         )
         .route(
-            "/api/admin/user-tokens",
+            "/api/admin/users/{email}/tokens",
             get(super::tokens::admin_list_user_tokens),
         )
         .route(
@@ -490,9 +490,14 @@ async fn test_enable_user_not_found() {
 async fn test_admin_list_tokens_empty() {
     let db = test_db();
     let _key = insert_test_admin(&db, "admin");
+    insert_test_user(&db, "user@test.com", "User", "viewer");
     let app = build_test_router(db);
     let response = app
-        .oneshot(make_auth_request("GET", "/api/admin/user-tokens", &_key))
+        .oneshot(make_auth_request(
+            "GET",
+            "/api/admin/users/user@test.com/tokens",
+            &_key,
+        ))
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);

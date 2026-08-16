@@ -63,8 +63,8 @@ pub(crate) fn folder_allowed_for_user(
     user_groups: &[String],
 ) -> bool {
     // Own ACL first; a folder without one walks up the slash-path hierarchy
-    // while inheritance is enabled (`inherit_from_parent` is the default for
-    // migrated/imported trees, so a subtree must not silently open up). A
+    // while inheritance is enabled (`inherit_from_parent` defaults to true
+    // in the API and the schema, so a subtree must not silently open up). A
     // folder whose chain has no ACL is unrestricted — in particular, users
     // without groups (e.g. DB accounts) can see it. The entry-level
     // fallback (legacy/import data stored allowed_groups per entry) runs
@@ -630,6 +630,18 @@ fn check_folder_access_db(
     }
 }
 
+/// Whether an entry's `allowed_groups` match one of the user's groups.
+/// An empty ACL is open to everyone.
+fn entry_groups_match(entry: &db::AbEntry, user_groups: &[String]) -> bool {
+    let groups: Vec<String> = entry
+        .allowed_groups
+        .split(',')
+        .map(|g| g.trim().to_string())
+        .filter(|g| !g.is_empty())
+        .collect();
+    groups.is_empty() || groups.iter().any(|g| user_groups.iter().any(|ug| ug == g))
+}
+
 /// Entry-level ACL: an entry with `allowed_groups` set is only usable by
 /// members of one of those groups, even inside an accessible folder.
 /// Custom-role holders with global `read` bypass it (the bundle is global —
@@ -648,17 +660,7 @@ fn check_entry_access_db(
     }
     let entry = db::get_ab_entry(db, folder_id, entry_name)
         .map_err(|e| AppError::NotFound(format!("entry not found: {}", e)))?;
-    let groups: Vec<String> = entry
-        .allowed_groups
-        .split(',')
-        .map(|g| g.trim().to_string())
-        .filter(|g| !g.is_empty())
-        .collect();
-    if groups.is_empty()
-        || groups
-            .iter()
-            .any(|g| identity.groups().iter().any(|ug| ug == g))
-    {
+    if entry_groups_match(&entry, identity.groups()) {
         Ok(())
     } else {
         Err(AppError::Forbidden("no access to this entry".into()))
@@ -719,7 +721,9 @@ pub struct CreateFolderRequest {
     #[serde(default = "default_scope")]
     pub scope: String,
     /// Inherit the nearest ancestor ACL when the folder has none.
-    #[serde(default)]
+    /// Defaults to true: a child folder without an ACL must not open up
+    /// a restricted parent.
+    #[serde(default = "default_inherit")]
     pub inherit_from_parent: bool,
 }
 
@@ -732,7 +736,8 @@ pub struct UpdateFolderRequest {
     #[serde(default)]
     pub description: String,
     /// Inherit the nearest ancestor ACL when the folder has none.
-    #[serde(default)]
+    /// Defaults to true, matching the create default.
+    #[serde(default = "default_inherit")]
     pub inherit_from_parent: bool,
 }
 
@@ -797,6 +802,13 @@ pub struct QuickConnectQuery {
 
 fn default_scope() -> String {
     "shared".into()
+}
+
+/// Serde default for `inherit_from_parent`: new folders inherit the nearest
+/// ancestor ACL, so an API-created child cannot silently open up a
+/// restricted parent.
+fn default_inherit() -> bool {
+    true
 }
 
 pub(crate) fn audit_client_ip(
@@ -995,7 +1007,8 @@ pub async fn ab_list_subfolders(
 
 /// `GET /api/addressbook`: the whole visible tree, folders with
 /// their entries, for the connections page. Requires operator or
-/// higher; inaccessible folders are skipped, not rejected.
+/// higher; inaccessible folders are skipped, not rejected, and entries
+/// whose `allowed_groups` exclude the caller are skipped as well.
 pub async fn ab_list_all(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -1042,6 +1055,14 @@ pub async fn ab_list_all(
         let mut entries = Vec::new();
         if let Ok(db_entries) = db::list_ab_entries(&database, folder.id) {
             for entry in &db_entries {
+                // Entry ACLs gate metadata listing the same way they gate
+                // connect (admin and global `read` bypass).
+                if !id.has_role("admin")
+                    && !rbac::identity_has_custom_permission(&database, id, "read")
+                    && !entry_groups_match(entry, user_groups)
+                {
+                    continue;
+                }
                 entries.push(entry_info_from_db_row(&database, entry));
             }
         }
@@ -1064,7 +1085,7 @@ pub async fn ab_list_all(
 
 /// `GET /api/addressbook/search-index`: every visible entry with its
 /// scope and folder path, for client-side search. Requires operator or
-/// higher.
+/// higher; entries whose `allowed_groups` exclude the caller are skipped.
 pub async fn ab_search_index(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -1131,6 +1152,14 @@ pub async fn ab_search_index(
             Err(_) => continue,
         };
         for entry in &db_entries {
+            // Entry ACLs gate metadata listing the same way they gate
+            // connect (admin and global `read` bypass).
+            if !is_admin
+                && !rbac::identity_has_custom_permission(&database, id, "read")
+                && !entry_groups_match(entry, user_groups)
+            {
+                continue;
+            }
             emitted.push(json!({
                 "scope": scope,
                 "folder_path": path,
@@ -1144,7 +1173,8 @@ pub async fn ab_search_index(
 
 /// `GET /api/addressbook/folders/{scope}/{folder}/entries`: list the
 /// entries in one folder. Requires operator or higher plus folder and
-/// entry access; `AppError::NotFound` for a missing folder.
+/// entry access; entries whose `allowed_groups` exclude the caller are
+/// skipped, not rejected. `AppError::NotFound` for a missing folder.
 pub async fn ab_list_entries(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
@@ -1172,8 +1202,17 @@ pub async fn ab_list_entries(
     let db_entries = db::list_ab_entries(&database, folder_rec.id)
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
+    let user_groups = id.groups();
     let mut entries = Vec::new();
     for entry in &db_entries {
+        // Entry ACLs gate metadata listing the same way they gate connect:
+        // an entry restricted to other groups is invisible here.
+        if !id.has_role("admin")
+            && !rbac::identity_has_custom_permission(&database, id, "read")
+            && !entry_groups_match(entry, user_groups)
+        {
+            continue;
+        }
         entries.push(entry_info_from_db_row(&database, entry));
     }
 
@@ -3629,6 +3668,165 @@ mod tests {
             "a child folder under a restricted parent must not open up via ungrouped entries"
         );
         assert!(folder_allowed_for_user(&db, "shared", "Clients/Acme", &ops));
+    }
+
+    #[test]
+    fn folder_allowed_inheritance_matrix() {
+        let db = test_db();
+        // Restricted chain: parent, child and grandchild all inherit.
+        db::create_ab_folder(&db, "shared", "Clients", "", "ops", false).unwrap();
+        db::create_ab_folder(&db, "shared", "Clients/Acme", "", "", true).unwrap();
+        db::create_ab_folder(&db, "shared", "Clients/Acme/Prod", "", "", true).unwrap();
+        // Open chain: no ACL anywhere, so the subtree stays unrestricted.
+        db::create_ab_folder(&db, "shared", "Public", "", "", false).unwrap();
+        db::create_ab_folder(&db, "shared", "Public/Open", "", "", false).unwrap();
+
+        let ops: Vec<String> = vec!["ops".to_string()];
+        let other: Vec<String> = vec!["other".to_string()];
+        let none: Vec<String> = Vec::new();
+
+        assert!(folder_allowed_for_user(&db, "shared", "Clients", &ops));
+        assert!(!folder_allowed_for_user(&db, "shared", "Clients", &other));
+        assert!(!folder_allowed_for_user(&db, "shared", "Clients", &none));
+        assert!(folder_allowed_for_user(&db, "shared", "Clients/Acme", &ops));
+        assert!(!folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme",
+            &other
+        ));
+        assert!(!folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme",
+            &none
+        ));
+        assert!(folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme/Prod",
+            &ops
+        ));
+        assert!(!folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme/Prod",
+            &other
+        ));
+        assert!(!folder_allowed_for_user(
+            &db,
+            "shared",
+            "Clients/Acme/Prod",
+            &none
+        ));
+
+        assert!(folder_allowed_for_user(&db, "shared", "Public", &none));
+        assert!(folder_allowed_for_user(&db, "shared", "Public/Open", &none));
+    }
+
+    #[test]
+    fn folder_requests_default_inherit_to_true() {
+        let create: CreateFolderRequest =
+            serde_json::from_str(r#"{"name": "Clients/Acme", "allowed_groups": []}"#).unwrap();
+        assert!(
+            create.inherit_from_parent,
+            "API-created folders must inherit the nearest ancestor ACL by default"
+        );
+        let update: UpdateFolderRequest =
+            serde_json::from_str(r#"{"allowed_groups": []}"#).unwrap();
+        assert!(update.inherit_from_parent);
+    }
+
+    #[tokio::test]
+    async fn ab_list_entries_gates_metadata_by_entry_acl() {
+        let db = test_db();
+        // Folder ACL admits both test groups; the entry ACL does the gating.
+        db::create_ab_folder(&db, "shared", "Clients", "", "ops,other", false).unwrap();
+        let folder = db::get_ab_folder(&db, "shared", "Clients").unwrap();
+        db::create_ab_entry(
+            &db,
+            folder.id,
+            "open1",
+            "Open 1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap();
+        db::create_ab_entry(
+            &db,
+            folder.id,
+            "restricted1",
+            "Restricted 1",
+            "ssh",
+            "10.0.0.2",
+            Some(22),
+            "root",
+            "{}",
+            "ops",
+        )
+        .unwrap();
+
+        // A user outside the entry's group sees only the open entry.
+        let session = insert_user_with_groups(&db, "alice@test.com", "operator", &["other"]);
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/addressbook/folders/shared/Clients/entries",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["open1"],
+            "entries restricted to other groups must not be listed"
+        );
+
+        // A member of the entry's group sees it; an admin sees everything.
+        let session = insert_user_with_groups(&db, "bob@test.com", "operator", &["ops"]);
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/addressbook/folders/shared/Clients/entries",
+                &session,
+            ))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["open1", "restricted1"]);
+
+        let key = insert_test_admin(&db, "admin");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(auth_req(
+                "GET",
+                "/api/addressbook/folders/shared/Clients/entries",
+                &key,
+            ))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        assert_eq!(body.as_array().unwrap().len(), 2);
     }
 
     #[tokio::test]
