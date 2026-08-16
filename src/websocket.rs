@@ -5,7 +5,7 @@ use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::guacd::GuacdStream;
 use crate::protocol::{last_instruction_boundary, Instruction};
-use crate::session::{SessionManager, ShareTokenValidation};
+use crate::session::{SessionError, SessionManager, ShareTokenValidation};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -84,6 +84,23 @@ fn base64_blob_len(data: &str) -> u64 {
     len * 3 / 4
 }
 
+/// Upper bound on concurrently tracked transfers. Stream indices are
+/// attacker-chosen, so without a cap the map grows without bound. At the
+/// cap the oldest (smallest) index is evicted; a real transfer that gets
+/// evicted merely loses its audit size accounting.
+const MAX_PENDING_TRANSFERS: usize = 4096;
+
+/// Insert a tracked transfer under the cap, evicting the smallest stream
+/// index when the map is full.
+fn track_transfer(pending: &mut HashMap<i64, PendingTransfer>, idx: i64, t: PendingTransfer) {
+    if !pending.contains_key(&idx) && pending.len() >= MAX_PENDING_TRANSFERS {
+        if let Some(&oldest) = pending.keys().min() {
+            pending.remove(&oldest);
+        }
+    }
+    pending.insert(idx, t);
+}
+
 /// Sniff one parsed instruction for file-transfer activity, updating the
 /// shared pending-transfer map and returning audit events to emit.
 ///
@@ -116,7 +133,8 @@ fn sniff_transfer_instruction(
             if instr.args.len() >= 3 {
                 if let Ok(idx) = instr.args[0].parse::<i64>() {
                     if idx >= 0 {
-                        pending.insert(
+                        track_transfer(
+                            pending,
                             idx,
                             PendingTransfer {
                                 kind: match direction {
@@ -144,7 +162,8 @@ fn sniff_transfer_instruction(
                     if idx >= 0 {
                         let path = instr.args[3].clone();
                         let filename = path.rsplit('/').next().unwrap_or(&path).to_string();
-                        pending.insert(
+                        track_transfer(
+                            pending,
                             idx,
                             PendingTransfer {
                                 kind: TransferKind::Download,
@@ -442,11 +461,14 @@ pub async fn ws_handler(
                 location.push('&');
                 location.push_str(&kept.join("&"));
             }
+            // The location embeds the fresh ticket and any share token:
+            // never log either.
+            let redacted_location = redact_ws_query(&location);
             tracing::info!(
                 session_id = %session_id,
                 client_ip = %ip,
                 owner = %info.owner_instance.as_deref().unwrap_or("?"),
-                location = %location,
+                location = %redacted_location,
                 "Redirecting cross-instance WebSocket to the owning instance"
             );
             return axum::response::Response::builder()
@@ -462,21 +484,24 @@ pub async fn ws_handler(
         || manager.is_session_disconnected(session_id).await;
 
     if is_owner {
-        // Owner path: require authenticated identity with operator+ role
-        match &identity {
-            Some(id) if id.has_role("operator") => {
-                // Authorized — proceed
-            }
-            _ => {
-                tracing::warn!(session_id = %session_id, client_ip = %ip, "Unauthorized owner connection attempt");
-                return (
-                    StatusCode::FORBIDDEN,
-                    axum::Json(
-                        json!({"error": "authentication required to connect as session owner"}),
-                    ),
-                )
-                    .into_response();
-            }
+        // Owner path: only the session's creator, or an administrator, may
+        // take over a pending/disconnected session. Share/shadow tokens
+        // take their own path below: a token alone never grants the
+        // owner's stream.
+        let creator = manager.get_session_creator(session_id).await;
+        if !owner_path_authorized(identity.as_ref(), creator.as_deref()) {
+            tracing::warn!(
+                session_id = %session_id,
+                client_ip = %ip,
+                "Unauthorized owner connection attempt"
+            );
+            return (
+                StatusCode::FORBIDDEN,
+                axum::Json(json!({
+                    "error": "only the session owner or an administrator may connect to a pending or disconnected session"
+                })),
+            )
+                .into_response();
         }
     }
 
@@ -498,27 +523,52 @@ pub async fn ws_handler(
         .into_response()
 }
 
-/// Per-session concurrent viewer cap for share-token joins
-/// (`[session] max_viewers`, default 10, 0 = unlimited). Returns the rejection message when
-/// the session already has the cap's worth of viewers connected, or `None`
-/// when a viewer may join. The owner connection is not counted
-/// (active_connections starts at 0 for a Pending session); 0 = unlimited.
-/// Only reached on the share-token path — cookie/ticket owner connections
-/// join via the pending/reconnect paths and are never limited. Extracted
-/// for test: the caller sends the message as a Guacamole `error`
-/// instruction.
-async fn share_viewer_cap_exceeded(manager: &SessionManager, session_id: Uuid) -> Option<String> {
-    let max_viewers = manager.config().max_viewers;
-    if max_viewers == 0 {
-        return None;
+/// Whether an identity may connect as the session owner: the session's
+/// creator itself, or any admin. Share/shadow tokens take their own path
+/// and never satisfy this check. Extracted for test.
+fn owner_path_authorized(identity: Option<&AuthIdentity>, creator: Option<&str>) -> bool {
+    match identity {
+        Some(id) => id.has_role("admin") || creator == Some(id.display_name()),
+        None => false,
     }
-    match manager.get_session(session_id).await {
-        Some(info) if info.active_connections >= max_viewers => Some(format!(
-            "share viewer limit reached: {} of {} viewers already connected",
-            info.active_connections, max_viewers
-        )),
-        _ => None,
-    }
+}
+
+/// Redact sensitive query values (`ticket`, `token`) from a URL or bare
+/// query string before it is logged. WebSocket tickets and share tokens
+/// must never reach the logs.
+fn redact_ws_query(input: &str) -> String {
+    let (base, query) = match input.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (input, None),
+    };
+    let Some(query) = query else {
+        return base.to_string();
+    };
+    let redacted = query
+        .split('&')
+        .map(|pair| {
+            let key = pair.split('=').next().unwrap_or("");
+            if key == "ticket" || key == "token" {
+                format!("{}=***", key)
+            } else {
+                pair.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{}?{}", base, redacted)
+}
+
+/// How this WebSocket connection relates to the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnectionKind {
+    /// The session owner (took or reconnected the guacd stream).
+    Owner,
+    /// A viewer joined with the owner's share token (interactive).
+    Viewer,
+    /// An admin-minted shadow viewer (view-only: read-only to guacd,
+    /// input instructions filtered, token re-checked on a timer).
+    Shadow,
 }
 
 async fn handle_ws(
@@ -530,17 +580,21 @@ async fn handle_ws(
     identity_name: Option<String>,
     database: Option<Db>,
 ) {
+    // Carried out of the join branch: the raw shadow token, when this
+    // connection is an admin-minted shadow (re-validated on a timer below).
+    let mut shadow_token: Option<String> = None;
+
     // Try to take the guacd stream (owner/first connection)
-    let (guacd_stream, cancel) = if let Some((stream, cancel)) =
+    let (guacd_stream, cancel, kind) = if let Some((stream, cancel)) =
         manager.take_guacd_stream(session_id).await
     {
         let identity_str = identity_name.as_deref().unwrap_or("unknown");
         tracing::info!(session_id = %session_id, client_ip = %client_addr, identity = %identity_str, "Session owner connected");
-        (stream, cancel)
+        (stream, cancel, ConnectionKind::Owner)
     } else if let Some((stream, cancel)) = manager.reconnect_session(session_id).await {
         let identity_str = identity_name.as_deref().unwrap_or("unknown");
         tracing::info!(session_id = %session_id, client_ip = %client_addr, identity = %identity_str, "Session owner reconnected");
-        (stream, cancel)
+        (stream, cancel, ConnectionKind::Owner)
     } else {
         // Not pending — try to join an active session
         // Joining requires a valid share token
@@ -553,12 +607,12 @@ async fn handle_ws(
         };
 
         let validation = manager.validate_share_token(session_id, &token).await;
-        match &validation {
+        let read_only = match &validation {
             ShareTokenValidation::Invalid => {
                 tracing::warn!(session_id = %session_id, client_ip = %client_addr, "Share token rejected");
                 return;
             }
-            ShareTokenValidation::Owner => {}
+            ShareTokenValidation::Owner => false,
             ShareTokenValidation::Shadow { issued_by } => {
                 // Audit every shadow-token use (not just the mint). A leaked
                 // token remains reusable within its TTL, but each reuse is
@@ -589,37 +643,58 @@ async fn handle_ws(
                     issued_by = %issued_by,
                     "Shadow token consumed"
                 );
+                // Shadow tokens are validated once at connect and expire
+                // 10 minutes later: re-check on a timer and end the
+                // shadow connection (never the session) when the token
+                // lapses mid-session.
+                shadow_token = Some(token.clone());
+                true
             }
-        }
+        };
 
-        // Per-session concurrent viewer cap for share-token joins
-        // (`[session] max_viewers`, default 10, 0 = unlimited). The owner
-        // connection is not counted (active_connections starts at 0 for a
-        // Pending session). Cookie/ticket (owner) connections join via the
-        // pending/reconnect paths above and never reach this check.
-        if let Some(message) = share_viewer_cap_exceeded(&manager, session_id).await {
-            tracing::warn!(
-                session_id = %session_id,
-                client_ip = %client_addr,
-                error = %message,
-                "Rejecting share-token viewer: per-session concurrent viewer limit reached"
-            );
-            // The Guacamole client renders `error,<message>,<code>` in the
-            // UI (Tunnel.js forwards every instruction; Client.js calls
-            // onerror with the reason and disconnects), so the 11th viewer
-            // sees WHY the stream closed instead of a silent drop.
-            let mut ws = ws;
-            let instr =
-                crate::protocol::Instruction::new("error", vec![message, "512".into()]).encode();
-            let _ = ws.send(Message::Text(instr.into())).await;
-            let _ = ws.close().await;
-            return;
-        }
-
-        match manager.join_session(session_id).await {
+        // The viewer slot is reserved atomically against the cap inside
+        // the join (viewers only, the owner's connection is excluded; 0 =
+        // unlimited). Shadow joins are read-only to guacd.
+        let max_viewers = manager.config().max_viewers;
+        match manager
+            .join_session_as_viewer(session_id, max_viewers, read_only)
+            .await
+        {
             Ok((stream, cancel)) => {
-                tracing::info!(session_id = %session_id, client_ip = %client_addr, "Viewer connected via share token");
-                (stream, cancel)
+                let kind = if read_only {
+                    ConnectionKind::Shadow
+                } else {
+                    ConnectionKind::Viewer
+                };
+                tracing::info!(
+                    session_id = %session_id,
+                    client_ip = %client_addr,
+                    shadow = read_only,
+                    "Viewer connected via share token"
+                );
+                (stream, cancel, kind)
+            }
+            Err(SessionError::ViewerLimit { viewers, max }) => {
+                let message = format!(
+                    "share viewer limit reached: {} of {} viewers already connected",
+                    viewers, max
+                );
+                tracing::warn!(
+                    session_id = %session_id,
+                    client_ip = %client_addr,
+                    error = %message,
+                    "Rejecting share-token viewer: per-session concurrent viewer limit reached"
+                );
+                // The Guacamole client renders `error,<message>,<code>` in the
+                // UI (Tunnel.js forwards every instruction; Client.js calls
+                // onerror with the reason and disconnects), so the 11th viewer
+                // sees WHY the stream closed instead of a silent drop.
+                let mut ws = ws;
+                let instr = crate::protocol::Instruction::new("error", vec![message, "512".into()])
+                    .encode();
+                let _ = ws.send(Message::Text(instr.into())).await;
+                let _ = ws.close().await;
+                return;
             }
             Err(e) => {
                 tracing::warn!(session_id = %session_id, client_ip = %client_addr, error = %e, "Failed to join session");
@@ -630,54 +705,163 @@ async fn handle_ws(
 
     tracing::info!(session_id = %session_id, client_ip = %client_addr, "Starting proxy");
 
-    // Set up recording file (only for owner connections, and only if recording is enabled)
+    // Per-connection cancellation: the session token ends the whole
+    // session; this one ends only this connection (e.g. an expired shadow
+    // token must drop the shadow, never the owner).
+    let conn_cancel = cancel.child_token();
+
+    // Shadow tokens are validated once at connect and expire 10 minutes
+    // later: re-check on a timer and end the shadow connection (never the
+    // session) when the token lapses mid-session.
+    if let Some(token) = shadow_token {
+        let watch_manager = manager.clone();
+        let watch_cancel = conn_cancel.clone();
+        let sid = session_id;
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                if watch_cancel.is_cancelled() {
+                    return;
+                }
+                if !watch_manager
+                    .validate_share_token(sid, &token)
+                    .await
+                    .is_valid()
+                {
+                    tracing::warn!(
+                        session_id = %sid,
+                        "Shadow token expired during session; ending shadow connection"
+                    );
+                    watch_cancel.cancel();
+                    return;
+                }
+            }
+        });
+    }
+
+    // Set up the recording file: owner connections only, and only if
+    // recording is enabled. An owner reconnect APPENDS to the previous
+    // segment (decrypting it first when it was encrypted at rest); a
+    // previous `.guac.enc` is never truncated.
     let is_recording_enabled = manager.is_recording_enabled(session_id).await;
     let recording_path = manager
         .recording_path()
         .join(format!("{}.guac", session_id));
-    let recording_file = if is_recording_enabled && !recording_path.exists() {
-        match tokio::fs::File::create(&recording_path).await {
-            Ok(f) => {
-                // Set restrictive permissions on recording file
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = tokio::fs::set_permissions(
-                        &recording_path,
-                        std::fs::Permissions::from_mode(0o640),
-                    )
-                    .await;
-                }
+    let recording_file = if kind == ConnectionKind::Owner && is_recording_enabled {
+        match crate::recording::recording_open_mode(
+            &recording_path,
+            manager.config().storage_encryption_key().as_deref(),
+        ) {
+            crate::recording::RecordingOpen::Create => {
+                match tokio::fs::File::create(&recording_path).await {
+                    Ok(f) => {
+                        // Set restrictive permissions on recording file
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = tokio::fs::set_permissions(
+                                &recording_path,
+                                std::fs::Permissions::from_mode(0o640),
+                            )
+                            .await;
+                        }
 
-                // Write sidecar .meta file with session context
-                {
-                    let session_info = manager.get_session(session_id).await;
-                    let ab_entry = session_info
-                        .as_ref()
-                        .and_then(|s| s.address_book_entry.clone());
-                    let meta = crate::recording::RecordingMeta {
-                        address_book_entry: ab_entry,
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                        user: session_info.as_ref().map(|s| s.created_by.clone()),
-                        folder: session_info
-                            .as_ref()
-                            .and_then(|s| s.address_book_folder.clone()),
-                        entry_display_name: session_info
-                            .as_ref()
-                            .and_then(|s| s.entry_display_name.clone()),
-                        session_type: session_info
-                            .as_ref()
-                            .map(|s| format!("{:?}", s.session_type).to_lowercase()),
-                    };
-                    if let Err(e) = crate::recording::write_meta(&recording_path, &meta) {
-                        tracing::warn!(session_id = %session_id, error = %e, "Failed to write recording .meta");
+                        // Write sidecar .meta file with session context
+                        {
+                            let session_info = manager.get_session(session_id).await;
+                            let ab_entry = session_info
+                                .as_ref()
+                                .and_then(|s| s.address_book_entry.clone());
+                            let meta = crate::recording::RecordingMeta {
+                                address_book_entry: ab_entry,
+                                created_at: chrono::Utc::now().to_rfc3339(),
+                                user: session_info.as_ref().map(|s| s.created_by.clone()),
+                                folder: session_info
+                                    .as_ref()
+                                    .and_then(|s| s.address_book_folder.clone()),
+                                entry_display_name: session_info
+                                    .as_ref()
+                                    .and_then(|s| s.entry_display_name.clone()),
+                                session_type: session_info
+                                    .as_ref()
+                                    .map(|s| format!("{:?}", s.session_type).to_lowercase()),
+                            };
+                            if let Err(e) = crate::recording::write_meta(&recording_path, &meta) {
+                                tracing::warn!(session_id = %session_id, error = %e, "Failed to write recording .meta");
+                            }
+                        }
+
+                        Some(f)
+                    }
+                    Err(e) => {
+                        tracing::error!(session_id = %session_id, error = %e, "Failed to create recording file");
+                        None
                     }
                 }
-
-                Some(f)
             }
-            Err(e) => {
-                tracing::error!(session_id = %session_id, error = %e, "Failed to create recording file");
+            crate::recording::RecordingOpen::Append => {
+                match tokio::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&recording_path)
+                    .await
+                {
+                    Ok(f) => {
+                        tracing::info!(
+                            session_id = %session_id,
+                            "Owner reconnect: appending to existing recording"
+                        );
+                        Some(f)
+                    }
+                    Err(e) => {
+                        tracing::error!(session_id = %session_id, error = %e, "Failed to open recording for append");
+                        None
+                    }
+                }
+            }
+            crate::recording::RecordingOpen::Restore(plaintext) => {
+                // The previous segment was encrypted at rest: write the
+                // decrypted plaintext back, then append to it. Teardown
+                // re-encrypts the combined recording.
+                match tokio::fs::write(&recording_path, &plaintext).await {
+                    Ok(()) => {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = tokio::fs::set_permissions(
+                                &recording_path,
+                                std::fs::Permissions::from_mode(0o640),
+                            )
+                            .await;
+                        }
+                        match tokio::fs::OpenOptions::new()
+                            .append(true)
+                            .open(&recording_path)
+                            .await
+                        {
+                            Ok(f) => {
+                                tracing::info!(
+                                    session_id = %session_id,
+                                    "Owner reconnect: restored encrypted recording segment, appending"
+                                );
+                                Some(f)
+                            }
+                            Err(e) => {
+                                tracing::error!(session_id = %session_id, error = %e, "Failed to open restored recording for append");
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(session_id = %session_id, error = %e, "Failed to restore previous recording segment");
+                        None
+                    }
+                }
+            }
+            crate::recording::RecordingOpen::Unavailable => {
+                tracing::warn!(
+                    session_id = %session_id,
+                    "Previous recording segment exists but cannot be restored; skipping recording this connection"
+                );
                 None
             }
         }
@@ -697,9 +881,11 @@ async fn handle_ws(
         guacd_stream,
         recording_file,
         cancel,
+        conn_cancel,
         manager.clone(),
         database,
         session_user,
+        kind == ConnectionKind::Shadow,
     )
     .await;
     let elapsed = start.elapsed();
@@ -708,6 +894,9 @@ async fn handle_ws(
     let guacd_error = proxy_outcome.guacd_error;
 
     manager.disconnect_viewer(session_id).await;
+    if kind == ConnectionKind::Owner {
+        manager.mark_owner_disconnected(session_id);
+    }
 
     // Log termination direction and timing
     let mark_error = match &proxy_result {
@@ -795,8 +984,11 @@ async fn handle_ws(
         }
     }
 
-    // Encrypt recording at rest (file is closed after proxy_ws_guacd returns).
-    if is_recording_enabled && recording_path.exists() {
+    // Encrypt recording at rest (file is closed after proxy_ws_guacd
+    // returns). Only the OWNER's teardown touches the recording: a viewer
+    // teardown must not encrypt/remove a `.guac` the owner's proxy is
+    // still writing to (that would truncate the live recording).
+    if kind == ConnectionKind::Owner && is_recording_enabled && recording_path.exists() {
         let rec_config = manager.recording_config();
         let enc_key = manager.config().storage_encryption_key();
         if crate::recording::should_encrypt_at_rest(&rec_config, enc_key.as_deref()) {
@@ -811,13 +1003,19 @@ async fn handle_ws(
         }
     }
 
-    // Record session end in history
-    manager.end_session_history(
-        session_id,
-        status_str,
-        elapsed.as_secs(),
-        is_recording_enabled,
-    );
+    // Close the history row only when the session actually ended. A
+    // reconnectable disconnect is not an end: the row stays open and the
+    // cleanup reaper closes it with the terminal "expired" status and the
+    // session's full lifetime. The duration is the session's real age,
+    // not just this connection's proxy time.
+    if status_str == "completed" || status_str == "error" {
+        let duration = manager
+            .get_session(session_id)
+            .await
+            .map(|info| (chrono::Utc::now() - info.created_at).num_seconds().max(0) as u64)
+            .unwrap_or(elapsed.as_secs());
+        manager.end_session_history(session_id, status_str, duration, is_recording_enabled);
+    }
 
     // Per-entry recording rotation (after session ends, recording file is complete)
     if is_recording_enabled {
@@ -837,6 +1035,10 @@ async fn handle_ws(
 }
 
 /// Bidirectional proxy between WebSocket and guacd stream (TCP or TLS).
+///
+/// `cancel` ends the whole session; `conn_cancel` ends only this
+/// connection (shadow-token expiry). `read_only` marks a shadow
+/// connection whose browser to guacd input is filtered.
 #[allow(clippy::too_many_arguments)]
 async fn proxy_ws_guacd(
     session_id: Uuid,
@@ -844,9 +1046,11 @@ async fn proxy_ws_guacd(
     guacd: GuacdStream,
     recording_file: Option<tokio::fs::File>,
     cancel: CancellationToken,
+    conn_cancel: CancellationToken,
     manager: Arc<crate::session::SessionManager>,
     database: Option<Db>,
     session_user: Option<String>,
+    read_only: bool,
 ) -> ProxyOutcome {
     let (guacd_read, guacd_write) = tokio::io::split(guacd);
     let (ws_write, ws_read) = ws.split();
@@ -912,6 +1116,7 @@ async fn proxy_ws_guacd(
             pending_b,
             db_b,
             user_b,
+            read_only,
         )
         .await
     });
@@ -935,6 +1140,9 @@ async fn proxy_ws_guacd(
             ProxyResult::BrowserEnded(err)
         }
         _ = cancel.cancelled() => {
+            ProxyResult::Cancelled
+        }
+        _ = conn_cancel.cancelled() => {
             ProxyResult::Cancelled
         }
     };
@@ -1168,6 +1376,7 @@ async fn ws_to_guacd(
     pending_transfers: Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
     database: Option<Db>,
     session_user: Option<String>,
+    read_only: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let result = ws_to_guacd_inner(
         &mut ws_read,
@@ -1178,6 +1387,7 @@ async fn ws_to_guacd(
         &pending_transfers,
         &database,
         &session_user,
+        read_only,
     )
     .await;
 
@@ -1201,6 +1411,7 @@ async fn ws_to_guacd_inner(
     pending_transfers: &Arc<tokio::sync::Mutex<HashMap<i64, PendingTransfer>>>,
     database: &Option<Db>,
     session_user: &Option<String>,
+    read_only: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     /// Maximum allowed WebSocket message size (64 MiB).
     const MAX_WS_MSG_SIZE: usize = 64 * 1024 * 1024;
@@ -1233,6 +1444,22 @@ async fn ws_to_guacd_inner(
                         }
                     }
                 }
+
+                // Shadow (view-only) connections: drop input instructions
+                // (key/mouse/clipboard/argv) before they reach guacd:
+                // defense in depth under the read-only guacd join. Other
+                // opcodes (sync, size, disconnect, tunnel pings handled
+                // above) forward unchanged; an unparseable fragment is
+                // dropped rather than forwarded.
+                let text = if read_only {
+                    let filtered = filter_read_only_input(&text);
+                    if filtered.is_empty() {
+                        continue;
+                    }
+                    filtered
+                } else {
+                    text.to_string()
+                };
 
                 // Log clipboard instructions from browser → guacd
                 if text.contains(".clipboard,") {
@@ -1290,6 +1517,31 @@ async fn ws_to_guacd_inner(
     }
 
     Ok(())
+}
+
+/// Opcodes a read-only (shadow) connection must not send to guacd:
+/// keyboard, mouse, clipboard, and argv input. Everything else (sync,
+/// size, disconnect, get, …) forwards unchanged.
+fn shadow_blocked_opcode(opcode: &str) -> bool {
+    matches!(opcode, "key" | "mouse" | "clipboard" | "argv")
+}
+
+/// Filter browser to guacd wire text for a shadow (view-only) connection:
+/// drop input instructions, keep everything else. Returns the filtered
+/// wire text (empty when nothing may be forwarded). A message that does
+/// not parse to at least one complete instruction is dropped entirely:
+/// for a view-only connection a dropped fragment is never input, and
+/// buffering it would corrupt the next message's framing. Extracted for
+/// test.
+fn filter_read_only_input(text: &str) -> String {
+    let mut parser = crate::protocol::InstructionParser::new();
+    let mut out = String::new();
+    for instr in parser.receive(text).into_iter().flatten() {
+        if !shadow_blocked_opcode(&instr.opcode) {
+            out.push_str(&instr.encode());
+        }
+    }
+    out
 }
 
 /// Return true if the browser-supplied Origin and the request Host header
@@ -1643,7 +1895,145 @@ mod tests {
         assert_eq!(received, b"10.disconnect;");
     }
 
-    // ── Share viewer cap (H02) ──────────────────────────────────────────
+    // ── Owner-path authorization ──────────────────────────────────────
+
+    fn test_identity(name: &str, role: &str) -> AuthIdentity {
+        AuthIdentity::User {
+            email: name.to_string(),
+            name: name.to_string(),
+            role: role.to_string(),
+            groups: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn owner_path_requires_creator_or_admin() {
+        // No identity: fail closed.
+        assert!(!owner_path_authorized(None, Some("alice")));
+        // The creator is authorized; anyone else is not.
+        assert!(owner_path_authorized(
+            Some(&test_identity("alice", "operator")),
+            Some("alice")
+        ));
+        assert!(!owner_path_authorized(
+            Some(&test_identity("mallory", "operator")),
+            Some("alice")
+        ));
+        // Admins are exempt regardless of the creator.
+        assert!(owner_path_authorized(
+            Some(&test_identity("root", "admin")),
+            Some("alice")
+        ));
+        // A viewer-role creator may still reconnect their own session.
+        assert!(owner_path_authorized(
+            Some(&test_identity("alice", "viewer")),
+            Some("alice")
+        ));
+        // Unknown session (no creator row): only an admin passes.
+        assert!(!owner_path_authorized(
+            Some(&test_identity("alice", "operator")),
+            None
+        ));
+        assert!(owner_path_authorized(
+            Some(&test_identity("root", "admin")),
+            None
+        ));
+    }
+
+    // ── Redirect-log redaction ────────────────────────────────────────
+
+    #[test]
+    fn redact_ws_query_masks_ticket_and_token() {
+        assert_eq!(
+            redact_ws_query("https://persea.example.com/ws/abc?ticket=secret"),
+            "https://persea.example.com/ws/abc?ticket=***"
+        );
+        assert_eq!(
+            redact_ws_query("https://persea.example.com/ws/abc?ticket=t&token=sh"),
+            "https://persea.example.com/ws/abc?ticket=***&token=***"
+        );
+        // Non-sensitive params survive verbatim.
+        assert_eq!(
+            redact_ws_query("https://persea.example.com/ws/abc?ticket=t&foo=bar"),
+            "https://persea.example.com/ws/abc?ticket=***&foo=bar"
+        );
+        // No query: unchanged.
+        assert_eq!(
+            redact_ws_query("https://persea.example.com/ws/abc"),
+            "https://persea.example.com/ws/abc"
+        );
+        // A value containing '=' stays masked (only the key is inspected).
+        assert_eq!(
+            redact_ws_query("https://persea.example.com/ws/abc?token=a=b"),
+            "https://persea.example.com/ws/abc?token=***"
+        );
+    }
+
+    // ── Shadow read-only input filter ─────────────────────────────────
+
+    #[test]
+    fn shadow_filter_drops_key_mouse_clipboard_argv() {
+        let dropped: Vec<String> = ["key", "mouse", "clipboard", "argv"]
+            .iter()
+            .map(|op| {
+                let instr = Instruction::new(*op, vec!["1".into(), "x".into()]).encode();
+                filter_read_only_input(&instr)
+            })
+            .collect();
+        assert!(dropped.iter().all(|s| s.is_empty()), "got: {:?}", dropped);
+    }
+
+    #[test]
+    fn shadow_filter_keeps_other_opcodes() {
+        let sync = Instruction::new("sync", vec!["123".into()]).encode();
+        assert_eq!(filter_read_only_input(&sync), sync);
+        let size = Instruction::new("size", vec!["1024".into(), "768".into()]).encode();
+        assert_eq!(filter_read_only_input(&size), size);
+        let disconnect = Instruction::new("disconnect", Vec::new()).encode();
+        assert_eq!(filter_read_only_input(&disconnect), disconnect);
+    }
+
+    #[test]
+    fn shadow_filter_mixed_message_drops_only_input() {
+        let key = Instruction::new("key", vec!["1".into(), "113".into()]).encode();
+        let sync = Instruction::new("sync", vec!["7".into()]).encode();
+        let mouse = Instruction::new("mouse", vec!["10".into(), "20".into(), "1".into()]).encode();
+        let mixed = format!("{}{}{}", key, sync, mouse);
+        assert_eq!(filter_read_only_input(&mixed), sync);
+    }
+
+    #[test]
+    fn shadow_filter_unparseable_fragment_dropped() {
+        // A partial instruction must not be forwarded (it cannot be
+        // classified) and must not corrupt the next message's framing.
+        assert!(filter_read_only_input("6.mous").is_empty());
+    }
+
+    // ── Pending-transfer cap ──────────────────────────────────────────
+
+    #[test]
+    fn pending_transfers_capped_with_eviction() {
+        let mut pending = HashMap::new();
+        for i in 0..(MAX_PENDING_TRANSFERS as i64 + 100) {
+            let file = Instruction::new(
+                "file",
+                vec![
+                    i.to_string().into(),
+                    "application/octet-stream".into(),
+                    format!("f{}", i).into(),
+                ],
+            );
+            sniff_transfer_instruction(&file, TransferDirection::BrowserToGuacd, &mut pending);
+        }
+        // The map never exceeds the cap; eviction removes the smallest
+        // stream indices first.
+        assert_eq!(pending.len(), MAX_PENDING_TRANSFERS);
+        assert!(!pending.contains_key(&0));
+        assert!(!pending.contains_key(&99));
+        assert!(pending.contains_key(&(MAX_PENDING_TRANSFERS as i64 + 99)));
+    }
+
+    // ── Share viewer cap (H02) ────────────────────────────────────────
 
     fn ws_test_session(id: Uuid, viewers: u32) -> crate::session::Session {
         use crate::session::{SessionStatus, SessionType};
@@ -1694,39 +2084,111 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn share_viewer_cap_blocks_at_capacity() {
+    async fn viewer_cap_blocks_at_capacity() {
         let manager = ws_manager(10).await;
         let id = manager
             .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 10))
             .await;
-        // 10/10 viewers → 11th blocked with a message naming the limit.
-        let msg = share_viewer_cap_exceeded(&manager, id).await;
-        assert!(msg.is_some());
+        // 10/10 viewers: the 11th reservation is rejected, naming the
+        // limit.
+        assert!(matches!(
+            manager.reserve_viewer_slot(id, 10).await,
+            Err(SessionError::ViewerLimit {
+                viewers: 10,
+                max: 10
+            })
+        ));
     }
 
     #[tokio::test]
-    async fn share_viewer_cap_allows_under_capacity() {
+    async fn viewer_cap_allows_under_capacity() {
         let manager = ws_manager(10).await;
         let id = manager
             .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 9))
             .await;
-        assert!(share_viewer_cap_exceeded(&manager, id).await.is_none());
+        assert!(manager.reserve_viewer_slot(id, 10).await.is_ok());
     }
 
     #[tokio::test]
-    async fn share_viewer_cap_zero_means_unlimited() {
+    async fn viewer_cap_counts_viewers_only_excludes_owner_slot() {
+        let manager = ws_manager(10).await;
+        // 10 connections total, one of them the owner: 9 viewers, so a
+        // 10th viewer may join.
+        let with_owner = manager
+            .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 10))
+            .await;
+        manager.mark_owner_connected(with_owner);
+        assert!(manager.reserve_viewer_slot(with_owner, 10).await.is_ok());
+        // 11 connections with the owner: 10 viewers, at the cap.
+        let at_cap = manager
+            .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 11))
+            .await;
+        manager.mark_owner_connected(at_cap);
+        assert!(matches!(
+            manager.reserve_viewer_slot(at_cap, 10).await,
+            Err(SessionError::ViewerLimit {
+                viewers: 10,
+                max: 10
+            })
+        ));
+        // Owner slot gone (owner disconnected, viewers remain): 10
+        // connections are 10 viewers, so the cap applies to all of them.
+        let owner_gone = manager
+            .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 10))
+            .await;
+        assert!(matches!(
+            manager.reserve_viewer_slot(owner_gone, 10).await,
+            Err(SessionError::ViewerLimit {
+                viewers: 10,
+                max: 10
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn viewer_cap_zero_means_unlimited() {
         let manager = ws_manager(0).await;
         let id = manager
             .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 99))
             .await;
-        assert!(share_viewer_cap_exceeded(&manager, id).await.is_none());
+        assert!(manager.reserve_viewer_slot(id, 0).await.is_ok());
     }
 
     #[tokio::test]
-    async fn share_viewer_cap_unknown_session_allows() {
+    async fn viewer_cap_reserve_increments_atomically_with_check() {
         let manager = ws_manager(10).await;
-        assert!(share_viewer_cap_exceeded(&manager, Uuid::new_v4())
-            .await
-            .is_none());
+        let id = manager
+            .seed_session_for_testing(ws_test_session(Uuid::new_v4(), 9))
+            .await;
+        // The reservation IS the increment: the next check sees it.
+        assert!(manager.reserve_viewer_slot(id, 10).await.is_ok());
+        assert!(matches!(
+            manager.reserve_viewer_slot(id, 10).await,
+            Err(SessionError::ViewerLimit {
+                viewers: 10,
+                max: 10
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn viewer_cap_unknown_session_rejected() {
+        let manager = ws_manager(10).await;
+        assert!(matches!(
+            manager.reserve_viewer_slot(Uuid::new_v4(), 10).await,
+            Err(SessionError::NotFound)
+        ));
+    }
+
+    #[tokio::test]
+    async fn viewer_cap_requires_active_session() {
+        let manager = ws_manager(10).await;
+        let mut session = ws_test_session(Uuid::new_v4(), 0);
+        session.status = crate::session::SessionStatus::Pending;
+        let id = manager.seed_session_for_testing(session).await;
+        assert!(matches!(
+            manager.reserve_viewer_slot(id, 10).await,
+            Err(SessionError::NotActive)
+        ));
     }
 }

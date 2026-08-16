@@ -580,6 +580,9 @@ pub enum SessionError {
     NotFound,
     /// The session exists but is not in a joinable state.
     NotActive,
+    /// The per-session concurrent viewer cap is reached; carries the
+    /// current viewer count and the configured cap.
+    ViewerLimit { viewers: u32, max: u32 },
     /// The request parameters failed validation; carries the reason.
     ValidationError(String),
     /// Xvnc or Chromium failed to start; carries the underlying message.
@@ -594,6 +597,11 @@ impl std::fmt::Display for SessionError {
             SessionError::GuacdConnection(msg) => write!(f, "guacd connection failed: {}", msg),
             SessionError::NotFound => write!(f, "session not found"),
             SessionError::NotActive => write!(f, "session is not active"),
+            SessionError::ViewerLimit { viewers, max } => write!(
+                f,
+                "share viewer limit reached: {} of {} viewers already connected",
+                viewers, max
+            ),
             SessionError::ValidationError(msg) => write!(f, "validation error: {}", msg),
             SessionError::BrowserSpawn(msg) => write!(f, "browser spawn failed: {}", msg),
             SessionError::VdiError(msg) => write!(f, "VDI error: {}", msg),

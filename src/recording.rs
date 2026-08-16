@@ -289,6 +289,61 @@ pub fn should_encrypt_at_rest(config: &RecordingConfig, encryption_key_hex: Opti
     }
 }
 
+/// How to open the recording for an owner connection, preserving any
+/// previous segment (an owner reconnect appends; a fresh connection
+/// creates).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecordingOpen {
+    /// No previous segment: create a new recording file.
+    Create,
+    /// A previous plaintext segment exists: append to it.
+    Append,
+    /// A previous `.guac.enc` segment exists: decrypt it so the new
+    /// segment can be appended and the combined recording re-encrypted at
+    /// teardown. Carries the decrypted plaintext to write back.
+    Restore(Vec<u8>),
+    /// A previous `.guac.enc` segment exists but cannot be restored (no
+    /// encryption key, or decryption failed): record nothing rather than
+    /// truncate the segment.
+    Unavailable,
+}
+
+/// Classify the recording file for an owner connection (reconnect-aware).
+///
+/// A previous segment is never truncated: when the last teardown encrypted
+/// the recording at rest, the `.guac.enc` is decrypted back to plaintext so
+/// the new segment appends to it (re-encryption happens at teardown). A
+/// plaintext `.guac` is appended to directly. With encryption off, reconnects
+/// keep recording into the same file.
+pub fn recording_open_mode(guac_path: &Path, encryption_key_hex: Option<&str>) -> RecordingOpen {
+    if guac_path.exists() {
+        return RecordingOpen::Append;
+    }
+    let enc_path = guac_path.with_extension("guac.enc");
+    if enc_path.exists() {
+        let Some(key) = encryption_key_hex else {
+            tracing::warn!(
+                path = %guac_path.display(),
+                "Encrypted recording segment exists but no encryption key is configured"
+            );
+            return RecordingOpen::Unavailable;
+        };
+        match decrypt_recording(guac_path, key) {
+            Ok(plaintext) => RecordingOpen::Restore(plaintext),
+            Err(e) => {
+                tracing::warn!(
+                    path = %guac_path.display(),
+                    error = %e,
+                    "Failed to decrypt previous recording segment; skipping recording this connection"
+                );
+                RecordingOpen::Unavailable
+            }
+        }
+    } else {
+        RecordingOpen::Create
+    }
+}
+
 /// Encrypt a `.guac` file in place: reads the plaintext, writes `<path>.enc`,
 /// then removes the original plaintext file.
 pub fn encrypt_recording_file(
@@ -636,6 +691,97 @@ mod tests {
 
         let deleted = rotate_per_entry(&dir, "target/entry", 1);
         assert_eq!(deleted, 0); // only 1 match, at limit
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── Reconnect-aware recording open (owner reconnect) ──
+
+    fn test_key_hex() -> String {
+        "01".repeat(32)
+    }
+
+    #[test]
+    fn recording_open_mode_fresh_connection_creates() {
+        let dir = temp_dir();
+        let guac_path = dir.join("fresh.guac");
+        assert_eq!(
+            recording_open_mode(&guac_path, Some(&test_key_hex())),
+            RecordingOpen::Create
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recording_open_mode_existing_plaintext_appends() {
+        let dir = temp_dir();
+        let guac_path = dir.join("plain.guac");
+        fs::write(&guac_path, b"segment1").unwrap();
+        // Reconnect with encryption off (or on): the plaintext segment is
+        // appended to, never recreated.
+        assert_eq!(recording_open_mode(&guac_path, None), RecordingOpen::Append);
+        assert_eq!(
+            recording_open_mode(&guac_path, Some(&test_key_hex())),
+            RecordingOpen::Append
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recording_open_mode_encrypted_segment_restored_never_truncated() {
+        let dir = temp_dir();
+        let guac_path = dir.join("sess.guac");
+        fs::write(&guac_path, b"segment1").unwrap();
+        // First teardown: encrypt at rest (.guac to .guac.enc).
+        let key = test_key_hex();
+        encrypt_recording_file(&guac_path, &key).unwrap();
+        assert!(!guac_path.exists());
+        assert!(guac_path.with_extension("guac.enc").exists());
+
+        // Owner reconnect: the previous segment is decrypted back so the
+        // new segment appends to it. The .enc is left untouched.
+        match recording_open_mode(&guac_path, Some(&key)) {
+            RecordingOpen::Restore(plaintext) => assert_eq!(plaintext, b"segment1"),
+            other => panic!("expected Restore, got {:?}", other),
+        }
+        assert!(
+            guac_path.with_extension("guac.enc").exists(),
+            "recording_open_mode must never truncate the .guac.enc"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recording_open_mode_encrypted_segment_without_key_unavailable() {
+        let dir = temp_dir();
+        let guac_path = dir.join("sess.guac");
+        fs::write(&guac_path, b"segment1").unwrap();
+        let key = test_key_hex();
+        encrypt_recording_file(&guac_path, &key).unwrap();
+        assert!(guac_path.with_extension("guac.enc").exists());
+
+        // No key configured: record nothing rather than truncate the
+        // encrypted segment.
+        assert_eq!(
+            recording_open_mode(&guac_path, None),
+            RecordingOpen::Unavailable
+        );
+        assert!(guac_path.with_extension("guac.enc").exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recording_open_mode_encrypted_segment_wrong_key_unavailable() {
+        let dir = temp_dir();
+        let guac_path = dir.join("sess.guac");
+        fs::write(&guac_path, b"segment1").unwrap();
+        encrypt_recording_file(&guac_path, &test_key_hex()).unwrap();
+
+        let wrong_key = "02".repeat(32);
+        assert_eq!(
+            recording_open_mode(&guac_path, Some(&wrong_key)),
+            RecordingOpen::Unavailable
+        );
+        assert!(guac_path.with_extension("guac.enc").exists());
         fs::remove_dir_all(&dir).ok();
     }
 }
