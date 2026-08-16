@@ -315,7 +315,7 @@ pub fn client_ip(headers: &HeaderMap, socket_addr: IpAddr, trusted_proxies: &[St
 /// Combines ALL `cookie` headers (HTTP/1.1 permits multiple Cookie headers;
 /// some clients and proxies split cookies across them) before parsing, so a
 /// cookie split across headers is still found.
-pub(crate) fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+pub fn extract_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
     let combined: String = headers
         .get_all("cookie")
         .iter()

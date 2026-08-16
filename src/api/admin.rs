@@ -428,8 +428,18 @@ async fn load_capability_settings(database: Option<Extension<Db>>) -> Vec<(Strin
 include!(concat!(env!("OUT_DIR"), "/docs-rendered.rs"));
 
 /// `GET /api/docs`: the rendered documentation sections (slug,
-/// title, HTML) baked in at build time.
-pub async fn get_docs() -> Result<Json<serde_json::Value>, AppError> {
+/// title, HTML) baked in at build time. Admin only: the docs describe
+/// internal endpoints and configuration; anonymous callers get 403.
+pub async fn get_docs(
+    identity: Option<Extension<AuthIdentity>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
     let sections: Vec<serde_json::Value> = DOCS
         .iter()
         .map(|(slug, title, html)| json!({ "slug": slug, "title": title, "html": html }))
@@ -437,14 +447,24 @@ pub async fn get_docs() -> Result<Json<serde_json::Value>, AppError> {
     Ok(Json(json!(sections)))
 }
 
-/// `GET /api/metrics`: Prometheus text exposition format. Public;
-/// no authentication required.
-pub async fn metrics() -> impl IntoResponse {
-    (
+/// `GET /api/metrics`: Prometheus text exposition format. Admin only —
+/// the endpoint exposes session counts, uptime, and request metrics that
+/// are useful to attackers; scrapers authenticate with an admin API key.
+pub async fn metrics(
+    identity: Option<Extension<AuthIdentity>>,
+) -> Result<impl IntoResponse, AppError> {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+    Ok((
         StatusCode::OK,
         [("Content-Type", "text/plain; version=0.0.4")],
         crate::metrics::render_prometheus(),
-    )
+    ))
 }
 
 /// HTMX fragment: table rows for audit events.
@@ -798,5 +818,61 @@ mod tests {
         let router = router(db, Some(identity("viewer@example.com", "Viewer", "viewer")));
         let resp = router.oneshot(req_get("/api/audit/events")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    // ── Operational endpoint gating (metrics, docs) ─────────────────────
+
+    fn ops_router(db: Db, id: Option<AuthIdentity>) -> Router {
+        let r = Router::new()
+            .route("/metrics", get(metrics))
+            .route("/api/docs", get(get_docs));
+        match id {
+            Some(id) => r.layer(Extension(id)),
+            None => r,
+        }
+    }
+
+    #[tokio::test]
+    async fn metrics_requires_admin() {
+        let db = test_db();
+        // Anonymous → 403.
+        let resp = ops_router(db.clone(), None)
+            .oneshot(req_get("/metrics"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        // Viewer → 403.
+        let resp = ops_router(db.clone(), Some(identity("v@example.com", "V", "viewer")))
+            .oneshot(req_get("/metrics"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        // Admin → 200 with the Prometheus content type.
+        let resp = ops_router(db, Some(identity("a@example.com", "A", "admin")))
+            .oneshot(req_get("/metrics"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers()["content-type"], "text/plain; version=0.0.4");
+    }
+
+    #[tokio::test]
+    async fn docs_requires_admin() {
+        let db = test_db();
+        let resp = ops_router(db.clone(), None)
+            .oneshot(req_get("/api/docs"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let resp = ops_router(db.clone(), Some(identity("v@example.com", "V", "viewer")))
+            .oneshot(req_get("/api/docs"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let resp = ops_router(db, Some(identity("a@example.com", "A", "admin")))
+            .oneshot(req_get("/api/docs"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }

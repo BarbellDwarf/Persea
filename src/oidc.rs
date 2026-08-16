@@ -7,7 +7,7 @@ use crate::db::{self, Db};
 use crate::totp::TotpEnforcement;
 use axum::{
     extract::{ConnectInfo, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{AppendHeaders, IntoResponse, Redirect, Response},
     Extension,
 };
@@ -108,6 +108,22 @@ fn state_fingerprint(key: &[u8; 32], ip: &str, ua: &str) -> String {
     data.extend_from_slice(ua.as_bytes());
     let tag = hmac::sign(&key, &data);
     hex::encode(tag.as_ref())
+}
+
+/// Is `s` a safe same-origin redirect target?
+///
+/// Accepts only relative paths that start with a single `/`. Rejects
+/// protocol-relative URLs (`//host`), absolute URLs (`scheme://host`),
+/// backslashes (browsers normalize `\` to `/`, so `/\evil.com` and
+/// `\\evil.com` become protocol-relative), and control characters.
+pub fn is_safe_redirect_path(s: &str) -> bool {
+    if !s.starts_with('/') || s.starts_with("//") || s.contains("://") {
+        return false;
+    }
+    if s.contains('\\') {
+        return false;
+    }
+    !s.chars().any(|c| c.is_control())
 }
 
 /// One named OIDC provider (DB-configured via the admin auth page, or the
@@ -291,7 +307,7 @@ pub async fn login(
 
     // Store post-login redirect URL in a cookie if provided and safe
     if let Some(ref next) = params.next {
-        if next.starts_with('/') && !next.starts_with("//") && !next.contains("://") {
+        if is_safe_redirect_path(next) {
             let next_cookie = format!(
                 "persea_next={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
                 next, sec
@@ -318,6 +334,82 @@ pub struct CallbackParams {
     pub error: Option<String>,
     /// Human-readable error description from the provider.
     pub error_description: Option<String>,
+}
+
+/// Create a pending MFA record and redirect to `target` with the
+/// pending-MFA cookie, clearing the OIDC state and next cookies. Used by
+/// both the MFA gate (target `/auth/mfa`, cookie scoped to it) and the
+/// enrollment gate (target `/auth/enroll`, cookie scoped to `/` so the
+/// enrollment page and the TOTP self-service API can read it). Neither
+/// path mints a session: the session is created only after the factor is
+/// verified on the MFA page.
+#[allow(clippy::too_many_arguments)]
+async fn redirect_with_pending_mfa(
+    database: &Db,
+    user_id: i64,
+    email: &str,
+    name: &str,
+    role: &str,
+    subject: Option<&str>,
+    ttl_secs: u64,
+    target: &str,
+    cookie_path: &str,
+    headers: &HeaderMap,
+    tls_enabled: bool,
+    trusted_proxies: Option<&TrustedProxies>,
+    peer_ip: Option<std::net::IpAddr>,
+) -> Response {
+    let db_clone = database.clone();
+    let email_for_mfa = email.to_string();
+    let name_for_mfa = name.to_string();
+    let role_for_mfa = role.to_string();
+    let subject_for_mfa = subject.map(str::to_string);
+    let pending_token = match tokio::task::spawn_blocking(move || {
+        db::create_pending_mfa(
+            &db_clone,
+            user_id,
+            &email_for_mfa,
+            &name_for_mfa,
+            &role_for_mfa,
+            subject_for_mfa.as_deref(),
+            ttl_secs,
+        )
+    })
+    .await
+    {
+        Ok(Ok(token)) => token,
+        _ => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": "failed to create MFA session"})),
+            )
+                .into_response();
+        }
+    };
+
+    let sec = crate::csrf::cookie_secure_attr(headers, tls_enabled, trusted_proxies, peer_ip);
+    let mfa_cookie = format!(
+        "persea_mfa_pending={}; Path={}; HttpOnly;{} SameSite=Lax; Max-Age={}",
+        pending_token, cookie_path, sec, ttl_secs
+    );
+    let clear_state_cookie = format!(
+        "persea_oidc_state=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        sec
+    );
+    let clear_next_cookie = format!(
+        "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        sec
+    );
+
+    (
+        AppendHeaders([
+            (header::SET_COOKIE, mfa_cookie),
+            (header::SET_COOKIE, clear_state_cookie),
+            (header::SET_COOKIE, clear_next_cookie),
+        ]),
+        Redirect::temporary(target),
+    )
+        .into_response()
 }
 
 /// GET /auth/callback — exchange code for tokens, create session.
@@ -588,7 +680,8 @@ pub async fn callback(
     // Check TOTP enforcement before creating session (mirrors the gate in
     // handlers/auth.rs): AdminsOnly requires admins enrolled, All requires
     // every user enrolled. A user who must enroll but has no TOTP is sent
-    // to the enrollment page with a session, not silently logged in.
+    // to the enrollment page with a pending-MFA cookie, not silently
+    // logged in.
     let (totp_required, enroll_required) = {
         let db_check = database.clone();
         let uid = user.id;
@@ -614,63 +707,48 @@ pub async fn callback(
     };
 
     if totp_required {
-        // Create pending MFA record and redirect to MFA page
-        let ttl_secs = 300u64; // 5 minutes
-        let db_clone = database.clone();
-        let email_for_mfa = email.clone();
-        let pending_token = match tokio::task::spawn_blocking(move || {
-            db::create_pending_mfa(
-                &db_clone,
-                user.id,
-                &email_for_mfa,
-                &name,
-                &effective_role,
-                Some(&subject),
-                ttl_secs,
-            )
-        })
-        .await
-        {
-            Ok(Ok(token)) => token,
-            _ => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    axum::Json(json!({"error": "failed to create MFA session"})),
-                )
-                    .into_response();
-            }
-        };
-
         tracing::info!(email = %email, "OIDC login requires TOTP — redirecting to MFA");
-
-        let sec = crate::csrf::cookie_secure_attr(
+        return redirect_with_pending_mfa(
+            &database,
+            user.id,
+            &email,
+            &name,
+            &effective_role,
+            Some(&subject),
+            300,
+            "/auth/mfa",
+            "/auth/mfa",
             &headers,
             tls_enabled.0,
             Some(&trusted_proxies),
             Some(addr.ip()),
-        );
-        let mfa_cookie = format!(
-            "persea_mfa_pending={}; Path=/auth/mfa; HttpOnly;{} SameSite=Lax; Max-Age={}",
-            pending_token, sec, ttl_secs
-        );
-        let clear_state_cookie = format!(
-            "persea_oidc_state=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
-            sec
-        );
-        let clear_next_cookie = format!(
-            "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
-            sec
-        );
-
-        return (
-            AppendHeaders([
-                (header::SET_COOKIE, mfa_cookie),
-                (header::SET_COOKIE, clear_state_cookie),
-                (header::SET_COOKIE, clear_next_cookie),
-            ]),
-            Redirect::temporary("/auth/mfa"),
         )
-            .into_response();
+        .await;
+    }
+
+    // Enforcement requires enrollment but the user has no TOTP yet: no
+    // session is minted. The pending-MFA cookie reaches the enrollment
+    // page and the TOTP self-service API only; the session is created
+    // after the factor is verified on the MFA page, so never enrolling
+    // means never getting in.
+    if enroll_required {
+        tracing::info!(email = %email, "OIDC login requires TOTP enrollment — redirecting to enrollment");
+        return redirect_with_pending_mfa(
+            &database,
+            user.id,
+            &email,
+            &name,
+            &effective_role,
+            Some(&subject),
+            300,
+            "/auth/enroll",
+            "/",
+            &headers,
+            tls_enabled.0,
+            Some(&trusted_proxies),
+            Some(addr.ip()),
+        )
+        .await;
     }
 
     // Create auth session
@@ -709,16 +787,12 @@ pub async fn callback(
         .await;
     }
 
-    // Check for post-login redirect cookie. An enforcement-required user
-    // without TOTP is sent to the enrollment page instead (the session
-    // exists, so the page is reachable; subsequent logins must pass MFA).
-    let redirect_to = if enroll_required {
-        "/account/totp.html".to_string()
-    } else {
-        extract_cookie(&headers, "persea_next")
-            .filter(|n| n.starts_with('/') && !n.starts_with("//") && !n.contains("://"))
-            .unwrap_or_else(|| "/addressbook.html".to_string())
-    };
+    // Check for post-login redirect cookie. The enforcement gates
+    // (MFA and enrollment) returned above, so reaching this point means
+    // no factor is required and the session is safe to mint.
+    let redirect_to = extract_cookie(&headers, "persea_next")
+        .filter(|n| is_safe_redirect_path(n))
+        .unwrap_or_else(|| "/addressbook.html".to_string());
 
     // Set session cookie and redirect; clear OIDC state and next cookies
     let sec = crate::csrf::cookie_secure_attr(
@@ -1162,5 +1236,50 @@ mod tests {
             msg,
             "OIDC discovery failed: Request(NetworkError(connect_timeout))"
         );
+    }
+
+    // ── Redirect target validation ─────────────────────────────────────
+
+    #[test]
+    fn safe_redirect_path_accepts_relative_paths() {
+        for p in ["/", "/connections.html", "/foo/bar?x=1", "/a/b/c"] {
+            assert!(is_safe_redirect_path(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn safe_redirect_path_rejects_external_targets() {
+        for p in [
+            "//evil.com",
+            "https://evil.com",
+            "http://evil.com",
+            "javascript:alert(1)",
+            "evil.com",
+            "",
+        ] {
+            assert!(!is_safe_redirect_path(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn safe_redirect_path_rejects_backslashes() {
+        // Browsers normalize `\` to `/`, so `/\evil.com` and `\\evil.com`
+        // become protocol-relative URLs.
+        for p in ["/\\evil.com", "\\\\evil.com", "/foo\\bar", "/foo\\/bar"] {
+            assert!(!is_safe_redirect_path(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn safe_redirect_path_rejects_control_characters() {
+        for p in [
+            "/foo\nbar",
+            "/foo\r\nbar",
+            "/foo\tbar",
+            "/foo\x7fbar",
+            "/foo\x00bar",
+        ] {
+            assert!(!is_safe_redirect_path(p), "{p}");
+        }
     }
 }
