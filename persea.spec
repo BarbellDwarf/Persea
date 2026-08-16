@@ -101,16 +101,35 @@ fi
 chown -R persea:persea %{_prefix}/data %{_prefix}/recordings
 # Generate a storage encryption key if the config has none: the server
 # refuses to start without one (credentials would sit in plaintext).
+# TOML-aware: inserts into an existing [storage] table, appends one only
+# when absent, so admin-modified configs never get a duplicate table.
+# Mirrors debian/postinst and rpm/scripts/post.sh; respects an admin-set key.
 CONFIG="%{_prefix}/config.toml"
+KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 if ! grep -q '^encryption_key' "$CONFIG" 2>/dev/null; then
-    KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    {
-        echo ""
-        echo "[storage]"
-        echo "encryption_key = \"$KEY\""
-    } >> "$CONFIG"
+    if grep -q '^\[storage\]' "$CONFIG" 2>/dev/null; then
+        sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$CONFIG"
+    else
+        {
+            echo ""
+            echo "[storage]"
+            echo "encryption_key = \"$KEY\""
+        } >> "$CONFIG"
+    fi
     echo "Generated storage encryption key."
 fi
+# The config now holds the encryption key: not world-readable.
+chmod 600 "$CONFIG"
+# The SQLite DB holds session tokens and encrypted credentials: never
+# world-readable. Pre-create it with owner-only perms so the first service
+# start (as persea) never creates a 0644 file; fix up existing files.
+DB="%{_prefix}/data/persea.db"
+if [ ! -f "$DB" ]; then
+    touch "$DB"
+fi
+chown persea:persea "$DB"
+chmod 600 "$DB"
+chmod 750 %{_prefix}/data
 # Generate self-signed TLS certificate if none exists
 if [ ! -f %{_prefix}/tls/cert.pem ] || [ ! -f %{_prefix}/tls/key.pem ]; then
     CERT_HOSTNAME=$(hostname -f 2>/dev/null || hostname)
@@ -150,7 +169,7 @@ fi
 %{_prefix}/lib/*.so*
 %{_libdir}/freerdp3/
 %{_prefix}/static/
-%config(noreplace) %{_prefix}/config.toml
+%config(noreplace) %attr(0600,persea,persea) %{_prefix}/config.toml
 %dir %attr(0750,persea,persea) %{_prefix}/data
 %dir %attr(0750,persea,persea) %{_prefix}/recordings
 %dir %attr(0750,persea,persea) %{_prefix}/tls

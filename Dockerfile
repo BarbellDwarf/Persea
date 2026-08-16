@@ -272,21 +272,44 @@ fi
 
 # Generate a storage encryption key on first run if none is set: without
 # one the server refuses to start (credentials would sit in plaintext).
-if ! grep -q 'encryption_key' "$CONFIG_PATH" 2>/dev/null; then
+# TOML-aware: inserts into an existing [storage] table, appends one only
+# when absent, so admin-modified configs never get a duplicate table.
+# Skipped when PERSEA_STORAGE_KEY is set: the env var wins, and a
+# placeholder there must fail loudly at startup, not be papered over.
+if [ -z "${PERSEA_STORAGE_KEY:-}" ] && ! grep -q '^encryption_key' "$CONFIG_PATH" 2>/dev/null; then
     KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    {
-        echo ""
-        echo "[storage]"
-        echo "encryption_key = \"$KEY\""
-    } >> "$CONFIG_PATH"
+    if grep -q '^\[storage\]' "$CONFIG_PATH" 2>/dev/null; then
+        sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$CONFIG_PATH"
+    else
+        {
+            echo ""
+            echo "[storage]"
+            echo "encryption_key = \"$KEY\""
+        } >> "$CONFIG_PATH"
+    fi
     echo "Generated storage encryption key."
 fi
+# The config now holds the encryption key: not world-readable. Best-effort:
+# some bind mounts (Windows/WSL, 9p, virtiofs) don't support chmod.
+chmod 600 "$CONFIG_PATH" 2>/dev/null || true
+
+# The SQLite DB holds session tokens and encrypted credentials: never
+# world-readable. Pre-create it with owner-only perms so the first `serve`
+# start never creates a 0644 file. Best-effort like the chmod above.
+DB_PATH="/opt/persea/data/persea.db"
+if [ ! -f "$DB_PATH" ]; then
+    touch "$DB_PATH" 2>/dev/null || true
+fi
+chmod 600 "$DB_PATH" 2>/dev/null || true
 
 # Generate TLS cert at runtime if not already present (e.g. mounted)
 TLS_DIR="/opt/persea/tls"
 if [ ! -f "$TLS_DIR/cert.pem" ] || [ ! -f "$TLS_DIR/key.pem" ]; then
     echo "No TLS cert found — generating self-signed certificate..."
     /opt/persea/bin/persea generate-cert --hostname localhost --out-dir "$TLS_DIR"
+    # The private key must not be world-readable. Best-effort: some bind
+    # mounts don't support chmod.
+    chmod 600 "$TLS_DIR/key.pem" 2>/dev/null || true
     echo "==> Generated self-signed TLS cert. Mount your own cert for production. <=="
     # Self-signed certs cause browsers to block Secure cookies even after
     # clicking through the cert warning. Disable Secure attribute automatically.
@@ -308,9 +331,9 @@ if [ ! -f "$TLS_DIR/cert.pem" ] || [ ! -f "$TLS_DIR/key.pem" ]; then
     fi
 fi
 
-# Create admin API key on first run (if no DB exists yet)
-DB_PATH="/opt/persea/data/persea.db"
-if [ ! -f "$DB_PATH" ]; then
+# Create admin API key on first run (if the DB is still empty: the file is
+# pre-created above, migrations run on the first add-admin/serve).
+if [ ! -s "$DB_PATH" ]; then
     echo "First run detected — creating admin API key..."
     ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
     touch "$ADMIN_KEY_FILE"

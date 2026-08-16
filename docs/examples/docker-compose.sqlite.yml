@@ -32,7 +32,10 @@ services:
       # stored credentials undecryptable. The entrypoint can generate one,
       # but it writes it into the container's ephemeral config, so the key
       # would be lost on recreate; pinning it here keeps it stable.
-      PERSEA_STORAGE_KEY: "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+      # The placeholder below is NOT a valid key: persea refuses to start
+      # with it, so a forgotten replacement fails loudly in the logs
+      # instead of silently shipping a known key.
+      PERSEA_STORAGE_KEY: "CHANGE_ME_openssl_rand_hex_32"
 
 volumes:
   persea-data:

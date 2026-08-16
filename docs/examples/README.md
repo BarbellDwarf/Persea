@@ -27,6 +27,10 @@ Then open `https://your-server:8089` and complete the setup wizard.
   credentials become undecryptable. The image's entrypoint can generate a
   key itself, but it writes it into the container's ephemeral config, so
   pinning it via the environment is what keeps it stable across recreates.
+  The shipped value is a placeholder, not a key: persea refuses to start
+  with it (it is not a 64-char hex string), so a forgotten replacement
+  fails loudly in the container logs instead of silently running with a
+  known key.
 - `change-me` passwords (postgres and mysql files): the database password
   appears twice per file, in the database service environment and inside
   `PERSEA_DB_URL`; keep the two in sync.

@@ -376,8 +376,18 @@ jobs:
           VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           TAG="${GITHUB_REF_NAME#v}"
           DIR="/tmp/persea-${TAG}-linux-amd64"
-          mkdir -p "$DIR/bin" "$DIR/sbin" "$DIR/lib" "$DIR/static" "$DIR/systemd" "$DIR/docs"
-          cp target/release/persea "$DIR/bin/" 2>/dev/null || cp artifacts/deb/*.deb /tmp/
+          mkdir -p "$DIR/bin" "$DIR/sbin" "$DIR/lib/freerdp3" "$DIR/static" "$DIR/systemd" "$DIR/docs" "$DIR/scripts"
+          # Extract the binaries from the .deb: persea, guacd, its
+          # libraries, the FreeRDP 3 plugins (RDPDR/RDPSND channels), and
+          # the drive setup helper. install-release.sh installs them to
+          # /opt/persea and bootstraps the storage key.
+          dpkg-deb -x artifacts/deb/*.deb /tmp/deb-root
+          cp /tmp/deb-root/opt/persea/bin/persea "$DIR/bin/"
+          cp /tmp/deb-root/opt/persea/sbin/guacd "$DIR/sbin/"
+          cp -a /tmp/deb-root/opt/persea/lib/*.so* "$DIR/lib/"
+          cp -a /tmp/deb-root/usr/lib/*/freerdp3/*.so* "$DIR/lib/freerdp3/" 2>/dev/null || true
+          cp /tmp/deb-root/opt/persea/bin/drive-setup.sh "$DIR/scripts/" 2>/dev/null || true
+          cp install-release.sh "$DIR/"
           cp -r static/* "$DIR/static/"
           cp -r docs/*.md "$DIR/docs/" 2>/dev/null || true
           cp debian/config.toml.default "$DIR/config.toml.default" 2>/dev/null || true
@@ -417,8 +427,18 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           DIR="/tmp/persea-${TAG}-linux-arm64"
-          mkdir -p "$DIR/bin" "$DIR/sbin" "$DIR/lib" "$DIR/static" "$DIR/systemd" "$DIR/docs"
-          cp target/release/persea "$DIR/bin/" 2>/dev/null || cp artifacts/deb/*.deb /tmp/
+          mkdir -p "$DIR/bin" "$DIR/sbin" "$DIR/lib/freerdp3" "$DIR/static" "$DIR/systemd" "$DIR/docs" "$DIR/scripts"
+          # Extract the binaries from the .deb: persea, guacd, its
+          # libraries, the FreeRDP 3 plugins (RDPDR/RDPSND channels), and
+          # the drive setup helper. install-release.sh installs them to
+          # /opt/persea and bootstraps the storage key.
+          dpkg-deb -x artifacts/deb/*.deb /tmp/deb-root
+          cp /tmp/deb-root/opt/persea/bin/persea "$DIR/bin/"
+          cp /tmp/deb-root/opt/persea/sbin/guacd "$DIR/sbin/"
+          cp -a /tmp/deb-root/opt/persea/lib/*.so* "$DIR/lib/"
+          cp -a /tmp/deb-root/usr/lib/*/freerdp3/*.so* "$DIR/lib/freerdp3/" 2>/dev/null || true
+          cp /tmp/deb-root/opt/persea/bin/drive-setup.sh "$DIR/scripts/" 2>/dev/null || true
+          cp install-release.sh "$DIR/"
           cp -r static/* "$DIR/static/"
           cp -r docs/*.md "$DIR/docs/" 2>/dev/null || true
           cp debian/config.toml.default "$DIR/config.toml.default" 2>/dev/null || true

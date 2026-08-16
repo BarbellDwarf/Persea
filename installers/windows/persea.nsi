@@ -87,6 +87,20 @@ Section "Install"
     Abort
   ${EndIf}
 
+  ; Lock down the data root. %ProgramData% inherits ACLs that let any local
+  ; user read files, and the database + config.toml (which holds the
+  ; credential encryption key) must not be readable by other users. Strip
+  ; inheritance and grant access to SYSTEM (the service account) and
+  ; Administrators (for upgrades/uninstall) only. Trade-off: the service
+  ; itself still runs as LocalSystem, a high-privilege account — this
+  ; protects persea's data from local users, not the machine from the
+  ; service (a least-privilege service account is a future option).
+  nsExec::ExecToLog 'icacls "$ProgramData\persea" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"'
+  Pop $0
+  ${If} $0 != 0
+    MessageBox MB_OK|MB_ICONWARNING "Could not restrict %ProgramData%\persea permissions (icacls exit code $0). Other local users may be able to read the database and config."
+  ${EndIf}
+
   ; Register the service (LocalSystem, auto-start) and start it.
   nsExec::ExecToLog '"$INSTDIR\persea.exe" --install-service'
   Pop $0
