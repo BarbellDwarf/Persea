@@ -7,7 +7,7 @@ use crate::db::{self, Db};
 use crate::totp::TotpEnforcement;
 use axum::{
     extract::{ConnectInfo, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderMap, StatusCode},
     response::{AppendHeaders, IntoResponse, Redirect, Response},
     Extension,
 };
@@ -344,7 +344,7 @@ pub struct CallbackParams {
 /// path mints a session: the session is created only after the factor is
 /// verified on the MFA page.
 #[allow(clippy::too_many_arguments)]
-fn redirect_with_pending_mfa(
+async fn redirect_with_pending_mfa(
     database: &Db,
     user_id: i64,
     email: &str,
@@ -722,7 +722,8 @@ pub async fn callback(
             tls_enabled.0,
             Some(&trusted_proxies),
             Some(addr.ip()),
-        );
+        )
+        .await;
     }
 
     // Enforcement requires enrollment but the user has no TOTP yet: no
@@ -746,7 +747,8 @@ pub async fn callback(
             tls_enabled.0,
             Some(&trusted_proxies),
             Some(addr.ip()),
-        );
+        )
+        .await;
     }
 
     // Create auth session

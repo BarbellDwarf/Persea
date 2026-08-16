@@ -1180,7 +1180,7 @@ fn validate_audience(assertion_xml: &str, entity_id: &str) -> Result<(), String>
     if audiences.is_empty() {
         return Err("SAML assertion carries no Audience restriction".to_string());
     }
-    if !audiences.contains(&entity_id) {
+    if !audiences.iter().any(|a| a == entity_id) {
         return Err(format!(
             "SP entity ID '{}' not found in Audience restriction",
             entity_id
