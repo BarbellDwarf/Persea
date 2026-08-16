@@ -131,7 +131,7 @@ async fn resolve_totp_identity(
     if let Some(Extension(AuthIdentity::User { email, .. })) = identity {
         let db_clone = database.clone();
         let email_clone = email.clone();
-        let user = tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &email_clone))
+        let user = tokio::task::spawn_blocking(move || crate::db::get_user_by_email(&db_clone, &email_clone))
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?
             .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -139,7 +139,7 @@ async fn resolve_totp_identity(
     }
     if let Some(token) = extract_cookie(headers, "persea_mfa_pending") {
         let db_clone = database.clone();
-        let pending = tokio::task::spawn_blocking(move || db::get_pending_mfa(&db_clone, &token))
+        let pending = tokio::task::spawn_blocking(move || crate::db::get_pending_mfa(&db_clone, &token))
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?
             .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -165,7 +165,7 @@ pub async fn totp_status(
 ) -> Result<Json<serde_json::Value>, AppError> {
     let (user_id, _) = resolve_totp_identity(identity, &database, &headers).await?;
     let db_clone = database.clone();
-    let enabled = tokio::task::spawn_blocking(move || db::user_totp_enabled(&db_clone, user_id))
+    let enabled = tokio::task::spawn_blocking(move || crate::db::user_totp_enabled(&db_clone, user_id))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
         .unwrap_or(false);
@@ -196,14 +196,14 @@ pub async fn totp_enroll(
     let db_clone = database.clone();
     let secret_b32 = enrollment.secret_b32.clone();
     tokio::task::spawn_blocking(move || {
-        db::store_totp_secret(&db_clone, user_id, &secret_b32, "SHA1", 6, 30)
+        crate::db::store_totp_secret(&db_clone, user_id, &secret_b32, "SHA1", 6, 30)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
     .map_err(|e| AppError::Internal(e.to_string()))?;
     // Stored disabled: only a verified code enables the factor.
     let db_clone = database.clone();
-    tokio::task::spawn_blocking(move || db::set_totp_enabled(&db_clone, user_id, false))
+    tokio::task::spawn_blocking(move || crate::db::set_totp_enabled(&db_clone, user_id, false))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -233,7 +233,7 @@ pub async fn totp_verify(
         .map(|t| t.skew)
         .unwrap_or(1);
     let db_clone = database.clone();
-    let secret = tokio::task::spawn_blocking(move || db::get_totp_secret(&db_clone, user_id))
+    let secret = tokio::task::spawn_blocking(move || crate::db::get_totp_secret(&db_clone, user_id))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -254,7 +254,7 @@ pub async fn totp_verify(
         return Ok(Json(serde_json::json!({"ok": false, "error": "Invalid code. Try again."})));
     }
     let db_clone = database.clone();
-    tokio::task::spawn_blocking(move || db::set_totp_enabled(&db_clone, user_id, true))
+    tokio::task::spawn_blocking(move || crate::db::set_totp_enabled(&db_clone, user_id, true))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -281,7 +281,7 @@ pub async fn totp_disable(
     };
     let db_clone = database.clone();
     let email_clone = email.clone();
-    let user = tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &email_clone))
+    let user = tokio::task::spawn_blocking(move || crate::db::get_user_by_email(&db_clone, &email_clone))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -305,7 +305,7 @@ pub async fn totp_disable(
         return Ok(Json(serde_json::json!({"ok": false, "error": "Invalid code"})));
     }
     let db_clone = database.clone();
-    tokio::task::spawn_blocking(move || db::delete_totp_secret(&db_clone, user_id))
+    tokio::task::spawn_blocking(move || crate::db::delete_totp_secret(&db_clone, user_id))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))?
         .map_err(|e| AppError::Internal(e.to_string()))?;
@@ -400,20 +400,20 @@ mod tests {
     use axum::http::header;
 
     fn test_db() -> Db {
-        db::init_db(std::path::Path::new(":memory:")).unwrap()
+        crate::db::init_db(std::path::Path::new(":memory:")).unwrap()
     }
 
-    fn create_user(db: &Db, email: &str, role: &str) -> db::User {
+    fn create_user(db: &Db, email: &str, role: &str) -> crate::db::User {
         let hash = crate::password::hash_password("s3cret-p@ss").unwrap();
-        db::create_user_with_password(db, email, email, &hash, role, "database").unwrap();
-        db::get_user_by_email(db, email).unwrap()
+        crate::db::create_user_with_password(db, email, email, &hash, role, "database").unwrap();
+        crate::db::get_user_by_email(db, email).unwrap()
     }
 
     #[tokio::test]
     async fn totp_identity_resolves_from_pending_mfa_cookie() {
         let db = test_db();
         let user = create_user(&db, "u@example.com", "viewer");
-        let token = db::create_pending_mfa(&db, user.id, "u@example.com", "U", "viewer", None, 300)
+        let token = crate::db::create_pending_mfa(&db, user.id, "u@example.com", "U", "viewer", None, 300)
             .unwrap();
         let headers = HeaderMap::from_iter([(
             header::COOKIE,
@@ -453,7 +453,7 @@ mod tests {
     async fn totp_identity_rejects_expired_pending_cookie() {
         let db = test_db();
         let user = create_user(&db, "u@example.com", "viewer");
-        let token = db::create_pending_mfa(&db, user.id, "u@example.com", "U", "viewer", None, 1)
+        let token = crate::db::create_pending_mfa(&db, user.id, "u@example.com", "U", "viewer", None, 1)
             .unwrap();
         // Force expiry: backdate the record.
         {
