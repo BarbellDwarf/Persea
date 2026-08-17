@@ -1230,6 +1230,20 @@ pub fn record_successful_login(db: &Db, username: &str, ip: &str) -> rusqlite::R
     Ok(())
 }
 
+/// Clear the failed-login lockout for a user across ALL source IPs
+/// (admin CLI `set-password` / `unlock-user`). Marks every open failed
+/// attempt as successful so the lockout window is lifted immediately.
+pub fn clear_user_failed_attempts(db: &Db, username: &str) -> rusqlite::Result<()> {
+    db_route!(db, clear_user_failed_attempts_pool, username.to_string());
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE failed_login_attempts SET success = TRUE
+         WHERE username = ?1 AND success = FALSE",
+        params![username],
+    )?;
+    Ok(())
+}
+
 /// Count failed login attempts for a user+IP within the given time window (seconds).
 pub fn count_recent_failures(
     db: &Db,
@@ -5982,6 +5996,21 @@ async fn record_successful_login_pool(
             "UPDATE failed_login_attempts SET success = 1 WHERE username = ? AND ip_address = ? AND success = 0"
         ),
         &[Arg::Str(username), Arg::Str(ip)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(())
+}
+
+async fn clear_user_failed_attempts_pool(pool: &DbPool, username: String) -> rusqlite::Result<()> {
+    pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "UPDATE failed_login_attempts SET success = TRUE WHERE username = $1 AND success = FALSE",
+            "UPDATE failed_login_attempts SET success = 1 WHERE username = ? AND success = 0"
+        ),
+        &[Arg::Str(username)],
     )
     .await
     .map_err(map_sqlx_err)?;

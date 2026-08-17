@@ -139,6 +139,7 @@ argon2 = "0.5"
 # Memory zeroize for sensitive data
 zeroize = "1"
 dns-lookup = "2"
+rpassword = "7.5.4"
 
 [target.'cfg(windows)'.dependencies]
 # Native Windows service support (install/uninstall/run under the SCM)
