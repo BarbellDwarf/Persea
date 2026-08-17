@@ -14,6 +14,26 @@ Release checklist (delete this comment before tagging v1.0.1):
 - [ ] Push the beta image + beta pre-release (`gh workflow run beta.yml --ref main`) after the tag
 -->
 
+## [1.0.2] - 2026-08-17
+
+Admin CLI iteration.
+
+### Added
+
+- **`persea set-password --email <email>`** — reset an existing user's
+  password from the server box. Validates the password policy (minimum
+  length, reuse history) identically to the change-password API, updates
+  the hash, records the reuse-history entry, and clears the
+  failed-login lockout. `--password` for scripts, otherwise a hidden
+  prompt; the password is never printed.
+- **`persea unlock-user --email <email>`** — clear the failed-login
+  lockout without changing the password (lockout-DoS recovery).
+
+### Fixed
+
+- `persea create-user` no longer echoes the plaintext password to
+  stdout.
+
 ## [1.0.1] - 2026-08-16
 
 Security and correctness release: the full 2026-08-14 review stack, new

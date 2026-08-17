@@ -1,6 +1,6 @@
 [package]
 name = "persea"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 description = "Lightweight Rust replacement for Apache Guacamole client"
 license = "Apache-2.0"
