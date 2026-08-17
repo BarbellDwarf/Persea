@@ -176,6 +176,10 @@ fn render_template(template_name: &str, context: &impl Serialize) -> Response {
             "features".to_string(),
             serde_json::to_value(request_features()).unwrap_or_default(),
         );
+        obj.insert(
+            "version".to_string(),
+            serde_json::to_value(env!("CARGO_PKG_VERSION")).unwrap_or_default(),
+        );
     }
     match tmpl.render(&value) {
         Ok(html) => Html(html).into_response(),
