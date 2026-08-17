@@ -144,6 +144,25 @@ enum Command {
         role: String,
     },
 
+    /// Reset a user's password (admin CLI). Prompts without echo unless
+    /// `--password` is given.
+    SetPassword {
+        /// Email address of the user to reset
+        #[arg(long)]
+        email: String,
+        /// New password (prompted without echo when omitted)
+        #[arg(long)]
+        password: Option<String>,
+    },
+
+    /// Clear the failed-login lockout for a user without changing the
+    /// password.
+    UnlockUser {
+        /// Email address of the user to unlock
+        #[arg(long)]
+        email: String,
+    },
+
     /// Create a new admin with an API key
     AddAdmin {
         /// Admin name (unique)
@@ -556,6 +575,23 @@ async fn main() {
         }
         Some(Command::ListUsers) => cmd_list_users(&database),
         Some(Command::SetRole { email, role }) => cmd_set_role(&database, &email, &role),
+        Some(Command::SetPassword { email, password }) => {
+            if let Err(msg) = cmd_set_password(
+                &database,
+                &email,
+                password.as_deref(),
+                crate::password::PasswordPolicy::from_config(&config),
+            ) {
+                eprintln!("Error: {}", msg);
+                std::process::exit(1);
+            }
+        }
+        Some(Command::UnlockUser { email }) => {
+            if let Err(msg) = cmd_unlock_user(&database, &email) {
+                eprintln!("Error: {}", msg);
+                std::process::exit(1);
+            }
+        }
         Some(Command::DisableUser { email }) => cmd_disable_user(&database, &email),
         Some(Command::DeleteUser { email }) => cmd_delete_user(&database, &email),
         Some(Command::ImportGuacamole {
@@ -637,13 +673,64 @@ fn cmd_create_user(
                 );
             }
             println!("User '{}' created (email: {}, role: {})", name, email, role);
-            println!("Password: {}", password);
         }
         Err(e) => {
             eprintln!("Error creating user: {}", e);
             std::process::exit(1);
         }
     }
+}
+
+/// Reset an existing user's password. Validates the password policy
+/// (minimum length, reuse history — identical to the change-password
+/// API), updates the hash, records the reuse-history entry, and clears
+/// the failed-login lockout. Never prints the password.
+fn cmd_set_password(
+    database: &Db,
+    email: &str,
+    password: Option<&str>,
+    policy: crate::password::PasswordPolicy,
+) -> Result<(), String> {
+    let new_password = match password {
+        Some(p) => p.to_string(),
+        None => rpassword::prompt_password(format!("New password for {}: ", email))
+            .map_err(|e| format!("could not read password from terminal: {}", e))?,
+    };
+    if let Err(msg) = policy.check_length(&new_password) {
+        return Err(msg);
+    }
+    let user = crate::db::get_user_by_email(database, email)
+        .map_err(|e| format!("no user with email '{}' ({})", email, e))?;
+    if crate::password::password_is_recent(database, user.id, &new_password, policy.history)
+        .map_err(|e| format!("reuse-history check failed: {}", e))?
+    {
+        return Err(format!(
+            "password must differ from the user's last {} passwords",
+            policy.history
+        ));
+    }
+    let hash = crate::password::hash_password(&new_password)
+        .map_err(|e| format!("error hashing password: {}", e))?;
+    crate::password::update_user_password_hash(database, user.id, &hash)
+        .map_err(|e| format!("error updating password: {}", e))?;
+    crate::password::record_password_history(database, user.id, &hash, policy.history)
+        .map_err(|e| format!("error recording password history: {}", e))?;
+    crate::db::clear_user_failed_attempts(database, email)
+        .map_err(|e| format!("error clearing login lockout: {}", e))?;
+    println!("Password reset for '{}'.", email);
+    Ok(())
+}
+
+/// Clear the failed-login lockout for a user without touching the
+/// password (lockout-DoS recovery).
+fn cmd_unlock_user(database: &Db, email: &str) -> Result<(), String> {
+    if crate::db::get_user_by_email(database, email).is_err() {
+        return Err(format!("no user with email '{}'", email));
+    }
+    crate::db::clear_user_failed_attempts(database, email)
+        .map_err(|e| format!("error clearing login lockout: {}", e))?;
+    println!("Lockout cleared for '{}'.", email);
+    Ok(())
 }
 
 fn cmd_add_admin(database: &Db, name: &str, allowed_ips: Option<&str>, expires: Option<&str>) {
@@ -3405,5 +3492,121 @@ mod tests {
         assert_eq!(resp.headers()["content-type"], "application/json");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod cli_password_tests {
+    use super::*;
+
+    fn temp_db() -> Db {
+        crate::db::init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    fn create_user(db: &Db, email: &str, password: &str) -> i64 {
+        let hash = crate::password::hash_password(password).unwrap();
+        crate::db::create_user_with_password(db, email, "Test User", &hash, "viewer", "database")
+            .unwrap();
+        let user = crate::db::get_user_by_email(db, email).unwrap();
+        crate::password::record_password_history(db, user.id, &hash, 5).unwrap();
+        user.id
+    }
+
+    fn policy() -> crate::password::PasswordPolicy {
+        crate::password::PasswordPolicy {
+            min_length: 15,
+            history: 5,
+        }
+    }
+
+    #[test]
+    fn set_password_resets_hash_and_clears_lockout() {
+        let db = temp_db();
+        let user_id = create_user(&db, "alice@example.com", "old-password-12345");
+        // Lock the account first (6 failed attempts from any IP).
+        for _ in 0..6 {
+            crate::db::record_failed_login_attempt(&db, "alice@example.com", "10.0.0.1").unwrap();
+        }
+        assert!(crate::db::is_locked_out(&db, "alice@example.com", "10.0.0.1").unwrap());
+
+        cmd_set_password(
+            &db,
+            "alice@example.com",
+            Some("brand-new-password-99"),
+            policy(),
+        )
+        .unwrap();
+
+        let (id, _, _, _, _, stored_hash) =
+            crate::db::get_user_login_info(&db, "alice@example.com")
+                .unwrap()
+                .unwrap();
+        assert_eq!(id, user_id);
+        assert!(crate::password::verify_password(
+            "brand-new-password-99",
+            stored_hash.as_deref().unwrap()
+        )
+        .unwrap());
+        assert!(!crate::db::is_locked_out(&db, "alice@example.com", "10.0.0.1").unwrap());
+    }
+
+    #[test]
+    fn set_password_rejects_short_and_reused_passwords() {
+        let db = temp_db();
+        create_user(&db, "bob@example.com", "initial-password-1");
+
+        let err = cmd_set_password(&db, "bob@example.com", Some("short"), policy()).unwrap_err();
+        assert!(err.contains("at least 15"), "got: {}", err);
+
+        // Reuse of the current password is rejected (it is in history).
+        let err = cmd_set_password(&db, "bob@example.com", Some("initial-password-1"), policy())
+            .unwrap_err();
+        assert!(err.contains("differ"), "got: {}", err);
+    }
+
+    #[test]
+    fn set_password_unknown_user_errors() {
+        let db = temp_db();
+        let err = cmd_set_password(
+            &db,
+            "nobody@example.com",
+            Some("brand-new-password-99"),
+            policy(),
+        )
+        .unwrap_err();
+        assert!(err.contains("no user"), "got: {}", err);
+    }
+
+    #[test]
+    fn unlock_user_clears_lockout_without_touching_password() {
+        let db = temp_db();
+        let user_id = create_user(&db, "carol@example.com", "carol-password-123");
+        for _ in 0..6 {
+            crate::db::record_failed_login_attempt(&db, "carol@example.com", "192.168.0.7")
+                .unwrap();
+        }
+        assert!(crate::db::is_locked_out(&db, "carol@example.com", "192.168.0.7").unwrap());
+
+        cmd_unlock_user(&db, "carol@example.com").unwrap();
+        assert!(!crate::db::is_locked_out(&db, "carol@example.com", "192.168.0.7").unwrap());
+
+        // The password hash is unchanged.
+        let (id, _, _, _, _, stored_hash) =
+            crate::db::get_user_login_info(&db, "carol@example.com")
+                .unwrap()
+                .unwrap();
+        assert_eq!(id, user_id);
+        assert!(crate::password::verify_password(
+            "carol-password-123",
+            stored_hash.as_deref().unwrap()
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn unlock_user_unknown_user_errors() {
+        let db = temp_db();
+        let err = cmd_unlock_user(&db, "nobody@example.com").unwrap_err();
+        assert!(err.contains("no user"), "got: {}", err);
     }
 }
