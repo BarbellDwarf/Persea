@@ -98,7 +98,7 @@ Section "Install"
   nsExec::ExecToLog 'icacls "$ProgramData\persea" /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"'
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_OK|MB_ICONWARNING "Could not restrict %ProgramData%\persea permissions (icacls exit code $0). Other local users may be able to read the database and config."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Could not restrict %ProgramData%\persea permissions (icacls exit code $0). Other local users may be able to read the database and config."
   ${EndIf}
 
   ; Register the service (LocalSystem, auto-start) and start it.
