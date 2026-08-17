@@ -599,6 +599,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+          # Curated notes first, then GitHub's auto-generated PR list with
+          # author credits (the action prepends the body when both are set).
+          body_path: RELEASE_NOTES.md
+          previous_tag: v1.0.0
           files: |
             artifacts/deb-amd64/*.deb
             artifacts/deb-arm64/*.deb

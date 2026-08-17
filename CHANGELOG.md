@@ -33,37 +33,47 @@ logo, docs examples, CI/action and dependency updates.
 
 - **TOTP MFA login was impossible**: the MFA page script was blocked by
   CSP (no nonce) and the fallback POST failed CSRF. Enrollment modes
-  (AdminsOnly/All) are now actually enforced.
+  (AdminsOnly/All) are now actually enforced, and no session is minted
+  before a verified factor.
 - **SAML SSO was dead**: the ACS endpoint rejected every IdP POST
   (CSRF) and the login button hit a GET on a POST-only route. Also
   hardened: per-flow request IDs, consumed-assertion replay protection,
-  and a refusal to run `strict_mode=false` with a configured cert.
+  a refusal to run `strict_mode=false` with a configured cert, a cap on
+  the deflate-bomb decompression, per-IP ACS rate limiting, and
+  audience/NotOnOrAfter/Recipient validation in strict mode.
 - **Address-book ACL bypasses**: quick-connect skipped entry ACLs and
   RBAC Connect grants; folder ACL inheritance could open restricted
   parents; database-provider users were denied every folder; folder
-  Connect grants now cascade to entries.
+  Connect grants now cascade to entries and subfolders; folder
+  inheritance defaults to on for API-created folders.
 - **Browser-session SSRF block inverted**: the Chromium `--host-rules`
   EXCLUDE re-enabled localhost and cloud-metadata access from web
   sessions; the metadata block now holds regardless of allowlist.
 - **VDI**: home bind-mount path traversal via `container_username`;
   container-name collisions let colliding users reuse each other's
-  containers.
+  containers; VDI thumbnail ownership now uses the container hash
+  scheme.
 - **Session takeover**: the WebSocket owner path checked role only, so
   any operator could hijack another user's pending/disconnected
-  session. Shadow/share viewers could type into sessions; they are now
-  read-only with token expiry re-checked.
-- **Recordings**: an owner reconnect destroyed the previous segment;
-  playback loaded whole files into RAM (now streamed); audit-chain
-  writes were serialized on the SQLx backends.
+  session. Ownership and session quotas are keyed on the stable
+  identity (email/sub), not the display name.
+- **Shadow (view-only) viewers could type and transfer files** from
+  monitored sessions: input and file-transfer opcodes are now filtered
+  and guacd joins shadow connections read-only.
+- **Recordings**: an owner reconnect destroyed the previous segment
+  (now appended); playback loaded whole files into RAM (now streamed);
+  the streaming decrypt verifies the GCM tag before releasing any
+  plaintext; audit-chain writes were serialized on the SQLx backends.
 - **Reaping**: reconnectable Disconnected sessions were removed by the
   cleanup reaper; pending sessions that timed out stayed "active" in
   history forever; idle reaps recorded duration 0.
 - **Session limits**: the global cap counted terminal states and raced
   concurrent creates; now counts only live sessions under the insert
-  lock.
+  lock; the guacd handshake on session creation has a 15 s timeout.
 - **XSS**: stored XSS in the audit-events fragment; template autoescape
   was disabled globally (site_title/logo_url/setup reflections); audit
-  CSV exports lacked formula neutralization.
+  CSV exports lacked formula neutralization; backslash open redirects
+  in `next`/RelayState are rejected.
 - **Protocol framing**: lengths were byte-counted where guacd counts
   characters, mis-framing non-ASCII connect arguments.
 - **Drive uploads**: slowloris body streams (now idle-timed) and a
@@ -88,13 +98,23 @@ logo, docs examples, CI/action and dependency updates.
   CSRF-protected.
 - Cross-user reports/recordings exports are admin-only; powerusers see
   their own sessions.
-- `/admin/*` page shells require the admin role.
+- `/admin/*` page shells require the admin role; `/metrics` and
+  `/api/docs` are admin-only.
 - Auth-chain misconfiguration fails startup instead of silently falling
   back to database-only auth.
 - VDI container names carry a per-user hash; jump-host chains are
   capped at 8 hops.
 - Credential variables no longer fall back to plaintext reads; `--init`
-  creates the static directory.
+  creates the static directory and hardens directory permissions;
+  `generate-cert` chmods the TLS key 0600.
+- Packaged config and DB files are no longer world-readable (0600/0640
+  across deb, RPM, install.sh, install-release.sh, and the Docker
+  entrypoint); the setup wizard preserves an existing storage key and
+  writes one when absent; release tarballs ship the binaries, guacd,
+  and install-release.sh; the Windows installer removes Users read
+  access from ProgramData.
+- The CSRF form-peek is capped at 64 KiB; `/api/me/password` is
+  rate-limited; the RADIUS challenge store prunes expired entries.
 - GitHub Actions bumped (`actions/setup-node` v7,
   `peter-evans/create-pull-request` v8); CI boot steps supply the
   storage key.
@@ -107,8 +127,10 @@ The fixes above close: stored XSS and CSV injection, CSRF gaps, the
 inverted SSRF block, VDI path traversal, session hijacking, plaintext
 credential fallbacks, LDAP user enumeration (uniform errors/timing),
 non-constant-time comparisons (CSRF/OIDC state), OIDC fingerprint
-spoofing via forwarded headers, RADIUS hostname misconfiguration, and
-SAML replay/identity-spoofing paths.
+spoofing via forwarded headers, RADIUS hostname misconfiguration, SAML
+replay/identity-spoofing paths, the SAML deflate-bomb decompression,
+shadow-viewer file exfiltration, backslash open redirects, and
+world-readable config/DB files holding the storage encryption key.
 
 ## [1.0.0] - 2026-08-14
 
