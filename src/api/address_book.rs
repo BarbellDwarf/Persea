@@ -1349,12 +1349,11 @@ pub async fn ab_apply_auto_size_defaults(
     // The current global defaults drive the bulk write. An unset key falls
     // back to true, the pre-feature client behaviour.
     let db_clone = database.clone();
-    let settings = tokio::task::spawn_blocking(move || {
-        crate::settings_merge::load_db_settings(&db_clone)
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    .unwrap_or_default();
+    let settings =
+        tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db_clone))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .unwrap_or_default();
     let rdp_auto_size =
         crate::settings_merge::toggle_enabled(&settings, "default_rdp_auto_size", true);
     let ssh_auto_size =
@@ -1372,9 +1371,10 @@ pub async fn ab_apply_auto_size_defaults(
     }
 
     let db_clone = database.clone();
-    let protocols_clone = protocols.clone();
+    let protocols_owned = protocols.clone();
     let entries = tokio::task::spawn_blocking(move || {
-        db::list_ab_entries_by_protocols(&db_clone, &protocols_clone)
+        let refs: Vec<&str> = protocols_owned.iter().map(|s| s.as_str()).collect();
+        db::list_ab_entries_by_protocols(&db_clone, &refs)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
