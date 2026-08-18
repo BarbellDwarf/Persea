@@ -393,12 +393,21 @@ pub async fn docs_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
+    let docs = crate::templates::DOCS
+        .iter()
+        .map(|(slug, title, html)| templates::DocSection {
+            slug: (*slug).to_string(),
+            title: (*title).to_string(),
+            html: (*html).to_string(),
+        })
+        .collect();
     templates::DocsTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
         is_admin: is_admin(&identity),
         active_page: "docs".to_string(),
         csp_nonce: nonce.0,
+        docs,
     }
     .into_response()
 }
