@@ -159,6 +159,10 @@
 .settings-group-toggle[aria-expanded="true"] .settings-chevron {
     transform: rotate(180deg);
 }
+
+/* Settings search: cards and sections the query does not match are
+   hidden; clearing the search restores tab-driven visibility. */
+.settings-search-hidden { display: none; }
 </style>
 
 <div class="max-w-5xl mx-auto">
@@ -180,6 +184,16 @@
         </nav>
 
         <div class="settings-main">
+            <!-- Settings search: a client-side filter over the sections and
+                 fields below, visible in both layouts (rail and tab bar).
+                 The script block at the bottom wires it with addEventListener
+                 because the page CSP blocks inline handlers. -->
+            <div class="mb-4">
+                <input type="search" id="settings-search" placeholder="Search settings..." aria-label="Search settings"
+                       autocomplete="off" class="form-input w-full sm:w-96">
+                <p id="settings-search-empty" class="hidden text-sm text-[var(--text-muted)] mt-2">No settings match your search.</p>
+            </div>
+
             <!-- Submenu bar: the narrow-screen (below 1280px) control; one
                  section at a time, hash preserves the active tab -->
             <div class="settings-tabs" role="tablist" aria-label="Settings sections">
@@ -605,27 +619,26 @@
 
                 <!-- Storage -->
                 <section role="tabpanel" id="panel-storage" aria-labelledby="tab-storage" tabindex="-1" hidden class="space-y-4">
-                    <!-- Storage backends -->
+                    <!-- Storage backends: where connection credentials live.
+                         Copy explains both backends and when to pick each; no
+                         decorative icons, per the design rule for this panel. -->
                     <div class="card">
                         <h2 class="settings-card-header">
-                            Storage
+                            Storage Backends
                         </h2>
+                        <p class="text-sm text-[var(--text-muted)] mb-4">
+                            Connection credentials are read server-side when a session starts and never reach
+                            the browser. Where they are kept is a deployment decision between two backends.
+                        </p>
                         <div class="space-y-3">
                             <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
                                 <div>
-                                    <span class="text-sm text-[var(--text-primary)]">Vault Address Book</span>
-                                    <p class="text-xs text-[var(--text-muted)]">Use Vault/OpenBao for connection storage</p>
-                                </div>
-                                <div class="toggle-switch">
-                                    <input type="checkbox" id="vault_enabled">
-                                    <span class="toggle-slider"></span>
-                                </div>
-                            </label>
-                            <input type="hidden" name="vault_enabled" id="vault_enabled-hidden" value="false">
-                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                                <div>
                                     <span class="text-sm text-[var(--text-primary)]">DB-Only Mode</span>
-                                    <p class="text-xs text-[var(--text-muted)]">Store connections in SQLite (no Vault required)</p>
+                                    <p class="text-xs text-[var(--text-muted)]">
+                                        The simplest backend, recommended for most deployments. Credentials stay in
+                                        the application database, encrypted at rest with AES-256-GCM. Nothing extra
+                                        to run or maintain.
+                                    </p>
                                 </div>
                                 <div class="toggle-switch">
                                     <input type="checkbox" id="db_only_mode">
@@ -633,17 +646,41 @@
                                 </div>
                             </label>
                             <input type="hidden" name="db_only_mode" id="db_only_mode-hidden" value="false">
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Vault Address Book</span>
+                                    <p class="text-xs text-[var(--text-muted)]">
+                                        Keep credentials in HashiCorp Vault or OpenBao, the shared secrets manager
+                                        used in enterprise and HashiCorp environments. Choose this when your
+                                        organization already runs Vault or OpenBao and wants connection secrets
+                                        managed alongside its other secrets. Requires a configured
+                                        <code class="text-[var(--text-primary)]">[vault]</code> section in the
+                                        config file.
+                                    </p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="vault_enabled">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="vault_enabled" id="vault_enabled-hidden" value="false">
                         </div>
+                        <p class="text-xs text-[var(--text-muted)] mt-4">
+                            Pros and cons of each backend, plus setup steps, are in the
+                            <a class="text-[var(--accent)] hover:underline" href="/docs">deployment guide's storage section</a>.
+                        </p>
                     </div>
 
-                    <!-- Connection Custom Fields -->
+                    <!-- Customization: the connection custom fields editor and
+                         what it does. The editor itself is unchanged. -->
                     <div class="card">
                         <h2 class="settings-card-header">
-                            Connection Custom Fields
+                            Customization
                         </h2>
-                        <p class="text-xs text-[var(--text-muted)] mb-4">
-                            Optional extra fields shown on connection entry forms (e.g. Environment, Owner, Cost Center).
-                            Off by default — add a field below to enable them.
+                        <p class="text-sm text-[var(--text-muted)] mb-4">
+                            Connection custom fields add optional extra inputs (e.g. Environment, Owner,
+                            Cost Center) to connection entry forms and to the filter bar on the Connections
+                            page. Off by default; add a field below to enable them.
                         </p>
                         <div id="custom-fields-editor" class="space-y-3"></div>
                         <button type="button" id="add-custom-field"
@@ -1135,5 +1172,64 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
             showError('Failed to load settings: ' + (e.message || e));
         });
 })();
+
+// ── Settings search ──
+// Client-side filter: typing hides the cards whose label text does not
+// match, and hides whole sections with no matches, across all five tabs.
+// When the active section has no matches the search jumps to the first
+// section that does, so results stay visible. Clearing the input restores
+// the tab-driven visibility. All wiring is addEventListener: the page CSP
+// blocks inline handlers.
+var settingsSearchInput = document.getElementById('settings-search');
+var settingsSearchEmpty = document.getElementById('settings-search-empty');
+var settingsCards = Array.prototype.slice.call(
+    document.querySelectorAll('#settings-form .card'));
+var featuresGroupToggle = document.getElementById('toggle-features');
+
+function applySettingsSearch() {
+    var q = (settingsSearchInput.value || '').trim().toLowerCase();
+    var matchBySection = {};
+    settingsCards.forEach(function(card) {
+        var section = card.closest('section[role="tabpanel"]');
+        var hit = !q || (card.textContent || '').toLowerCase().indexOf(q) !== -1;
+        card.classList.toggle('settings-search-hidden', !hit);
+        if (section) {
+            if (matchBySection[section.id] === undefined) matchBySection[section.id] = false;
+            if (hit) matchBySection[section.id] = true;
+        }
+    });
+    var firstVisible = null;
+    var anyVisible = !q;
+    settingsSections.forEach(function(name) {
+        var panel = settingsPanel(name);
+        if (!panel) return;
+        var hit = !q || matchBySection[panel.id] === true;
+        panel.classList.toggle('settings-search-hidden', !hit);
+        if (hit) anyVisible = true;
+        if (hit && !panel.hidden && !firstVisible) firstVisible = name;
+    });
+    if (q && firstVisible) {
+        var active = (location.hash || '').replace(/^#/, '');
+        if (matchBySection['panel-' + active] !== true) {
+            showSettingsSection(firstVisible, { focus: false });
+        }
+    }
+    if (settingsSearchEmpty) {
+        settingsSearchEmpty.classList.toggle('hidden', anyVisible);
+    }
+    // A hit inside the collapsible Features group is only useful when the
+    // group is open; expand it while a search is active.
+    if (q && featuresGroupToggle) {
+        var group = document.getElementById(featuresGroupToggle.getAttribute('aria-controls'));
+        if (group && group.hidden) {
+            featuresGroupToggle.setAttribute('aria-expanded', 'true');
+            group.hidden = false;
+        }
+    }
+}
+
+if (settingsSearchInput) {
+    settingsSearchInput.addEventListener('input', applySettingsSearch);
+}
 </script>
 {% endblock %}

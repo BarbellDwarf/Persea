@@ -359,7 +359,20 @@ For programmatic API access later, create scoped [user API tokens](roles-and-acc
 
 The Connections page is the address book: folders and connection entries (SSH, RDP, VNC, web sessions, VDI). Each entry stores the host, port, and credentials. Credentials never reach the browser; persea reads them server-side and hands them to guacd when the session starts.
 
-By default everything, including credentials, is stored in the database, with credentials encrypted (AES-256-GCM) using the key from `[storage]` / `PERSEA_STORAGE_KEY`:
+### Storage backends
+
+Where connection credentials live is a deployment decision with two options: the application database, or an external secrets store (HashiCorp Vault or OpenBao). Both keep the address book metadata in the database; they differ in where the credentials themselves are stored.
+
+| | DB-backed (default) | Vault-backed |
+|---|---|---|
+| What it is | Credentials stored in the application database, encrypted at rest with AES-256-GCM | Credentials stored in a shared Vault/OpenBao secrets store |
+| Setup | None: the encryption key is generated automatically on first run | Install and run Vault/OpenBao, then configure a KV v2 mount, a policy, and AppRole auth |
+| Pros | Nothing extra to run or maintain; works out of the box; backups are just the database backup | Central secret management alongside your other tools; Vault's audit, rotation, and access-control tooling; secrets leave the app database |
+| Cons | Secrets live in the same store as the rest of the data, so the encryption key must be protected like a database password and never changed | Another service to install, run, and keep available; more moving parts; overkill for small deployments |
+
+**DB-backed storage is the recommended default for most deployments.** It is the simplest option and needs no additional infrastructure. Choose Vault-backed storage when your organization already runs Vault or OpenBao and wants connection credentials managed centrally with its other secrets, typically in enterprise or regulated environments.
+
+With the DB backend, everything, including credentials, is stored in the database, with credentials encrypted (AES-256-GCM) using the key from `[storage]` / `PERSEA_STORAGE_KEY`:
 
 ```toml
 [storage]
@@ -367,9 +380,9 @@ backend = "db"        # "db" (default) or "vault"
 encryption_key = "…"  # 64-char hex; generate with: openssl rand -hex 32
 ```
 
-The database backend works out of the box and is the recommended default. On first run, when the store holds no encrypted credentials yet and no key is configured, persea generates a random `encryption_key` and persists it into the config file automatically (see [Configuration → `[storage]`](configuration.md)); a missing `[storage]` section is created, an existing one is filled in. Startup still refuses when the store already holds encrypted credentials with no key configured, when a malformed key is configured, or when the generated key cannot be persisted to the config file, so plaintext credentials can never be written by accident. The key must not change afterwards; changing it makes stored credentials undecryptable.
+On first run, when the store holds no encrypted credentials yet and no key is configured, persea generates a random `encryption_key` and persists it into the config file automatically (see [Configuration → `[storage]`](configuration.md)); a missing `[storage]` section is created, an existing one is filled in. Startup still refuses when the store already holds encrypted credentials with no key configured, when a malformed key is configured, or when the generated key cannot be persisted to the config file, so plaintext credentials can never be written by accident. The key must not change afterwards; changing it makes stored credentials undecryptable.
 
-Alternatively, store credentials in HashiCorp Vault or OpenBao (`[storage] backend = "vault"`), for example to keep secrets in a central store. Setup: install Vault, enable KV v2, create a policy for `secret/data/persea/*`, enable AppRole auth, then:
+With Vault-backed storage (`[storage] backend = "vault"`), credentials are kept in HashiCorp Vault or OpenBao. Setup: install Vault, enable KV v2, create a policy for `secret/data/persea/*`, enable AppRole auth, then:
 
 ```toml
 [storage]
@@ -386,6 +399,12 @@ sudo systemctl restart persea
 ```
 
 Check the persea logs for `Vault: authenticated via AppRole` to confirm. The full Vault walkthrough is in [Integrations](integrations.md). Moving an existing Vault-backed address book into the database is covered in [Migration](migration.md).
+
+### Custom fields
+
+Connection custom fields are optional extra inputs defined on Admin → Settings → Storage → Customization. They appear on every connection entry form and in the filter bar on the Connections page. A field is either free text or a select with fixed options, and can be marked required, which the entry form enforces. Values are stored with the entry and are included in CSV import and export as trailing columns.
+
+Custom fields are off by default; adding the first field on the settings page enables them.
 
 ![Connections page](screenshots/connections.png)
 
