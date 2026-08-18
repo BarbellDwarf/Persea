@@ -283,242 +283,313 @@
 
 <!-- Entry create/edit modal -->
 <div id="entry-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title">
-    <div class="card w-full max-w-md" style="max-height:90vh;overflow-y:auto">
-        <h2 id="entry-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">New Entry</h2>
-        <div class="space-y-4">
-            <div>
-                <label class="form-label" for="em-name">Name</label>
-                <input type="text" id="em-name" class="form-input" placeholder="e.g. Web Server 01" maxlength="64" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1"><span id="em-identifier-label">Identifier:</span> <span id="em-identifier-preview" style="font-family:var(--font-mono)"></span></p>
+    <div class="card w-full max-w-3xl entry-modal-card">
+        <div class="entry-modal-header">
+            <div style="min-width:0">
+                <h2 id="entry-modal-title" class="text-lg font-bold text-[var(--text-primary)]">New Entry</h2>
+                <p id="entry-modal-subtitle" class="text-xs text-[var(--text-muted)] mt-1"></p>
             </div>
-            <div>
-                <label class="form-label" for="em-description">Description</label>
-                <textarea id="em-description" class="form-input" rows="2" style="resize:vertical" placeholder="e.g. Production web server behind the load balancer" autocomplete="off"></textarea>
-            </div>
-            <div>
-                <label class="form-label" for="em-type">Type</label>
-                <select id="em-type" class="form-input">
-                    <option value="ssh">SSH</option>
-                    {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
-                    <option value="vnc">VNC</option>
-                    {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
-                    {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
-                    {% if features.vdi %}<option value="vdi">VDI (Docker)</option>{% endif %}
-                    {% if features.powershell_ssh %}<option value="powershell">PowerShell (SSH)</option>{% endif %}
-                    {% if features.proxmox %}<option value="proxmox">Proxmox VE console</option>{% endif %}
-                </select>
-                <div id="em-type-help" class="text-xs text-[var(--text-muted)] mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
-            </div>
-            <div id="em-custom-fields"></div>
-            <div>
-                <label class="form-label" for="em-hostname">Hostname</label>
-                <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">The server's IP or hostname — no http:// and no port here (port has its own field). Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
-            </div>
-            <div id="em-url-field" style="display:none">
-                <label class="form-label" for="em-url">URL</label>
-                <input type="text" id="em-url" class="form-input" placeholder="https://10.0.1.5:8080" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Required for Web entries — the browser session opens this URL.</p>
-            </div>
-            <div id="em-container-field" style="display:none">
-                <label class="form-label" for="em-container-image">Container image</label>
-                <input type="text" id="em-container-image" class="form-input" placeholder="registry.example.com/desktop:latest" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Required for VDI entries — the Docker image to run.</p>
-            </div>
-            <div id="em-powershell-field" style="display:none">
-                <label class="form-label" for="em-powershell-binary">PowerShell binary</label>
-                <input type="text" id="em-powershell-binary" class="form-input" placeholder="pwsh.exe" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">The PowerShell executable to launch on the Windows host (default pwsh.exe). Requires Windows OpenSSH on the target. WinRM support is coming in v1.3.0.</p>
-            </div>
-            {% if features.proxmox %}
-            <div id="em-proxmox-fields" style="display:none">
-                <div>
-                    <label class="form-label" for="em-proxmox-url">Proxmox API URL</label>
-                    <input type="text" id="em-proxmox-url" class="form-input" placeholder="https://pve.example.com:8006" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">The address of your Proxmox web interface (the API is the same server, port 8006).</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-proxmox-vmid">VM ID</label>
-                    <input type="number" id="em-proxmox-vmid" class="form-input" min="100" max="999999" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">The numeric VM ID — shown in the PVE web UI next to the VM name (e.g. 105).</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-proxmox-node">Node</label>
-                    <input type="text" id="em-proxmox-node" class="form-input" placeholder="pve1" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Optional — leave blank to auto-detect which node the VM runs on.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-proxmox-token-id">API token ID</label>
-                    <input type="text" id="em-proxmox-token-id" class="form-input" placeholder="root@pam!persea" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Format: user@realm!tokenname (e.g. root@pam!persea). Create it in PVE under Datacenter → Permissions → API Tokens.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-proxmox-token-secret">API token secret</label>
-                    <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">The UUID shown once when you created the token. The token needs Sys.Audit on / and VM.Audit + VM.Console on the VM (Datacenter → Permissions → Add).</p>
-                </div>
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="margin-top:8px">
-                    <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Verify TLS certificate
-                </label>
-                <p class="text-xs text-[var(--text-muted)]" style="margin-top:6px">Leave unchecked if PVE uses its default self-signed certificate.</p>
-            </div>
-            {% endif %}
-            <div>
-                <label class="form-label" for="em-port">Port</label>
-                <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Defaults are filled in for you: SSH 22, RDP 3389, VNC/SPICE 5900. Leave as-is unless the server listens elsewhere.</p>
-            </div>
-            <div>
-                <label class="form-label" for="em-username">Username</label>
-                <input type="text" id="em-username" class="form-input" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">The account on the target server (e.g. root, Administrator, or DOMAIN\user for RDP). Leave blank to fall back to your preset (My Profile → My Credentials) or to be asked at connect time.</p>
-            </div>
-            <div>
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                    <label class="form-label" for="em-password" style="margin:0">Password</label>
-                    <div style="display:flex;gap:8px">
-                        <button type="button" id="em-password-generate" class="btn btn-secondary btn-sm" title="Generate a strong random password">Generate</button>
-                        <button type="button" id="em-password-clear" class="btn btn-secondary btn-sm hidden" title="Remove the stored password on save">Clear stored</button>
-                    </div>
-                </div>
-                <input type="password" id="em-password" class="form-input" autocomplete="new-password">
-                <p class="text-xs text-[var(--text-muted)] mt-1" id="em-password-hint">Saving with an empty password field keeps the stored value.</p>
-            </div>
-            <div>
-                <label class="form-label" for="em-private-key">Private key (PEM)</label>
-                <textarea id="em-private-key" class="form-input" rows="3" style="resize:vertical;font-family:var(--font-mono);font-size:13px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-                <p class="text-xs text-[var(--text-muted)] mt-1">SSH only. Alternative to a password — paste the full key including the BEGIN/END lines. If both are set, the key is used.</p>
-            </div>
-            <div id="em-ignore-cert-field" style="display:none">
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                    <input type="checkbox" id="em-ignore-cert" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Ignore TLS certificate errors
-                </label>
-                <p class="text-xs text-[var(--text-muted)] mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
-            </div>
-            <div id="em-clipboard-field" style="display:none">
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                    <input type="checkbox" id="em-disable-copy" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Disable copy from remote
-                </label>
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer;margin-top:8px">
-                    <input type="checkbox" id="em-disable-paste" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Disable paste to remote
-                </label>
-                <p class="text-xs text-[var(--text-muted)] mt-1">Restrict clipboard transfer for this entry's sessions (SSH, RDP, VNC, SPICE). Leave both unchecked for normal clipboard use.</p>
-            </div>
-            <div id="em-enable-drive-field" style="display:none">
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                    <input type="checkbox" id="em-enable-drive" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Enable file transfer
-                </label>
-                <p class="text-xs text-[var(--text-muted)] mt-1">Turn on file transfer for this entry — SFTP for SSH (browse and download remote files), a shared drive for RDP (upload files to the remote).</p>
-            </div>
-            <div id="em-rdp-security-field" style="display:none">
-                <div>
-                    <label class="form-label" for="em-rdp-domain">Domain</label>
-                    <input type="text" id="em-rdp-domain" class="form-input" placeholder="DOMAIN" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">The Windows/AD domain for NLA authentication. Leave blank if your username already includes it as <strong>DOMAIN\user</strong> — but for CredSSP/NLA an explicit domain is more reliable.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-rdp-security">Security mode</label>
-                    <select id="em-rdp-security" class="form-input">
-                        <option value="">Any (negotiate)</option>
-                        <option value="nla">NLA (Network Level Authentication)</option>
-                        <option value="tls">TLS (SSL encryption)</option>
-                        <option value="rdp">RDP (standard encryption)</option>
-                    </select>
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Corporate Windows servers usually require <strong>NLA</strong>. If the server refuses the connection ("wrong security type?"), try NLA first, then TLS. Any is the default.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-rdp-auth-pkg">Authentication package</label>
-                    <select id="em-rdp-auth-pkg" class="form-input">
-                        <option value="">Negotiate (default)</option>
-                        <option value="kerberos">Kerberos</option>
-                        <option value="ntlm">NTLM</option>
-                    </select>
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Use <strong>Kerberos</strong> when the domain restricts NTLM (common in hardened AD environments). NTLM is the fallback default.</p>
-                </div>
-                <div id="em-rdp-kdc-field" style="display:none">
-                    <label class="form-label" for="em-rdp-kdc-url">KDC URL</label>
-                    <input type="text" id="em-rdp-kdc-url" class="form-input" placeholder="kdc.example.com" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Your AD Kerberos KDC hostname — required when using the Kerberos authentication package.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-enable-gfx">GFX pipeline (H.264)</label>
-                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                        <input type="checkbox" id="em-enable-gfx" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                        Enable GFX pipeline for smoother video on modern RDP servers
-                    </label>
-                </div>
-                <div>
-                    <label class="form-label" for="em-color-depth">Color depth</label>
-                    <select id="em-color-depth" class="form-input">
-                        <option value="">Default</option>
-                        <option value="8">8 bits</option>
-                        <option value="16">16 bits</option>
-                        <option value="24">24 bits</option>
-                        <option value="32">32 bits</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="form-label" for="em-remote-app">RemoteApp program</label>
-                    <input type="text" id="em-remote-app" class="form-input" placeholder="mstsc.exe" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Launch a single remote program instead of the full desktop (RemoteApp).</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-prompt-creds">Prompt for credentials</label>
-                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                        <input type="checkbox" id="em-prompt-creds" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                        Ask the user for credentials at connect time instead of using stored ones
-                    </label>
-                </div>
-            </div>
-            {% if features.proxmox %}
-            <div id="em-proxmox-secret-field" style="display:none">
-                <label class="form-label" for="em-proxmox-token-secret">Proxmox token secret</label>
-                <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
-            </div>
-            {% endif %}
-            <div id="em-container-password-field" style="display:none">
-                <label class="form-label" for="em-container-password">Container password</label>
-                <input type="password" id="em-container-password" class="form-input" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Only for VDI images with a baked-in account. Leave blank to keep the stored value when editing.</p>
-            </div>
-            <div>
-                <label class="form-label">Allowed groups</label>
-                <div class="chip-picker">
-                    <div class="chip-list" id="em-groups-chips"></div>
-                    <div class="chip-input-wrap">
-                        <div class="combo" id="em-groups-combo">
-                            <input type="text" id="em-groups-input" placeholder="Type or pick a group..." autocomplete="off" spellcheck="false">
-                            <div class="combo-menu" id="em-groups-menu" role="listbox"></div>
-                        </div>
-                        <button type="button" class="btn btn-secondary btn-sm" id="em-groups-add" style="width:auto">Add</button>
-                    </div>
-                </div>
-                <p class="text-xs text-[var(--text-muted)] mt-1">Which groups may <em>see</em> this entry in the address book. Leave empty for admin-only. Connect permission is separate — grant it under "Connect permissions" below.</p>
-            </div>
-            <div id="em-rbac-field" style="display:none">
-                <label class="form-label">Connect permissions (RBAC)</label>
-                <p class="text-xs text-[var(--text-muted)]" style="margin:4px 0 8px">Who may connect to this entry. Denied by default unless granted here or inherited via connection groups (Admin → Groups).</p>
-                <div class="chip-picker">
-                    <div class="chip-list" id="em-rbac-chips"></div>
-                    <div class="chip-input-wrap">
-                        <div class="combo" id="em-rbac-combo">
-                            <input type="text" id="em-rbac-input" placeholder="Type or pick a group or user..." autocomplete="off" spellcheck="false">
-                            <div class="combo-menu" id="em-rbac-menu" role="listbox"></div>
-                        </div>
-                        <button type="button" class="btn btn-secondary btn-sm" id="em-rbac-add" style="width:auto">Add</button>
-                    </div>
-                </div>
-            </div>
-            <div id="em-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <span id="entry-modal-badge" class="entry-modal-state-badge entry-modal-state-create">Create</span>
         </div>
-        <div class="flex justify-end gap-3 mt-6">
-            <button type="button" id="em-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
-            <button type="button" id="em-save" class="btn btn-primary btn-sm" style="width:auto">Save</button>
+
+        <div class="entry-modal-body">
+            <!-- Identity -->
+            <section class="entry-section" aria-labelledby="em-section-identity-title">
+                <h3 id="em-section-identity-title" class="entry-section-title">Identity</h3>
+                <div class="entry-section-fields">
+                    <div>
+                        <label class="form-label" for="em-name" id="em-name-label">Name</label>
+                        <input type="text" id="em-name" class="form-input" placeholder="e.g. Web Server 01" maxlength="64" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1"><span id="em-identifier-label">Identifier:</span> <span id="em-identifier-preview" style="font-family:var(--font-mono)"></span></p>
+                    </div>
+                    <div class="span-2">
+                        <label class="form-label" for="em-description">Description</label>
+                        <textarea id="em-description" class="form-input" rows="2" style="resize:vertical" placeholder="e.g. Production web server behind the load balancer" autocomplete="off"></textarea>
+                    </div>
+                    <div class="span-2">
+                        <label class="form-label" for="em-type">Type</label>
+                        <select id="em-type" class="form-input">
+                            <option value="ssh">SSH</option>
+                            {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
+                            <option value="vnc">VNC</option>
+                            {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
+                            {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
+                            {% if features.vdi %}<option value="vdi">VDI (Docker)</option>{% endif %}
+                            {% if features.powershell_ssh %}<option value="powershell">PowerShell (SSH)</option>{% endif %}
+                            {% if features.proxmox %}<option value="proxmox">Proxmox VE console</option>{% endif %}
+                        </select>
+                        <div id="em-type-help" class="text-xs text-[var(--text-muted)] mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Custom fields -->
+            <section id="em-custom-fields-section" class="entry-section" aria-labelledby="em-custom-fields-title">
+                <h3 id="em-custom-fields-title" class="entry-section-title">Custom Fields</h3>
+                <div class="entry-section-fields">
+                    <div class="span-2" id="em-custom-fields"></div>
+                </div>
+            </section>
+
+            <!-- Connection -->
+            <section class="entry-section" aria-labelledby="em-section-connection-title">
+                <h3 id="em-section-connection-title" class="entry-section-title">Connection</h3>
+                <div class="entry-section-fields">
+                    <div class="span-2">
+                        <label class="form-label" for="em-folder">Folder</label>
+                        <select id="em-folder" class="form-input"></select>
+                        <p id="em-folder-hint" class="text-xs text-[var(--text-muted)] mt-1">Pick the folder this entry is created in. The scope (shared or instance) follows the folder.</p>
+                    </div>
+                    <div>
+                        <label class="form-label" for="em-hostname">Hostname</label>
+                        <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">The server's IP or hostname — no http:// and no port here (port has its own field). Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
+                    </div>
+                    <div>
+                        <label class="form-label" for="em-port">Port</label>
+                        <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Defaults are filled in for you: SSH 22, RDP 3389, VNC/SPICE 5900. Leave as-is unless the server listens elsewhere.</p>
+                    </div>
+                    <div id="em-url-field" class="span-2" style="display:none">
+                        <label class="form-label" for="em-url">URL</label>
+                        <input type="text" id="em-url" class="form-input" placeholder="https://10.0.1.5:8080" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Required for Web entries — the browser session opens this URL.</p>
+                    </div>
+                    <div id="em-container-field" class="span-2" style="display:none">
+                        <label class="form-label" for="em-container-image">Container image</label>
+                        <input type="text" id="em-container-image" class="form-input" placeholder="registry.example.com/desktop:latest" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Required for VDI entries — the Docker image to run.</p>
+                    </div>
+                    <div id="em-powershell-field" class="span-2" style="display:none">
+                        <label class="form-label" for="em-powershell-binary">PowerShell binary</label>
+                        <input type="text" id="em-powershell-binary" class="form-input" placeholder="pwsh.exe" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">The PowerShell executable to launch on the Windows host (default pwsh.exe). Requires Windows OpenSSH on the target. WinRM support is coming in v1.3.0.</p>
+                    </div>
+                    {% if features.proxmox %}
+                    <div id="em-proxmox-fields" class="span-2" style="display:none">
+                        <details class="proto-block-details" open>
+                            <summary class="proto-block-summary">
+                                <span class="proto-block-chevron">▸</span>
+                                Proxmox console settings
+                            </summary>
+                            <div class="proto-block-body entry-section-fields">
+                                <div class="span-2">
+                                    <label class="form-label" for="em-proxmox-url">Proxmox API URL</label>
+                                    <input type="text" id="em-proxmox-url" class="form-input" placeholder="https://pve.example.com:8006" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">The address of your Proxmox web interface (the API is the same server, port 8006).</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-proxmox-vmid">VM ID</label>
+                                    <input type="number" id="em-proxmox-vmid" class="form-input" min="100" max="999999" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">The numeric VM ID — shown in the PVE web UI next to the VM name (e.g. 105).</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-proxmox-node">Node</label>
+                                    <input type="text" id="em-proxmox-node" class="form-input" placeholder="pve1" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Optional — leave blank to auto-detect which node the VM runs on.</p>
+                                </div>
+                                <div class="span-2">
+                                    <label class="form-label" for="em-proxmox-token-id">API token ID</label>
+                                    <input type="text" id="em-proxmox-token-id" class="form-input" placeholder="root@pam!persea" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Format: user@realm!tokenname (e.g. root@pam!persea). Create it in PVE under Datacenter → Permissions → API Tokens.</p>
+                                </div>
+                                <div class="span-2">
+                                    <label class="form-label" for="em-proxmox-token-secret">API token secret</label>
+                                    <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">The UUID shown once when you created the token. The token needs Sys.Audit on / and VM.Audit + VM.Console on the VM (Datacenter → Permissions → Add).</p>
+                                </div>
+                                <div class="span-2">
+                                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                                        <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                                        Verify TLS certificate
+                                    </label>
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Leave unchecked if PVE uses its default self-signed certificate.</p>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                    {% endif %}
+                </div>
+            </section>
+
+            <!-- Credentials -->
+            <section class="entry-section" aria-labelledby="em-section-credentials-title">
+                <h3 id="em-section-credentials-title" class="entry-section-title">Credentials</h3>
+                <div class="entry-section-fields">
+                    <div>
+                        <label class="form-label" for="em-username">Username</label>
+                        <input type="text" id="em-username" class="form-input" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">The account on the target server (e.g. root, Administrator, or DOMAIN\user for RDP). Leave blank to fall back to your preset (My Profile → My Credentials) or to be asked at connect time.</p>
+                    </div>
+                    <div>
+                        <div style="display:flex;justify-content:space-between;align-items:center">
+                            <label class="form-label" for="em-password" style="margin:0">Password</label>
+                            <div style="display:flex;gap:8px">
+                                <button type="button" id="em-password-generate" class="btn btn-secondary btn-sm" title="Generate a strong random password">Generate</button>
+                                <button type="button" id="em-password-clear" class="btn btn-secondary btn-sm hidden" title="Remove the stored password on save">Clear stored</button>
+                            </div>
+                        </div>
+                        <input type="password" id="em-password" class="form-input" autocomplete="new-password">
+                        <p class="text-xs text-[var(--text-muted)] mt-1" id="em-password-hint">Leave blank to be asked for credentials at connect time.</p>
+                    </div>
+                    <div class="span-2">
+                        <label class="form-label" for="em-private-key">Private key (PEM)</label>
+                        <textarea id="em-private-key" class="form-input" rows="3" style="resize:vertical;font-family:var(--font-mono);font-size:13px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">SSH only. Alternative to a password — paste the full key including the BEGIN/END lines. If both are set, the key is used.</p>
+                    </div>
+                    <div id="em-container-password-field" class="span-2" style="display:none">
+                        <label class="form-label" for="em-container-password">Container password</label>
+                        <input type="password" id="em-container-password" class="form-input" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Only for VDI images with a baked-in account. Leave blank to keep the stored value when editing.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Protocol Options -->
+            <section class="entry-section" aria-labelledby="em-section-protocol-title">
+                <h3 id="em-section-protocol-title" class="entry-section-title">Protocol Options</h3>
+                <div class="entry-section-fields">
+                    <div id="em-ignore-cert-field" class="span-2" style="display:none">
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                            <input type="checkbox" id="em-ignore-cert" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                            Ignore TLS certificate errors
+                        </label>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
+                    </div>
+                    <div id="em-clipboard-field" class="span-2" style="display:none">
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                            <input type="checkbox" id="em-disable-copy" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                            Disable copy from remote
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer;margin-top:8px">
+                            <input type="checkbox" id="em-disable-paste" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                            Disable paste to remote
+                        </label>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Restrict clipboard transfer for this entry's sessions (SSH, RDP, VNC, SPICE). Leave both unchecked for normal clipboard use.</p>
+                    </div>
+                    <div id="em-enable-drive-field" class="span-2" style="display:none">
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                            <input type="checkbox" id="em-enable-drive" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                            Enable file transfer
+                        </label>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Turn on file transfer for this entry — SFTP for SSH (browse and download remote files), a shared drive for RDP (upload files to the remote).</p>
+                    </div>
+                    <div id="em-rdp-security-field" class="span-2" style="display:none">
+                        <details class="proto-block-details" open>
+                            <summary class="proto-block-summary">
+                                <span class="proto-block-chevron">▸</span>
+                                RDP connection options
+                            </summary>
+                            <div class="proto-block-body entry-section-fields">
+                                <div>
+                                    <label class="form-label" for="em-rdp-domain">Domain</label>
+                                    <input type="text" id="em-rdp-domain" class="form-input" placeholder="DOMAIN" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">The Windows/AD domain for NLA authentication. Leave blank if your username already includes it as <strong>DOMAIN\user</strong> — but for CredSSP/NLA an explicit domain is more reliable.</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-color-depth">Color depth</label>
+                                    <select id="em-color-depth" class="form-input">
+                                        <option value="">Default</option>
+                                        <option value="8">8 bits</option>
+                                        <option value="16">16 bits</option>
+                                        <option value="24">24 bits</option>
+                                        <option value="32">32 bits</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-rdp-security">Security mode</label>
+                                    <select id="em-rdp-security" class="form-input">
+                                        <option value="">Any (negotiate)</option>
+                                        <option value="nla">NLA (Network Level Authentication)</option>
+                                        <option value="tls">TLS (SSL encryption)</option>
+                                        <option value="rdp">RDP (standard encryption)</option>
+                                    </select>
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Corporate Windows servers usually require <strong>NLA</strong>. If the server refuses the connection ("wrong security type?"), try NLA first, then TLS. Any is the default.</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-rdp-auth-pkg">Authentication package</label>
+                                    <select id="em-rdp-auth-pkg" class="form-input">
+                                        <option value="">Negotiate (default)</option>
+                                        <option value="kerberos">Kerberos</option>
+                                        <option value="ntlm">NTLM</option>
+                                    </select>
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Use <strong>Kerberos</strong> when the domain restricts NTLM (common in hardened AD environments). NTLM is the fallback default.</p>
+                                </div>
+                                <div id="em-rdp-kdc-field" style="display:none">
+                                    <label class="form-label" for="em-rdp-kdc-url">KDC URL</label>
+                                    <input type="text" id="em-rdp-kdc-url" class="form-input" placeholder="kdc.example.com" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Your AD Kerberos KDC hostname — required when using the Kerberos authentication package.</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-enable-gfx">GFX pipeline (H.264)</label>
+                                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                                        <input type="checkbox" id="em-enable-gfx" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                                        Enable GFX pipeline for smoother video on modern RDP servers
+                                    </label>
+                                </div>
+                                <div class="span-2">
+                                    <label class="form-label" for="em-remote-app">RemoteApp program</label>
+                                    <input type="text" id="em-remote-app" class="form-input" placeholder="mstsc.exe" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Launch a single remote program instead of the full desktop (RemoteApp).</p>
+                                </div>
+                                <div class="span-2">
+                                    <label class="form-label" for="em-prompt-creds">Prompt for credentials</label>
+                                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                                        <input type="checkbox" id="em-prompt-creds" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                                        Ask the user for credentials at connect time instead of using stored ones
+                                    </label>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Access & Permissions -->
+            <section class="entry-section" aria-labelledby="em-section-access-title">
+                <h3 id="em-section-access-title" class="entry-section-title">Access &amp; Permissions</h3>
+                <div class="entry-section-fields">
+                    <div class="span-2">
+                        <label class="form-label">Allowed groups</label>
+                        <div class="chip-picker">
+                            <div class="chip-list" id="em-groups-chips"></div>
+                            <div class="chip-input-wrap">
+                                <div class="combo" id="em-groups-combo">
+                                    <input type="text" id="em-groups-input" placeholder="Type or pick a group..." autocomplete="off" spellcheck="false">
+                                    <div class="combo-menu" id="em-groups-menu" role="listbox"></div>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm" id="em-groups-add" style="width:auto">Add</button>
+                            </div>
+                        </div>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Which groups may <em>see</em> this entry in the address book. Leave empty for admin-only. Connect permission is separate — grant it under "Connect permissions" below.</p>
+                    </div>
+                    <div id="em-rbac-field" class="span-2" style="display:none">
+                        <label class="form-label">Connect permissions (RBAC)</label>
+                        <p class="text-xs text-[var(--text-muted)]" style="margin:4px 0 8px">Who may connect to this entry. Denied by default unless granted here or inherited via connection groups (Admin → Groups).</p>
+                        <div class="chip-picker">
+                            <div class="chip-list" id="em-rbac-chips"></div>
+                            <div class="chip-input-wrap">
+                                <div class="combo" id="em-rbac-combo">
+                                    <input type="text" id="em-rbac-input" placeholder="Type or pick a group or user..." autocomplete="off" spellcheck="false">
+                                    <div class="combo-menu" id="em-rbac-menu" role="listbox"></div>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm" id="em-rbac-add" style="width:auto">Add</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="em-access-note" class="span-2 hidden">
+                        <p class="text-xs text-[var(--text-muted)]" style="padding:10px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px">Only administrators can create or edit connections. Ask an administrator to make changes.</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <div class="entry-modal-footer">
+            <div id="em-error" class="hidden entry-modal-error" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <div class="flex justify-end gap-3" style="flex-shrink:0">
+                <button type="button" id="em-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
+                <button type="button" id="em-save" class="btn btn-primary btn-sm" style="width:auto">Create Entry</button>
+            </div>
         </div>
     </div>
 </div>
@@ -765,11 +836,14 @@
     function updateIdentifierPreview() {
         var preview = document.getElementById('em-identifier-preview');
         var label = document.getElementById('em-identifier-label');
+        var nameLabel = document.getElementById('em-name-label');
         if (!preview || !label) return;
         if (entryEditMode) {
+            if (nameLabel) nameLabel.textContent = 'Display name';
             label.textContent = 'Identifier (read-only):';
             preview.textContent = entryEditMode.name;
         } else {
+            if (nameLabel) nameLabel.textContent = 'Name';
             label.textContent = 'Identifier:';
             preview.textContent = slugify(document.getElementById('em-name').value);
         }
@@ -1615,6 +1689,8 @@
         });
         container.innerHTML = html.join('');
         container.style.display = customFieldDefs.length ? '' : 'none';
+        var section = document.getElementById('em-custom-fields-section');
+        if (section) section.style.display = customFieldDefs.length ? '' : 'none';
     }
     function distinctCustomFieldValues(name) {
         var seen = [];
@@ -2499,7 +2575,6 @@
     function updateEntryTypeFields() {
         var type = document.getElementById('em-type').value;
         function show(id, on) { var el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; }
-        show('em-proxmox-secret-field', type === 'proxmox');
         show('em-container-password-field', type === 'vdi');
         show('em-url-field', type === 'web');
         show('em-container-field', type === 'vdi');
@@ -2551,10 +2626,104 @@
         }
         updateEntryTypeFields();
     }
+    // Entry modal helpers: folder picker, create/edit state, credential
+    // keep/change/clear semantics, and consistent non-admin disabled state.
+    function populateEntryFolders(selectValue) {
+        var sel = document.getElementById('em-folder');
+        if (!sel) return;
+        sel.innerHTML = '';
+        var found = false;
+        folders.forEach(function(f) {
+            if (f.scope === 'personal') return;
+            var opt = document.createElement('option');
+            opt.value = f.scope + '|' + f.path;
+            opt.textContent = f.path + (f.scope === 'instance' ? ' (instance)' : '');
+            sel.appendChild(opt);
+            if (opt.value === selectValue) { sel.value = opt.value; found = true; }
+        });
+        if (!found && selectValue) {
+            var fallback = document.createElement('option');
+            fallback.value = selectValue;
+            fallback.textContent = selectValue.split('|')[1];
+            sel.appendChild(fallback);
+            sel.value = selectValue;
+        }
+    }
+    function entryTargetFolder() {
+        if (entryEditMode) return { scope: entryEditMode.scope, folder: entryEditMode.folder };
+        var sel = document.getElementById('em-folder');
+        if (sel && sel.value) {
+            var parts = sel.value.split('|');
+            return { scope: parts[0], folder: parts[1] };
+        }
+        return selectedFolder
+            ? { scope: selectedFolder.scope, folder: selectedFolder.path }
+            : { scope: 'shared', folder: '' };
+    }
+    function entrySaveLabel() {
+        return entryEditMode ? 'Save Changes' : 'Create Entry';
+    }
+    function updateEntryModalSubtitle() {
+        var sub = document.getElementById('entry-modal-subtitle');
+        if (!sub) return;
+        var t = entryTargetFolder();
+        if (entryEditMode) {
+            sub.textContent = 'Editing "' + entryEditMode.name + '" in ' + t.scope + '/' + t.folder;
+        } else {
+            sub.textContent = 'Will be created in ' + t.scope + '/' + (t.folder || '(root)');
+        }
+    }
+    function updatePasswordHint() {
+        var hint = document.getElementById('em-password-hint');
+        if (!hint) return;
+        if (passwordClearArmed) {
+            hint.textContent = 'The stored password WILL BE REMOVED when you save.';
+            return;
+        }
+        if (!entryEditMode) {
+            hint.textContent = 'Leave blank to be asked for credentials at connect time.';
+        } else if (selectedEntry && selectedEntry.has_credentials) {
+            hint.textContent = 'Keep: leave blank. Change: type a new password. Remove: press "Clear stored".';
+        } else {
+            hint.textContent = 'No stored password yet. Type one to store it with this entry.';
+        }
+    }
+    function applyEntryModalPermissions() {
+        var admin = isAdmin;
+        var rbacField = document.getElementById('em-rbac-field');
+        if (rbacField) rbacField.style.display = admin ? '' : 'none';
+        var note = document.getElementById('em-access-note');
+        if (note) note.classList.toggle('hidden', admin);
+        if (admin) return;
+        // Non-admins never reach the modal through the UI (the create/edit
+        // buttons are admin-only), but if it opens anyway every field and
+        // the save button render disabled with a read-only note.
+        var ids = ['em-name', 'em-description', 'em-type', 'em-folder', 'em-hostname', 'em-port',
+            'em-username', 'em-password', 'em-private-key', 'em-url', 'em-container-image',
+            'em-powershell-binary', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node',
+            'em-proxmox-token-id', 'em-proxmox-token-secret', 'em-container-password',
+            'em-rdp-kdc-url', 'em-rdp-domain', 'em-remote-app', 'em-rdp-security',
+            'em-rdp-auth-pkg', 'em-color-depth', 'em-ignore-cert', 'em-disable-copy',
+            'em-disable-paste', 'em-enable-drive', 'em-enable-gfx', 'em-prompt-creds',
+            'em-proxmox-verify-tls', 'em-password-generate', 'em-password-clear',
+            'em-groups-input', 'em-groups-add', 'em-rbac-input', 'em-rbac-add', 'em-save'];
+        ids.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.disabled = true;
+        });
+    }
     function openNewEntry() {
         if (!selectedFolder) return;
         entryEditMode = null;
-        document.getElementById('entry-modal-title').textContent = 'New Entry in ' + selectedFolder.path;
+        document.getElementById('entry-modal-title').textContent = 'New Entry';
+        document.getElementById('entry-modal-badge').textContent = 'Create';
+        document.getElementById('entry-modal-badge').className = 'entry-modal-state-badge entry-modal-state-create';
+        var nonPersonal = folders.filter(function(f) { return f.scope !== 'personal'; });
+        var target = selectedFolder.scope !== 'personal' ? selectedFolder : (nonPersonal[0] || null);
+        populateEntryFolders(target ? target.scope + '|' + target.path : '');
+        document.getElementById('em-folder').disabled = false;
+        var fh = document.getElementById('em-folder-hint');
+        if (fh) fh.textContent = 'Pick the folder this entry is created in. The scope (shared or instance) follows the folder.';
         document.getElementById('em-name').value = '';
         document.getElementById('em-name').disabled = false;
         document.getElementById('em-type').value = 'ssh';
@@ -2570,14 +2739,23 @@
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
-        document.getElementById('em-rbac-field').style.display = isAdmin ? '' : 'none';
         resetEntryRbac();
+        applyEntryModalPermissions();
+        document.getElementById('em-save').textContent = entrySaveLabel();
+        updateEntryModalSubtitle();
+        updatePasswordHint();
         openModal('entry-modal');
     }
     function openEditEntry() {
         if (!selectedFolder || !selectedEntry) return;
         entryEditMode = { scope: selectedFolder.scope, folder: selectedFolder.path, name: selectedEntry.name };
-        document.getElementById('entry-modal-title').textContent = 'Edit: ' + selectedEntry.name;
+        document.getElementById('entry-modal-title').textContent = 'Edit Entry';
+        document.getElementById('entry-modal-badge').textContent = 'Edit';
+        document.getElementById('entry-modal-badge').className = 'entry-modal-state-badge entry-modal-state-edit';
+        populateEntryFolders(entryEditMode.scope + '|' + entryEditMode.folder);
+        document.getElementById('em-folder').disabled = true;
+        var fh = document.getElementById('em-folder-hint');
+        if (fh) fh.textContent = 'Editing keeps the entry in its current folder.';
         document.getElementById('em-name').value = selectedEntry.display_name || selectedEntry.name;
         document.getElementById('em-name').disabled = false;
         document.getElementById('em-type').value = selectedEntry.session_type || 'ssh';
@@ -2642,11 +2820,14 @@
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
-        document.getElementById('em-rbac-field').style.display = isAdmin ? '' : 'none';
         resetEntryRbac();
         loadRbacRefs(function() {
             loadEntryRbac();
         });
+        applyEntryModalPermissions();
+        document.getElementById('em-save').textContent = entrySaveLabel();
+        updateEntryModalSubtitle();
+        updatePasswordHint();
         openModal('entry-modal');
     }
     var passwordClearArmed = false;
@@ -2665,8 +2846,7 @@
     function markPasswordCleared() {
         passwordClearArmed = true;
         document.getElementById('em-password').value = '';
-        var hint = document.getElementById('em-password-hint');
-        if (hint) hint.textContent = 'The stored password WILL BE REMOVED when you save.';
+        updatePasswordHint();
     }
     function updatePasswordButtons() {
         var clearBtn = document.getElementById('em-password-clear');
@@ -2674,9 +2854,8 @@
         clearBtn.classList.toggle('hidden', !entryEditMode || !(selectedEntry && selectedEntry.has_credentials));
         if (clearBtn.classList.contains('hidden')) {
             passwordClearArmed = false;
-            var hint = document.getElementById('em-password-hint');
-            if (hint) hint.textContent = 'Saving with an empty password field keeps the stored value.';
         }
+        updatePasswordHint();
     }
 
     function saveEntry() {
@@ -2859,7 +3038,8 @@
         } else {
             var payload = { name: name };
             for (var k in entry) payload[k] = entry[k];
-            req = fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries', {
+            var target = entryTargetFolder();
+            req = fetch('/api/addressbook/folders/' + encodeURIComponent(target.scope) + '/' + encodeURIComponent(target.folder) + '/entries', {
                 method: 'POST',
                 headers: apiHeaders(),
                 credentials: 'same-origin',
@@ -2890,7 +3070,7 @@
             errEl.classList.remove('hidden');
         }).then(function() {
             saveBtn.disabled = false;
-            saveBtn.textContent = 'Save';
+            saveBtn.textContent = entrySaveLabel();
         });
     }
     function deleteEntry() {
@@ -3157,8 +3337,9 @@
 
     // ── RBAC connect permissions (entry modal) ───────────────────────
     function rbacConnId() {
-        var scope = entryEditMode ? entryEditMode.scope : selectedFolder.scope;
-        var folder = entryEditMode ? entryEditMode.folder : selectedFolder.path;
+        var target = entryTargetFolder();
+        var scope = target.scope;
+        var folder = target.folder;
         // RBAC ids use the SLUG identifier; in create mode the server derives
         // it from the friendly name, so mirror that here.
         var name = entryEditMode ? entryEditMode.name : slugify(document.getElementById('em-name').value.trim());
@@ -3528,6 +3709,7 @@
     wireGroupCombo('em');
     document.getElementById('em-type').addEventListener('change', updateEntryTypeFields);
     document.getElementById('em-port').addEventListener('input', function() { portAutoSet = false; });
+    document.getElementById('em-folder').addEventListener('change', updateEntryModalSubtitle);
     document.getElementById('em-rdp-auth-pkg').addEventListener('change', updateKdcField);
 
     var rbacComboEl = document.getElementById('em-rbac-combo');
