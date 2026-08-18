@@ -469,23 +469,46 @@ async fn main() {
                     }
                 }
             }
-            // DB-first storage: credentials are encrypted at
-            // rest in the DB — without a key they are stored/returned in
-            // plaintext. Refuse to start so operators cannot accidentally
-            // run with plaintext credentials.
-            if config
-                .storage
-                .as_ref()
-                .map(|st| st.backend != "vault")
-                .unwrap_or(true)
-                && config.storage_encryption_key().is_none()
-            {
-                eprintln!(
-                    "Error: no [storage].encryption_key / PERSEA_STORAGE_KEY set — \
-                     connection credentials would be stored in plaintext. \
-                     Refusing to start. Generate one with: openssl rand -hex 32"
-                );
-                std::process::exit(1);
+            // DB-first storage: credentials are encrypted at rest in the
+            // DB. Without a key they are stored/returned in plaintext.
+            // Refuse to start so operators cannot accidentally run with
+            // plaintext credentials. On first run (no encrypted
+            // credentials in the store yet) a key is generated and
+            // persisted to the config file, so a fresh install can bind
+            // and serve /setup without manual key setup.
+            let config_path = cli
+                .config
+                .clone()
+                .or_else(|| std::env::var("RUSTGUAC_CONFIG").ok())
+                .or_else(crate::config::windows_default_config_path)
+                .unwrap_or_else(|| "/opt/persea/config.toml".to_string());
+            match crate::config::ensure_db_storage_key(&mut config, &database, &config_path) {
+                crate::config::StorageKeyGuard::Ready => {}
+                crate::config::StorageKeyGuard::RefuseExistingCredentials => {
+                    eprintln!(
+                        "Error: no [storage].encryption_key / PERSEA_STORAGE_KEY set and the \
+                         store already holds encrypted credentials. Refusing to start: a fresh \
+                         key could not decrypt them. Generate one with: openssl rand -hex 32"
+                    );
+                    std::process::exit(1);
+                }
+                crate::config::StorageKeyGuard::RefuseUnwritable { path, error } => {
+                    eprintln!(
+                        "Error: generated a storage encryption key but could not persist it to \
+                         {}: {}. Refusing to start: the key would be lost on restart and stored \
+                         credentials unreadable",
+                        path, error
+                    );
+                    std::process::exit(1);
+                }
+                crate::config::StorageKeyGuard::RefuseStoreCheckFailed { error } => {
+                    eprintln!(
+                        "Error: could not check the store for existing encrypted credentials: \
+                         {}. Refusing to start",
+                        error
+                    );
+                    std::process::exit(1);
+                }
             }
             // The credential encryption key is used in every DB-credential
             // request path; a malformed value would panic at runtime.

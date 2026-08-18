@@ -194,7 +194,7 @@ Every setting can also be supplied as an environment variable: the `PERSEA_` pre
 | trusted_proxies | `PERSEA_TRUSTED_PROXIES` | empty | Proxy addresses whose `X-Forwarded-For` is trusted |
 | rate_limit | `PERSEA_RATE_LIMIT` | `false` | Extra API rate limiting (usually handled by the proxy) |
 | tls.secure_cookies | `PERSEA_TLS__SECURE_COOKIES` | `true` | Must be `false` when serving HTTPS with a self-signed certificate (see [Troubleshooting](troubleshooting.md)) |
-| storage.encryption_key | `PERSEA_STORAGE__ENCRYPTION_KEY` | unset | Key that encrypts stored connection credentials (also settable as `PERSEA_STORAGE_KEY`); required when `backend = "db"` — startup refuses without it |
+| storage.encryption_key | `PERSEA_STORAGE__ENCRYPTION_KEY` | unset | Key that encrypts stored connection credentials (also settable as `PERSEA_STORAGE_KEY`); when `backend = "db"` and the store already holds encrypted credentials, startup refuses without it. On a store with no credentials yet, persea generates and persists a key on first run |
 
 The full reference, including the `[auth]`, `[vault]`, `[oidc]`, `[recording]`, `[drive]`, `[vdi]`, and `[theme]` sections, is in the [Configuration guide](configuration.md).
 
@@ -367,7 +367,7 @@ backend = "db"        # "db" (default) or "vault"
 encryption_key = "…"  # 64-char hex; generate with: openssl rand -hex 32
 ```
 
-The database backend works out of the box and is the recommended default. The `encryption_key` is required when `backend = "db"` — persea refuses to start without it (or with a malformed key) so plaintext credentials can never be written by accident. The key must not change afterwards; changing it makes stored credentials undecryptable.
+The database backend works out of the box and is the recommended default. On first run, when the store holds no encrypted credentials yet and no key is configured, persea generates a random `encryption_key` and persists it into the config file automatically (see [Configuration → `[storage]`](configuration.md)); a missing `[storage]` section is created, an existing one is filled in. Startup still refuses when the store already holds encrypted credentials with no key configured, when a malformed key is configured, or when the generated key cannot be persisted to the config file, so plaintext credentials can never be written by accident. The key must not change afterwards; changing it makes stored credentials undecryptable.
 
 Alternatively, store credentials in HashiCorp Vault or OpenBao (`[storage] backend = "vault"`), for example to keep secrets in a central store. Setup: install Vault, enable KV v2, create a policy for `secret/data/persea/*`, enable AppRole auth, then:
 

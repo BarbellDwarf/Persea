@@ -5827,6 +5827,83 @@ async fn count_users_pool(pool: &DbPool) -> rusqlite::Result<i64> {
     Ok(row.map(|r| r.get::<i64>(0)).unwrap_or(0))
 }
 
+/// Whether the store holds any encrypted credentials. Used by the startup
+/// guard: a first-run storage key may only be generated while the store is
+/// empty, otherwise the fresh key could not decrypt existing rows.
+pub fn has_encrypted_credentials(db: &Db) -> rusqlite::Result<bool> {
+    db_route!(db, has_encrypted_credentials_pool);
+    let conn = db.lock().unwrap();
+    let count: i64 = conn.query_row(
+        "SELECT
+            (SELECT COUNT(*) FROM address_book_credentials)
+            + (SELECT COUNT(*) FROM user_preset_credentials WHERE password_enc != '')
+            + (SELECT COUNT(*) FROM login_credentials WHERE password_enc != '')",
+        [],
+        |row| row.get(0),
+    )?;
+    // `user_credentials` is created lazily by store_user_credentials;
+    // count it only when the table exists.
+    let has_uc: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'user_credentials'",
+        [],
+        |row| row.get(0),
+    )?;
+    if has_uc > 0 {
+        let uc: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM user_credentials WHERE var_value != ''",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count + uc > 0)
+    } else {
+        Ok(count > 0)
+    }
+}
+
+async fn has_encrypted_credentials_pool(pool: &DbPool) -> rusqlite::Result<bool> {
+    let row = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch_opt(
+                p,
+                "SELECT
+                    (SELECT COUNT(*) FROM address_book_credentials)
+                    + (SELECT COUNT(*) FROM user_preset_credentials WHERE password_enc <> '')
+                    + (SELECT COUNT(*) FROM login_credentials WHERE password_enc <> '')
+                    + (SELECT COUNT(*) FROM user_credentials WHERE var_value <> '')",
+                &[],
+            )
+            .await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch_opt(
+                p,
+                "SELECT
+                    (SELECT COUNT(*) FROM address_book_credentials)
+                    + (SELECT COUNT(*) FROM user_preset_credentials WHERE password_enc <> '')
+                    + (SELECT COUNT(*) FROM login_credentials WHERE password_enc <> '')
+                    + (SELECT COUNT(*) FROM user_credentials WHERE var_value <> '')",
+                &[],
+            )
+            .await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch_opt(
+                p,
+                "SELECT
+                    (SELECT COUNT(*) FROM address_book_credentials)
+                    + (SELECT COUNT(*) FROM user_preset_credentials WHERE password_enc <> '')
+                    + (SELECT COUNT(*) FROM login_credentials WHERE password_enc <> '')
+                    + (SELECT COUNT(*) FROM user_credentials WHERE var_value <> '')",
+                &[],
+            )
+            .await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(row.map(|r| r.get::<i64>(0)).unwrap_or(0) > 0)
+}
+
 /// Count session history rows (admin system status).
 pub fn count_session_history(db: &Db) -> rusqlite::Result<i64> {
     db_route!(db, count_session_history_pool);

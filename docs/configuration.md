@@ -374,6 +374,23 @@ Or via environment variable:
 PERSEA_STORAGE_KEY=aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344
 ```
 
+### First-run key generation
+
+With `backend = "db"` and no key configured, a store that holds no
+encrypted credentials yet gets a random key generated on first startup and
+persisted as `[storage] encryption_key` in the config file, so a fresh
+install can bind and serve `/setup` without manual key setup. The key is
+written into the file the server was started with (`--config <path>`, the
+`RUSTGUAC_CONFIG` environment variable, or the default
+`/opt/persea/config.toml`); a missing `[storage]` section is created, an
+existing one is filled in.
+
+Startup still refuses, fail-closed, when the store already holds encrypted
+credentials (a fresh key could not decrypt them) or when the generated key
+cannot be persisted to the config file (it would be lost on restart).
+Treat the key like a database password: back it up, and never change it,
+since changing it makes stored credentials undecryptable.
+
 ## `[vault]` section
 
 Optional external secrets store (HashiCorp Vault or OpenBao). Used when
