@@ -3611,16 +3611,31 @@ pub async fn pf_list_entries(
     let user_groups = id.groups();
     let mut visible = Vec::new();
     for entry in &db_entries {
+        // The containing folder's ACL gates the reference the same way it
+        // gates the shared tree: a tightened folder hides its entries
+        // everywhere, including personal references. A vanished folder
+        // also hides the reference.
+        let folder_path = match db::get_ab_folder_by_id(&database, entry.folder_id) {
+            Ok(folder) => folder.name,
+            Err(_) => continue,
+        };
+        if check_folder_access_db(&database, "shared", &folder_path, id).is_err() {
+            continue;
+        }
         if !id.has_role("admin")
             && !rbac::identity_has_custom_permission(&database, id, "read")
             && !entry_groups_match(entry, user_groups)
         {
             continue;
         }
-        visible.push(inject_powershell_binary(
-            entry,
-            json!(entry_info_from_db_row(&database, entry)),
-        ));
+        // The shared location rides along so the client can connect to the
+        // real entry without a client-side location map.
+        let mut value = json!(entry_info_from_db_row(&database, entry));
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("shared_scope".into(), json!("shared"));
+            obj.insert("shared_folder".into(), json!(folder_path));
+        }
+        visible.push(inject_powershell_binary(entry, value));
     }
     Ok(Json(json!(visible)))
 }

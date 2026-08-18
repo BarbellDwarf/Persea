@@ -3508,6 +3508,29 @@ pub fn get_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<AbFol
     )
 }
 
+/// Fetch a folder by id (used by the personal-folder reference paths).
+pub fn get_ab_folder_by_id(db: &Db, folder_id: i64) -> rusqlite::Result<AbFolder> {
+    db_route!(db, get_ab_folder_by_id_pool, folder_id);
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at
+         FROM address_book_folders WHERE id = ?1",
+        params![folder_id],
+        |row| {
+            Ok(AbFolder {
+                id: row.get(0)?,
+                scope: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                allowed_groups: row.get(4)?,
+                inherit_from_parent: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        },
+    )
+}
+
 /// Delete a folder and cascade-delete its entries/credentials.
 pub fn delete_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<bool> {
     db_route!(
@@ -8780,6 +8803,24 @@ async fn get_ab_folder_pool(
         }
         DbPool::SQLite(p) => {
             sqlite_fetch_opt(p, "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at FROM address_book_folders WHERE scope = ? AND name = ?", &[Arg::Str(scope), Arg::Str(name)]).await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    row.map(|r| ab_folder_row!(&r))
+        .ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+async fn get_ab_folder_by_id_pool(pool: &DbPool, folder_id: i64) -> rusqlite::Result<AbFolder> {
+    let row = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch_opt(p, "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at FROM address_book_folders WHERE id = $1", &[Arg::I64(folder_id)]).await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch_opt(p, "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at FROM address_book_folders WHERE id = ?", &[Arg::I64(folder_id)]).await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch_opt(p, "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at FROM address_book_folders WHERE id = ?", &[Arg::I64(folder_id)]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
