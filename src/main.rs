@@ -719,9 +719,7 @@ fn cmd_set_password(
         None => rpassword::prompt_password(format!("New password for {}: ", email))
             .map_err(|e| format!("could not read password from terminal: {}", e))?,
     };
-    if let Err(msg) = policy.check_length(&new_password) {
-        return Err(msg);
-    }
+    policy.check_length(&new_password)?;
     let user = crate::db::get_user_by_email(database, email)
         .map_err(|e| format!("no user with email '{}' ({})", email, e))?;
     if crate::password::password_is_recent(database, user.id, &new_password, policy.history)

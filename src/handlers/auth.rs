@@ -90,6 +90,9 @@ async fn check_totp_enforcement(
 /// pending-MFA cookie. Used by the MFA gate (target `/auth/mfa`) and the
 /// enrollment gate (target `/auth/enroll`); neither mints a session.
 /// Returns the response with the MFA pending cookie set.
+// The 8 parameters mirror the caller's full request context; bundling them
+// into a struct would add ceremony to both call sites for a style lint.
+#[allow(clippy::too_many_arguments)]
 async fn redirect_to_mfa(
     db: &Db,
     user: &db::User,
