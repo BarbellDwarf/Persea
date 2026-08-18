@@ -85,6 +85,12 @@ struct ProtocolDefaults {
     rdp_h264: bool,
     rdp_gfx: bool,
     rdp_drive: Option<bool>,
+    /// Auto-size the session to the browser window (persea#142). Resolved
+    /// from the per-protocol global default (`default_rdp_auto_size` /
+    /// `default_ssh_auto_size`); unset falls back to true, the behaviour
+    /// of the pre-feature client. The per-entry `protocol_config.auto_size`
+    /// override is applied on top of this in `create_session`.
+    auto_size: bool,
     vnc_color_depth: Option<u8>,
     vnc_disable_copy: bool,
     vnc_disable_paste: bool,
@@ -139,6 +145,11 @@ impl ProtocolDefaults {
             rdp_h264: stored_bool("default_rdp_h264").unwrap_or(true),
             rdp_gfx: stored_bool("default_rdp_gfx").unwrap_or(true),
             rdp_drive: stored_bool("default_rdp_drive"),
+            auto_size: match session_type {
+                SessionType::Ssh => stored_bool("default_ssh_auto_size").unwrap_or(true),
+                SessionType::Rdp => stored_bool("default_rdp_auto_size").unwrap_or(true),
+                _ => true,
+            },
             vnc_color_depth: settings
                 .iter()
                 .find(|(k, _)| k == "default_vnc_color_depth")
@@ -332,6 +343,31 @@ impl SessionManager {
         let defaults = ProtocolDefaults::from_settings(&req.session_type, &settings);
 
         let session_id = Uuid::new_v4();
+
+        // Auto-size flag (persea#142): per-entry `protocol_config.auto_size`
+        // wins, then the per-protocol global default
+        // (`default_rdp_auto_size` / `default_ssh_auto_size`, which itself
+        // falls back to true), then true, the behaviour of the pre-feature
+        // client. Only rdp and ssh sessions are affected; the entry is read
+        // here because only its DB row carries the flag. The resolved value
+        // is surfaced to the client via SessionInfo.
+        let auto_size = if matches!(&req.session_type, SessionType::Ssh | SessionType::Rdp) {
+            let db = self.db.clone();
+            let key = req.address_book_entry.clone();
+            let entry_value =
+                tokio::task::spawn_blocking(move || entry_auto_size(&db, key.as_deref()))
+                    .await
+                    .unwrap_or(None);
+            entry_value.unwrap_or(defaults.auto_size)
+        } else {
+            defaults.auto_size
+        };
+        tracing::debug!(
+            session_id = %session_id,
+            session_type = ?req.session_type,
+            auto_size,
+            "Resolved session auto-size flag"
+        );
         // V09: connection reason, trimmed and normalized before any of
         // `req`'s fields are moved into the session literal below.
         let reason = req
@@ -1950,6 +1986,34 @@ fn entry_powershell_binary(
     )
 }
 
+/// Resolve the per-entry auto-size flag for an address-book entry, if the
+/// session is entry-derived. The flag lives in the entry's `protocol_config`
+/// JSON (`auto_size`); the entry type is the `protocol` column. Only rdp,
+/// ssh, and powershell (SSH-based) entries carry the flag, everything else
+/// returns `None` and the caller falls back to the global default.
+fn entry_auto_size(db: &Option<crate::db::Db>, address_book_entry: Option<&str>) -> Option<bool> {
+    let db = db.as_ref()?;
+    let key = address_book_entry?;
+    // The key is `scope/folder/entry`; folder paths may themselves contain
+    // slashes (nested folders), so scope is up to the first slash and the
+    // entry is after the last one (mirrors the frontend's key parsing).
+    let first = key.find('/')?;
+    let last = key.rfind('/')?;
+    if last <= first {
+        return None;
+    }
+    let scope = &key[..first];
+    let folder = &key[first + 1..last];
+    let entry = &key[last + 1..];
+    let folder_rec = crate::db::get_ab_folder(db, scope, folder).ok()?;
+    let entry_rec = crate::db::get_ab_entry(db, folder_rec.id, entry).ok()?;
+    if !matches!(entry_rec.protocol.as_str(), "rdp" | "ssh" | "powershell") {
+        return None;
+    }
+    let config: serde_json::Value = serde_json::from_str(&entry_rec.protocol_config).ok()?;
+    config.get("auto_size").and_then(|v| v.as_bool())
+}
+
 /// Which `enable_*` lockdown toggle gates a session type. `Vnc` and `Ssh`
 /// have no toggles (the settings page offers none) and are never blocked
 /// here — SSH is always allowed like VNC; `enable_ssh_tunnels` only gates
@@ -2206,6 +2270,7 @@ mod tests {
         assert!(d.rdp_h264, "H.264 must default on");
         assert!(d.rdp_gfx, "GFX must default on");
         assert_eq!(d.rdp_drive, None);
+        assert!(d.auto_size, "auto-size must default on (pre-feature behaviour)");
         assert_eq!(d.vnc_color_depth, None);
         assert!(!d.vnc_disable_copy);
         assert!(!d.vnc_disable_paste);
@@ -2221,8 +2286,10 @@ mod tests {
             ("default_rdp_h264", "false"),
             ("default_rdp_gfx", "false"),
             ("default_rdp_drive", "true"),
+            ("default_rdp_auto_size", "false"),
             ("default_ssh_width", "200"),
             ("default_ssh_height", "60"),
+            ("default_ssh_auto_size", "true"),
             ("default_vnc_color_depth", "16"),
             ("default_vnc_disable_copy", "true"),
             ("default_vnc_disable_paste", "true"),
@@ -2233,6 +2300,10 @@ mod tests {
         assert!(!rdp.rdp_h264);
         assert!(!rdp.rdp_gfx);
         assert_eq!(rdp.rdp_drive, Some(true));
+        assert!(
+            !rdp.auto_size,
+            "the RDP auto-size default must come from default_rdp_auto_size"
+        );
         assert_eq!(
             rdp.vnc_color_depth,
             Some(16),
@@ -2249,6 +2320,10 @@ mod tests {
         assert!(
             !ssh.rdp_h264,
             "the RDP H.264 default still populates the struct; only the RDP branch reads it"
+        );
+        assert!(
+            ssh.auto_size,
+            "SSH auto-size must come from default_ssh_auto_size, not default_rdp_auto_size"
         );
 
         let vnc = ProtocolDefaults::from_settings(&SessionType::Vnc, &settings);
@@ -2269,11 +2344,13 @@ mod tests {
             SessionType::Spice,
             SessionType::Vdi,
             SessionType::Proxmox,
+            SessionType::Vnc,
         ] {
             let d = ProtocolDefaults::from_settings(&st, &[]);
             assert_eq!((d.width, d.height, d.dpi), (1920, 1080, 96));
             assert!(d.rdp_h264);
             assert!(d.rdp_gfx);
+            assert!(d.auto_size, "non-rdp/ssh types keep auto-size on");
         }
     }
 
@@ -2284,6 +2361,7 @@ mod tests {
             ("default_rdp_h264", "maybe"),
             ("default_rdp_security", ""),
             ("default_rdp_drive", "yes"),
+            ("default_rdp_auto_size", "maybe"),
             ("default_vnc_color_depth", "deep"),
         ]);
         let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
@@ -2291,6 +2369,7 @@ mod tests {
         assert!(d.rdp_h264);
         assert_eq!(d.rdp_security, None);
         assert_eq!(d.rdp_drive, None);
+        assert!(d.auto_size, "garbage auto-size falls back to true");
         assert_eq!(d.vnc_color_depth, None);
     }
 
@@ -2304,6 +2383,67 @@ mod tests {
         let settings = stored(&[("default_rdp_security", "tls")]);
         let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
         assert_eq!(d.rdp_security.as_deref(), Some("tls"));
+    }
+
+    #[test]
+    fn entry_auto_size_reads_entry_protocol_config() {
+        use std::path::Path;
+        let db = crate::db::init_db(Path::new(":memory:")).expect("test db");
+        let folder_id = crate::db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+        let mut cfg = serde_json::Map::new();
+        cfg.insert("auto_size".into(), serde_json::json!(false));
+        let config = serde_json::to_string(&serde_json::Value::Object(cfg)).unwrap();
+        crate::db::create_ab_entry(
+            &db,
+            folder_id,
+            "win1",
+            "Win 1",
+            "rdp",
+            "10.0.0.5",
+            Some(3389),
+            "user",
+            &config,
+            "",
+        )
+        .unwrap();
+
+        let some_db = Some(db);
+        // The stored per-entry flag wins over the global default.
+        assert_eq!(entry_auto_size(&some_db, Some("shared/IT/win1")), Some(false));
+        // Missing entries and key-less calls return None.
+        assert_eq!(entry_auto_size(&some_db, Some("shared/IT/nope")), None);
+        assert_eq!(entry_auto_size(&some_db, None), None);
+        assert_eq!(entry_auto_size(&None, Some("shared/IT/win1")), None);
+        // Non-rdp/ssh protocols never carry the flag.
+        crate::db::create_ab_entry(
+            some_db.as_ref().unwrap(),
+            folder_id,
+            "web1",
+            "Web 1",
+            "web",
+            "10.0.0.6",
+            Some(80),
+            "user",
+            &config,
+            "",
+        )
+        .unwrap();
+        assert_eq!(entry_auto_size(&some_db, Some("shared/IT/web1")), None);
+        // An entry without an auto_size key returns None (global default).
+        crate::db::create_ab_entry(
+            some_db.as_ref().unwrap(),
+            folder_id,
+            "ssh1",
+            "Ssh 1",
+            "ssh",
+            "10.0.0.7",
+            Some(22),
+            "user",
+            "{}",
+            "",
+        )
+        .unwrap();
+        assert_eq!(entry_auto_size(&some_db, Some("shared/IT/ssh1")), None);
     }
 
     #[tokio::test]

@@ -64,8 +64,10 @@ const SETTING_KEYS: &[&str] = &[
     "default_rdp_h264",
     "default_rdp_gfx",
     "default_rdp_drive",
+    "default_rdp_auto_size",
     "default_ssh_width",
     "default_ssh_height",
+    "default_ssh_auto_size",
     "default_vnc_color_depth",
     "default_vnc_disable_copy",
     "default_vnc_disable_paste",
@@ -129,6 +131,8 @@ const BOOL_KEYS: &[&str] = &[
     "default_rdp_h264",
     "default_rdp_gfx",
     "default_rdp_drive",
+    "default_rdp_auto_size",
+    "default_ssh_auto_size",
     "default_vnc_disable_copy",
     "default_vnc_disable_paste",
 ];
@@ -205,8 +209,10 @@ fn default_value(key: &str) -> Value {
         "default_rdp_h264" => json!(true),
         "default_rdp_gfx" => json!(true),
         "default_rdp_drive" => json!(false),
+        "default_rdp_auto_size" => json!(true),
         "default_ssh_width" => json!(1920u64),
         "default_ssh_height" => json!(1080u64),
+        "default_ssh_auto_size" => json!(true),
         "default_vnc_color_depth" => json!(24u64),
         "default_vnc_disable_copy" => json!(false),
         "default_vnc_disable_paste" => json!(false),
@@ -822,8 +828,10 @@ mod tests {
         assert_eq!(default_value("default_rdp_h264"), json!(true));
         assert_eq!(default_value("default_rdp_gfx"), json!(true));
         assert_eq!(default_value("default_rdp_drive"), json!(false));
+        assert_eq!(default_value("default_rdp_auto_size"), json!(true));
         assert_eq!(default_value("default_ssh_width"), json!(1920u64));
         assert_eq!(default_value("default_ssh_height"), json!(1080u64));
+        assert_eq!(default_value("default_ssh_auto_size"), json!(true));
         assert_eq!(default_value("default_vnc_color_depth"), json!(24u64));
         assert_eq!(default_value("default_vnc_disable_copy"), json!(false));
         assert_eq!(default_value("default_vnc_disable_paste"), json!(false));
@@ -834,6 +842,14 @@ mod tests {
         assert_eq!(stored_to_value("default_rdp_width", "1280"), json!(1280u64));
         assert_eq!(stored_to_value("default_rdp_h264", "false"), json!(false));
         assert_eq!(stored_to_value("default_rdp_security", "nla"), json!("nla"));
+        assert_eq!(
+            stored_to_value("default_rdp_auto_size", "false"),
+            json!(false)
+        );
+        assert_eq!(
+            stored_to_value("default_ssh_auto_size", "true"),
+            json!(true)
+        );
         assert_eq!(
             stored_to_value("default_vnc_color_depth", "16"),
             json!(16u64)
@@ -860,6 +876,15 @@ mod tests {
             canonicalize("default_vnc_disable_copy", &json!(false)).unwrap(),
             "false"
         );
+        assert_eq!(
+            canonicalize("default_rdp_auto_size", &json!(false)).unwrap(),
+            "false"
+        );
+        assert_eq!(
+            canonicalize("default_ssh_auto_size", &json!(true)).unwrap(),
+            "true"
+        );
+        assert!(canonicalize("default_rdp_auto_size", &json!("maybe")).is_err());
         // Zero and oversized values are rejected.
         assert!(canonicalize("default_rdp_width", &json!(0)).is_err());
         assert!(canonicalize("default_rdp_width", &json!(9000)).is_err());

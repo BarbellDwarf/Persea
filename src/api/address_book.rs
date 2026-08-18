@@ -248,6 +248,7 @@ fn ab_entry_from_db(row: &db::AbEntry) -> AddressBookEntry {
         autohide_side_tabs: protocol_config
             .get("autohide_side_tabs")
             .and_then(|v| v.as_bool()),
+        auto_size: protocol_config.get("auto_size").and_then(|v| v.as_bool()),
         spice_tls: protocol_config.get("spice_tls").and_then(|v| v.as_bool()),
         spice_tls_port: protocol_config
             .get("spice_tls_port")
@@ -469,6 +470,9 @@ pub(crate) fn build_protocol_config(
     }
     if let Some(v) = entry.autohide_side_tabs {
         config.insert("autohide_side_tabs".into(), json!(v));
+    }
+    if let Some(v) = entry.auto_size {
+        config.insert("auto_size".into(), json!(v));
     }
     if let Some(v) = entry.spice_tls {
         config.insert("spice_tls".into(), json!(v));
@@ -1281,6 +1285,169 @@ pub async fn ab_get_custom_fields(
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
     Ok(Json(super::settings::custom_fields_value(&stored)))
+}
+
+/// Request body for `PUT /api/addressbook/defaults/apply`.
+#[derive(Debug, Deserialize)]
+pub struct ApplyAutoSizeDefaultsRequest {
+    /// Protocols whose entries get the current global auto-size default
+    /// written into their `protocol_config`: `"rdp"` and/or `"ssh"`.
+    /// Missing or empty applies both. Anything else is rejected.
+    #[serde(default)]
+    pub protocols: Option<Vec<String>>,
+}
+
+/// `PUT /api/addressbook/defaults/apply`: apply the current global
+/// auto-size defaults (`default_rdp_auto_size` / `default_ssh_auto_size`)
+/// to every rdp and/or ssh entry's `protocol_config.auto_size`. Admin-only,
+/// idempotent (a second run changes nothing and counts 0), audited on the
+/// admin hash chain. Returns the number of entries updated, the protocols
+/// touched, and the defaults that were applied.
+pub async fn ab_apply_auto_size_defaults(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    identity: Option<Extension<AuthIdentity>>,
+    trusted: Option<Extension<TrustedProxies>>,
+    Extension(database): Extension<Db>,
+    Json(req): Json<ApplyAutoSizeDefaultsRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let admin_email = match identity.as_ref() {
+        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
+        _ => return Err(AppError::Forbidden("admin role required".into())),
+    };
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    // Resolve the requested protocol scope. Missing or empty means both;
+    // an unknown protocol is rejected rather than silently ignored.
+    let mut want_rdp = false;
+    let mut want_ssh = false;
+    let mut matched_any = false;
+    if let Some(protocols) = req.protocols {
+        for p in protocols {
+            match p.as_str() {
+                "rdp" => want_rdp = true,
+                "ssh" => want_ssh = true,
+                other => {
+                    return Err(AppError::Validation(format!(
+                        "unsupported protocol '{other}': expected \"rdp\" or \"ssh\""
+                    )))
+                }
+            }
+            matched_any = true;
+        }
+    }
+    if !matched_any {
+        want_rdp = true;
+        want_ssh = true;
+    }
+
+    // The current global defaults drive the bulk write. An unset key falls
+    // back to true, the pre-feature client behaviour.
+    let db_clone = database.clone();
+    let settings = tokio::task::spawn_blocking(move || {
+        crate::settings_merge::load_db_settings(&db_clone)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .unwrap_or_default();
+    let rdp_auto_size =
+        crate::settings_merge::toggle_enabled(&settings, "default_rdp_auto_size", true);
+    let ssh_auto_size =
+        crate::settings_merge::toggle_enabled(&settings, "default_ssh_auto_size", true);
+
+    // PowerShell entries are SSH sessions (session creation maps them to
+    // SessionType::Ssh), so the SSH default applies to them too.
+    let mut protocols: Vec<String> = Vec::new();
+    if want_rdp {
+        protocols.push("rdp".into());
+    }
+    if want_ssh {
+        protocols.push("ssh".into());
+        protocols.push("powershell".into());
+    }
+
+    let db_clone = database.clone();
+    let protocols_clone = protocols.clone();
+    let entries = tokio::task::spawn_blocking(move || {
+        db::list_ab_entries_by_protocols(&db_clone, &protocols_clone)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Write auto_size where the stored value differs from the default. The
+    // update runs in one spawn_blocking so the loop holds the lock once.
+    let db_clone = database.clone();
+    let applied = tokio::task::spawn_blocking(move || {
+        let mut applied = 0u64;
+        for entry in &entries {
+            let default = if entry.protocol == "rdp" {
+                rdp_auto_size
+            } else {
+                ssh_auto_size
+            };
+            let mut config: serde_json::Map<String, serde_json::Value> =
+                serde_json::from_str(&entry.protocol_config)
+                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
+                    .as_object()
+                    .cloned()
+                    .unwrap_or_default();
+            let current = config.get("auto_size").and_then(|v| v.as_bool());
+            if current == Some(default) {
+                continue;
+            }
+            config.insert("auto_size".into(), json!(default));
+            let serialized = serde_json::to_string(&config).unwrap_or_else(|_| "{}".into());
+            let changed =
+                db::set_ab_entry_protocol_config(&db_clone, entry.id, &serialized).unwrap_or(false);
+            if changed {
+                applied += 1;
+            }
+        }
+        Ok::<u64, rusqlite::Error>(applied)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+    // Audit the admin mutation on the hash chain (same pattern as the other
+    // admin mutations in users.rs / groups.rs).
+    {
+        let db_audit = database.clone();
+        let admin_name = admin_email.clone();
+        let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
+        let details = json!({
+            "action": "apply_auto_size_defaults",
+            "protocols": protocols.clone(),
+            "applied": applied,
+            "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
+        });
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let _ = crate::audit::log_event(
+                &db_audit,
+                &mut crate::audit::EventBuilder::new("admin.config.change", "success")
+                    .user_id(&admin_name)
+                    .source_ip(&ip)
+                    .details(details)
+                    .build(),
+            );
+        })
+        .await
+        {
+            tracing::error!(error = %e, "audit task failed");
+        }
+    }
+
+    Ok(Json(json!({
+        "applied": applied,
+        "protocols": protocols,
+        "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
+    })))
 }
 
 /// `POST /api/ssh/probe-host-key`: fetch an SSH host key from a
@@ -3159,6 +3326,10 @@ mod tests {
                 get(super::ab_get_custom_fields),
             )
             .route(
+                "/api/addressbook/defaults/apply",
+                put(super::ab_apply_auto_size_defaults),
+            )
+            .route(
                 "/api/addressbook/folders/{scope}/{folder}/entries",
                 get(super::ab_list_entries),
             )
@@ -3676,6 +3847,244 @@ mod tests {
             .unwrap();
         let body = body_json(response).await;
         assert_eq!(body, json!([]), "feature is off by default");
+    }
+
+    // ── Bulk auto-size defaults apply (persea#142) ────────────────────────
+
+    #[tokio::test]
+    async fn test_apply_auto_size_defaults_updates_entries_and_is_idempotent() {
+        let db = test_db();
+        let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "win1",
+            "Win 1",
+            "rdp",
+            "10.0.0.5",
+            Some(3389),
+            "user",
+            r#"{"security":"nla"}"#,
+            "",
+        )
+        .unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "ssh1",
+            "Ssh 1",
+            "ssh",
+            "10.0.0.7",
+            Some(22),
+            "user",
+            "{}",
+            "",
+        )
+        .unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "web1",
+            "Web 1",
+            "web",
+            "10.0.0.6",
+            Some(80),
+            "user",
+            "{}",
+            "",
+        )
+        .unwrap();
+
+        // Defaults are unset, so the fallback (true) applies to rdp + ssh
+        // entries; the web entry must be untouched.
+        let key = insert_test_admin(&db, "admin");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/defaults/apply",
+                &key,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["applied"], json!(2));
+        let protocols = body["protocols"].as_array().unwrap();
+        assert!(protocols.contains(&json!("rdp")), "got: {protocols:?}");
+        assert!(protocols.contains(&json!("ssh")), "got: {protocols:?}");
+        assert_eq!(body["auto_size"]["rdp"], json!(true));
+        assert_eq!(body["auto_size"]["ssh"], json!(true));
+
+        let entries = db::list_ab_entries(&db, folder).unwrap();
+        for e in &entries {
+            let cfg: Value = serde_json::from_str(&e.protocol_config).unwrap();
+            match e.protocol.as_str() {
+                "rdp" | "ssh" => {
+                    assert_eq!(cfg["auto_size"], json!(true), "entry {}", e.name);
+                }
+                "web" => {
+                    assert!(cfg.get("auto_size").is_none(), "web entry must not change");
+                }
+                _ => panic!("unexpected protocol {}", e.protocol),
+            }
+        }
+
+        // Idempotent: a second apply changes nothing and counts 0.
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/defaults/apply",
+                &key,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["applied"], json!(0), "second apply must be a no-op");
+    }
+
+    #[tokio::test]
+    async fn test_apply_auto_size_defaults_scope_and_stored_default() {
+        let db = test_db();
+        let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "win1",
+            "Win 1",
+            "rdp",
+            "10.0.0.5",
+            Some(3389),
+            "user",
+            r#"{"auto_size":true}"#,
+            "",
+        )
+        .unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "ssh1",
+            "Ssh 1",
+            "ssh",
+            "10.0.0.7",
+            Some(22),
+            "user",
+            "{}",
+            "",
+        )
+        .unwrap();
+        // Global defaults: both protocols stored as off.
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO system_settings (key, value) VALUES ('default_rdp_auto_size', 'false') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO system_settings (key, value) VALUES ('default_ssh_auto_size', 'false') ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [],
+            )
+            .unwrap();
+        }
+
+        // ssh scope only: the rdp entry keeps its stored true; the ssh
+        // entry takes the stored false default.
+        let key = insert_test_admin(&db, "admin");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/defaults/apply",
+                &key,
+                json!({"protocols": ["ssh"]}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["applied"], json!(1));
+
+        let entries = db::list_ab_entries(&db, folder).unwrap();
+        for e in &entries {
+            let cfg: Value = serde_json::from_str(&e.protocol_config).unwrap();
+            match e.protocol.as_str() {
+                "rdp" => assert_eq!(
+                    cfg["auto_size"],
+                    json!(true),
+                    "rdp scope must not touch rdp entries"
+                ),
+                "ssh" => assert_eq!(
+                    cfg["auto_size"],
+                    json!(false),
+                    "ssh entries get the stored ssh default"
+                ),
+                _ => panic!("unexpected protocol {}", e.protocol),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_auto_size_defaults_admin_gated_and_validates_protocols() {
+        let db = test_db();
+        let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "win1",
+            "Win 1",
+            "rdp",
+            "10.0.0.5",
+            Some(3389),
+            "user",
+            "{}",
+            "",
+        )
+        .unwrap();
+
+        // An authenticated operator is denied.
+        insert_test_user(&db, "op@test.com", "Op", "operator");
+        let user = db::get_user_by_email(&db, "op@test.com").unwrap();
+        let session = db::create_auth_session(&db, user.id, 3600).unwrap();
+        let mut req = Request::builder()
+            .method("PUT")
+            .uri("/api/addressbook/defaults/apply")
+            .header("cookie", format!("persea_session={session}"))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&json!({})).unwrap()))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(test_addr()));
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app.oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // An unknown protocol is rejected up front.
+        let key = insert_test_admin(&db, "admin");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/defaults/apply",
+                &key,
+                json!({"protocols": ["vnc"]}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Nothing was written by either failed attempt.
+        let entries = db::list_ab_entries(&db, folder).unwrap();
+        let cfg: Value = serde_json::from_str(&entries[0].protocol_config).unwrap();
+        assert!(cfg.get("auto_size").is_none());
     }
 
     // ── Address book ACL hardening (persea#33) ─────────────────────────────

@@ -26,9 +26,11 @@ pub const PROTOCOL_DEFAULT_KEYS: &[(&str, &str)] = &[
     ("default_rdp_h264", "true"),
     ("default_rdp_gfx", "true"),
     ("default_rdp_drive", "false"),
+    ("default_rdp_auto_size", "true"),
     // SSH
     ("default_ssh_width", "1920"),
     ("default_ssh_height", "1080"),
+    ("default_ssh_auto_size", "true"),
     // VNC
     ("default_vnc_color_depth", "24"),
     ("default_vnc_disable_copy", "false"),

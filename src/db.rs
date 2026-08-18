@@ -3655,6 +3655,75 @@ pub fn update_ab_entry(
     Ok(changed > 0)
 }
 
+/// List address book entries whose protocol is one of the given values
+/// (for example "rdp", "ssh", "powershell"), across every folder, ordered
+/// by name. Used by the bulk auto-size defaults apply. An empty protocol
+/// list matches nothing.
+pub fn list_ab_entries_by_protocols(
+    db: &Db,
+    protocols: &[&str],
+) -> rusqlite::Result<Vec<AbEntry>> {
+    db_route!(
+        db,
+        list_ab_entries_by_protocols_pool,
+        protocols.iter().map(|p| p.to_string()).collect::<Vec<_>>()
+    );
+    if protocols.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = db.lock().unwrap();
+    let placeholders = protocols.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+    let sql = format!(
+        "SELECT id, folder_id, name, display_name, protocol, hostname, port,
+                username, protocol_config, allowed_groups, created_at, updated_at
+         FROM address_book_entries WHERE protocol IN ({placeholders}) ORDER BY name"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params_vec: Vec<Box<dyn rusqlite::types::ToSql>> = protocols
+        .iter()
+        .map(|p| Box::new(p.to_string()) as Box<dyn rusqlite::types::ToSql>)
+        .collect();
+    let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
+        Ok(AbEntry {
+            id: row.get(0)?,
+            folder_id: row.get(1)?,
+            name: row.get(2)?,
+            display_name: row.get(3)?,
+            protocol: row.get(4)?,
+            hostname: row.get(5)?,
+            port: row.get::<_, Option<i64>>(6)?.map(|p| p as u16),
+            username: row.get(7)?,
+            protocol_config: row.get(8)?,
+            allowed_groups: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// Update only the `protocol_config` JSON of an entry, leaving every other
+/// column untouched. Used by the bulk auto-size defaults apply.
+pub fn set_ab_entry_protocol_config(
+    db: &Db,
+    entry_id: i64,
+    protocol_config: &str,
+) -> rusqlite::Result<bool> {
+    db_route!(
+        db,
+        set_ab_entry_protocol_config_pool,
+        entry_id,
+        protocol_config.to_string()
+    );
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE address_book_entries SET protocol_config = ?2, updated_at = datetime('now')
+         WHERE id = ?1",
+        params![entry_id, protocol_config],
+    )?;
+    Ok(changed > 0)
+}
+
 /// Delete an entry and cascade-delete its credentials.
 pub fn delete_ab_entry(db: &Db, entry_id: i64) -> rusqlite::Result<bool> {
     db_route!(db, delete_ab_entry_pool, entry_id);
@@ -8898,6 +8967,57 @@ async fn update_ab_entry_pool(
             Arg::Str(protocol_config),
             Arg::Str(allowed_groups),
         ],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(changed > 0)
+}
+
+async fn list_ab_entries_by_protocols_pool(
+    pool: &DbPool,
+    protocols: Vec<String>,
+) -> rusqlite::Result<Vec<AbEntry>> {
+    if protocols.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders: Vec<String> = protocols
+        .iter()
+        .enumerate()
+        .map(|(i, _)| match pool {
+            DbPool::Postgres(_) => format!("${}", i + 1),
+            _ => "?".to_string(),
+        })
+        .collect();
+    let sql = format!(
+        "SELECT id, folder_id, name, display_name, protocol, hostname, port, username, protocol_config, allowed_groups, created_at, updated_at \
+         FROM address_book_entries WHERE protocol IN ({}) ORDER BY name",
+        placeholders.join(", ")
+    );
+    let args: Vec<Arg> = protocols.into_iter().map(Arg::Str).collect();
+    let rows = match pool {
+        DbPool::Postgres(p) => pg_fetch(p, &sql, &args).await,
+        DbPool::MySQL(p) => mysql_fetch(p, &sql, &args).await,
+        DbPool::SQLite(p) => sqlite_fetch(p, &sql, &args).await,
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(rows.iter().map(|row| ab_entry_row!(row)).collect())
+}
+
+async fn set_ab_entry_protocol_config_pool(
+    pool: &DbPool,
+    entry_id: i64,
+    protocol_config: String,
+) -> rusqlite::Result<bool> {
+    let changed = pool_exec(
+        pool,
+        &format!(
+            "UPDATE address_book_entries SET protocol_config = {}, updated_at = {} WHERE id = {}",
+            ph1(pool),
+            ts_now(pool),
+            ph2(pool)
+        ),
+        &[Arg::Str(protocol_config), Arg::I64(entry_id)],
     )
     .await
     .map_err(map_sqlx_err)?;

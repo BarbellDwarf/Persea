@@ -2368,6 +2368,10 @@ async fn run_server(
             "/api/addressbook/custom-fields",
             get(api::ab_get_custom_fields),
         )
+        .route(
+            "/api/addressbook/defaults/apply",
+            put(api::ab_apply_auto_size_defaults),
+        )
         .route("/api/ssh/probe-host-key", post(api::ssh_probe_host_key))
         // Jump host / tunnel management
         .route(
