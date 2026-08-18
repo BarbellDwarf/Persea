@@ -148,6 +148,9 @@ pub struct User {
     /// Comma-separated OIDC group memberships (updated on each login).
     #[serde(default)]
     pub oidc_groups: String,
+    /// Auth source for this account: `database` (local password) or
+    /// `oidc`. Written at creation and refreshed on each login.
+    pub auth_source: String,
 }
 
 impl User {
@@ -322,7 +325,8 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             custom_role_id TEXT,
             disabled       INTEGER NOT NULL DEFAULT 0,
             created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-            last_login_at  TEXT
+            last_login_at  TEXT,
+            auth_source    TEXT NOT NULL DEFAULT 'database'
         );
 
         CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -471,6 +475,17 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         .is_ok();
     if !has_custom_role_id {
         conn.execute_batch("ALTER TABLE users ADD COLUMN custom_role_id TEXT")?;
+    }
+
+    // Migration: auth_source column. Fresh databases get the column from
+    // the CREATE TABLE above; existing databases are ALTERed here.
+    let has_auth_source: bool = conn
+        .prepare("SELECT auth_source FROM users LIMIT 0")
+        .is_ok();
+    if !has_auth_source {
+        conn.execute_batch(
+            "ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'database'",
+        )?;
     }
 
     // Migration: connection reason column (V09). Fresh databases get the
@@ -932,19 +947,23 @@ pub fn upsert_user(
         groups_str
     );
     let groups_str = groups.join(",");
+    // An OIDC login always carries a subject; plain users created through
+    // this entry point default to the database source.
+    let auth_source = if oidc_subject.is_some() { "oidc" } else { "database" };
     let conn = db.lock().unwrap();
     conn.execute(
-        "INSERT INTO users (email, name, oidc_subject, role, oidc_groups)
-         VALUES (?1, ?2, ?3, ?4, ?5)
+        "INSERT INTO users (email, name, oidc_subject, role, oidc_groups, auth_source)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(email) DO UPDATE SET
              name = excluded.name,
              oidc_subject = COALESCE(excluded.oidc_subject, users.oidc_subject),
              oidc_groups = excluded.oidc_groups,
+             auth_source = excluded.auth_source,
              last_login_at = datetime('now')",
-        params![email, name, oidc_subject, default_role, groups_str],
+        params![email, name, oidc_subject, default_role, groups_str, auth_source],
     )?;
     conn.query_row(
-        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id
+        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source
          FROM users WHERE email = ?1",
         params![email],
         |row| {
@@ -959,6 +978,7 @@ pub fn upsert_user(
                 last_login_at: row.get(7)?,
                 oidc_groups: row.get(8)?,
                 custom_role_id: row.get(9)?,
+                auth_source: row.get(10)?,
             })
         },
     )
@@ -995,7 +1015,7 @@ pub fn get_user_by_email(db: &Db, email: &str) -> rusqlite::Result<User> {
     db_route!(db, get_user_by_email_pool, email.to_string());
     let conn = db.lock().unwrap();
     conn.query_row(
-        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id
+        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source
          FROM users WHERE email = ?1",
         params![email],
         |row| {
@@ -1010,6 +1030,7 @@ pub fn get_user_by_email(db: &Db, email: &str) -> rusqlite::Result<User> {
                 last_login_at: row.get(7)?,
                 oidc_groups: row.get(8)?,
                 custom_role_id: row.get(9)?,
+                auth_source: row.get(10)?,
             })
         },
     )
@@ -1145,7 +1166,7 @@ pub fn validate_auth_session(db: &Db, token: &str) -> Result<User, AuthError> {
     let token_hash = hash_key(token);
     let conn = db.lock().unwrap();
     conn.query_row(
-        "SELECT u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, u.custom_role_id
+        "SELECT u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, u.custom_role_id, u.auth_source
          FROM auth_sessions s
          JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = ?1 AND s.expires_at > datetime('now')",
@@ -1162,6 +1183,7 @@ pub fn validate_auth_session(db: &Db, token: &str) -> Result<User, AuthError> {
                 last_login_at: row.get(7)?,
                 oidc_groups: row.get(8)?,
                 custom_role_id: row.get(9)?,
+                auth_source: row.get(10)?,
             })
         },
     )
@@ -1280,7 +1302,7 @@ pub fn list_users(db: &Db) -> rusqlite::Result<Vec<User>> {
     db_route!(db, list_users_pool);
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id
+        "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source
          FROM users ORDER BY id",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -1295,6 +1317,7 @@ pub fn list_users(db: &Db) -> rusqlite::Result<Vec<User>> {
             last_login_at: row.get(7)?,
             oidc_groups: row.get(8)?,
             custom_role_id: row.get(9)?,
+            auth_source: row.get(10)?,
         })
     })?;
     rows.collect()
@@ -1628,7 +1651,7 @@ pub fn validate_user_token(db: &Db, token: &str) -> Result<(User, UserApiToken),
         .prepare(
             "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at,
                     u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups,
-                    t.token_hash, u.custom_role_id
+                    t.token_hash, u.custom_role_id, u.auth_source
              FROM user_api_tokens t
              JOIN users u ON u.id = t.user_id",
         )
@@ -1657,6 +1680,7 @@ pub fn validate_user_token(db: &Db, token: &str) -> Result<(User, UserApiToken),
                 last_login_at: row.get(15)?,
                 oidc_groups: row.get(16)?,
                 custom_role_id: row.get(18)?,
+                auth_source: row.get(19)?,
             };
             Ok((user, token_info, stored_hash))
         })
@@ -3774,6 +3798,7 @@ mod tests {
             custom_role_id: None,
             disabled: false,
             oidc_groups: "admins,developers,ops".into(),
+            auth_source: "oidc".into(),
         };
         assert_eq!(user.groups_vec(), vec!["admins", "developers", "ops"]);
     }
@@ -3791,6 +3816,7 @@ mod tests {
             custom_role_id: None,
             disabled: false,
             oidc_groups: String::new(),
+            auth_source: "database".into(),
         };
         assert!(user.groups_vec().is_empty());
     }
@@ -3808,12 +3834,77 @@ mod tests {
             custom_role_id: None,
             disabled: false,
             oidc_groups: "solo-group".into(),
+            auth_source: "database".into(),
         };
         assert_eq!(user.groups_vec(), vec!["solo-group"]);
     }
 
     fn test_db() -> Db {
         init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    #[test]
+    fn test_upsert_oidc_user_sets_auth_source() {
+        let db = test_db();
+        // Create path: an OIDC login (subject present) records 'oidc'.
+        let user = upsert_user(&db, "oidc@example.com", "OIDC User", Some("sub-1"), "viewer", &[])
+            .unwrap();
+        assert_eq!(user.auth_source, "oidc");
+        assert_eq!(get_user_auth_source(&db, "oidc@example.com").unwrap(), "oidc");
+    }
+
+    #[test]
+    fn test_upsert_oidc_update_keeps_auth_source() {
+        let db = test_db();
+        upsert_user(&db, "oidc@example.com", "OIDC User", Some("sub-1"), "viewer", &["admins"])
+            .unwrap();
+        // Update path: a second OIDC login refreshes the row and must not
+        // reset auth_source back to the column default.
+        let updated = upsert_user(
+            &db,
+            "oidc@example.com",
+            "OIDC User",
+            Some("sub-1"),
+            "viewer",
+            &["admins", "ops"],
+        )
+        .unwrap();
+        assert_eq!(updated.auth_source, "oidc");
+        assert_eq!(get_user_auth_source(&db, "oidc@example.com").unwrap(), "oidc");
+        // The row is updated in place, not duplicated.
+        assert_eq!(list_users(&db).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_upsert_without_subject_defaults_database() {
+        let db = test_db();
+        let user = upsert_user(&db, "local@example.com", "Local User", None, "viewer", &[])
+            .unwrap();
+        assert_eq!(user.auth_source, "database");
+        assert_eq!(
+            get_user_auth_source(&db, "local@example.com").unwrap(),
+            "database"
+        );
+    }
+
+    #[test]
+    fn test_list_users_includes_auth_source() {
+        let db = test_db();
+        let hash = crate::password::hash_password("s3cret-p@ss").unwrap();
+        create_user_with_password(&db, "local@example.com", "Local User", &hash, "viewer", "database")
+            .unwrap();
+        upsert_user(&db, "oidc@example.com", "OIDC User", Some("sub-9"), "viewer", &[]).unwrap();
+        let users = list_users(&db).unwrap();
+        assert_eq!(users.len(), 2);
+        let by_email: std::collections::HashMap<&str, &User> = users
+            .iter()
+            .map(|u| (u.email.as_str(), u))
+            .collect();
+        assert_eq!(by_email["local@example.com"].auth_source, "database");
+        assert_eq!(by_email["oidc@example.com"].auth_source, "oidc");
+        // The same field is what the users list API serializes per user.
+        let serialized = serde_json::to_value(&by_email["local@example.com"]).unwrap();
+        assert_eq!(serialized["auth_source"], "database");
     }
 
     #[test]
@@ -5174,6 +5265,7 @@ macro_rules! user_row {
             last_login_at: $row.get(7),
             oidc_groups: $row.get(8),
             custom_role_id: $row.get(9),
+            auth_source: $row.get(10),
         }
     };
 }
@@ -5186,47 +5278,54 @@ async fn upsert_user_pool(
     default_role: String,
     groups_str: String,
 ) -> rusqlite::Result<User> {
+    // An OIDC login always carries a subject; plain users created through
+    // this entry point default to the database source.
+    let auth_source = if oidc_subject.is_some() { "oidc" } else { "database" };
     let sql = qsql!(
         pool,
-        "INSERT INTO users (email, username, name, oidc_subject, role, oidc_groups) \
-         VALUES ($1, $1, $2, $3, $4, $5) \
+        "INSERT INTO users (email, username, name, oidc_subject, role, oidc_groups, auth_source) \
+         VALUES ($1, $1, $2, $3, $4, $5, $6) \
          ON CONFLICT (email) DO UPDATE SET \
              name = excluded.name, \
              username = excluded.username, \
              oidc_subject = COALESCE(excluded.oidc_subject, users.oidc_subject), \
              oidc_groups = excluded.oidc_groups, \
+             auth_source = excluded.auth_source, \
              last_login_at = to_char((now() at time zone 'utc'), 'YYYY-MM-DD HH24:MI:SS')",
-        "INSERT INTO users (email, username, name, oidc_subject, role, oidc_groups) \
-         VALUES (?, ?, ?, ?, ?, ?) \
+        "INSERT INTO users (email, username, name, oidc_subject, role, oidc_groups, auth_source) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) \
          ON CONFLICT (email) DO UPDATE SET \
              name = excluded.name, \
              username = excluded.username, \
              oidc_subject = COALESCE(excluded.oidc_subject, users.oidc_subject), \
              oidc_groups = excluded.oidc_groups, \
+             auth_source = excluded.auth_source, \
              last_login_at = datetime('now')"
     );
-    let mysql_sql = "INSERT INTO users (email, username, name, oidc_subject, `role`, oidc_groups) \
-         VALUES (?, ?, ?, ?, ?, ?) AS new \
+    let mysql_sql = "INSERT INTO users (email, username, name, oidc_subject, `role`, oidc_groups, auth_source) \
+         VALUES (?, ?, ?, ?, ?, ?, ?) AS new \
          ON DUPLICATE KEY UPDATE \
              name = new.name, \
              username = new.username, \
              oidc_subject = COALESCE(new.oidc_subject, users.oidc_subject), \
              oidc_groups = new.oidc_groups, \
+             auth_source = new.auth_source, \
              last_login_at = DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:%s')";
     let sql = match pool {
         DbPool::MySQL(_) => mysql_sql,
         _ => sql,
     };
     let args = match pool {
-        // MySQL has no $n reuse: the email placeholder appears twice
-        // (email + username columns), so it needs two binds.
-        DbPool::MySQL(_) => vec![
+        // MySQL and SQLite have no $n reuse: the email placeholder appears
+        // twice (email + username columns), so it needs two binds.
+        DbPool::MySQL(_) | DbPool::SQLite(_) => vec![
             Arg::Str(email.clone()),
             Arg::Str(email.clone()),
             Arg::Str(name),
             Arg::OptStr(oidc_subject),
             Arg::Str(default_role),
             Arg::Str(groups_str),
+            Arg::Str(auth_source.to_string()),
         ],
         _ => vec![
             Arg::Str(email.clone()),
@@ -5234,19 +5333,20 @@ async fn upsert_user_pool(
             Arg::OptStr(oidc_subject),
             Arg::Str(default_role),
             Arg::Str(groups_str),
+            Arg::Str(auth_source.to_string()),
         ],
     };
     pool_exec(pool, sql, &args).await.map_err(map_sqlx_err)?;
 
     let rows = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = $1", &[Arg::Str(email)]).await
+            pg_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source FROM users WHERE email = $1", &[Arg::Str(email)]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = ?", &[Arg::Str(email)]).await
+            mysql_fetch(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source FROM users WHERE email = ?", &[Arg::Str(email)]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = ?", &[Arg::Str(email)]).await
+            sqlite_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source FROM users WHERE email = ?", &[Arg::Str(email)]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
@@ -5346,13 +5446,13 @@ async fn create_user_with_password_pool(
 async fn get_user_by_email_pool(pool: &DbPool, email: String) -> rusqlite::Result<User> {
     let row = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch_opt(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = $1", &[Arg::Str(email)]).await
+            pg_fetch_opt(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source FROM users WHERE email = $1", &[Arg::Str(email)]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch_opt(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = ?", &[Arg::Str(email)]).await
+            mysql_fetch_opt(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source FROM users WHERE email = ?", &[Arg::Str(email)]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch_opt(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users WHERE email = ?", &[Arg::Str(email)]).await
+            sqlite_fetch_opt(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source FROM users WHERE email = ?", &[Arg::Str(email)]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
@@ -5397,13 +5497,13 @@ async fn get_user_auth_source_pool(pool: &DbPool, email: String) -> rusqlite::Re
 async fn list_users_pool(pool: &DbPool) -> rusqlite::Result<Vec<User>> {
     let rows = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users ORDER BY id", &[]).await
+            pg_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source FROM users ORDER BY id", &[]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users ORDER BY id", &[]).await
+            mysql_fetch(p, "SELECT id, email, name, oidc_subject, `role`, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source FROM users ORDER BY id", &[]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id FROM users ORDER BY id", &[]).await
+            sqlite_fetch(p, "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source FROM users ORDER BY id", &[]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
@@ -5986,7 +6086,7 @@ async fn delete_user_sessions_pool(pool: &DbPool, user_id: i64) -> rusqlite::Res
 async fn validate_auth_session_pool(pool: &DbPool, token: String) -> Result<User, AuthError> {
     let token_hash = hash_key(&token);
     let sql = format!(
-        "SELECT u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, u.custom_role_id \
+        "SELECT u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, u.custom_role_id, u.auth_source \
          FROM auth_sessions s JOIN users u ON u.id = s.user_id \
          WHERE s.token_hash = {} AND s.expires_at > {}",
         ph1(pool),
@@ -6443,11 +6543,11 @@ async fn validate_user_token_pool(
         pool,
         "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, \
                 u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, \
-                t.token_hash, u.custom_role_id \
+                t.token_hash, u.custom_role_id, u.auth_source \
          FROM user_api_tokens t JOIN users u ON u.id = t.user_id",
         "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, \
                 u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, \
-                t.token_hash, u.custom_role_id \
+                t.token_hash, u.custom_role_id, u.auth_source \
          FROM user_api_tokens t JOIN users u ON u.id = t.user_id"
     );
     let rows = match pool {
@@ -6487,6 +6587,7 @@ async fn validate_user_token_pool(
         last_login_at: row.get(15),
         oidc_groups: row.get(16),
         custom_role_id: row.get(18),
+        auth_source: row.get(19),
     };
 
     if token_info.disabled {
