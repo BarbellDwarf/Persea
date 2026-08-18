@@ -4518,7 +4518,7 @@ mod tests {
             "10.0.0.7",
             Some(22),
             "user",
-            r#"{"security":"nla","auth_pkg":"kerberos"}"#,
+            r#"{}"#,
             "",
         )
         .unwrap();
