@@ -90,7 +90,7 @@ fn valid_user_authenticates_with_groups() {
     };
     let chain = chain(&url, "(uid={})");
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let result = rt.block_on(chain.authenticate(&auth_request("alice", ALICE_PASSWORD)).await;)
+    let result = rt.block_on(chain.authenticate(&auth_request("alice", ALICE_PASSWORD)));
     match result {
         AuthResult::Success {
             subject,
@@ -117,7 +117,7 @@ fn second_user_authenticates_without_groups() {
     };
     let chain = chain(&url, "(uid={})");
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let result = rt.block_on(chain.authenticate(&auth_request("bob", BOB_PASSWORD)).await;)
+    let result = rt.block_on(chain.authenticate(&auth_request("bob", BOB_PASSWORD)));
     match result {
         AuthResult::Success {
             subject, groups, ..
@@ -142,7 +142,7 @@ fn wrong_password_fails() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(chain
         .authenticate(&auth_request("alice", "wrong-password-2026"))
-        .await;)
+        );
     match result {
         AuthResult::Failure(msg) => assert_eq!(msg, "invalid credentials"),
         other => panic!("expected Failure, got {other}"),
@@ -159,7 +159,7 @@ fn unknown_user_fails_identically() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let result = rt.block_on(chain
         .authenticate(&auth_request("carol", "any-password-2026"))
-        .await;)
+        );
     match result {
         // Anti-enumeration: an unknown user must produce the exact same
         // failure as a wrong password, so the search cannot be used as a
@@ -178,7 +178,7 @@ fn ambiguous_filter_fails_closed() {
     // (|(uid={})(uid=bob)) matches alice AND bob when the username is alice.
     let chain = chain(&url, "(|(uid={})(uid=bob))");
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let result = rt.block_on(chain.authenticate(&auth_request("alice", ALICE_PASSWORD)).await;)
+    let result = rt.block_on(chain.authenticate(&auth_request("alice", ALICE_PASSWORD)));
     match result {
         AuthResult::Failure(msg) => assert_eq!(msg, "invalid credentials"),
         other => panic!("expected Failure, got {other}"),
@@ -198,9 +198,8 @@ fn lookup_user_returns_user_info() {
     // entry at the base, which is what the lookup path needs.
     let chain = chain(&url, "(objectClass=inetOrgPerson)");
     let rt = tokio::runtime::Runtime::new().unwrap();
-    let info = rt.block_on(chain
-        .lookup_user(ALICE_DN)
-        .await)
+    let info = rt
+        .block_on(chain.lookup_user(ALICE_DN))
         .expect("lookup_user returned None");
     assert_eq!(info.subject, ALICE_DN);
     assert_eq!(info.display_name, "Alice Example");
