@@ -92,11 +92,13 @@ body {
     box-shadow: 4px 0 12px rgba(0,0,0,0.15);
 }
 
-/* Collapsed: hide text, center icons */
+/* Collapsed: hide text, center icons. Hidden text and labels must take no
+   layout space (height 0 / display none), not just be transparent, or their
+   line boxes and margins leave dead vertical gaps between the icons. */
 .sidebar.collapsed .nav-text,
-.sidebar.collapsed .sidebar-logo-text,
-.sidebar.collapsed .nav-section-label,
-.sidebar.collapsed .sidebar-version { opacity: 0; width: 0; overflow: hidden; }
+.sidebar.collapsed .sidebar-logo-text { opacity: 0; width: 0; height: 0; overflow: hidden; }
+.sidebar.collapsed .nav-section-label { display: none; }
+.sidebar.collapsed .sidebar-version { opacity: 0; width: 0; height: 0; margin: 0; overflow: hidden; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
 .sidebar.collapsed .sidebar-logo { justify-content: center; padding: 0; gap: 0; }
 
@@ -118,9 +120,9 @@ body {
 .sidebar.collapsed .sidebar-logo-text { width: 0; }
 
 /* Hover-expanded: show text, restore layout */
-.sidebar.collapsed:hover .nav-text { opacity: 1; width: auto; }
-.sidebar.collapsed:hover .sidebar-logo-text { opacity: 1; width: auto; }
-.sidebar.collapsed:hover .nav-section-label { opacity: 1; width: auto; }
+.sidebar.collapsed:hover .nav-text { opacity: 1; width: auto; height: auto; }
+.sidebar.collapsed:hover .sidebar-logo-text { opacity: 1; width: auto; height: auto; }
+.sidebar.collapsed:hover .nav-section-label { opacity: 1; width: auto; display: block; }
 .sidebar.collapsed:hover .nav-item { justify-content: flex-start; padding: 8px 12px; gap: 10px; }
 .sidebar.collapsed:hover .sidebar-logo { justify-content: flex-start; padding: 0 16px; gap: 12px; }
 .sidebar.collapsed:hover .sidebar-toggle { display: inline-flex; }
@@ -135,7 +137,7 @@ body {
 }
 .sidebar.collapsed.just-collapsed:hover .nav-text,
 .sidebar.collapsed.just-collapsed:hover .sidebar-logo-text,
-.sidebar.collapsed.just-collapsed:hover .nav-section-label { opacity: 0; width: 0; }
+.sidebar.collapsed.just-collapsed:hover .nav-section-label { opacity: 0; width: 0; height: 0; display: none; }
 .sidebar.collapsed.just-collapsed:hover .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
 .sidebar.collapsed.just-collapsed:hover .sidebar-logo { justify-content: center; padding: 0; gap: 0; }
 .sidebar.collapsed.just-collapsed:hover .sidebar-toggle { display: none; }
