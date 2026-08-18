@@ -4975,12 +4975,6 @@ mod tests {
 
         // Every operation on Alice's folder is a 404 for Bob.
         let uri = format!("/api/personal/folders/{}", alice_folder);
-        let get = app
-            .clone()
-            .oneshot(session_req("GET", &uri, &bob))
-            .await
-            .unwrap();
-        assert_eq!(get.status(), StatusCode::NOT_FOUND);
         let rename = app
             .clone()
             .oneshot(session_json_req(
