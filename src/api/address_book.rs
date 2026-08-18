@@ -362,8 +362,8 @@ fn entry_info_from_db_row(database: &Db, row: &db::AbEntry) -> crate::vault::Ent
 /// PowerShell-only metadata that lives in the protocol_config JSON.
 fn inject_powershell_binary(row: &db::AbEntry, mut value: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = value.as_object_mut() {
-        let config: serde_json::Value = serde_json::from_str(&row.protocol_config)
-            .unwrap_or(serde_json::Value::Null);
+        let config: serde_json::Value =
+            serde_json::from_str(&row.protocol_config).unwrap_or(serde_json::Value::Null);
         if let Some(bin) = config.get("powershell_binary").and_then(|b| b.as_str()) {
             obj.insert("powershell_binary".into(), json!(bin));
         }
