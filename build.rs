@@ -14,7 +14,7 @@ const DOC_FILES: &[&str] = &[
     "rdp-video-performance.md",
     "web-sessions.md",
     "vdi.md",
-    "security.md",
+    "security-hardening.md",
     "roles-and-access-control.md",
     "integrations.md",
     "netbox.md",
