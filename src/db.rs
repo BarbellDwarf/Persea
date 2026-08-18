@@ -3659,10 +3659,7 @@ pub fn update_ab_entry(
 /// (for example "rdp", "ssh", "powershell"), across every folder, ordered
 /// by name. Used by the bulk auto-size defaults apply. An empty protocol
 /// list matches nothing.
-pub fn list_ab_entries_by_protocols(
-    db: &Db,
-    protocols: &[&str],
-) -> rusqlite::Result<Vec<AbEntry>> {
+pub fn list_ab_entries_by_protocols(db: &Db, protocols: &[&str]) -> rusqlite::Result<Vec<AbEntry>> {
     db_route!(
         db,
         list_ab_entries_by_protocols_pool,

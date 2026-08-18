@@ -2281,7 +2281,10 @@ mod tests {
         assert!(d.rdp_h264, "H.264 must default on");
         assert!(d.rdp_gfx, "GFX must default on");
         assert_eq!(d.rdp_drive, None);
-        assert!(d.auto_size, "auto-size must default on (pre-feature behaviour)");
+        assert!(
+            d.auto_size,
+            "auto-size must default on (pre-feature behaviour)"
+        );
         assert_eq!(d.vnc_color_depth, None);
         assert!(!d.vnc_disable_copy);
         assert!(!d.vnc_disable_paste);
@@ -2420,7 +2423,10 @@ mod tests {
 
         let some_db = Some(db);
         // The stored per-entry flag wins over the global default.
-        assert_eq!(entry_auto_size(&some_db, Some("shared/IT/win1")), Some(false));
+        assert_eq!(
+            entry_auto_size(&some_db, Some("shared/IT/win1")),
+            Some(false)
+        );
         // Missing entries and key-less calls return None.
         assert_eq!(entry_auto_size(&some_db, Some("shared/IT/nope")), None);
         assert_eq!(entry_auto_size(&some_db, None), None);

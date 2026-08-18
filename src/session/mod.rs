@@ -363,6 +363,7 @@ mod tests {
             username: "alice".into(),
             url: None,
             banner: None,
+            auto_size: true,
             guacd_stream: None,
             connection_id: "conn-test".into(),
             share_token: share_token.to_string(),
