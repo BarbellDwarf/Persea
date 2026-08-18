@@ -764,8 +764,8 @@ fn parse_cert_metadata(cert_path: &std::path::Path) -> Result<CertMetadata, Stri
 /// missing files are reported in-band (`cert` null + `cert_error`), never
 /// as a 500, so the tab can render a clear status.
 pub async fn tls_cert_info(
+    Extension(database): Extension<Db>,
     identity: Option<Extension<AuthIdentity>>,
-    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     if !identity
         .as_ref()
@@ -774,8 +774,23 @@ pub async fn tls_cert_info(
     {
         return Err(AppError::Forbidden("admin role required".into()));
     }
-    let cert_path = params.get("cert_path").cloned().unwrap_or_default();
-    let key_path = params.get("key_path").cloned().unwrap_or_default();
+    // Resolve the paths server-side from the stored settings: the client
+    // never supplies file paths (no arbitrary-file oracle).
+    let db = database.clone();
+    let settings =
+        tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .unwrap_or_default();
+    let get = |key: &str| {
+        settings
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    let cert_path = get("tls_cert_path");
+    let key_path = get("tls_key_path");
     let cert_exists = !cert_path.is_empty() && std::path::Path::new(&cert_path).is_file();
     let key_exists = !key_path.is_empty() && std::path::Path::new(&key_path).is_file();
     let (cert, cert_error) = if cert_exists {
@@ -990,11 +1005,30 @@ mod tests {
 
     // ── TLS certificate info endpoint (Security page TLS tab) ─────────────
 
-    fn tls_router(id: Option<AuthIdentity>) -> Router {
-        let r = Router::new().route("/api/admin/tls-cert-info", get(tls_cert_info));
+    fn tls_router(db: Db, id: Option<AuthIdentity>) -> Router {
+        let r = Router::new()
+            .route("/api/admin/tls-cert-info", get(tls_cert_info))
+            .layer(Extension(db));
         match id {
             Some(id) => r.layer(Extension(id)),
             None => r,
+        }
+    }
+
+    /// Seed the tls_cert_path/tls_key_path settings the endpoint resolves.
+    fn seed_tls_settings(db: &Db, cert_path: &str, key_path: &str) {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            [],
+        )
+        .unwrap();
+        for (key, value) in [("tls_cert_path", cert_path), ("tls_key_path", key_path)] {
+            conn.execute(
+                "INSERT INTO system_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![key, value],
+            )
+            .unwrap();
         }
     }
 
@@ -1020,13 +1054,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("persea-tls-fixture-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let cert_path = write_fixture_cert(&dir);
-        let query = format!(
-            "/api/admin/tls-cert-info?cert_path={}&key_path={}",
-            urlencoding::encode(cert_path.to_string_lossy().as_ref()),
-            urlencoding::encode("/nonexistent/key.pem"),
-        );
-        let router = tls_router(Some(identity("admin@example.com", "Admin", "admin")));
-        let resp = router.oneshot(req_get(&query)).await.unwrap();
+        let db = test_db();
+        seed_tls_settings(&db, &cert_path.to_string_lossy(), "/nonexistent/key.pem");
+        let router = tls_router(db, Some(identity("admin@example.com", "Admin", "admin")));
+        let resp = router
+            .oneshot(req_get("/api/admin/tls-cert-info"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
         assert_eq!(body["cert_exists"], json!(true));
@@ -1068,11 +1102,11 @@ mod tests {
 
     #[tokio::test]
     async fn tls_cert_info_missing_files_report_false_existence() {
-        let router = tls_router(Some(identity("admin@example.com", "Admin", "admin")));
+        let db = test_db();
+        seed_tls_settings(&db, "/nonexistent/cert.pem", "/nonexistent/key.pem");
+        let router = tls_router(db, Some(identity("admin@example.com", "Admin", "admin")));
         let resp = router
-            .oneshot(req_get(
-                "/api/admin/tls-cert-info?cert_path=/nonexistent/cert.pem",
-            ))
+            .oneshot(req_get("/api/admin/tls-cert-info"))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -1089,12 +1123,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let bad = dir.join("bad.pem");
         std::fs::write(&bad, "not a pem").unwrap();
-        let query = format!(
-            "/api/admin/tls-cert-info?cert_path={}",
-            urlencoding::encode(bad.to_string_lossy().as_ref())
-        );
-        let router = tls_router(Some(identity("admin@example.com", "Admin", "admin")));
-        let resp = router.oneshot(req_get(&query)).await.unwrap();
+        let db = test_db();
+        seed_tls_settings(&db, &bad.to_string_lossy(), "");
+        let router = tls_router(db, Some(identity("admin@example.com", "Admin", "admin")));
+        let resp = router
+            .oneshot(req_get("/api/admin/tls-cert-info"))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
         assert_eq!(body["cert_exists"], json!(true));
@@ -1113,7 +1148,7 @@ mod tests {
             Some(identity("viewer@example.com", "Viewer", "viewer")),
         ];
         for id in cases {
-            let router = tls_router(id);
+            let router = tls_router(test_db(), id);
             let resp = router
                 .oneshot(req_get("/api/admin/tls-cert-info"))
                 .await
