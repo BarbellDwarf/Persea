@@ -1354,9 +1354,10 @@ pub async fn ab_apply_defaults(
         want_ssh = true;
     }
 
-    // The current global defaults drive the bulk write. An unset key falls
-    // back to the pre-feature behaviour: auto-size on, security "any"
-    // (guacd's own fallback), auth package unset (config value, then NTLM).
+    // The current global defaults drive the bulk write. Only keys with a
+    // STORED default are written: an unset security or auth-package key
+    // means "no global default", so per-entry values are left untouched
+    // (matching the create-path precedence where the entry wins).
     let db_clone = database.clone();
     let settings =
         tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db_clone))
@@ -1372,8 +1373,7 @@ pub async fn ab_apply_defaults(
         .find(|(k, _)| k == "default_rdp_security")
         .map(|(_, v)| v.as_str())
         .filter(|v| matches!(*v, "any" | "rdp" | "tls" | "nla"))
-        .unwrap_or("any")
-        .to_string();
+        .map(str::to_string);
     // An empty stored auth package means "no global default": entries keep
     // their per-entry value (or none), so the create path falls back to
     // the `[rdp]` config value, then NTLM.
@@ -1428,25 +1428,18 @@ pub async fn ab_apply_defaults(
                     config.insert("auto_size".into(), json!(rdp_auto_size));
                     changed = true;
                 }
-                let current = config.get("security").and_then(|v| v.as_str());
-                if current != Some(rdp_security_for_write.as_str()) {
-                    config.insert("security".into(), json!(rdp_security_for_write));
-                    changed = true;
-                }
-                match &rdp_auth_pkg_for_write {
-                    Some(pkg) => {
-                        let current = config.get("auth_pkg").and_then(|v| v.as_str());
-                        if current != Some(pkg.as_str()) {
-                            config.insert("auth_pkg".into(), json!(pkg));
-                            changed = true;
-                        }
+                if let Some(security) = &rdp_security_for_write {
+                    let current = config.get("security").and_then(|v| v.as_str());
+                    if current != Some(security.as_str()) {
+                        config.insert("security".into(), json!(security));
+                        changed = true;
                     }
-                    // No global auth-package default: drop any per-entry
-                    // value so the create path falls back to config/NTLM.
-                    None => {
-                        if config.remove("auth_pkg").is_some() {
-                            changed = true;
-                        }
+                }
+                if let Some(pkg) = &rdp_auth_pkg_for_write {
+                    let current = config.get("auth_pkg").and_then(|v| v.as_str());
+                    if current != Some(pkg.as_str()) {
+                        config.insert("auth_pkg".into(), json!(pkg));
+                        changed = true;
                     }
                 }
             } else {
@@ -1507,7 +1500,7 @@ pub async fn ab_apply_defaults(
         "protocols": protocols,
         "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
         "security": {"rdp": rdp_security},
-        "auth_pkg": {"rdp": rdp_auth_pkg.unwrap_or_default()},
+        "auth_pkg": {"rdp": rdp_auth_pkg},
     })))
 }
 
@@ -4588,7 +4581,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_apply_defaults_unset_auth_pkg_clears_entry_value() {
+    async fn test_apply_defaults_unset_keys_leave_entry_values_untouched() {
         let db = test_db();
         let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
         db::create_ab_entry(
@@ -4600,13 +4593,13 @@ mod tests {
             "10.0.0.5",
             Some(3389),
             "user",
-            r#"{"auth_pkg":"kerberos"}"#,
+            r#"{"auth_pkg":"kerberos","security":"nla"}"#,
             "",
         )
         .unwrap();
-        // No stored defaults at all: auto-size falls back to true, security
-        // to "any", and the unset auth package must clear the per-entry
-        // value so the create path falls back to config/NTLM.
+        // No stored defaults at all: only auto-size falls back to true; the
+        // unset security and auth-package keys must leave the per-entry
+        // values untouched (matching the create-path precedence).
         let key = insert_test_admin(&db, "admin");
         let app = build_router(db.clone(), test_vault_state(), None);
         let response = app
@@ -4621,15 +4614,15 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_json(response).await;
         assert_eq!(body["applied"], json!(1));
-        assert_eq!(body["auth_pkg"]["rdp"], json!(""));
 
         let entries = db::list_ab_entries(&db, folder).unwrap();
         let cfg: Value = serde_json::from_str(&entries[0].protocol_config).unwrap();
-        assert!(
-            cfg.get("auth_pkg").is_none(),
-            "unset global auth package must clear the per-entry value"
+        assert_eq!(
+            cfg["auth_pkg"],
+            json!("kerberos"),
+            "per-entry auth package kept"
         );
-        assert_eq!(cfg["security"], json!("any"));
+        assert_eq!(cfg["security"], json!("nla"), "per-entry security kept");
         assert_eq!(cfg["auto_size"], json!(true));
     }
 
