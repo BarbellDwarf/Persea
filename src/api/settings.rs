@@ -43,6 +43,7 @@ const SETTING_KEYS: &[&str] = &[
     "enable_proxmox",
     "enable_vmware",
     "enable_vdi",
+    "enable_powershell_ssh",
     "enable_file_transfer",
     "desktop_kiosk",
     "desktop_transfers",
@@ -118,6 +119,7 @@ const BOOL_KEYS: &[&str] = &[
     "enable_proxmox",
     "enable_vmware",
     "enable_vdi",
+    "enable_powershell_ssh",
     "enable_file_transfer",
     "desktop_kiosk",
     "desktop_transfers",
@@ -170,6 +172,7 @@ fn default_value(key: &str) -> Value {
         "enable_proxmox" => json!(true),
         "enable_vmware" => json!(true),
         "enable_vdi" => json!(true),
+        "enable_powershell_ssh" => json!(true),
         // Unset = enabled everywhere: the runtime gate at
         // session/create.rs defaults an absent enable_file_transfer toggle
         // to true (settings_merge::toggle_enabled), so the Settings API
@@ -660,6 +663,31 @@ mod tests {
     #[test]
     fn custom_fields_default_is_empty_array() {
         assert_eq!(default_value("custom_fields"), json!([]));
+    }
+
+    #[test]
+    fn enable_powershell_ssh_default_matches_runtime_gate() {
+        // The runtime treats an unset enable_powershell_ssh toggle as
+        // enabled (settings_merge::toggle_enabled(..., true) at
+        // session/create.rs), so the Settings API default must agree or the
+        // admin Settings page would show "Off" for a feature that is on.
+        assert_eq!(default_value("enable_powershell_ssh"), json!(true));
+        assert!(crate::settings_merge::toggle_enabled(
+            &[],
+            "enable_powershell_ssh",
+            true
+        ));
+        // An explicitly stored "false" still wins on both sides.
+        let stored = vec![("enable_powershell_ssh".to_string(), "false".to_string())];
+        assert_eq!(
+            stored_to_value("enable_powershell_ssh", "false"),
+            json!(false)
+        );
+        assert!(!crate::settings_merge::toggle_enabled(
+            &stored,
+            "enable_powershell_ssh",
+            true
+        ));
     }
 
     #[test]
