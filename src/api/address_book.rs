@@ -590,6 +590,15 @@ fn powershell_ssh_enabled(database: &Db) -> bool {
         .unwrap_or(true)
 }
 
+/// Whether a DB error is a unique-constraint violation. SQLite reports
+/// "UNIQUE constraint failed", Postgres/MySQL "duplicate key value
+/// violates unique constraint": match case-insensitively so duplicates
+/// map to 409 on every backend.
+fn is_unique_violation(e: &rusqlite::Error) -> bool {
+    let msg = e.to_string().to_lowercase();
+    msg.contains("unique constraint") || msg.contains("duplicate key")
+}
+
 /// Overlay decrypted DB credential rows onto an entry (db mode).
 fn apply_db_credentials(
     database: &Db,
@@ -1414,13 +1423,19 @@ pub async fn ab_apply_defaults(
     let rdp_auth_pkg_for_write = rdp_auth_pkg.clone();
     let applied = tokio::task::spawn_blocking(move || {
         let mut applied = 0u64;
+        let mut failures = 0u64;
         for entry in &entries {
-            let mut config: serde_json::Map<String, serde_json::Value> =
+            // A non-object protocol_config (valid JSON that is not a map)
+            // is left untouched rather than replaced: only object configs
+            // are updated.
+            let mut config: Option<serde_json::Map<String, serde_json::Value>> =
                 serde_json::from_str(&entry.protocol_config)
-                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default();
+                    .ok()
+                    .and_then(|v: serde_json::Value| v.as_object().cloned());
+            let Some(config) = config.as_mut() else {
+                failures += 1;
+                continue;
+            };
             let mut changed = false;
             if entry.protocol == "rdp" {
                 let current = config.get("auto_size").and_then(|v| v.as_bool());
@@ -1453,17 +1468,21 @@ pub async fn ab_apply_defaults(
                 continue;
             }
             let serialized = serde_json::to_string(&config).unwrap_or_else(|_| "{}".into());
-            let changed =
-                db::set_ab_entry_protocol_config(&db_clone, entry.id, &serialized).unwrap_or(false);
-            if changed {
-                applied += 1;
+            match db::set_ab_entry_protocol_config(&db_clone, entry.id, &serialized) {
+                Ok(true) => applied += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::error!(error = %e, entry = entry.name, "bulk defaults write failed");
+                    failures += 1;
+                }
             }
         }
-        Ok::<u64, rusqlite::Error>(applied)
+        Ok::<(u64, u64), rusqlite::Error>((applied, failures))
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
     .map_err(|e| AppError::Internal(e.to_string()))?;
+    let (applied, failures) = applied;
 
     // Audit the admin mutation on the hash chain (same pattern as the other
     // admin mutations in users.rs / groups.rs).
@@ -1475,9 +1494,10 @@ pub async fn ab_apply_defaults(
             "action": "apply_defaults",
             "protocols": protocols.clone(),
             "applied": applied,
+            "failures": failures,
             "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
             "security": {"rdp": rdp_security},
-            "auth_pkg": {"rdp": rdp_auth_pkg.clone().unwrap_or_default()},
+            "auth_pkg": {"rdp": rdp_auth_pkg},
         });
         if let Err(e) = tokio::task::spawn_blocking(move || {
             let _ = crate::audit::log_event(
@@ -1497,6 +1517,7 @@ pub async fn ab_apply_defaults(
 
     Ok(Json(json!({
         "applied": applied,
+        "failures": failures,
         "protocols": protocols,
         "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
         "security": {"rdp": rdp_security},
@@ -1970,7 +1991,7 @@ pub async fn ab_create_folder(
             Ok(StatusCode::CREATED)
         }
         Err(e) => {
-            if e.to_string().contains("UNIQUE constraint") {
+            if is_unique_violation(&e) {
                 Err(AppError::Conflict("folder already exists".into()))
             } else {
                 tracing::error!(error = %e, scope = %folder_scope, folder = %folder_name, "Failed to create folder in DB");
@@ -3476,7 +3497,7 @@ pub async fn pf_create_folder(
     let name = validate_personal_folder_name(&req.name)?;
     match db::create_user_folder(&database, user_id, &name, &req.description) {
         Ok(id) => Ok((StatusCode::CREATED, Json(json!({"id": id, "name": name})))),
-        Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
+        Err(e) if is_unique_violation(&e) => Err(AppError::Conflict(
             "a folder with this name already exists".into(),
         )),
         Err(e) => {
@@ -3511,7 +3532,7 @@ pub async fn pf_rename_folder(
     match db::rename_user_folder(&database, user_id, folder_id, &name) {
         Ok(true) => Ok(Json(json!({"id": folder_id, "name": name}))),
         Ok(false) => Err(AppError::NotFound("folder not found".into())),
-        Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
+        Err(e) if is_unique_violation(&e) => Err(AppError::Conflict(
             "a folder with this name already exists".into(),
         )),
         Err(e) => {
@@ -3586,7 +3607,7 @@ pub async fn pf_add_folder_entry(
         Err(rusqlite::Error::QueryReturnedNoRows) => {
             Err(AppError::NotFound("folder not found".into()))
         }
-        Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
+        Err(e) if is_unique_violation(&e) => Err(AppError::Conflict(
             "this entry is already in the folder".into(),
         )),
         Err(e) => {
