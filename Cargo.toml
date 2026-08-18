@@ -154,6 +154,10 @@ proptest = "1"
 # used only by the teardown integration tests' WebSocket client. No new
 # crates enter the lock.
 tokio-tungstenite = "0.30"
+# futures-executor's block_on drives a future without a tokio runtime on
+# the thread, which the ldap3 sync client needs (it creates its own
+# runtime internally). Used by the LDAP integration tests.
+futures = "0.3"
 
 [build-dependencies]
 pulldown-cmark = "0.13"

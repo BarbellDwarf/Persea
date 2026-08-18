@@ -3111,6 +3111,7 @@ dependencies = [
  "config",
  "dns-lookup",
  "flate2",
+ "futures",
  "futures-util",
  "hex",
  "hmac 0.13.0",
