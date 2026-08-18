@@ -309,13 +309,17 @@ pub async fn login_submit(
     // internally), so run the chain off the async runtime: a sync client
     // started on a tokio worker thread panics with "Cannot start a runtime
     // from within a runtime" and kills the request.
-    let result = tokio::task::spawn_blocking(move || {
+    let result = match tokio::task::spawn_blocking(move || {
         futures::executor::block_on(auth_chain.authenticate(&auth_request))
     })
     .await
-    .unwrap_or(crate::auth_provider::AuthResult::Failure(
-        "no provider could authenticate".into(),
-    ));
+    {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!(error = %e, "auth chain panicked during password login");
+            return Redirect::to("/?error=invalid_credentials").into_response();
+        }
+    };
 
     match result {
         crate::auth_provider::AuthResult::Success {
@@ -934,8 +938,21 @@ pub async fn saml_acs(
         ..AuthRequest::default()
     };
 
-    // Try each provider in chain order (first success wins).
-    let result = auth_chain.authenticate(&auth_request).await;
+    // Try each provider in chain order (first success wins). Providers
+    // may do blocking I/O (the LDAP client creates its own tokio runtime
+    // internally), so run the chain off the async runtime; a panic in the
+    // chain is logged distinctly instead of masking as a rejection.
+    let result = match tokio::task::spawn_blocking(move || {
+        futures::executor::block_on(auth_chain.authenticate(&auth_request))
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!(error = %e, "auth chain panicked during SAML ACS");
+            return Redirect::to("/?error=saml_auth_failed").into_response();
+        }
+    };
 
     match result {
         AuthResult::Success {
