@@ -5001,7 +5001,7 @@ mod tests {
 
         let list_entries = app
             .clone()
-            .oneshot(session_req(&format!("{}/entries", uri), &bob))
+            .oneshot(session_req("GET", &format!("{}/entries", uri), &bob))
             .await
             .unwrap();
         assert_eq!(list_entries.status(), StatusCode::NOT_FOUND);
@@ -5143,13 +5143,13 @@ mod tests {
         let entry_a = make_shared_entry(&db, "srv-a");
         let entry_b = make_shared_entry(&db, "srv-b");
 
-        let add = |uri: &str, entry: &str| {
+        let add = |uri: String, entry: String| {
             let app = app.clone();
             let session = alice.clone();
             async move {
                 app.oneshot(session_json_req(
                     "POST",
-                    uri,
+                    &uri,
                     &session,
                     json!({"scope": "shared", "folder": "Shared", "entry": entry}),
                 ))
@@ -5159,8 +5159,8 @@ mod tests {
         };
 
         let response = add(
-            &format!("/api/personal/folders/{}/entries", folder),
-            "srv-a",
+            format!("/api/personal/folders/{}/entries", folder),
+            "srv-a".to_string(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::CREATED);
@@ -5169,14 +5169,18 @@ mod tests {
 
         // Duplicate references conflict.
         let response = add(
-            &format!("/api/personal/folders/{}/entries", folder),
-            "srv-a",
+            format!("/api/personal/folders/{}/entries", folder),
+            "srv-a".to_string(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
         // A missing shared entry is a 404.
-        let response = add(&format!("/api/personal/folders/{}/entries", folder), "nope").await;
+        let response = add(
+            format!("/api/personal/folders/{}/entries", folder),
+            "nope".to_string(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         // An entry the caller cannot read is a 404 (no enumeration). The
@@ -5211,8 +5215,8 @@ mod tests {
         // The referenced entries resolve to their real rows with the same
         // serialization as the address-book entry lists.
         let response = add(
-            &format!("/api/personal/folders/{}/entries", folder),
-            "srv-b",
+            format!("/api/personal/folders/{}/entries", folder),
+            "srv-b".to_string(),
         )
         .await;
         assert_eq!(response.status(), StatusCode::CREATED);
