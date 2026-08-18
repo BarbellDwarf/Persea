@@ -589,6 +589,27 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         CREATE INDEX IF NOT EXISTS idx_ab_entries_folder ON address_book_entries(folder_id);
         CREATE INDEX IF NOT EXISTS idx_ab_creds_entry ON address_book_credentials(entry_id);
 
+        CREATE TABLE IF NOT EXISTS user_folders (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name        TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, name)
+        );
+
+        CREATE TABLE IF NOT EXISTS user_folder_entries (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            folder_id   INTEGER NOT NULL REFERENCES user_folders(id) ON DELETE CASCADE,
+            entry_id    INTEGER NOT NULL REFERENCES address_book_entries(id) ON DELETE CASCADE,
+            created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(user_id, folder_id, entry_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ufe_folder ON user_folder_entries(folder_id);
+        CREATE INDEX IF NOT EXISTS idx_ufe_entry ON user_folder_entries(entry_id);
+
         CREATE TABLE IF NOT EXISTS user_preset_credentials (
             user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
             username    TEXT NOT NULL DEFAULT '',
@@ -1447,6 +1468,16 @@ pub fn delete_user(db: &Db, email: &str) -> rusqlite::Result<bool> {
     // Delete user API tokens
     conn.execute(
         "DELETE FROM user_api_tokens WHERE user_id IN (SELECT id FROM users WHERE email = ?1)",
+        params![email],
+    )?;
+    // Personal folders: remove the references first, then the folders.
+    // Shared address book entries are never touched.
+    conn.execute(
+        "DELETE FROM user_folder_entries WHERE user_id IN (SELECT id FROM users WHERE email = ?1)",
+        params![email],
+    )?;
+    conn.execute(
+        "DELETE FROM user_folders WHERE user_id IN (SELECT id FROM users WHERE email = ?1)",
         params![email],
     )?;
     let changed = conn.execute("DELETE FROM users WHERE email = ?1", params![email])?;
@@ -3502,6 +3533,12 @@ pub fn delete_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<bo
             "DELETE FROM address_book_credentials WHERE entry_id = ?1",
             params![id],
         )?;
+        // Personal-folder references to these shared entries go with them;
+        // the shared entries themselves are the ones being deleted here.
+        tx.execute(
+            "DELETE FROM user_folder_entries WHERE entry_id = ?1",
+            params![id],
+        )?;
     }
     tx.execute(
         "DELETE FROM address_book_entries WHERE folder_id IN
@@ -3728,6 +3765,12 @@ pub fn delete_ab_entry(db: &Db, entry_id: i64) -> rusqlite::Result<bool> {
     let tx = conn.transaction()?;
     tx.execute(
         "DELETE FROM address_book_credentials WHERE entry_id = ?1",
+        params![entry_id],
+    )?;
+    // Personal-folder references to this shared entry go with it (the FK
+    // cascade the SQLx backends enforce for user_folder_entries.entry_id).
+    tx.execute(
+        "DELETE FROM user_folder_entries WHERE entry_id = ?1",
         params![entry_id],
     )?;
     let changed = tx.execute(
@@ -5968,6 +6011,18 @@ async fn delete_user_pool(pool: &DbPool, email: String) -> rusqlite::Result<bool
             pool,
             "DELETE FROM rbac_user_groups WHERE user_id = $1",
             "DELETE FROM rbac_user_groups WHERE user_id = ?"
+        ),
+        // Personal folders: references first, then the folders themselves.
+        // Shared address book entries are never touched.
+        qsql!(
+            pool,
+            "DELETE FROM user_folder_entries WHERE user_id = $1",
+            "DELETE FROM user_folder_entries WHERE user_id = ?"
+        ),
+        qsql!(
+            pool,
+            "DELETE FROM user_folders WHERE user_id = $1",
+            "DELETE FROM user_folders WHERE user_id = ?"
         ),
     ] {
         pool_exec(pool, sql, &id_arg).await.map_err(map_sqlx_err)?;
@@ -8818,6 +8873,19 @@ async fn delete_ab_folder_pool(
         )
         .await
         .map_err(map_sqlx_err)?;
+        // Personal-folder references to these shared entries go with them;
+        // the shared entries themselves are the ones being deleted here.
+        pool_exec(
+            pool,
+            qsql!(
+                pool,
+                "DELETE FROM user_folder_entries WHERE entry_id = $1",
+                "DELETE FROM user_folder_entries WHERE entry_id = ?"
+            ),
+            &[Arg::I64(*id)],
+        )
+        .await
+        .map_err(map_sqlx_err)?;
     }
     pool_exec(
         pool,
@@ -9028,6 +9096,18 @@ async fn delete_ab_entry_pool(pool: &DbPool, entry_id: i64) -> rusqlite::Result<
             pool,
             "DELETE FROM address_book_credentials WHERE entry_id = $1",
             "DELETE FROM address_book_credentials WHERE entry_id = ?"
+        ),
+        &[Arg::I64(entry_id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    // Personal-folder references to this shared entry go with it.
+    pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "DELETE FROM user_folder_entries WHERE entry_id = $1",
+            "DELETE FROM user_folder_entries WHERE entry_id = ?"
         ),
         &[Arg::I64(entry_id)],
     )
@@ -11155,4 +11235,703 @@ pub async fn settings_put_pool(
             .map_err(map_sqlx_err)?;
     }
     Ok(())
+}
+
+// ── Personal folders (user-scoped folder trees) ────────────────────────
+// This block was appended at the end of the file because parallel
+// workstreams may be editing db.rs.
+//
+// Users keep their own folder tree, expressed as slash paths exactly like
+// the shared tree (`Work/Acme` nests under `Work`), unique per user.
+// `user_folder_entries` stores *references* to shared address book entries;
+// deleting a personal folder or its owner removes only those references,
+// never the shared entries themselves. The entry FK cascade (declared in
+// the migrations and mirrored by explicit deletes here, because the
+// rusqlite path runs without `PRAGMA foreign_keys`) removes references
+// when a shared entry is deleted, in the other direction.
+
+/// DB record for a user's personal folder.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UserFolder {
+    /// Primary key.
+    pub id: i64,
+    /// Owning user's `users.id`.
+    pub user_id: i64,
+    /// Folder name; slash-separated paths nest folders.
+    pub name: String,
+    /// Human-readable description.
+    pub description: String,
+    /// When the folder was created (UTC).
+    pub created_at: String,
+}
+
+/// Create a personal folder for `user_id`. The name is a slash path
+/// (`Work/Acme` nests under `Work`), unique per user; duplicate names
+/// surface as UNIQUE constraint errors. Returns the folder ID.
+pub fn create_user_folder(
+    db: &Db,
+    user_id: i64,
+    name: &str,
+    description: &str,
+) -> rusqlite::Result<i64> {
+    db_route!(
+        db,
+        create_user_folder_pool,
+        user_id,
+        name.to_string(),
+        description.to_string()
+    );
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO user_folders (user_id, name, description) VALUES (?1, ?2, ?3)",
+        params![user_id, name, description],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Rename a personal folder. Returns false when the folder does not exist
+/// or belongs to another user. The new name is a slash path, unique per
+/// user (UNIQUE violations surface as constraint errors).
+pub fn rename_user_folder(
+    db: &Db,
+    user_id: i64,
+    folder_id: i64,
+    new_name: &str,
+) -> rusqlite::Result<bool> {
+    db_route!(
+        db,
+        rename_user_folder_pool,
+        user_id,
+        folder_id,
+        new_name.to_string()
+    );
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "UPDATE user_folders SET name = ?3 WHERE id = ?2 AND user_id = ?1",
+        params![user_id, folder_id, new_name],
+    )?;
+    Ok(changed > 0)
+}
+
+/// Delete a user folder. Removes only the folder's references
+/// (`user_folder_entries`); shared address book entries are untouched.
+/// Returns false when the folder does not exist or belongs to another user.
+pub fn delete_user_folder(db: &Db, user_id: i64, folder_id: i64) -> rusqlite::Result<bool> {
+    db_route!(db, delete_user_folder_pool, user_id, folder_id);
+    let mut conn = db.lock().unwrap();
+    let tx = conn.transaction()?;
+    // SQLite runs without PRAGMA foreign_keys, so the ON DELETE CASCADE on
+    // user_folder_entries.folder_id never fires — delete the references
+    // explicitly, then the folder. Shared entries are never touched.
+    tx.execute(
+        "DELETE FROM user_folder_entries WHERE folder_id = ?2 AND user_id = ?1",
+        params![user_id, folder_id],
+    )?;
+    let changed = tx.execute(
+        "DELETE FROM user_folders WHERE id = ?2 AND user_id = ?1",
+        params![user_id, folder_id],
+    )?;
+    tx.commit()?;
+    Ok(changed > 0)
+}
+
+/// Reference a shared address book entry from a personal folder. The folder
+/// must belong to `user_id`; a folder owned by someone else fails with
+/// `QueryReturnedNoRows`. Duplicate (user, folder, entry) references
+/// surface as UNIQUE constraint errors. Returns the reference row id.
+pub fn add_user_folder_entry(
+    db: &Db,
+    user_id: i64,
+    folder_id: i64,
+    entry_id: i64,
+) -> rusqlite::Result<i64> {
+    db_route!(db, add_user_folder_entry_pool, user_id, folder_id, entry_id);
+    let conn = db.lock().unwrap();
+    let owned = conn.query_row(
+        "SELECT COUNT(*) FROM user_folders WHERE id = ?1 AND user_id = ?2",
+        params![folder_id, user_id],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if owned == 0 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    conn.execute(
+        "INSERT INTO user_folder_entries (user_id, folder_id, entry_id) VALUES (?1, ?2, ?3)",
+        params![user_id, folder_id, entry_id],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Remove an entry reference from a user folder. Returns false when the
+/// reference does not exist.
+pub fn remove_user_folder_entry(
+    db: &Db,
+    user_id: i64,
+    folder_id: i64,
+    entry_id: i64,
+) -> rusqlite::Result<bool> {
+    db_route!(
+        db,
+        remove_user_folder_entry_pool,
+        user_id,
+        folder_id,
+        entry_id
+    );
+    let conn = db.lock().unwrap();
+    let changed = conn.execute(
+        "DELETE FROM user_folder_entries
+         WHERE user_id = ?1 AND folder_id = ?2 AND entry_id = ?3",
+        params![user_id, folder_id, entry_id],
+    )?;
+    Ok(changed > 0)
+}
+
+/// List a user's personal folders, ordered by name.
+pub fn list_user_folders(db: &Db, user_id: i64) -> rusqlite::Result<Vec<UserFolder>> {
+    db_route!(db, list_user_folders_pool, user_id);
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT id, user_id, name, description, created_at
+         FROM user_folders WHERE user_id = ?1 ORDER BY name",
+    )?;
+    let rows = stmt.query_map(params![user_id], |row| {
+        Ok(UserFolder {
+            id: row.get(0)?,
+            user_id: row.get(1)?,
+            name: row.get(2)?,
+            description: row.get(3)?,
+            created_at: row.get(4)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// List the shared address book entries referenced from one user folder.
+pub fn list_user_folder_entries(
+    db: &Db,
+    user_id: i64,
+    folder_id: i64,
+) -> rusqlite::Result<Vec<AbEntry>> {
+    db_route!(db, list_user_folder_entries_pool, user_id, folder_id);
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT e.id, e.folder_id, e.name, e.display_name, e.protocol, e.hostname, e.port,
+                e.username, e.protocol_config, e.allowed_groups, e.created_at, e.updated_at
+         FROM user_folder_entries ufe
+         JOIN address_book_entries e ON e.id = ufe.entry_id
+         WHERE ufe.user_id = ?1 AND ufe.folder_id = ?2
+         ORDER BY e.name",
+    )?;
+    let rows = stmt.query_map(params![user_id, folder_id], |row| {
+        Ok(AbEntry {
+            id: row.get(0)?,
+            folder_id: row.get(1)?,
+            name: row.get(2)?,
+            display_name: row.get(3)?,
+            protocol: row.get(4)?,
+            hostname: row.get(5)?,
+            port: row.get::<_, Option<i64>>(6)?.map(|p| p as u16),
+            username: row.get(7)?,
+            protocol_config: row.get(8)?,
+            allowed_groups: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// List the immediate children of the folder at `path`, mirroring the
+/// shared tree's subfolder semantics: `path = ""` returns top-level
+/// folders (no slash in the name), `path = "Work"` returns `Work/<child>`
+/// names whose remainder contains no further slash.
+pub fn list_user_folder_children(
+    db: &Db,
+    user_id: i64,
+    path: &str,
+) -> rusqlite::Result<Vec<UserFolder>> {
+    db_route!(
+        db,
+        list_user_folder_children_pool,
+        user_id,
+        path.to_string()
+    );
+    let folders = list_user_folders(db, user_id)?;
+    let prefix = if path.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", path)
+    };
+    Ok(folders
+        .into_iter()
+        .filter(|f| {
+            if prefix.is_empty() {
+                !f.name.contains('/')
+            } else {
+                f.name
+                    .strip_prefix(&prefix)
+                    .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
+            }
+        })
+        .collect())
+}
+
+macro_rules! user_folder_row {
+    ($row:expr) => {
+        UserFolder {
+            id: $row.get(0),
+            user_id: $row.get(1),
+            name: $row.get(2),
+            description: $row.get(3),
+            created_at: $row.get(4),
+        }
+    };
+}
+
+async fn create_user_folder_pool(
+    pool: &DbPool,
+    user_id: i64,
+    name: String,
+    description: String,
+) -> rusqlite::Result<i64> {
+    let id = exec_returning_id(
+        pool,
+        qsql!(
+            pool,
+            "INSERT INTO user_folders (user_id, name, description) VALUES ($1, $2, $3) RETURNING id",
+            "INSERT INTO user_folders (user_id, name, description) VALUES (?, ?, ?)"
+        ),
+        &[Arg::I64(user_id), Arg::Str(name), Arg::Str(description)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(id)
+}
+
+async fn rename_user_folder_pool(
+    pool: &DbPool,
+    user_id: i64,
+    folder_id: i64,
+    new_name: String,
+) -> rusqlite::Result<bool> {
+    let changed = pool_exec(
+        pool,
+        &format!(
+            "UPDATE user_folders SET name = {} WHERE id = {} AND user_id = {}",
+            ph1(pool),
+            ph2(pool),
+            ph3(pool)
+        ),
+        &[Arg::Str(new_name), Arg::I64(folder_id), Arg::I64(user_id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(changed > 0)
+}
+
+async fn delete_user_folder_pool(
+    pool: &DbPool,
+    user_id: i64,
+    folder_id: i64,
+) -> rusqlite::Result<bool> {
+    // The SQLx backends cascade on their own (folder_id FK with ON DELETE
+    // CASCADE), but the explicit delete keeps behavior identical to the
+    // rusqlite path, which runs without PRAGMA foreign_keys.
+    pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "DELETE FROM user_folder_entries WHERE folder_id = $1 AND user_id = $2",
+            "DELETE FROM user_folder_entries WHERE folder_id = ? AND user_id = ?"
+        ),
+        &[Arg::I64(folder_id), Arg::I64(user_id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    let changed = pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "DELETE FROM user_folders WHERE id = $1 AND user_id = $2",
+            "DELETE FROM user_folders WHERE id = ? AND user_id = ?"
+        ),
+        &[Arg::I64(folder_id), Arg::I64(user_id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(changed > 0)
+}
+
+async fn add_user_folder_entry_pool(
+    pool: &DbPool,
+    user_id: i64,
+    folder_id: i64,
+    entry_id: i64,
+) -> rusqlite::Result<i64> {
+    let owned = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch_opt(
+                p,
+                "SELECT id FROM user_folders WHERE id = $1 AND user_id = $2",
+                &[Arg::I64(folder_id), Arg::I64(user_id)],
+            )
+            .await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch_opt(
+                p,
+                "SELECT id FROM user_folders WHERE id = ? AND user_id = ?",
+                &[Arg::I64(folder_id), Arg::I64(user_id)],
+            )
+            .await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch_opt(
+                p,
+                "SELECT id FROM user_folders WHERE id = ? AND user_id = ?",
+                &[Arg::I64(folder_id), Arg::I64(user_id)],
+            )
+            .await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    if owned.is_none() {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    let id = exec_returning_id(
+        pool,
+        qsql!(
+            pool,
+            "INSERT INTO user_folder_entries (user_id, folder_id, entry_id) VALUES ($1, $2, $3) RETURNING id",
+            "INSERT INTO user_folder_entries (user_id, folder_id, entry_id) VALUES (?, ?, ?)"
+        ),
+        &[Arg::I64(user_id), Arg::I64(folder_id), Arg::I64(entry_id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(id)
+}
+
+async fn remove_user_folder_entry_pool(
+    pool: &DbPool,
+    user_id: i64,
+    folder_id: i64,
+    entry_id: i64,
+) -> rusqlite::Result<bool> {
+    let changed = pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "DELETE FROM user_folder_entries WHERE user_id = $1 AND folder_id = $2 AND entry_id = $3",
+            "DELETE FROM user_folder_entries WHERE user_id = ? AND folder_id = ? AND entry_id = ?"
+        ),
+        &[Arg::I64(user_id), Arg::I64(folder_id), Arg::I64(entry_id)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(changed > 0)
+}
+
+async fn list_user_folders_pool(pool: &DbPool, user_id: i64) -> rusqlite::Result<Vec<UserFolder>> {
+    let rows = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch(p, "SELECT id, user_id, name, description, created_at FROM user_folders WHERE user_id = $1 ORDER BY name", &[Arg::I64(user_id)]).await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch(p, "SELECT id, user_id, name, description, created_at FROM user_folders WHERE user_id = ? ORDER BY name", &[Arg::I64(user_id)]).await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch(p, "SELECT id, user_id, name, description, created_at FROM user_folders WHERE user_id = ? ORDER BY name", &[Arg::I64(user_id)]).await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(rows.iter().map(|row| user_folder_row!(row)).collect())
+}
+
+async fn list_user_folder_entries_pool(
+    pool: &DbPool,
+    user_id: i64,
+    folder_id: i64,
+) -> rusqlite::Result<Vec<AbEntry>> {
+    let rows = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch(p, "SELECT e.id, e.folder_id, e.name, e.display_name, e.protocol, e.hostname, e.port, e.username, e.protocol_config, e.allowed_groups, e.created_at, e.updated_at FROM user_folder_entries ufe JOIN address_book_entries e ON e.id = ufe.entry_id WHERE ufe.user_id = $1 AND ufe.folder_id = $2 ORDER BY e.name", &[Arg::I64(user_id), Arg::I64(folder_id)]).await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch(p, "SELECT e.id, e.folder_id, e.name, e.display_name, e.protocol, e.hostname, e.port, e.username, e.protocol_config, e.allowed_groups, e.created_at, e.updated_at FROM user_folder_entries ufe JOIN address_book_entries e ON e.id = ufe.entry_id WHERE ufe.user_id = ? AND ufe.folder_id = ? ORDER BY e.name", &[Arg::I64(user_id), Arg::I64(folder_id)]).await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch(p, "SELECT e.id, e.folder_id, e.name, e.display_name, e.protocol, e.hostname, e.port, e.username, e.protocol_config, e.allowed_groups, e.created_at, e.updated_at FROM user_folder_entries ufe JOIN address_book_entries e ON e.id = ufe.entry_id WHERE ufe.user_id = ? AND ufe.folder_id = ? ORDER BY e.name", &[Arg::I64(user_id), Arg::I64(folder_id)]).await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(rows.iter().map(|row| ab_entry_row!(row)).collect())
+}
+
+async fn list_user_folder_children_pool(
+    pool: &DbPool,
+    user_id: i64,
+    path: String,
+) -> rusqlite::Result<Vec<UserFolder>> {
+    let folders = list_user_folders_pool(pool, user_id).await?;
+    let prefix = if path.is_empty() {
+        String::new()
+    } else {
+        format!("{}/", path)
+    };
+    Ok(folders
+        .into_iter()
+        .filter(|f| {
+            if prefix.is_empty() {
+                !f.name.contains('/')
+            } else {
+                f.name
+                    .strip_prefix(&prefix)
+                    .is_some_and(|rest| !rest.is_empty() && !rest.contains('/'))
+            }
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod personal_folder_tests {
+    use super::*;
+
+    fn test_db() -> Db {
+        init_db(std::path::Path::new(":memory:")).unwrap()
+    }
+
+    fn make_user(db: &Db, email: &str) -> i64 {
+        upsert_user(db, email, email, None, "viewer", &[]).unwrap().id
+    }
+
+    /// Create a shared folder + entry so personal folders have something to
+    /// reference. The shared folder is reused across calls. Returns
+    /// (folder_id, entry_id).
+    fn make_shared_entry(db: &Db, name: &str) -> (i64, i64) {
+        let folder_id = match get_ab_folder(db, "shared", "Shared") {
+            Ok(f) => f.id,
+            Err(_) => create_ab_folder(db, "shared", "Shared", "", "", false).unwrap(),
+        };
+        let entry_id = create_ab_entry(
+            db,
+            folder_id,
+            name,
+            "",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap();
+        (folder_id, entry_id)
+    }
+
+    #[test]
+    fn create_and_list_user_folders() {
+        let db = test_db();
+        let uid = make_user(&db, "alice@example.com");
+        let a = create_user_folder(&db, uid, "Work", "day job").unwrap();
+        let b = create_user_folder(&db, uid, "Personal", "").unwrap();
+        assert!(a > 0 && b > 0);
+        let folders = list_user_folders(&db, uid).unwrap();
+        assert_eq!(folders.len(), 2);
+        // Ordered by name.
+        assert_eq!(folders[0].name, "Personal");
+        assert_eq!(folders[1].name, "Work");
+        assert_eq!(folders[1].description, "day job");
+        assert_eq!(folders[1].user_id, uid);
+        // Other users see nothing.
+        let other = make_user(&db, "bob@example.com");
+        assert!(list_user_folders(&db, other).unwrap().is_empty());
+    }
+
+    #[test]
+    fn user_folder_names_unique_per_user() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        let bob = make_user(&db, "bob@example.com");
+        create_user_folder(&db, alice, "Work", "").unwrap();
+        // Same user, same name: UNIQUE(user_id, name) rejects it.
+        assert!(create_user_folder(&db, alice, "Work", "").is_err());
+        // Another user may use the same name.
+        assert!(create_user_folder(&db, bob, "Work", "").is_ok());
+    }
+
+    #[test]
+    fn rename_user_folder_checks_ownership() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        let bob = make_user(&db, "bob@example.com");
+        let fid = create_user_folder(&db, alice, "Work", "").unwrap();
+        assert!(rename_user_folder(&db, alice, fid, "Career").unwrap());
+        let folders = list_user_folders(&db, alice).unwrap();
+        assert_eq!(folders[0].name, "Career");
+        // Bob cannot rename Alice's folder.
+        assert!(!rename_user_folder(&db, bob, fid, "Hijacked").unwrap());
+        // Renaming onto an existing name violates the per-user UNIQUE.
+        create_user_folder(&db, alice, "Work", "").unwrap();
+        assert!(rename_user_folder(&db, alice, fid, "Work").is_err());
+    }
+
+    #[test]
+    fn delete_user_folder_cascades_to_references_only() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        let (shared_folder, entry_id) = make_shared_entry(&db, "srv1");
+        let fid = create_user_folder(&db, alice, "Work", "").unwrap();
+        add_user_folder_entry(&db, alice, fid, entry_id).unwrap();
+
+        assert!(delete_user_folder(&db, alice, fid).unwrap());
+
+        // The reference is gone; the shared entry and folder survive.
+        assert!(list_user_folder_entries(&db, alice, fid).unwrap().is_empty());
+        let entries = list_ab_entries(&db, shared_folder).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "srv1");
+        assert!(get_ab_folder(&db, "shared", "Shared").is_ok());
+        // A missing / foreign folder reports false.
+        assert!(!delete_user_folder(&db, alice, fid + 999).unwrap());
+    }
+
+    #[test]
+    fn add_and_remove_entry_references() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        let (_, entry_a) = make_shared_entry(&db, "srv-a");
+        let (_, entry_b) = make_shared_entry(&db, "srv-b");
+        let fid = create_user_folder(&db, alice, "Work", "").unwrap();
+
+        add_user_folder_entry(&db, alice, fid, entry_a).unwrap();
+        add_user_folder_entry(&db, alice, fid, entry_b).unwrap();
+        let entries = list_user_folder_entries(&db, alice, fid).unwrap();
+        assert_eq!(entries.len(), 2);
+        // Ordered by entry name, with full entry metadata.
+        assert_eq!(entries[0].name, "srv-a");
+        assert_eq!(entries[1].name, "srv-b");
+        assert_eq!(entries[1].protocol, "ssh");
+
+        assert!(remove_user_folder_entry(&db, alice, fid, entry_a).unwrap());
+        assert!(!remove_user_folder_entry(&db, alice, fid, entry_a).unwrap());
+        let entries = list_user_folder_entries(&db, alice, fid).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "srv-b");
+    }
+
+    #[test]
+    fn add_user_folder_entry_requires_owned_folder() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        let bob = make_user(&db, "bob@example.com");
+        let (_, entry) = make_shared_entry(&db, "srv1");
+        let bob_folder = create_user_folder(&db, bob, "Work", "").unwrap();
+        // Alice cannot reference an entry into Bob's folder.
+        assert!(matches!(
+            add_user_folder_entry(&db, alice, bob_folder, entry),
+            Err(rusqlite::Error::QueryReturnedNoRows)
+        ));
+        // And a nonexistent folder fails the same way.
+        assert!(matches!(
+            add_user_folder_entry(&db, alice, 999_999, entry),
+            Err(rusqlite::Error::QueryReturnedNoRows)
+        ));
+    }
+
+    #[test]
+    fn entry_references_unique_per_user_folder() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        let (_, entry) = make_shared_entry(&db, "srv1");
+        let fid = create_user_folder(&db, alice, "Work", "").unwrap();
+        add_user_folder_entry(&db, alice, fid, entry).unwrap();
+        // Duplicate (user, folder, entry) reference violates the UNIQUE.
+        assert!(add_user_folder_entry(&db, alice, fid, entry).is_err());
+    }
+
+    #[test]
+    fn deleting_user_removes_only_personal_rows() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        let (shared_folder, shared_entry) = make_shared_entry(&db, "srv1");
+        let fid = create_user_folder(&db, alice, "Work", "").unwrap();
+        add_user_folder_entry(&db, alice, fid, shared_entry).unwrap();
+
+        assert!(delete_user(&db, "alice@example.com").unwrap());
+
+        // Personal folders + references are gone, shared tree untouched.
+        assert!(list_user_folders(&db, alice).unwrap().is_empty());
+        let entries = list_ab_entries(&db, shared_folder).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "srv1");
+    }
+
+    #[test]
+    fn deleting_shared_entry_removes_references() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        let (_, shared_entry) = make_shared_entry(&db, "srv1");
+        let fid = create_user_folder(&db, alice, "Work", "").unwrap();
+        add_user_folder_entry(&db, alice, fid, shared_entry).unwrap();
+
+        assert!(delete_ab_entry(&db, shared_entry).unwrap());
+        assert!(list_user_folder_entries(&db, alice, fid).unwrap().is_empty());
+        // The folder itself survives.
+        assert_eq!(list_user_folders(&db, alice).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn user_folder_children_by_path() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        create_user_folder(&db, alice, "Work", "").unwrap();
+        create_user_folder(&db, alice, "Work/Acme", "").unwrap();
+        create_user_folder(&db, alice, "Work/Acme/Prod", "").unwrap();
+        create_user_folder(&db, alice, "Work/Globex", "").unwrap();
+        create_user_folder(&db, alice, "Personal", "").unwrap();
+
+        // Top level: folders with no slash in the name.
+        let top: Vec<String> = list_user_folder_children(&db, alice, "")
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(top, vec!["Personal".to_string(), "Work".to_string()]);
+
+        // Immediate children only, no grandchildren.
+        let work: Vec<String> = list_user_folder_children(&db, alice, "Work")
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(work, vec!["Work/Acme".to_string(), "Work/Globex".to_string()]);
+
+        let acme: Vec<String> = list_user_folder_children(&db, alice, "Work/Acme")
+            .unwrap()
+            .into_iter()
+            .map(|f| f.name)
+            .collect();
+        assert_eq!(acme, vec!["Work/Acme/Prod".to_string()]);
+
+        // Unknown paths have no children.
+        assert!(list_user_folder_children(&db, alice, "Nope").unwrap().is_empty());
+    }
+
+    #[test]
+    fn user_folders_do_not_leak_across_users() {
+        let db = test_db();
+        let alice = make_user(&db, "alice@example.com");
+        let bob = make_user(&db, "bob@example.com");
+        let alice_folder = create_user_folder(&db, alice, "Work", "").unwrap();
+        create_user_folder(&db, bob, "Work", "").unwrap();
+        // Bob's folder list holds only his folder.
+        let bob_folders = list_user_folders(&db, bob).unwrap();
+        assert_eq!(bob_folders.len(), 1);
+        assert_eq!(bob_folders[0].id, alice_folder + 1);
+        assert_ne!(bob_folders[0].id, alice_folder);
+    }
 }
