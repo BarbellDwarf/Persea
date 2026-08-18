@@ -138,7 +138,7 @@ argon2 = "0.5"
 
 # Memory zeroize for sensitive data
 zeroize = "1"
-dns-lookup = "2"
+dns-lookup = "3"
 rpassword = "7.5.4"
 
 [target.'cfg(windows)'.dependencies]
