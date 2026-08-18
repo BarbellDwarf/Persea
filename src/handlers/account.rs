@@ -57,7 +57,7 @@ pub async fn change_password(
     let db_for_source = database.clone();
     let email_for_source = email.clone();
     let auth_source = tokio::task::spawn_blocking(move || {
-        db::get_user_auth_source(&db_for_source, &email_for_source)
+        crate::db::get_user_auth_source(&db_for_source, &email_for_source)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
@@ -550,8 +550,9 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(resp.0["ok"], true);
-        let (_, _, _, _, _, stored_hash) =
-            crate::db::get_user_login_info(&db, "u@example.com").unwrap().unwrap();
+        let (_, _, _, _, _, stored_hash) = crate::db::get_user_login_info(&db, "u@example.com")
+            .unwrap()
+            .unwrap();
         assert!(
             crate::password::verify_password("a-brand-new-password-42", &stored_hash.unwrap())
                 .unwrap()

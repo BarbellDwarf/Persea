@@ -847,16 +847,14 @@ pub async fn update_me(
         // An email change re-verifies the current password against the
         // stored hash before touching the account.
         if email_for_update.is_some() {
-            let (_, _, _, _, _, stored_hash) =
-                db::get_user_login_info(&db_clone, &email_clone)
-                    .map_err(|_| AppError::Session("user not found".into()))?
-                    .ok_or(AppError::Session("user not found".into()))?;
+            let (_, _, _, _, _, stored_hash) = db::get_user_login_info(&db_clone, &email_clone)
+                .map_err(|_| AppError::Session("user not found".into()))?
+                .ok_or(AppError::Session("user not found".into()))?;
             let valid = match stored_hash {
-                Some(h) if !h.is_empty() => crate::password::verify_password(
-                    current_password.as_deref().unwrap_or(""),
-                    &h,
-                )
-                .map_err(|e| AppError::Internal(e.to_string()))?,
+                Some(h) if !h.is_empty() => {
+                    crate::password::verify_password(current_password.as_deref().unwrap_or(""), &h)
+                        .map_err(|e| AppError::Internal(e.to_string()))?
+                }
                 _ => false,
             };
             if !valid {
@@ -1257,7 +1255,9 @@ mod tests {
         .unwrap();
         assert_eq!(resp.0["name"], "New Name");
         assert_eq!(
-            crate::db::get_user_by_email(&db, "u@example.com").unwrap().name,
+            crate::db::get_user_by_email(&db, "u@example.com")
+                .unwrap()
+                .name,
             "New Name"
         );
     }
@@ -1275,7 +1275,9 @@ mod tests {
         .unwrap();
         assert_eq!(resp.0["name"], "Alias Name");
         assert_eq!(
-            crate::db::get_user_by_email(&db, "u@example.com").unwrap().name,
+            crate::db::get_user_by_email(&db, "u@example.com")
+                .unwrap()
+                .name,
             "Alias Name"
         );
     }
