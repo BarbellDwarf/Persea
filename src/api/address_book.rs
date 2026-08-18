@@ -3313,9 +3313,7 @@ fn personal_caller<'a>(
 fn validate_personal_folder_name(name: &str) -> Result<String, AppError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(AppError::Validation(
-            "folder name must not be empty".into(),
-        ));
+        return Err(AppError::Validation("folder name must not be empty".into()));
     }
     if trimmed.starts_with('/') || trimmed.ends_with('/') {
         return Err(AppError::Validation(
@@ -3364,7 +3362,8 @@ fn resolve_readable_shared_entry(
         .map_err(|_| AppError::NotFound("folder not found".into()))?;
     let entry_rec = db::get_ab_entry(database, folder_rec.id, entry)
         .map_err(|_| AppError::NotFound("entry not found".into()))?;
-    if identity.has_role("admin") || rbac::identity_has_custom_permission(database, identity, "read")
+    if identity.has_role("admin")
+        || rbac::identity_has_custom_permission(database, identity, "read")
     {
         return Ok(entry_rec.id);
     }
@@ -3390,8 +3389,8 @@ pub async fn pf_list_folders(
         ));
     }
 
-    let folders = db::list_user_folders(&database, user_id)
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let folders =
+        db::list_user_folders(&database, user_id).map_err(|e| AppError::Internal(e.to_string()))?;
     let mut result = Vec::new();
     for folder in &folders {
         result.push(json!({
@@ -3427,10 +3426,7 @@ pub async fn pf_create_folder(
 
     let name = validate_personal_folder_name(&req.name)?;
     match db::create_user_folder(&database, user_id, &name, &req.description) {
-        Ok(id) => Ok((
-            StatusCode::CREATED,
-            Json(json!({"id": id, "name": name})),
-        )),
+        Ok(id) => Ok((StatusCode::CREATED, Json(json!({"id": id, "name": name})))),
         Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
             "a folder with this name already exists".into(),
         )),
@@ -3529,13 +3525,8 @@ pub async fn pf_add_folder_entry(
         ));
     }
 
-    let entry_id = resolve_readable_shared_entry(
-        &database,
-        &req.scope,
-        &req.folder,
-        &req.entry,
-        id,
-    )?;
+    let entry_id =
+        resolve_readable_shared_entry(&database, &req.scope, &req.folder, &req.entry, id)?;
     match db::add_user_folder_entry(&database, user_id, folder_id, entry_id) {
         Ok(reference_id) => Ok((
             StatusCode::CREATED,
@@ -3734,18 +3725,9 @@ mod tests {
                 "/api/addressbook/folders/{scope}/{folder}/entries/{entry}",
                 put(super::ab_update_entry),
             )
-            .route(
-                "/api/personal/folders",
-                get(super::pf_list_folders),
-            )
-            .route(
-                "/api/personal/folders",
-                post(super::pf_create_folder),
-            )
-            .route(
-                "/api/personal/folders/{id}",
-                put(super::pf_rename_folder),
-            )
+            .route("/api/personal/folders", get(super::pf_list_folders))
+            .route("/api/personal/folders", post(super::pf_create_folder))
+            .route("/api/personal/folders/{id}", put(super::pf_rename_folder))
             .route(
                 "/api/personal/folders/{id}",
                 delete(super::pf_delete_folder),
@@ -5001,7 +4983,12 @@ mod tests {
         assert_eq!(get.status(), StatusCode::NOT_FOUND);
         let rename = app
             .clone()
-            .oneshot(session_json_req("PUT", &uri, &bob, json!({"name": "Hijacked"})))
+            .oneshot(session_json_req(
+                "PUT",
+                &uri,
+                &bob,
+                json!({"name": "Hijacked"}),
+            ))
             .await
             .unwrap();
         assert_eq!(rename.status(), StatusCode::NOT_FOUND);
@@ -5171,13 +5158,21 @@ mod tests {
             }
         };
 
-        let response = add(&format!("/api/personal/folders/{}/entries", folder), "srv-a").await;
+        let response = add(
+            &format!("/api/personal/folders/{}/entries", folder),
+            "srv-a",
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::CREATED);
         let body = body_json(response).await;
         assert_eq!(body["entry_id"], json!(entry_a));
 
         // Duplicate references conflict.
-        let response = add(&format!("/api/personal/folders/{}/entries", folder), "srv-a").await;
+        let response = add(
+            &format!("/api/personal/folders/{}/entries", folder),
+            "srv-a",
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
 
         // A missing shared entry is a 404.
@@ -5215,7 +5210,11 @@ mod tests {
 
         // The referenced entries resolve to their real rows with the same
         // serialization as the address-book entry lists.
-        let response = add(&format!("/api/personal/folders/{}/entries", folder), "srv-b").await;
+        let response = add(
+            &format!("/api/personal/folders/{}/entries", folder),
+            "srv-b",
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::CREATED);
         let response = app
             .clone()
@@ -5366,8 +5365,11 @@ mod tests {
             .map(|e| e.name)
             .collect();
         assert_eq!(remaining, vec!["srv-b".to_string()]);
-        let folders = db::list_user_folders(&db, db::get_user_by_email(&db, "alice@test.com").unwrap().id)
-            .unwrap();
+        let folders = db::list_user_folders(
+            &db,
+            db::get_user_by_email(&db, "alice@test.com").unwrap().id,
+        )
+        .unwrap();
         assert!(folders.is_empty(), "personal folders are gone");
     }
 }

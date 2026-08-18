@@ -2376,14 +2376,8 @@ async fn run_server(
         // Personal folders (owner-only, any authenticated user)
         .route("/api/personal/folders", get(api::pf_list_folders))
         .route("/api/personal/folders", post(api::pf_create_folder))
-        .route(
-            "/api/personal/folders/{id}",
-            put(api::pf_rename_folder),
-        )
-        .route(
-            "/api/personal/folders/{id}",
-            delete(api::pf_delete_folder),
-        )
+        .route("/api/personal/folders/{id}", put(api::pf_rename_folder))
+        .route("/api/personal/folders/{id}", delete(api::pf_delete_folder))
         .route(
             "/api/personal/folders/{id}/entries",
             get(api::pf_list_entries),
