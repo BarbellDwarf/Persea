@@ -890,6 +890,13 @@
             .then(function(r) { return r.ok ? r.json() : []; })
             .then(function(list) {
                 entriesByFolder.set(folderKey('personal', folder.path), list || []);
+                // The API now returns the shared location on each reference;
+                // record it so connect never depends on a stale cache.
+                (list || []).forEach(function(e) {
+                    if (e.shared_scope && e.shared_folder) {
+                        rememberPfLocation(folder.path, e.name, e.shared_scope, e.shared_folder);
+                    }
+                });
                 refreshCustomFilterOptions();
                 var af = activeFilters();
                 if (searchQuery || af.active) runSearch();
