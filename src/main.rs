@@ -2373,6 +2373,29 @@ async fn run_server(
             put(api::ab_apply_auto_size_defaults),
         )
         .route("/api/ssh/probe-host-key", post(api::ssh_probe_host_key))
+        // Personal folders (owner-only, any authenticated user)
+        .route("/api/personal/folders", get(api::pf_list_folders))
+        .route("/api/personal/folders", post(api::pf_create_folder))
+        .route(
+            "/api/personal/folders/{id}",
+            put(api::pf_rename_folder),
+        )
+        .route(
+            "/api/personal/folders/{id}",
+            delete(api::pf_delete_folder),
+        )
+        .route(
+            "/api/personal/folders/{id}/entries",
+            get(api::pf_list_entries),
+        )
+        .route(
+            "/api/personal/folders/{id}/entries",
+            post(api::pf_add_folder_entry),
+        )
+        .route(
+            "/api/personal/folders/{id}/entries/{entry_id}",
+            delete(api::pf_remove_entry),
+        )
         // Jump host / tunnel management
         .route(
             "/api/admin/jump-hosts",

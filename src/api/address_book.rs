@@ -1,9 +1,14 @@
 //! Address book API: folder and entry management, connection start, SSH
-//! host-key probing, and quick connect.
+//! host-key probing, quick connect, and per-user personal folders.
 //!
 //! Handlers enforce role gates (operator or higher for reads and connects,
 //! admin for writes) plus folder and entry ACLs, and report failures as
 //! `AppError` (403 for denied access, 404 for missing folders or entries).
+//!
+//! Personal folders (`pf_*`) are owner-only: every authenticated user gets
+//! their own private folder tree referencing shared address book entries.
+//! There is no admin bypass, and a request for another user's folder is
+//! indistinguishable from a missing one (404).
 use super::{AppState, StorageBackend, StorageKey, VaultState};
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
@@ -3244,6 +3249,391 @@ pub async fn quick_connect(
     }
 }
 
+// ── Personal folders (persea#138 / persea#166) ─────────────────────────
+//
+// Every authenticated user owns a private folder tree. Folders nest via
+// slash paths and reference shared address book entries without copying
+// them. All endpoints are owner-only: the authenticated user's own folders
+// only, no admin bypass, and foreign or missing folders are both 404 so
+// nothing can be enumerated.
+
+/// Body for `POST /api/personal/folders`.
+#[derive(Deserialize)]
+pub struct CreatePersonalFolderRequest {
+    /// Folder name; slash-separated paths nest folders.
+    pub name: String,
+    /// Free-text description.
+    #[serde(default)]
+    pub description: String,
+}
+
+/// Body for `PUT /api/personal/folders/{id}`.
+#[derive(Deserialize)]
+pub struct RenamePersonalFolderRequest {
+    /// New folder name; slash-separated paths nest folders.
+    pub name: String,
+}
+
+/// Body for `POST /api/personal/folders/{id}/entries`: the shared address
+/// book key of the entry to reference.
+#[derive(Deserialize)]
+pub struct AddPersonalFolderEntryRequest {
+    /// Address book scope of the shared entry (`shared` or `instance`).
+    pub scope: String,
+    /// Address book folder path holding the entry.
+    pub folder: String,
+    /// Entry name inside that folder.
+    pub entry: String,
+}
+
+/// Resolve the authenticated caller to (user id, identity). Personal
+/// folders are per-user, so an API key identity (which has no user row) or
+/// a missing identity is rejected with 403: fail closed, no admin bypass.
+fn personal_caller<'a>(
+    database: &Db,
+    identity: Option<&'a Extension<AuthIdentity>>,
+) -> Result<(i64, &'a AuthIdentity), AppError> {
+    match identity {
+        Some(ext) => match &ext.0 {
+            AuthIdentity::User { email, .. } => {
+                let user = db::get_user_by_email(database, email).map_err(|_| {
+                    AppError::Forbidden("authenticated user session required".into())
+                })?;
+                Ok((user.id, &ext.0))
+            }
+            AuthIdentity::ApiKey(_) => Err(AppError::Forbidden("user session required".into())),
+        },
+        None => Err(AppError::Forbidden("user session required".into())),
+    }
+}
+
+/// Validate a personal folder slash-path name: non-empty, no leading or
+/// trailing slash, no empty path segments (rejects `//` and whitespace-only
+/// segments). The stored name is the trimmed input.
+fn validate_personal_folder_name(name: &str) -> Result<String, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation(
+            "folder name must not be empty".into(),
+        ));
+    }
+    if trimmed.starts_with('/') || trimmed.ends_with('/') {
+        return Err(AppError::Validation(
+            "folder name must not start or end with a slash".into(),
+        ));
+    }
+    if trimmed.split('/').any(|seg| seg.trim().is_empty()) {
+        return Err(AppError::Validation(
+            "folder name must not contain empty path segments".into(),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Fail-closed owner check: 404 when the folder does not exist or belongs
+/// to another user, so foreign folders are indistinguishable from missing
+/// ones (no enumeration).
+fn require_owned_personal_folder(
+    database: &Db,
+    user_id: i64,
+    folder_id: i64,
+) -> Result<(), AppError> {
+    let owned = db::list_user_folders(database, user_id)
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .iter()
+        .any(|f| f.id == folder_id);
+    if owned {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("folder not found".into()))
+    }
+}
+
+/// Resolve a shared entry reference (scope, folder, entry) to its DB id.
+/// The folder and entry must exist and the caller must be able to read
+/// them; missing and unreadable both map to 404 so the API never reveals
+/// which shared entries exist to callers without access.
+fn resolve_readable_shared_entry(
+    database: &Db,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    identity: &AuthIdentity,
+) -> Result<i64, AppError> {
+    let folder_rec = db::get_ab_folder(database, scope, folder)
+        .map_err(|_| AppError::NotFound("folder not found".into()))?;
+    let entry_rec = db::get_ab_entry(database, folder_rec.id, entry)
+        .map_err(|_| AppError::NotFound("entry not found".into()))?;
+    if identity.has_role("admin") || rbac::identity_has_custom_permission(database, identity, "read")
+    {
+        return Ok(entry_rec.id);
+    }
+    check_folder_access_db(database, scope, folder, identity)
+        .map_err(|_| AppError::NotFound("folder not found".into()))?;
+    check_entry_access_db(database, folder_rec.id, entry, identity)
+        .map_err(|_| AppError::NotFound("entry not found".into()))?;
+    Ok(entry_rec.id)
+}
+
+/// `GET /api/personal/folders`: list the caller's personal folders, flat
+/// with slash paths (`Work/Acme` nests under `Work`). Any authenticated
+/// user; no admin gate. API key identities are rejected (no user row).
+pub async fn pf_list_folders(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    let folders = db::list_user_folders(&database, user_id)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut result = Vec::new();
+    for folder in &folders {
+        result.push(json!({
+            "id": folder.id,
+            "name": folder.name,
+            "path": folder.name,
+            "description": folder.description,
+            "created_at": folder.created_at,
+            "has_children": folders
+                .iter()
+                .any(|g| g.name.starts_with(&format!("{}/", folder.name))),
+        }));
+    }
+    Ok(Json(json!(result)))
+}
+
+/// `POST /api/personal/folders`: create a personal folder. The name is a
+/// slash path (`Work/Acme` nests under `Work`), validated non-empty with
+/// no leading/trailing slash and no empty segments; duplicate names per
+/// user conflict with 409.
+pub async fn pf_create_folder(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Json(req): Json<CreatePersonalFolderRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    let name = validate_personal_folder_name(&req.name)?;
+    match db::create_user_folder(&database, user_id, &name, &req.description) {
+        Ok(id) => Ok((
+            StatusCode::CREATED,
+            Json(json!({"id": id, "name": name})),
+        )),
+        Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
+            "a folder with this name already exists".into(),
+        )),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = %name,
+                "Failed to create personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `PUT /api/personal/folders/{id}`: rename one of the caller's folders.
+/// The new name follows the same validation as create and must stay unique
+/// per user; foreign folders return 404.
+pub async fn pf_rename_folder(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(folder_id): Path<i64>,
+    Json(req): Json<RenamePersonalFolderRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    let name = validate_personal_folder_name(&req.name)?;
+    match db::rename_user_folder(&database, user_id, folder_id, &name) {
+        Ok(true) => Ok(Json(json!({"id": folder_id, "name": name}))),
+        Ok(false) => Err(AppError::NotFound("folder not found".into())),
+        Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
+            "a folder with this name already exists".into(),
+        )),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = folder_id,
+                "Failed to rename personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `DELETE /api/personal/folders/{id}`: delete one of the caller's
+/// folders. Removes only the folder's entry references; shared address
+/// book entries are never touched. Foreign folders return 404.
+pub async fn pf_delete_folder(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(folder_id): Path<i64>,
+) -> Result<StatusCode, AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    match db::delete_user_folder(&database, user_id, folder_id) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(AppError::NotFound("folder not found".into())),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = folder_id,
+                "Failed to delete personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `POST /api/personal/folders/{id}/entries`: reference a shared address
+/// book entry from one of the caller's folders. The body carries the
+/// shared entry key (scope/folder/entry); the entry must exist and be
+/// readable by the caller, else 404 (no enumeration). Duplicate references
+/// conflict with 409.
+pub async fn pf_add_folder_entry(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(folder_id): Path<i64>,
+    Json(req): Json<AddPersonalFolderEntryRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let (user_id, id) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    let entry_id = resolve_readable_shared_entry(
+        &database,
+        &req.scope,
+        &req.folder,
+        &req.entry,
+        id,
+    )?;
+    match db::add_user_folder_entry(&database, user_id, folder_id, entry_id) {
+        Ok(reference_id) => Ok((
+            StatusCode::CREATED,
+            Json(json!({"id": reference_id, "entry_id": entry_id})),
+        )),
+        // The schema layer fails this way when the folder is missing or
+        // owned by someone else: 404, same as a missing folder.
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            Err(AppError::NotFound("folder not found".into()))
+        }
+        Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
+            "this entry is already in the folder".into(),
+        )),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = folder_id,
+                "Failed to add entry reference to personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `DELETE /api/personal/folders/{id}/entries/{entry_id}`: remove an
+/// entry reference from one of the caller's folders. `entry_id` is the
+/// shared entry id used when the reference was added. Foreign folders and
+/// unknown references return 404.
+pub async fn pf_remove_entry(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path((folder_id, entry_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    match db::remove_user_folder_entry(&database, user_id, folder_id, entry_id) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(AppError::NotFound("folder entry not found".into())),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = folder_id,
+                "Failed to remove entry reference from personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `GET /api/personal/folders/{id}/entries`: list the shared entries
+/// referenced from one of the caller's folders, resolved to their real
+/// rows with the same serialization as the address-book entry lists.
+///
+/// Reference integrity: deleting a shared entry removes its references
+/// (the schema cascades them away), and the join here additionally skips
+/// any reference whose entry no longer resolves, so a deleted entry simply
+/// stops appearing. Entry ACLs gate the listing the same way they gate the
+/// shared entry lists: entries restricted away are skipped, not rejected.
+pub async fn pf_list_entries(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(folder_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (user_id, id) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    require_owned_personal_folder(&database, user_id, folder_id)?;
+
+    let db_entries = db::list_user_folder_entries(&database, user_id, folder_id)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let user_groups = id.groups();
+    let mut visible = Vec::new();
+    for entry in &db_entries {
+        if !id.has_role("admin")
+            && !rbac::identity_has_custom_permission(&database, id, "read")
+            && !entry_groups_match(entry, user_groups)
+        {
+            continue;
+        }
+        visible.push(inject_powershell_binary(
+            entry,
+            json!(entry_info_from_db_row(&database, entry)),
+        ));
+    }
+    Ok(Json(json!(visible)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3319,9 +3709,10 @@ mod tests {
     }
 
     /// Minimal router for the entry create/update/list + custom-fields
-    /// handlers, mirroring the route shapes in `src/main.rs`.
+    /// handlers plus the personal folders API, mirroring the route shapes
+    /// in `src/main.rs`.
     fn build_router(db: Db, vault: VaultState, backend: Option<&str>) -> axum::Router {
-        use axum::routing::{get, post, put};
+        use axum::routing::{delete, get, post, put};
         let api_routes = axum::Router::new()
             .route(
                 "/api/addressbook/custom-fields",
@@ -3342,6 +3733,34 @@ mod tests {
             .route(
                 "/api/addressbook/folders/{scope}/{folder}/entries/{entry}",
                 put(super::ab_update_entry),
+            )
+            .route(
+                "/api/personal/folders",
+                get(super::pf_list_folders),
+            )
+            .route(
+                "/api/personal/folders",
+                post(super::pf_create_folder),
+            )
+            .route(
+                "/api/personal/folders/{id}",
+                put(super::pf_rename_folder),
+            )
+            .route(
+                "/api/personal/folders/{id}",
+                delete(super::pf_delete_folder),
+            )
+            .route(
+                "/api/personal/folders/{id}/entries",
+                get(super::pf_list_entries),
+            )
+            .route(
+                "/api/personal/folders/{id}/entries",
+                post(super::pf_add_folder_entry),
+            )
+            .route(
+                "/api/personal/folders/{id}/entries/{entry_id}",
+                delete(super::pf_remove_entry),
             )
             .with_state(());
         let mut api_routes = api_routes
@@ -4415,5 +4834,540 @@ mod tests {
             StatusCode::OK,
             "with the Connect grant the credential prompt is served"
         );
+    }
+
+    // ── Personal folders API (persea#138 / persea#166) ──────────────────
+
+    fn make_session(db: &Db, email: &str, role: &str) -> String {
+        insert_test_user(db, email, email, role);
+        let user = db::get_user_by_email(db, email).unwrap();
+        db::create_auth_session(db, user.id, 3600).unwrap()
+    }
+
+    fn session_json_req(method: &str, uri: &str, session: &str, body: Value) -> Request<Body> {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("cookie", format!("persea_session={}", session))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(test_addr()));
+        req
+    }
+
+    /// Reusable shared folder plus a fresh entry; returns the entry id.
+    fn make_shared_entry(db: &Db, name: &str) -> i64 {
+        let folder_id = match db::get_ab_folder(db, "shared", "Shared") {
+            Ok(f) => f.id,
+            Err(_) => db::create_ab_folder(db, "shared", "Shared", "", "", false).unwrap(),
+        };
+        db::create_ab_entry(
+            db,
+            folder_id,
+            name,
+            "",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap()
+    }
+
+    /// Create a personal folder via the API; returns its id.
+    async fn make_personal_folder(app: &axum::Router, session: &str, name: &str) -> i64 {
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                "/api/personal/folders",
+                session,
+                json!({"name": name}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        body_json(response).await["id"].as_i64().unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_create_list_and_validate() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+
+        let a = make_personal_folder(&app, &alice, "Work").await;
+        let b = make_personal_folder(&app, &alice, "Work/Acme").await;
+        let c = make_personal_folder(&app, &alice, "Personal").await;
+        assert!(a > 0 && b > 0 && c > 0);
+
+        // Flat list with slash paths, ordered by name.
+        let response = app
+            .clone()
+            .oneshot(session_req("GET", "/api/personal/folders", &alice))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["Personal", "Work", "Work/Acme"]);
+        assert_eq!(body[1]["path"], "Work");
+        assert_eq!(body[1]["has_children"], json!(true));
+        assert_eq!(body[2]["has_children"], json!(false));
+        assert_eq!(body[0]["description"], "");
+
+        // Name validation: empty, slashes at either end, empty segments.
+        for bad in ["", "   ", "/x", "x/", "/x/", "a//b", "a/ /b"] {
+            let response = app
+                .clone()
+                .oneshot(session_json_req(
+                    "POST",
+                    "/api/personal/folders",
+                    &alice,
+                    json!({"name": bad}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "name {:?} must be rejected",
+                bad
+            );
+        }
+
+        // Duplicate name per user conflicts.
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                "/api/personal/folders",
+                &alice,
+                json!({"name": "Work"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        // Another user may reuse the same name.
+        let bob = make_session(&db, "bob@test.com", "viewer");
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                "/api/personal/folders",
+                &bob,
+                json!({"name": "Work"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_owner_isolation() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let bob = make_session(&db, "bob@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+
+        let alice_folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry = make_shared_entry(&db, "srv1");
+
+        // Bob sees only his own (empty) list.
+        let response = app
+            .clone()
+            .oneshot(session_req("GET", "/api/personal/folders", &bob))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await, json!([]));
+
+        // Every operation on Alice's folder is a 404 for Bob.
+        let uri = format!("/api/personal/folders/{}", alice_folder);
+        let get = app
+            .clone()
+            .oneshot(session_req("GET", &uri, &bob))
+            .await
+            .unwrap();
+        assert_eq!(get.status(), StatusCode::NOT_FOUND);
+        let rename = app
+            .clone()
+            .oneshot(session_json_req("PUT", &uri, &bob, json!({"name": "Hijacked"})))
+            .await
+            .unwrap();
+        assert_eq!(rename.status(), StatusCode::NOT_FOUND);
+        let delete = app
+            .clone()
+            .oneshot(session_req("DELETE", &uri, &bob))
+            .await
+            .unwrap();
+        assert_eq!(delete.status(), StatusCode::NOT_FOUND);
+
+        let list_entries = app
+            .clone()
+            .oneshot(session_req(&format!("{}/entries", uri), &bob))
+            .await
+            .unwrap();
+        assert_eq!(list_entries.status(), StatusCode::NOT_FOUND);
+        let add_entry = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                &format!("{}/entries", uri),
+                &bob,
+                json!({"scope": "shared", "folder": "Shared", "entry": "srv1"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(add_entry.status(), StatusCode::NOT_FOUND);
+        let remove_entry = app
+            .clone()
+            .oneshot(session_req(
+                "DELETE",
+                &format!("{}/entries/{}", uri, entry),
+                &bob,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(remove_entry.status(), StatusCode::NOT_FOUND);
+
+        // Alice's folder is untouched.
+        let response = app
+            .clone()
+            .oneshot(session_req("GET", "/api/personal/folders", &alice))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        assert_eq!(body.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_api_key_and_anonymous_denied() {
+        let db = test_db();
+        let app = build_router(db.clone(), test_vault_state(), None);
+
+        // API key identities have no user row: fail closed with 403.
+        let key = insert_test_admin(&db, "admin");
+        let response = app
+            .clone()
+            .oneshot(auth_req("GET", "/api/personal/folders", &key))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = app
+            .clone()
+            .oneshot(json_req(
+                "POST",
+                "/api/personal/folders",
+                &key,
+                json!({"name": "Work"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // No session cookie at all.
+        let response = app
+            .clone()
+            .oneshot(session_req("GET", "/api/personal/folders", "nope"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_rename() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+
+        // Rename into a deeper slash path.
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "PUT",
+                &format!("/api/personal/folders/{}", folder),
+                &alice,
+                json!({"name": "Career/Lead"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["name"], "Career/Lead");
+
+        // Invalid names are rejected on rename too.
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "PUT",
+                &format!("/api/personal/folders/{}", folder),
+                &alice,
+                json!({"name": "/bad"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Renaming onto an existing per-user name conflicts.
+        make_personal_folder(&app, &alice, "Work").await;
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "PUT",
+                &format!("/api/personal/folders/{}", folder),
+                &alice,
+                json!({"name": "Work"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        // A missing folder is a 404, not a 500.
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "PUT",
+                "/api/personal/folders/999999",
+                &alice,
+                json!({"name": "Nope"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_entries_add_list_remove() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry_a = make_shared_entry(&db, "srv-a");
+        let entry_b = make_shared_entry(&db, "srv-b");
+
+        let add = |uri: &str, entry: &str| {
+            let app = app.clone();
+            let session = alice.clone();
+            async move {
+                app.oneshot(session_json_req(
+                    "POST",
+                    uri,
+                    &session,
+                    json!({"scope": "shared", "folder": "Shared", "entry": entry}),
+                ))
+                .await
+                .unwrap()
+            }
+        };
+
+        let response = add(&format!("/api/personal/folders/{}/entries", folder), "srv-a").await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = body_json(response).await;
+        assert_eq!(body["entry_id"], json!(entry_a));
+
+        // Duplicate references conflict.
+        let response = add(&format!("/api/personal/folders/{}/entries", folder), "srv-a").await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        // A missing shared entry is a 404.
+        let response = add(&format!("/api/personal/folders/{}/entries", folder), "nope").await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // An entry the caller cannot read is a 404 (no enumeration). The
+        // restricted entry lives in its own folder so the open folder's
+        // entry fallback stays open.
+        db::create_ab_folder(&db, "shared", "Restricted", "", "", false).unwrap();
+        db::create_ab_entry(
+            &db,
+            db::get_ab_folder(&db, "shared", "Restricted").unwrap().id,
+            "secret",
+            "",
+            "ssh",
+            "10.0.0.9",
+            Some(22),
+            "root",
+            "{}",
+            "admins",
+        )
+        .unwrap();
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+                json!({"scope": "shared", "folder": "Restricted", "entry": "secret"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // The referenced entries resolve to their real rows with the same
+        // serialization as the address-book entry lists.
+        let response = add(&format!("/api/personal/folders/{}/entries", folder), "srv-b").await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["srv-a", "srv-b"]);
+        assert_eq!(body[0]["session_type"], "ssh");
+        assert_eq!(body[0]["hostname"], "10.0.0.1");
+        assert_eq!(body[0]["port"], json!(22));
+        assert!(body[0].get("password").is_none(), "no credentials leak");
+
+        // Remove one reference, then the other; a second remove is 404.
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "DELETE",
+                &format!("/api/personal/folders/{}/entries/{}", folder, entry_a),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "DELETE",
+                &format!("/api/personal/folders/{}/entries/{}", folder, entry_a),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["srv-b"]);
+        let _ = entry_b;
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_cascade_and_reference_integrity() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry_a = make_shared_entry(&db, "srv-a");
+        let entry_b = make_shared_entry(&db, "srv-b");
+        for (_, entry_name) in [(entry_a, "srv-a"), (entry_b, "srv-b")] {
+            let response = app
+                .clone()
+                .oneshot(session_json_req(
+                    "POST",
+                    &format!("/api/personal/folders/{}/entries", folder),
+                    &alice,
+                    json!({"scope": "shared", "folder": "Shared", "entry": entry_name}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+
+        // Deleting the shared entry removes its references: the folder
+        // survives and the read path skips the gone entry.
+        assert!(db::delete_ab_entry(&db, entry_a).unwrap());
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["srv-b"], "deleted entry is skipped");
+
+        // The shared entry itself is really gone; the folder survives.
+        let shared_folder = db::get_ab_folder(&db, "shared", "Shared").unwrap();
+        let remaining: Vec<String> = db::list_ab_entries(&db, shared_folder.id)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(remaining, vec!["srv-b".to_string()]);
+
+        // Deleting the personal folder cascades to references only: the
+        // shared folder and its remaining entry survive.
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "DELETE",
+                &format!("/api/personal/folders/{}", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // The folder is gone, so its entry listing is a 404.
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let remaining: Vec<String> = db::list_ab_entries(&db, shared_folder.id)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(remaining, vec!["srv-b".to_string()]);
+        let folders = db::list_user_folders(&db, db::get_user_by_email(&db, "alice@test.com").unwrap().id)
+            .unwrap();
+        assert!(folders.is_empty(), "personal folders are gone");
     }
 }
