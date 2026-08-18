@@ -3681,16 +3681,31 @@ pub async fn pf_list_entries(
     let user_groups = id.groups();
     let mut visible = Vec::new();
     for entry in &db_entries {
+        // The containing folder's ACL gates the reference the same way it
+        // gates the shared tree: a tightened folder hides its entries
+        // everywhere, including personal references. A vanished folder
+        // also hides the reference.
+        let folder_path = match db::get_ab_folder_by_id(&database, entry.folder_id) {
+            Ok(folder) => folder.name,
+            Err(_) => continue,
+        };
+        if check_folder_access_db(&database, "shared", &folder_path, id).is_err() {
+            continue;
+        }
         if !id.has_role("admin")
             && !rbac::identity_has_custom_permission(&database, id, "read")
             && !entry_groups_match(entry, user_groups)
         {
             continue;
         }
-        visible.push(inject_powershell_binary(
-            entry,
-            json!(entry_info_from_db_row(&database, entry)),
-        ));
+        // The shared location rides along so the client can connect to the
+        // real entry without a client-side location map.
+        let mut value = json!(entry_info_from_db_row(&database, entry));
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("shared_scope".into(), json!("shared"));
+            obj.insert("shared_folder".into(), json!(folder_path));
+        }
+        visible.push(inject_powershell_binary(entry, value));
     }
     Ok(Json(json!(visible)))
 }
@@ -5580,5 +5595,62 @@ mod tests {
         )
         .unwrap();
         assert!(folders.is_empty(), "personal folders are gone");
+    }
+    #[tokio::test]
+    async fn test_personal_folders_folder_acl_gates_references() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry_id = make_shared_entry(&db, "srv-a");
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+                json!({"scope": "shared", "folder": "Shared", "entry": "srv-a"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Visible while the folder is open.
+        let list = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(body_json(list).await.as_array().unwrap().len(), 1);
+
+        // Tighten the folder ACL to a group Alice is not in: the reference
+        // must disappear from the personal view (same rule as the shared
+        // tree) while the reference row survives.
+        let shared_folder = db::get_ab_folder(&db, "shared", "Shared").unwrap();
+        db::update_ab_folder(&db, "shared", "Shared", "", "admins", false).unwrap();
+        let list = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        let body = body_json(list).await;
+        assert_eq!(
+            body.as_array().unwrap().len(),
+            0,
+            "a tightened folder hides its references"
+        );
+        // The reference row itself still exists (folder + entry intact).
+        let alice_user = db::get_user_by_email(&db, "alice@test.com").unwrap();
+        let refs = db::list_user_folder_entries(&db, alice_user.id, folder).unwrap();
+        assert_eq!(refs.len(), 1);
+        let _ = entry_id;
     }
 }
