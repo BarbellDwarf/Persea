@@ -284,12 +284,11 @@ pub async fn update_user(
     // auth source gates the email/password fields.
     let db_for_read = database.clone();
     let email_for_read = email.clone();
-    let user = tokio::task::spawn_blocking(move || {
-        db::get_user_by_email(&db_for_read, &email_for_read)
-    })
-    .await
-    .map_err(|e| AppError::Internal(e.to_string()))?
-    .map_err(|_| AppError::NotFound("user not found".into()))?;
+    let user =
+        tokio::task::spawn_blocking(move || db::get_user_by_email(&db_for_read, &email_for_read))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .map_err(|_| AppError::NotFound("user not found".into()))?;
     let is_database = user.auth_source == "database";
 
     let new_name = match &body.name {
@@ -330,7 +329,9 @@ pub async fn update_user(
                 "password is managed by the identity provider for this user".into(),
             ));
         }
-        policy.check_length(password).map_err(AppError::Validation)?;
+        policy
+            .check_length(password)
+            .map_err(AppError::Validation)?;
     }
 
     let history = policy.history;

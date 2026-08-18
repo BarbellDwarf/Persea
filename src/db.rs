@@ -4054,9 +4054,15 @@ mod tests {
         assert_eq!(updated.name, "Renamed");
         assert_eq!(updated.email, "user@example.com");
         // Email only: name untouched.
-        let updated = update_user(&db, "user@example.com", None, Some("moved@example.com"), None)
-            .unwrap()
-            .unwrap();
+        let updated = update_user(
+            &db,
+            "user@example.com",
+            None,
+            Some("moved@example.com"),
+            None,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(updated.name, "Renamed");
         assert_eq!(updated.email, "moved@example.com");
     }
@@ -4064,35 +4070,20 @@ mod tests {
     #[test]
     fn test_update_user_unknown_email_returns_none() {
         let db = test_db();
-        assert!(update_user(&db, "nobody@example.com", Some("X"), None, None)
-            .unwrap()
-            .is_none());
+        assert!(
+            update_user(&db, "nobody@example.com", Some("X"), None, None)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn test_update_user_email_uniqueness_conflict() {
         let db = test_db();
         let hash = crate::password::hash_password("a-very-long-password").unwrap();
-        create_user_with_password(
-            &db,
-            "a@example.com",
-            "A",
-            &hash,
-            "viewer",
-            "database",
-        )
-        .unwrap();
-        create_user_with_password(
-            &db,
-            "b@example.com",
-            "B",
-            &hash,
-            "viewer",
-            "database",
-        )
-        .unwrap();
-        let err = update_user(&db, "a@example.com", None, Some("b@example.com"), None)
-            .unwrap_err();
+        create_user_with_password(&db, "a@example.com", "A", &hash, "viewer", "database").unwrap();
+        create_user_with_password(&db, "b@example.com", "B", &hash, "viewer", "database").unwrap();
+        let err = update_user(&db, "a@example.com", None, Some("b@example.com"), None).unwrap_err();
         assert!(
             err.to_string().contains("UNIQUE"),
             "expected UNIQUE violation, got: {err}"

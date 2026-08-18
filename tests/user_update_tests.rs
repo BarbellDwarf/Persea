@@ -230,13 +230,13 @@ async fn update_user_password_works() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     // The new password verifies against the stored hash.
-    let (_, _, _, _, _, stored_hash) =
-        db::get_user_login_info(&db, "user@test.com").unwrap().unwrap();
-    assert!(persea::password::verify_password(
-        "a-brand-new-long-password",
-        &stored_hash.unwrap()
-    )
-    .unwrap());
+    let (_, _, _, _, _, stored_hash) = db::get_user_login_info(&db, "user@test.com")
+        .unwrap()
+        .unwrap();
+    assert!(
+        persea::password::verify_password("a-brand-new-long-password", &stored_hash.unwrap())
+            .unwrap()
+    );
 }
 
 #[tokio::test]
