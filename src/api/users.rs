@@ -381,6 +381,13 @@ pub async fn update_user(
         if let (Some(hash), Some(user)) = (&password_hash, &updated) {
             let _ = crate::password::record_password_history(&db_clone, user.id, hash, history);
         }
+        // A password reset by an admin must revoke the user's existing
+        // sessions (and API tokens) so a compromised account cannot keep
+        // using old credentials.
+        if password_hash.is_some() {
+            let _ = db::delete_user_sessions(&db_clone, user_id);
+            let _ = db::revoke_all_user_tokens(&db_clone, user_id);
+        }
         Ok::<_, AppError>(updated)
     })
     .await
