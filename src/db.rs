@@ -11705,7 +11705,9 @@ mod personal_folder_tests {
     }
 
     fn make_user(db: &Db, email: &str) -> i64 {
-        upsert_user(db, email, email, None, "viewer", &[]).unwrap().id
+        upsert_user(db, email, email, None, "viewer", &[])
+            .unwrap()
+            .id
     }
 
     /// Create a shared folder + entry so personal folders have something to
@@ -11790,7 +11792,9 @@ mod personal_folder_tests {
         assert!(delete_user_folder(&db, alice, fid).unwrap());
 
         // The reference is gone; the shared entry and folder survive.
-        assert!(list_user_folder_entries(&db, alice, fid).unwrap().is_empty());
+        assert!(list_user_folder_entries(&db, alice, fid)
+            .unwrap()
+            .is_empty());
         let entries = list_ab_entries(&db, shared_folder).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "srv1");
@@ -11879,7 +11883,9 @@ mod personal_folder_tests {
         add_user_folder_entry(&db, alice, fid, shared_entry).unwrap();
 
         assert!(delete_ab_entry(&db, shared_entry).unwrap());
-        assert!(list_user_folder_entries(&db, alice, fid).unwrap().is_empty());
+        assert!(list_user_folder_entries(&db, alice, fid)
+            .unwrap()
+            .is_empty());
         // The folder itself survives.
         assert_eq!(list_user_folders(&db, alice).unwrap().len(), 1);
     }
@@ -11908,7 +11914,10 @@ mod personal_folder_tests {
             .into_iter()
             .map(|f| f.name)
             .collect();
-        assert_eq!(work, vec!["Work/Acme".to_string(), "Work/Globex".to_string()]);
+        assert_eq!(
+            work,
+            vec!["Work/Acme".to_string(), "Work/Globex".to_string()]
+        );
 
         let acme: Vec<String> = list_user_folder_children(&db, alice, "Work/Acme")
             .unwrap()
@@ -11918,7 +11927,9 @@ mod personal_folder_tests {
         assert_eq!(acme, vec!["Work/Acme/Prod".to_string()]);
 
         // Unknown paths have no children.
-        assert!(list_user_folder_children(&db, alice, "Nope").unwrap().is_empty());
+        assert!(list_user_folder_children(&db, alice, "Nope")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
