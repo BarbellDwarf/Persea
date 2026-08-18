@@ -213,6 +213,29 @@ Add `[vdi]` to your config and create a VDI entry in the connections. See [VDI D
 - [API Reference](docs/api.md): REST API endpoints, the session connection flow, and headless ws-ticket integration
 - [Migration from Apache Guacamole](docs/migration.md): MySQL/MariaDB to Vault
 
+## Testing
+
+`cargo test` runs the unit and integration suites. Integration tests that
+need an external service skip with a visible message when their env var is
+unset, so a plain `cargo test` needs nothing but a Rust toolchain.
+
+### LDAP integration tests
+
+`tests/ldap_integration.rs` exercises the LDAP auth provider against a real
+OpenLDAP server: bind + search, group resolution, anti-enumeration, user
+lookup, and the full login flow through the binary. Start the local harness
+and run them:
+
+```bash
+docker compose -f docker-compose.ldap.yml up -d --wait
+TEST_LDAP_URL=ldap://127.0.0.1:3389 cargo test --test ldap_integration
+```
+
+The harness runs `osixia/openldap:1.5.0` seeded from
+`tests/fixtures/ldap-seed.ldif` (users `alice` and `bob`, group
+`engineers`). CI runs the same tests in the `ldap-integration` job with an
+LDAP service container.
+
 ## Acknowledgements
 
 [OpenCode](https://opencode.ai) and the OpenCode Go subscription made this project possible. An AI coding agent that just works, a subscription that is worth every cent, and isn't that many cents either. If you are a dev who needs solid pricing for AI coding agents, this is the way to go. They are not a sponsor by the way, just love the product and the ethos.
