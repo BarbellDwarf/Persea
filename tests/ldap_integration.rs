@@ -82,14 +82,15 @@ fn auth_request(username: &str, password: &str) -> AuthRequest {
 // In-process tests against the real server
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn valid_user_authenticates_with_groups() {
+#[test]
+fn valid_user_authenticates_with_groups() {
     let Some(url) = ldap_url() else {
         skip_message("valid_user_authenticates_with_groups");
         return;
     };
     let chain = chain(&url, "(uid={})");
-    let result = chain.authenticate(&auth_request("alice", ALICE_PASSWORD)).await;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(chain.authenticate(&auth_request("alice", ALICE_PASSWORD)).await;)
     match result {
         AuthResult::Success {
             subject,
@@ -108,14 +109,15 @@ async fn valid_user_authenticates_with_groups() {
     }
 }
 
-#[tokio::test]
-async fn second_user_authenticates_without_groups() {
+#[test]
+fn second_user_authenticates_without_groups() {
     let Some(url) = ldap_url() else {
         skip_message("second_user_authenticates_without_groups");
         return;
     };
     let chain = chain(&url, "(uid={})");
-    let result = chain.authenticate(&auth_request("bob", BOB_PASSWORD)).await;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(chain.authenticate(&auth_request("bob", BOB_PASSWORD)).await;)
     match result {
         AuthResult::Success {
             subject, groups, ..
@@ -130,32 +132,34 @@ async fn second_user_authenticates_without_groups() {
     }
 }
 
-#[tokio::test]
-async fn wrong_password_fails() {
+#[test]
+fn wrong_password_fails() {
     let Some(url) = ldap_url() else {
         skip_message("wrong_password_fails");
         return;
     };
     let chain = chain(&url, "(uid={})");
-    let result = chain
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(chain
         .authenticate(&auth_request("alice", "wrong-password-2026"))
-        .await;
+        .await;)
     match result {
         AuthResult::Failure(msg) => assert_eq!(msg, "invalid credentials"),
         other => panic!("expected Failure, got {other}"),
     }
 }
 
-#[tokio::test]
-async fn unknown_user_fails_identically() {
+#[test]
+fn unknown_user_fails_identically() {
     let Some(url) = ldap_url() else {
         skip_message("unknown_user_fails_identically");
         return;
     };
     let chain = chain(&url, "(uid={})");
-    let result = chain
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(chain
         .authenticate(&auth_request("carol", "any-password-2026"))
-        .await;
+        .await;)
     match result {
         // Anti-enumeration: an unknown user must produce the exact same
         // failure as a wrong password, so the search cannot be used as a
@@ -165,23 +169,24 @@ async fn unknown_user_fails_identically() {
     }
 }
 
-#[tokio::test]
-async fn ambiguous_filter_fails_closed() {
+#[test]
+fn ambiguous_filter_fails_closed() {
     let Some(url) = ldap_url() else {
         skip_message("ambiguous_filter_fails_closed");
         return;
     };
     // (|(uid={})(uid=bob)) matches alice AND bob when the username is alice.
     let chain = chain(&url, "(|(uid={})(uid=bob))");
-    let result = chain.authenticate(&auth_request("alice", ALICE_PASSWORD)).await;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(chain.authenticate(&auth_request("alice", ALICE_PASSWORD)).await;)
     match result {
         AuthResult::Failure(msg) => assert_eq!(msg, "invalid credentials"),
         other => panic!("expected Failure, got {other}"),
     }
 }
 
-#[tokio::test]
-async fn lookup_user_returns_user_info() {
+#[test]
+fn lookup_user_returns_user_info() {
     let Some(url) = ldap_url() else {
         skip_message("lookup_user_returns_user_info");
         return;
@@ -192,9 +197,10 @@ async fn lookup_user_returns_user_info() {
     // and cannot match a DN subject; (objectClass=inetOrgPerson) matches the
     // entry at the base, which is what the lookup path needs.
     let chain = chain(&url, "(objectClass=inetOrgPerson)");
-    let info = chain
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let info = rt.block_on(chain
         .lookup_user(ALICE_DN)
-        .await
+        .await)
         .expect("lookup_user returned None");
     assert_eq!(info.subject, ALICE_DN);
     assert_eq!(info.display_name, "Alice Example");
