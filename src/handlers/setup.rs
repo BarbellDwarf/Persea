@@ -190,13 +190,20 @@ pub async fn setup_page(
         guacd_addr: "127.0.0.1:4822".to_string(),
         admin_email: String::new(),
         admin_name: String::new(),
+        password_min_length: config.password_min_length(),
         csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
 }
 
 /// Re-render the wizard with an error, keeping the submitted form values.
-fn error_response(site_title: &str, error: String, form: &SetupForm, nonce: &str) -> Response {
+fn error_response(
+    site_title: &str,
+    error: String,
+    form: &SetupForm,
+    min_len: usize,
+    nonce: &str,
+) -> Response {
     SetupTemplate {
         site_title: site_title.to_string(),
         error: Some(error),
@@ -207,6 +214,7 @@ fn error_response(site_title: &str, error: String, form: &SetupForm, nonce: &str
         guacd_addr: form.guacd_addr.clone(),
         admin_email: form.admin_email.clone(),
         admin_name: form.admin_name.clone(),
+        password_min_length: min_len,
         csp_nonce: nonce.to_string(),
     }
     .into_response()
@@ -224,12 +232,15 @@ pub async fn setup_submit(
         return Redirect::to("/").into_response();
     }
 
-    // Validate
-    if form.admin_email.is_empty() || form.admin_password.len() < 8 {
+    // Validate against the enforced password policy minimum (the wizard
+    // advertises this value on the password field).
+    let min_len = config.password_min_length();
+    if form.admin_email.is_empty() || form.admin_password.len() < min_len {
         return error_response(
             &site_title.0,
-            "Email is required and password must be at least 8 characters.".to_string(),
+            format!("Email is required and password must be at least {min_len} characters long."),
             &form,
+            min_len,
             &nonce.0,
         );
     }
@@ -252,6 +263,7 @@ pub async fn setup_submit(
                  URL field)."
                     .to_string(),
                 &form,
+                min_len,
                 &nonce.0,
             );
         }
@@ -266,6 +278,7 @@ pub async fn setup_submit(
                     configured
                 ),
                 &form,
+                min_len,
                 &nonce.0,
             );
         }
@@ -282,6 +295,7 @@ pub async fn setup_submit(
                     &site_title.0,
                     format!("Failed to connect to database URL: {}", e),
                     &form,
+                    min_len,
                     &nonce.0,
                 );
             }
@@ -291,6 +305,7 @@ pub async fn setup_submit(
                 &site_title.0,
                 format!("Failed to run database migrations: {}", e),
                 &form,
+                min_len,
                 &nonce.0,
             );
         }
@@ -299,23 +314,13 @@ pub async fn setup_submit(
                 &site_title.0,
                 "Failed to activate the database backend (worker thread error).".to_string(),
                 &form,
+                min_len,
                 &nonce.0,
             );
         }
         tracing::info!(
             backend = ?current_backend(),
             "Setup: database backend connected and migrated"
-        );
-    }
-
-    // Enforce the password policy minimum length before hashing.
-    let min_len = config.password.as_ref().map(|p| p.min_length).unwrap_or(15);
-    if form.admin_password.len() < min_len {
-        return error_response(
-            &site_title.0,
-            format!("Password must be at least {min_len} characters long"),
-            &form,
-            &nonce.0,
         );
     }
 
@@ -327,6 +332,7 @@ pub async fn setup_submit(
                 &site_title.0,
                 format!("Failed to hash password: {}", e),
                 &form,
+                min_len,
                 &nonce.0,
             );
         }
@@ -352,6 +358,7 @@ pub async fn setup_submit(
             &site_title.0,
             format!("Failed to create admin user: {}", e),
             &form,
+            min_len,
             &nonce.0,
         );
     }

@@ -4,6 +4,11 @@ use minijinja::{AutoEscape, Environment};
 use serde::Serialize;
 use std::sync::{Arc, LazyLock};
 
+/// CSP nonce carried as a request extension by the security headers
+/// middleware so page handlers can stamp inline scripts with `nonce=`.
+#[derive(Clone)]
+pub struct CspNonce(pub String);
+
 /// Template environment shared across requests.
 static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     let mut env = Environment::new();
@@ -830,6 +835,9 @@ pub struct SetupTemplate {
     pub admin_email: String,
     /// Display name of the admin account.
     pub admin_name: String,
+    /// Minimum password length enforced by the `[password]` policy; the
+    /// wizard renders it into the password field hint and `minlength`.
+    pub password_min_length: usize,
     /// CSP nonce for inline scripts on the setup page.
     pub csp_nonce: String,
 }
