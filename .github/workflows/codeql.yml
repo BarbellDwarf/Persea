@@ -29,14 +29,14 @@ jobs:
         language: [actions, c-cpp, javascript-typescript]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: github/codeql-action/init@d6317709a54fd87078d323eeb0e48ec331c8e621 # v3
+      - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           languages: ${{ matrix.language }}
           # Standalone extraction: this repo has no buildable C/C++ tree
           # (fuzz-guacd expects the guacamole-server source beside it) and
           # JS/TS/actions need no build. Avoids the cpp autobuild failure.
           build-mode: none
-      - uses: github/codeql-action/analyze@d6317709a54fd87078d323eeb0e48ec331c8e621 # v3
+      - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           category: "/language:${{ matrix.language }}"
 
@@ -56,7 +56,7 @@ jobs:
           SRC_DIR="$(rustc --print sysroot)/lib/rustlib/src/rust"
           test -d "$SRC_DIR"
           echo "CODEQL_EXTRACTOR_RUST_OPTION_RUST_SRC_DIR=$SRC_DIR" >> "$GITHUB_ENV"
-      - uses: github/codeql-action/init@d6317709a54fd87078d323eeb0e48ec331c8e621 # v3
+      - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           languages: rust
           build-mode: manual
@@ -64,6 +64,6 @@ jobs:
         run: cargo build --all-targets --locked
         env:
           CARGO_INCREMENTAL: "0"
-      - uses: github/codeql-action/analyze@d6317709a54fd87078d323eeb0e48ec331c8e621 # v3
+      - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           category: "/language:rust"
