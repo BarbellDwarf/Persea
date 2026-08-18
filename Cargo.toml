@@ -146,7 +146,7 @@ rpassword = "7.5.4"
 windows-service = "0.8"
 # Disk-space probe for recording rotation (GetDiskFreeSpaceExW); the
 # windows-sys version windows-service already locks.
-windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
 
 [dev-dependencies]
 proptest = "1"
