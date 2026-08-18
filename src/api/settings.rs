@@ -902,10 +902,7 @@ mod tests {
         // one from a manual DB edit).
         assert_eq!(stored_to_value("default_rdp_security", "psk"), json!("any"));
         // Unknown auth packages fall back to the empty default.
-        assert_eq!(
-            stored_to_value("default_rdp_auth_pkg", "pam"),
-            json!("")
-        );
+        assert_eq!(stored_to_value("default_rdp_auth_pkg", "pam"), json!(""));
     }
 
     #[test]
