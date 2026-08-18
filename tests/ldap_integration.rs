@@ -195,7 +195,7 @@ fn lookup_user_returns_user_info() {
     // and cannot match a DN subject; (objectClass=inetOrgPerson) matches the
     // entry at the base, which is what the lookup path needs.
     let chain = chain(&url, "(objectClass=inetOrgPerson)");
-        let info = futures::executor::block_on(chain.lookup_user(ALICE_DN))
+    let info = futures::executor::block_on(chain.lookup_user(ALICE_DN))
         .expect("lookup_user returned None");
     assert_eq!(info.subject, ALICE_DN);
     assert_eq!(info.display_name, "Alice Example");
