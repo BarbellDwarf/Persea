@@ -142,6 +142,15 @@ presets. Useful for integration code that must adapt to the server.
 Requires authentication. Returns the current user's name, email, role,
 group memberships, auth source, and whether Vault is configured.
 
+### `PUT /api/me`: update my profile
+
+Requires authentication. Accepts `name` (any user) and `email`
+(database users only, and only with `current_password` supplied).
+LDAP/OIDC accounts are provider-owned: email changes are rejected with a
+clear message. Email uniqueness is enforced (409 on conflict). The
+password change endpoint is `POST /api/me/password` (current + new
+password, database users only, password policy applies).
+
 ### `GET /auth/login`, `GET /auth/callback`, `POST /auth/logout`
 
 Browser flow: `/auth/login` redirects to the OIDC provider (when
@@ -365,6 +374,7 @@ cannot be overridden at connect time.
 | `POST /api/addressbook/folders/{scope}/{folder}/entries` | Create an entry: `{"name":"prod-db","type":"ssh","hostname":"db.internal.example.com","username":"admin","password":"secret"}` |
 | `PUT` / `DELETE /api/addressbook/folders/{scope}/{folder}/entries/{entry}` | Update / delete an entry. Updates are read-modify-write: omitted credential fields are preserved from the stored entry. |
 | `POST /api/addressbook/import` | Bulk-import entries from CSV (see the import template at `GET /api/addressbook/import-template`) |
+| `PUT /api/addressbook/defaults/apply` | Admin only. Write the current global per-protocol defaults into every saved entry: RDP entries get auto-size, security mode, and auth package (`default_rdp_auto_size` / `default_rdp_security` / `default_rdp_auth_pkg`); SSH (and PowerShell) entries get auto-size (`default_ssh_auto_size`). Body `{"protocols":["rdp","ssh"]}` (missing or empty applies both). Idempotent, audited on the admin hash chain; returns the number of entries updated |
 
 Entry `type` values match session types. Additional entry fields
 mirror the session fields (`jump_hosts`, `allowed_domains` for web
@@ -373,6 +383,24 @@ display geometry, and the `spice_*` / `proxmox_*` fields). The
 `proxmox_token_secret` is write-only: read endpoints never return it
 (a `has_proxmox_token_secret` boolean indicates whether one is stored),
 and it is preserved on update when omitted.
+
+## Personal folders
+
+Every authenticated user owns a private folder tree that references
+shared address-book entries without copying them. Owner-only: requests
+from any other identity, including admins, fail closed (404 for foreign
+or missing folders, 403 for API-key identities, which have no user
+row). Folders nest via slash paths (`Work/Acme` nests under `Work`).
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/personal/folders` | List the caller's personal folders, flat with slash paths |
+| `POST /api/personal/folders` | Create a folder: `{"name":"Work/Acme","description":"..."}`. Names must be non-empty, have no leading/trailing slash, and contain no empty path segments; duplicates conflict (409) |
+| `PUT /api/personal/folders/{id}` | Rename a folder (unique per user) |
+| `DELETE /api/personal/folders/{id}` | Delete a folder; cascades to its entry references only, shared entries are untouched |
+| `POST /api/personal/folders/{id}/entries` | Add a reference: `{"scope":"shared","folder":"production","entry":"web-server-01"}`. The shared entry must exist and be readable by the caller, else 404 |
+| `GET /api/personal/folders/{id}/entries` | List the referenced shared entries |
+| `DELETE /api/personal/folders/{id}/entries/{entry_id}` | Remove a reference |
 
 ## Quick connect (`POST /api/connect`)
 
@@ -398,6 +426,7 @@ stored password, the endpoint returns an inline credential form instead
 |----------|---------|
 | `GET /api/users` | List all users |
 | `POST /api/users` | Create a user (`{"name":"...","email":"...","password":"...","role":"operator"}`): the password is checked against the password policy |
+| `PUT /api/users/{email}` | Edit a user: `{"name":"...","email":"...","password":"..."}` (any subset). Name applies to any user; email and password apply to database users only (LDAP/OIDC identities are provider-owned and rejected). Email uniqueness is enforced (409), password resets enforce the password policy, and the change is written to the audit log |
 | `PUT /api/users/{email}/role` | Set a role: `{"role":"poweruser"}` (roles: `admin`, `poweruser`, `operator`, `viewer`) |
 | `POST /api/users/{email}/disable` / `enable` | Block / unblock login |
 | `DELETE /api/users/{email}` | Delete a user (their tokens are cascade-deleted) |

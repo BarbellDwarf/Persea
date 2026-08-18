@@ -80,7 +80,8 @@ For Active Directory, the search filter is usually `(sAMAccountName={})`.
 **Groups.** When `group_search_base` and `group_search_filter` are both set,
 persea resolves the user's group memberships. Groups are used for two things:
 folder access (see [Roles and Access Control](roles-and-access-control.md))
-and automatic role assignment (group-to-role mappings on the Admin page).
+and automatic role assignment (group-to-role mappings on the Admin → Groups
+page).
 
 ### Verify
 
@@ -286,7 +287,7 @@ sudo systemctl restart persea
 
 **6. (Optional) Group-to-role mappings:** create groups in Authentik (e.g.
 `persea-admins`, `persea-operators`), assign users, then map the groups to
-roles on the persea Admin page. See
+roles on the Admin → Groups page. See
 [Roles and Access Control](roles-and-access-control.md).
 
 ### Microsoft Entra ID (Azure AD) setup guide
@@ -341,8 +342,8 @@ Use the `v2.0` issuer URL: the v1 endpoint won't return the claims persea
 expects.
 
 **5. (Optional) Group-to-role mappings:** after a first successful login your
-groups appear in the **seen groups** list on the Admin page; map them to roles
-from there.
+groups appear in the **seen groups** list on the Admin → Groups page; map
+them to roles from there.
 
 ### Outbound HTTP proxy (egress)
 
