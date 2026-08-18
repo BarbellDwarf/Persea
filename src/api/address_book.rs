@@ -590,6 +590,15 @@ fn powershell_ssh_enabled(database: &Db) -> bool {
         .unwrap_or(true)
 }
 
+/// Whether a DB error is a unique-constraint violation. SQLite reports
+/// "UNIQUE constraint failed", Postgres/MySQL "duplicate key value
+/// violates unique constraint": match case-insensitively so duplicates
+/// map to 409 on every backend.
+fn is_unique_violation(e: &rusqlite::Error) -> bool {
+    let msg = e.to_string().to_lowercase();
+    msg.contains("unique constraint") || msg.contains("duplicate key")
+}
+
 /// Overlay decrypted DB credential rows onto an entry (db mode).
 fn apply_db_credentials(
     database: &Db,
@@ -1354,9 +1363,10 @@ pub async fn ab_apply_defaults(
         want_ssh = true;
     }
 
-    // The current global defaults drive the bulk write. An unset key falls
-    // back to the pre-feature behaviour: auto-size on, security "any"
-    // (guacd's own fallback), auth package unset (config value, then NTLM).
+    // The current global defaults drive the bulk write. Only keys with a
+    // STORED default are written: an unset security or auth-package key
+    // means "no global default", so per-entry values are left untouched
+    // (matching the create-path precedence where the entry wins).
     let db_clone = database.clone();
     let settings =
         tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db_clone))
@@ -1372,8 +1382,7 @@ pub async fn ab_apply_defaults(
         .find(|(k, _)| k == "default_rdp_security")
         .map(|(_, v)| v.as_str())
         .filter(|v| matches!(*v, "any" | "rdp" | "tls" | "nla"))
-        .unwrap_or("any")
-        .to_string();
+        .map(str::to_string);
     // An empty stored auth package means "no global default": entries keep
     // their per-entry value (or none), so the create path falls back to
     // the `[rdp]` config value, then NTLM.
@@ -1414,13 +1423,19 @@ pub async fn ab_apply_defaults(
     let rdp_auth_pkg_for_write = rdp_auth_pkg.clone();
     let applied = tokio::task::spawn_blocking(move || {
         let mut applied = 0u64;
+        let mut failures = 0u64;
         for entry in &entries {
-            let mut config: serde_json::Map<String, serde_json::Value> =
+            // A non-object protocol_config (valid JSON that is not a map)
+            // is left untouched rather than replaced: only object configs
+            // are updated.
+            let mut config: Option<serde_json::Map<String, serde_json::Value>> =
                 serde_json::from_str(&entry.protocol_config)
-                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default();
+                    .ok()
+                    .and_then(|v: serde_json::Value| v.as_object().cloned());
+            let Some(config) = config.as_mut() else {
+                failures += 1;
+                continue;
+            };
             let mut changed = false;
             if entry.protocol == "rdp" {
                 let current = config.get("auto_size").and_then(|v| v.as_bool());
@@ -1428,25 +1443,18 @@ pub async fn ab_apply_defaults(
                     config.insert("auto_size".into(), json!(rdp_auto_size));
                     changed = true;
                 }
-                let current = config.get("security").and_then(|v| v.as_str());
-                if current != Some(rdp_security_for_write.as_str()) {
-                    config.insert("security".into(), json!(rdp_security_for_write));
-                    changed = true;
-                }
-                match &rdp_auth_pkg_for_write {
-                    Some(pkg) => {
-                        let current = config.get("auth_pkg").and_then(|v| v.as_str());
-                        if current != Some(pkg.as_str()) {
-                            config.insert("auth_pkg".into(), json!(pkg));
-                            changed = true;
-                        }
+                if let Some(security) = &rdp_security_for_write {
+                    let current = config.get("security").and_then(|v| v.as_str());
+                    if current != Some(security.as_str()) {
+                        config.insert("security".into(), json!(security));
+                        changed = true;
                     }
-                    // No global auth-package default: drop any per-entry
-                    // value so the create path falls back to config/NTLM.
-                    None => {
-                        if config.remove("auth_pkg").is_some() {
-                            changed = true;
-                        }
+                }
+                if let Some(pkg) = &rdp_auth_pkg_for_write {
+                    let current = config.get("auth_pkg").and_then(|v| v.as_str());
+                    if current != Some(pkg.as_str()) {
+                        config.insert("auth_pkg".into(), json!(pkg));
+                        changed = true;
                     }
                 }
             } else {
@@ -1460,17 +1468,21 @@ pub async fn ab_apply_defaults(
                 continue;
             }
             let serialized = serde_json::to_string(&config).unwrap_or_else(|_| "{}".into());
-            let changed =
-                db::set_ab_entry_protocol_config(&db_clone, entry.id, &serialized).unwrap_or(false);
-            if changed {
-                applied += 1;
+            match db::set_ab_entry_protocol_config(&db_clone, entry.id, &serialized) {
+                Ok(true) => applied += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::error!(error = %e, entry = entry.name, "bulk defaults write failed");
+                    failures += 1;
+                }
             }
         }
-        Ok::<u64, rusqlite::Error>(applied)
+        Ok::<(u64, u64), rusqlite::Error>((applied, failures))
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
     .map_err(|e| AppError::Internal(e.to_string()))?;
+    let (applied, failures) = applied;
 
     // Audit the admin mutation on the hash chain (same pattern as the other
     // admin mutations in users.rs / groups.rs).
@@ -1482,9 +1494,10 @@ pub async fn ab_apply_defaults(
             "action": "apply_defaults",
             "protocols": protocols.clone(),
             "applied": applied,
+            "failures": failures,
             "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
             "security": {"rdp": rdp_security},
-            "auth_pkg": {"rdp": rdp_auth_pkg.clone().unwrap_or_default()},
+            "auth_pkg": {"rdp": rdp_auth_pkg},
         });
         if let Err(e) = tokio::task::spawn_blocking(move || {
             let _ = crate::audit::log_event(
@@ -1504,10 +1517,11 @@ pub async fn ab_apply_defaults(
 
     Ok(Json(json!({
         "applied": applied,
+        "failures": failures,
         "protocols": protocols,
         "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
         "security": {"rdp": rdp_security},
-        "auth_pkg": {"rdp": rdp_auth_pkg.unwrap_or_default()},
+        "auth_pkg": {"rdp": rdp_auth_pkg},
     })))
 }
 
@@ -1977,7 +1991,7 @@ pub async fn ab_create_folder(
             Ok(StatusCode::CREATED)
         }
         Err(e) => {
-            if e.to_string().contains("UNIQUE constraint") {
+            if is_unique_violation(&e) {
                 Err(AppError::Conflict("folder already exists".into()))
             } else {
                 tracing::error!(error = %e, scope = %folder_scope, folder = %folder_name, "Failed to create folder in DB");
@@ -3483,7 +3497,7 @@ pub async fn pf_create_folder(
     let name = validate_personal_folder_name(&req.name)?;
     match db::create_user_folder(&database, user_id, &name, &req.description) {
         Ok(id) => Ok((StatusCode::CREATED, Json(json!({"id": id, "name": name})))),
-        Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
+        Err(e) if is_unique_violation(&e) => Err(AppError::Conflict(
             "a folder with this name already exists".into(),
         )),
         Err(e) => {
@@ -3518,7 +3532,7 @@ pub async fn pf_rename_folder(
     match db::rename_user_folder(&database, user_id, folder_id, &name) {
         Ok(true) => Ok(Json(json!({"id": folder_id, "name": name}))),
         Ok(false) => Err(AppError::NotFound("folder not found".into())),
-        Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
+        Err(e) if is_unique_violation(&e) => Err(AppError::Conflict(
             "a folder with this name already exists".into(),
         )),
         Err(e) => {
@@ -3593,7 +3607,7 @@ pub async fn pf_add_folder_entry(
         Err(rusqlite::Error::QueryReturnedNoRows) => {
             Err(AppError::NotFound("folder not found".into()))
         }
-        Err(e) if e.to_string().contains("UNIQUE constraint") => Err(AppError::Conflict(
+        Err(e) if is_unique_violation(&e) => Err(AppError::Conflict(
             "this entry is already in the folder".into(),
         )),
         Err(e) => {
@@ -3667,16 +3681,31 @@ pub async fn pf_list_entries(
     let user_groups = id.groups();
     let mut visible = Vec::new();
     for entry in &db_entries {
+        // The containing folder's ACL gates the reference the same way it
+        // gates the shared tree: a tightened folder hides its entries
+        // everywhere, including personal references. A vanished folder
+        // also hides the reference.
+        let folder_path = match db::get_ab_folder_by_id(&database, entry.folder_id) {
+            Ok(folder) => folder.name,
+            Err(_) => continue,
+        };
+        if check_folder_access_db(&database, "shared", &folder_path, id).is_err() {
+            continue;
+        }
         if !id.has_role("admin")
             && !rbac::identity_has_custom_permission(&database, id, "read")
             && !entry_groups_match(entry, user_groups)
         {
             continue;
         }
-        visible.push(inject_powershell_binary(
-            entry,
-            json!(entry_info_from_db_row(&database, entry)),
-        ));
+        // The shared location rides along so the client can connect to the
+        // real entry without a client-side location map.
+        let mut value = json!(entry_info_from_db_row(&database, entry));
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("shared_scope".into(), json!("shared"));
+            obj.insert("shared_folder".into(), json!(folder_path));
+        }
+        visible.push(inject_powershell_binary(entry, value));
     }
     Ok(Json(json!(visible)))
 }
@@ -4588,7 +4617,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_apply_defaults_unset_auth_pkg_clears_entry_value() {
+    async fn test_apply_defaults_unset_keys_leave_entry_values_untouched() {
         let db = test_db();
         let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
         db::create_ab_entry(
@@ -4600,13 +4629,13 @@ mod tests {
             "10.0.0.5",
             Some(3389),
             "user",
-            r#"{"auth_pkg":"kerberos"}"#,
+            r#"{"auth_pkg":"kerberos","security":"nla"}"#,
             "",
         )
         .unwrap();
-        // No stored defaults at all: auto-size falls back to true, security
-        // to "any", and the unset auth package must clear the per-entry
-        // value so the create path falls back to config/NTLM.
+        // No stored defaults at all: only auto-size falls back to true; the
+        // unset security and auth-package keys must leave the per-entry
+        // values untouched (matching the create-path precedence).
         let key = insert_test_admin(&db, "admin");
         let app = build_router(db.clone(), test_vault_state(), None);
         let response = app
@@ -4621,15 +4650,15 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_json(response).await;
         assert_eq!(body["applied"], json!(1));
-        assert_eq!(body["auth_pkg"]["rdp"], json!(""));
 
         let entries = db::list_ab_entries(&db, folder).unwrap();
         let cfg: Value = serde_json::from_str(&entries[0].protocol_config).unwrap();
-        assert!(
-            cfg.get("auth_pkg").is_none(),
-            "unset global auth package must clear the per-entry value"
+        assert_eq!(
+            cfg["auth_pkg"],
+            json!("kerberos"),
+            "per-entry auth package kept"
         );
-        assert_eq!(cfg["security"], json!("any"));
+        assert_eq!(cfg["security"], json!("nla"), "per-entry security kept");
         assert_eq!(cfg["auto_size"], json!(true));
     }
 
@@ -5566,5 +5595,62 @@ mod tests {
         )
         .unwrap();
         assert!(folders.is_empty(), "personal folders are gone");
+    }
+    #[tokio::test]
+    async fn test_personal_folders_folder_acl_gates_references() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry_id = make_shared_entry(&db, "srv-a");
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+                json!({"scope": "shared", "folder": "Shared", "entry": "srv-a"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Visible while the folder is open.
+        let list = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(body_json(list).await.as_array().unwrap().len(), 1);
+
+        // Tighten the folder ACL to a group Alice is not in: the reference
+        // must disappear from the personal view (same rule as the shared
+        // tree) while the reference row survives.
+        let shared_folder = db::get_ab_folder(&db, "shared", "Shared").unwrap();
+        db::update_ab_folder(&db, "shared", "Shared", "", "admins", false).unwrap();
+        let list = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        let body = body_json(list).await;
+        assert_eq!(
+            body.as_array().unwrap().len(),
+            0,
+            "a tightened folder hides its references"
+        );
+        // The reference row itself still exists (folder + entry intact).
+        let alice_user = db::get_user_by_email(&db, "alice@test.com").unwrap();
+        let refs = db::list_user_folder_entries(&db, alice_user.id, folder).unwrap();
+        assert_eq!(refs.len(), 1);
+        let _ = entry_id;
     }
 }
