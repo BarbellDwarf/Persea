@@ -318,11 +318,7 @@ impl SessionManager {
         } else {
             None
         };
-        if powershell_binary.is_some() && !toggle("enable_powershell_ssh") {
-            return Err(SessionError::ValidationError(
-                "PowerShell sessions are disabled by an administrator".into(),
-            ));
-        }
+        powershell_gate(powershell_binary.as_deref(), toggle)?;
 
         // Effective per-protocol global defaults (admin Settings → Session
         // → Session defaults). Precedence: the request/entry value wins,
@@ -1917,6 +1913,21 @@ async fn check_allowed_network(
 /// to the `pwsh.exe` default (the entry form's default). Returns `None` for
 /// non-PowerShell entries, missing entries, or any read failure — plain SSH
 /// sessions are unaffected.
+/// Reject PowerShell sessions when the feature toggle is off. The
+/// binary presence marks the entry as a PowerShell session; the toggle
+/// defaults to enabled, matching the other `enable_*` gates.
+fn powershell_gate(
+    powershell_binary: Option<&str>,
+    toggle: impl Fn(&str) -> bool,
+) -> Result<(), SessionError> {
+    if powershell_binary.is_some() && !toggle("enable_powershell_ssh") {
+        return Err(SessionError::ValidationError(
+            "PowerShell sessions are disabled by an administrator".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn entry_powershell_binary(
     db: &Option<crate::db::Db>,
     address_book_entry: Option<&str>,
@@ -2420,6 +2431,25 @@ mod tests {
         let creds = parse_autofill_credentials(Some(json), None, None).unwrap();
         assert_eq!(creds.len(), 1);
         assert_eq!(creds[0].0, "https://ok.com");
+    }
+
+    // ── PowerShell feature gate ──
+
+    #[test]
+    fn powershell_gate_blocks_when_toggle_off() {
+        let err = powershell_gate(Some("pwsh.exe"), |k| k != "enable_powershell_ssh");
+        assert!(matches!(err, Err(SessionError::ValidationError(_))));
+    }
+
+    #[test]
+    fn powershell_gate_allows_when_toggle_on_or_unset() {
+        assert!(powershell_gate(Some("pwsh.exe"), |_| true).is_ok());
+        assert!(powershell_gate(Some("pwsh.exe"), |_| false).is_err());
+    }
+
+    #[test]
+    fn powershell_gate_ignores_plain_ssh() {
+        assert!(powershell_gate(None, |_| false).is_ok());
     }
 
     // ── Protocol lockdown toggles ──
