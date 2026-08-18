@@ -21,12 +21,19 @@
                     placeholder="Your display name">
             </div>
 
-            <!-- Email (readonly) -->
+            <!-- Email -->
             <div>
                 <label for="email" class="form-label">Email</label>
-                <input type="email" id="email" name="email" readonly
-                    class="form-input" style="opacity:0.5;cursor:not-allowed">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Managed by your identity provider</p>
+                <input type="email" id="email" name="email"
+                    class="form-input">
+                <p class="text-xs text-[var(--text-muted)] mt-1" id="email-note">Managed by your identity provider</p>
+            </div>
+
+            <!-- Current password (required to change email) -->
+            <div id="email-password-field" class="hidden">
+                <label for="email-current-password" class="form-label">Current Password</label>
+                <input type="password" id="email-current-password" class="form-input"
+                    autocomplete="current-password" placeholder="Required to change your email">
             </div>
 
             <!-- Auth Source -->
@@ -58,6 +65,35 @@
                     Save Changes
                 </button>
                 <span id="save-status" class="ml-3 text-sm text-[var(--text-muted)] hidden"></span>
+            </div>
+        </form>
+    </div>
+
+    <!-- Change Password (database accounts only) -->
+    <div class="card mb-6 hidden" id="password-section">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Change Password</h2>
+        <form id="password-form" class="space-y-5">
+            <div>
+                <label for="pw-current-password" class="form-label">Current Password</label>
+                <input type="password" id="pw-current-password" class="form-input"
+                    autocomplete="current-password">
+            </div>
+            <div>
+                <label for="pw-new-password" class="form-label">New Password</label>
+                <input type="password" id="pw-new-password" class="form-input"
+                    autocomplete="new-password">
+                <p class="text-xs text-[var(--text-muted)] mt-1">At least 15 characters, and must not match any of your last 5 passwords.</p>
+            </div>
+            <div>
+                <label for="pw-confirm-password" class="form-label">Confirm New Password</label>
+                <input type="password" id="pw-confirm-password" class="form-input"
+                    autocomplete="new-password">
+            </div>
+            <div class="pt-2">
+                <button type="submit" id="pw-save-btn" class="btn btn-primary btn-sm">
+                    Change Password
+                </button>
+                <span id="pw-status" class="ml-3 text-sm text-[var(--text-muted)] hidden"></span>
             </div>
         </form>
     </div>
@@ -204,6 +240,8 @@
     document.addEventListener('DOMContentLoaded', function() {
         // Load current user info
         if (typeof apiHeaders === 'undefined') { console.error('apiHeaders not defined'); return; }
+        var originalName = '';
+        var originalEmail = '';
         fetch('/api/me', { headers: apiHeaders() })
             .then(function(r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -211,8 +249,30 @@
             })
             .then(function(data) {
                 if (!data) return;
-                document.getElementById('display-name').value = data.name || '';
-                document.getElementById('email').value = data.email || '';
+                var isDatabase = data.auth_source === 'database';
+                var nameInput = document.getElementById('display-name');
+                var emailInput = document.getElementById('email');
+                nameInput.value = data.name || '';
+                nameInput.readOnly = !isDatabase;
+                emailInput.value = data.email || '';
+                emailInput.readOnly = !isDatabase;
+                originalName = data.name || '';
+                originalEmail = data.email || '';
+                var emailNote = document.getElementById('email-note');
+                var emailPwField = document.getElementById('email-password-field');
+                var pwSection = document.getElementById('password-section');
+                var saveBtn = document.getElementById('save-btn');
+                if (isDatabase) {
+                    emailNote.textContent = 'Changing your email requires your current password.';
+                    emailPwField.classList.remove('hidden');
+                    pwSection.classList.remove('hidden');
+                    saveBtn.disabled = false;
+                } else {
+                    emailNote.textContent = 'Managed by your identity provider';
+                    emailPwField.classList.add('hidden');
+                    pwSection.classList.add('hidden');
+                    saveBtn.disabled = true;
+                }
                 document.getElementById('auth-source-badge').textContent = data.auth_source || 'OIDC';
                 var roleEl = document.getElementById('role-badge');
                 var roleColors = {
@@ -237,29 +297,111 @@
         document.getElementById('profile-form').addEventListener('submit', function(e) {
             e.preventDefault();
             var status = document.getElementById('save-status');
+            var nameInput = document.getElementById('display-name');
+            var emailInput = document.getElementById('email');
+            var payload = {};
+            if (nameInput.value.trim() !== originalName) {
+                payload.name = nameInput.value.trim();
+            }
+            var emailChanged = emailInput.value.trim() !== originalEmail;
+            if (emailChanged) {
+                var currentPw = document.getElementById('email-current-password').value;
+                if (!currentPw) {
+                    status.textContent = 'Enter your current password to change your email';
+                    status.className = 'ml-3 text-sm text-red-400';
+                    status.classList.remove('hidden');
+                    setTimeout(function() { status.classList.add('hidden'); }, 4000);
+                    return;
+                }
+                payload.email = emailInput.value.trim();
+                payload.current_password = currentPw;
+            }
+            if (Object.keys(payload).length === 0) {
+                status.textContent = 'No changes to save';
+                status.className = 'ml-3 text-sm text-[var(--text-muted)]';
+                status.classList.remove('hidden');
+                setTimeout(function() { status.classList.add('hidden'); }, 3000);
+                return;
+            }
             status.textContent = 'Saving...';
             status.classList.remove('hidden');
             fetch('/api/me', {
                 method: 'PUT',
                 headers: apiHeaders(),
-                body: JSON.stringify({
-                    display_name: document.getElementById('display-name').value
-                })
+                body: JSON.stringify(payload)
             })
             .then(function(r) {
-                if (r.ok) {
+                return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+            })
+            .then(function(res) {
+                if (res.ok) {
                     status.textContent = 'Saved!';
                     status.className = 'ml-3 text-sm text-emerald-400';
+                    originalName = nameInput.value.trim();
+                    originalEmail = emailInput.value.trim();
+                    document.getElementById('email-current-password').value = '';
                 } else {
-                    status.textContent = 'Failed to save';
+                    status.textContent = res.data.error || 'Failed to save';
                     status.className = 'ml-3 text-sm text-red-400';
                 }
-                setTimeout(function() { status.classList.add('hidden'); }, 3000);
+                setTimeout(function() { status.classList.add('hidden'); }, 4000);
             })
             .catch(function() {
                 status.textContent = 'Network error';
                 status.className = 'ml-3 text-sm text-red-400';
                 setTimeout(function() { status.classList.add('hidden'); }, 3000);
+            });
+        });
+
+        // ── Change Password ────────────────────────────────────────────
+        document.getElementById('password-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var status = document.getElementById('pw-status');
+            var current = document.getElementById('pw-current-password').value;
+            var next = document.getElementById('pw-new-password').value;
+            var confirm = document.getElementById('pw-confirm-password').value;
+            if (next !== confirm) {
+                status.textContent = 'New passwords do not match';
+                status.className = 'ml-3 text-sm text-red-400';
+                status.classList.remove('hidden');
+                setTimeout(function() { status.classList.add('hidden'); }, 4000);
+                return;
+            }
+            var btn = document.getElementById('pw-save-btn');
+            btn.disabled = true;
+            btn.textContent = 'Changing\u2026';
+            status.textContent = 'Changing...';
+            status.className = 'ml-3 text-sm text-[var(--text-muted)]';
+            status.classList.remove('hidden');
+            fetch('/api/me/password', {
+                method: 'POST',
+                headers: apiHeaders(),
+                body: JSON.stringify({ current_password: current, new_password: next })
+            })
+            .then(function(r) {
+                return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+            })
+            .then(function(res) {
+                if (res.ok) {
+                    status.textContent = 'Password changed';
+                    status.className = 'ml-3 text-sm text-emerald-400';
+                    document.getElementById('pw-current-password').value = '';
+                    document.getElementById('pw-new-password').value = '';
+                    document.getElementById('pw-confirm-password').value = '';
+                } else {
+                    status.textContent = res.data.error || 'Failed to change password';
+                    status.className = 'ml-3 text-sm text-red-400';
+                }
+                setTimeout(function() { status.classList.add('hidden'); }, 5000);
+            })
+            .catch(function() {
+                status.textContent = 'Network error';
+                status.className = 'ml-3 text-sm text-red-400';
+                setTimeout(function() { status.classList.add('hidden'); }, 3000);
+            })
+            .then(function() {
+                btn.disabled = false;
+                btn.textContent = 'Change Password';
             });
         });
 

@@ -52,6 +52,22 @@ pub async fn change_password(
         }
     };
 
+    // LDAP/OIDC accounts have no local password: reject before the
+    // current-password check so the message is accurate.
+    let db_for_source = database.clone();
+    let email_for_source = email.clone();
+    let auth_source = tokio::task::spawn_blocking(move || {
+        db::get_user_auth_source(&db_for_source, &email_for_source)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(|_| AppError::Session("user not found".into()))?;
+    if auth_source != "database" {
+        return Err(AppError::Validation(
+            "password is managed by the identity provider for this user".into(),
+        ));
+    }
+
     let policy = policy.map(|Extension(p)| p).unwrap_or_default();
     policy
         .check_length(&body.new_password)
@@ -489,5 +505,94 @@ mod tests {
             format!("persea_mfa_pending={token}").parse().unwrap(),
         )]);
         assert!(resolve_totp_identity(None, &db, &headers).await.is_err());
+    }
+
+    fn user_identity(email: &str) -> Option<Extension<AuthIdentity>> {
+        Some(Extension(AuthIdentity::User {
+            email: email.to_string(),
+            name: "U".to_string(),
+            role: "viewer".to_string(),
+            groups: vec![],
+        }))
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_wrong_current_password() {
+        let db = test_db();
+        create_user(&db, "u@example.com", "viewer");
+        let err = change_password(
+            user_identity("u@example.com"),
+            Extension(db),
+            None,
+            Json(ChangePasswordRequest {
+                current_password: "wrong-password".to_string(),
+                new_password: "a-brand-new-password-42".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn change_password_succeeds_with_correct_current_password() {
+        let db = test_db();
+        create_user(&db, "u@example.com", "viewer");
+        let resp = change_password(
+            user_identity("u@example.com"),
+            Extension(db.clone()),
+            None,
+            Json(ChangePasswordRequest {
+                current_password: "s3cret-p@ss".to_string(),
+                new_password: "a-brand-new-password-42".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.0["ok"], true);
+        let (_, _, _, _, _, stored_hash) =
+            crate::db::get_user_login_info(&db, "u@example.com").unwrap().unwrap();
+        assert!(
+            crate::password::verify_password("a-brand-new-password-42", &stored_hash.unwrap())
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_short_new_password() {
+        let db = test_db();
+        create_user(&db, "u@example.com", "viewer");
+        let err = change_password(
+            user_identity("u@example.com"),
+            Extension(db),
+            None,
+            Json(ChangePasswordRequest {
+                current_password: "s3cret-p@ss".to_string(),
+                new_password: "short".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_non_database_user() {
+        let db = test_db();
+        let hash = crate::password::hash_password("s3cret-p@ss").unwrap();
+        crate::db::create_user_with_password(&db, "oidc@example.com", "O", &hash, "viewer", "oidc")
+            .unwrap();
+        let err = change_password(
+            user_identity("oidc@example.com"),
+            Extension(db),
+            None,
+            Json(ChangePasswordRequest {
+                current_password: "s3cret-p@ss".to_string(),
+                new_password: "a-brand-new-password-42".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 }
