@@ -949,7 +949,11 @@ pub fn upsert_user(
     let groups_str = groups.join(",");
     // An OIDC login always carries a subject; plain users created through
     // this entry point default to the database source.
-    let auth_source = if oidc_subject.is_some() { "oidc" } else { "database" };
+    let auth_source = if oidc_subject.is_some() {
+        "oidc"
+    } else {
+        "database"
+    };
     let conn = db.lock().unwrap();
     conn.execute(
         "INSERT INTO users (email, name, oidc_subject, role, oidc_groups, auth_source)
@@ -960,7 +964,14 @@ pub fn upsert_user(
              oidc_groups = excluded.oidc_groups,
              auth_source = excluded.auth_source,
              last_login_at = datetime('now')",
-        params![email, name, oidc_subject, default_role, groups_str, auth_source],
+        params![
+            email,
+            name,
+            oidc_subject,
+            default_role,
+            groups_str,
+            auth_source
+        ],
     )?;
     conn.query_row(
         "SELECT id, email, name, oidc_subject, role, disabled, created_at, last_login_at, oidc_groups, custom_role_id, auth_source
@@ -3847,17 +3858,34 @@ mod tests {
     fn test_upsert_oidc_user_sets_auth_source() {
         let db = test_db();
         // Create path: an OIDC login (subject present) records 'oidc'.
-        let user = upsert_user(&db, "oidc@example.com", "OIDC User", Some("sub-1"), "viewer", &[])
-            .unwrap();
+        let user = upsert_user(
+            &db,
+            "oidc@example.com",
+            "OIDC User",
+            Some("sub-1"),
+            "viewer",
+            &[],
+        )
+        .unwrap();
         assert_eq!(user.auth_source, "oidc");
-        assert_eq!(get_user_auth_source(&db, "oidc@example.com").unwrap(), "oidc");
+        assert_eq!(
+            get_user_auth_source(&db, "oidc@example.com").unwrap(),
+            "oidc"
+        );
     }
 
     #[test]
     fn test_upsert_oidc_update_keeps_auth_source() {
         let db = test_db();
-        upsert_user(&db, "oidc@example.com", "OIDC User", Some("sub-1"), "viewer", &["admins".to_string()])
-            .unwrap();
+        upsert_user(
+            &db,
+            "oidc@example.com",
+            "OIDC User",
+            Some("sub-1"),
+            "viewer",
+            &["admins".to_string()],
+        )
+        .unwrap();
         // Update path: a second OIDC login refreshes the row and must not
         // reset auth_source back to the column default.
         let updated = upsert_user(
@@ -3870,7 +3898,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(updated.auth_source, "oidc");
-        assert_eq!(get_user_auth_source(&db, "oidc@example.com").unwrap(), "oidc");
+        assert_eq!(
+            get_user_auth_source(&db, "oidc@example.com").unwrap(),
+            "oidc"
+        );
         // The row is updated in place, not duplicated.
         assert_eq!(list_users(&db).unwrap().len(), 1);
     }
@@ -3878,8 +3909,8 @@ mod tests {
     #[test]
     fn test_upsert_without_subject_defaults_database() {
         let db = test_db();
-        let user = upsert_user(&db, "local@example.com", "Local User", None, "viewer", &[])
-            .unwrap();
+        let user =
+            upsert_user(&db, "local@example.com", "Local User", None, "viewer", &[]).unwrap();
         assert_eq!(user.auth_source, "database");
         assert_eq!(
             get_user_auth_source(&db, "local@example.com").unwrap(),
@@ -3891,15 +3922,28 @@ mod tests {
     fn test_list_users_includes_auth_source() {
         let db = test_db();
         let hash = crate::password::hash_password("s3cret-p@ss").unwrap();
-        create_user_with_password(&db, "local@example.com", "Local User", &hash, "viewer", "database")
-            .unwrap();
-        upsert_user(&db, "oidc@example.com", "OIDC User", Some("sub-9"), "viewer", &[]).unwrap();
+        create_user_with_password(
+            &db,
+            "local@example.com",
+            "Local User",
+            &hash,
+            "viewer",
+            "database",
+        )
+        .unwrap();
+        upsert_user(
+            &db,
+            "oidc@example.com",
+            "OIDC User",
+            Some("sub-9"),
+            "viewer",
+            &[],
+        )
+        .unwrap();
         let users = list_users(&db).unwrap();
         assert_eq!(users.len(), 2);
-        let by_email: std::collections::HashMap<&str, &User> = users
-            .iter()
-            .map(|u| (u.email.as_str(), u))
-            .collect();
+        let by_email: std::collections::HashMap<&str, &User> =
+            users.iter().map(|u| (u.email.as_str(), u)).collect();
         assert_eq!(by_email["local@example.com"].auth_source, "database");
         assert_eq!(by_email["oidc@example.com"].auth_source, "oidc");
         // The same field is what the users list API serializes per user.
@@ -5280,7 +5324,11 @@ async fn upsert_user_pool(
 ) -> rusqlite::Result<User> {
     // An OIDC login always carries a subject; plain users created through
     // this entry point default to the database source.
-    let auth_source = if oidc_subject.is_some() { "oidc" } else { "database" };
+    let auth_source = if oidc_subject.is_some() {
+        "oidc"
+    } else {
+        "database"
+    };
     let sql = qsql!(
         pool,
         "INSERT INTO users (email, username, name, oidc_subject, role, oidc_groups, auth_source) \
