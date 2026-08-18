@@ -1005,8 +1005,7 @@ mod tests {
             .expect("fixture cert params");
         params
             .distinguished_name
-            .push(rcgen::DnType::CommonName, "persea.example.com")
-            .expect("fixture cert subject");
+            .push(rcgen::DnType::CommonName, "persea.example.com");
         params.not_before = rcgen::date_time_ymd(2026, 1, 1);
         params.not_after = rcgen::date_time_ymd(2099, 1, 1);
         let key = rcgen::KeyPair::generate().expect("fixture key");
@@ -1049,12 +1048,18 @@ mod tests {
         );
         assert_eq!(subject, issuer, "self-signed cert subject == issuer");
         assert!(
-            body["cert"]["not_after"].as_str().unwrap().starts_with("2099"),
+            body["cert"]["not_after"]
+                .as_str()
+                .unwrap()
+                .starts_with("2099"),
             "not_after must reflect the fixture expiry: {}",
             body["cert"]["not_after"]
         );
         assert!(
-            body["cert"]["not_before"].as_str().unwrap().starts_with("2026"),
+            body["cert"]["not_before"]
+                .as_str()
+                .unwrap()
+                .starts_with("2026"),
             "not_before must reflect the fixture start: {}",
             body["cert"]["not_before"]
         );
@@ -1065,7 +1070,9 @@ mod tests {
     async fn tls_cert_info_missing_files_report_false_existence() {
         let router = tls_router(Some(identity("admin@example.com", "Admin", "admin")));
         let resp = router
-            .oneshot(req_get("/api/admin/tls-cert-info?cert_path=/nonexistent/cert.pem"))
+            .oneshot(req_get(
+                "/api/admin/tls-cert-info?cert_path=/nonexistent/cert.pem",
+            ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);

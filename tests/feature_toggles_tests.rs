@@ -522,10 +522,11 @@ async fn render_settings_page() -> String {
 }
 
 #[tokio::test]
-async fn settings_page_renders_five_section_tabs() {
+async fn settings_page_renders_four_section_tabs() {
     let html = render_settings_page().await;
     // Two tablists since #160: the left rail (wide screens) and the tab
-    // bar (narrow screens), each with the same five sections.
+    // bar (narrow screens), each with the same four sections (the Security
+    // tab moved to the dedicated page in #172).
     assert_eq!(
         html.matches("role=\"tablist\"").count(),
         2,
@@ -535,8 +536,8 @@ async fn settings_page_renders_five_section_tabs() {
     // the literal `role="tab"`, so raw matches overcount by one.
     let rail_tabs = html.matches("class=\"settings-rail-tab\"").count();
     let bar_tabs = html.matches("class=\"settings-tab\"").count();
-    assert_eq!(rail_tabs + bar_tabs, 10, "ten tabs (rail + bar)");
-    for tab in ["Session", "Features", "Storage", "Security", "Updates"] {
+    assert_eq!(rail_tabs + bar_tabs, 8, "eight tabs (rail + bar)");
+    for tab in ["Session", "Features", "Storage", "Updates"] {
         assert_eq!(
             html.matches(&format!(">{tab}</button>")).count(),
             2,
@@ -546,8 +547,8 @@ async fn settings_page_renders_five_section_tabs() {
     // Exactly one tab per tablist is selected: the default Session tab.
     assert_eq!(
         html.matches("aria-selected=\"false\"").count(),
-        8,
-        "the other eight tabs must be unselected"
+        6,
+        "the other six tabs must be unselected"
     );
     assert!(
         html.contains("id=\"tab-session\" aria-controls=\"panel-session\" aria-selected=\"true\""),
@@ -562,21 +563,21 @@ async fn settings_page_renders_five_section_tabs() {
 #[tokio::test]
 async fn settings_page_defaults_to_session_panel_and_hides_the_rest() {
     let html = render_settings_page().await;
-    for panel in ["session", "features", "storage", "security", "updates"] {
+    for panel in ["session", "features", "storage", "updates"] {
         assert!(
             html.contains(&format!("id=\"panel-{panel}\"")),
             "panel {panel} must render"
         );
     }
-    // Only the Session panel is visible on load; the other four start hidden.
+    // Only the Session panel is visible on load; the other three start hidden.
     assert!(
         !html.contains("id=\"panel-session\" hidden"),
         "session panel must be visible by default"
     );
     assert_eq!(
         html.matches("tabindex=\"-1\" hidden").count(),
-        4,
-        "the four non-default panels must start hidden"
+        3,
+        "the three non-default panels must start hidden"
     );
 }
 

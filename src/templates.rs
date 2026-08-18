@@ -1052,7 +1052,12 @@ mod tests {
     #[tokio::test]
     async fn settings_page_has_no_security_tab() {
         let html = render_body("pages/admin/settings.html", &admin_ctx("settings")).await;
-        for gone in ["tab-security", "rail-security", "panel-security", ">Security</button>"] {
+        for gone in [
+            "tab-security",
+            "rail-security",
+            "panel-security",
+            ">Security</button>",
+        ] {
             assert!(
                 !html.contains(gone),
                 "settings must no longer render {gone}"
