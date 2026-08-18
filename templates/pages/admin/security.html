@@ -276,18 +276,9 @@ function renderTlsStatus(data) {
 function loadTlsStatus() {
     var summary = document.getElementById('tls-summary');
     if (!summary) return;
-    fetch('/api/system/settings', { headers: apiHeaders(), credentials: 'same-origin' })
-        .then(function(r) { return r.ok ? r.json() : null; })
-        .then(function(s) {
-            if (!s) throw new Error('settings unavailable');
-            var q = new URLSearchParams();
-            if (s.tls_cert_path) q.set('cert_path', s.tls_cert_path);
-            if (s.tls_key_path) q.set('key_path', s.tls_key_path);
-            return fetch('/api/admin/tls-cert-info?' + q.toString(), {
-                headers: apiHeaders(),
-                credentials: 'same-origin'
-            });
-        })
+    // The endpoint resolves the configured paths server-side; the client
+    // only displays them.
+    fetch('/api/admin/tls-cert-info', { headers: apiHeaders(), credentials: 'same-origin' })
         .then(function(r) { return r.ok ? r.json() : null; })
         .then(renderTlsStatus)
         .catch(function() {
