@@ -21,6 +21,10 @@ on:
       - 'docs/deployment-guide.md'
       - '.github/workflows/screenshots.yml'
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   pull-requests: write
@@ -29,14 +33,14 @@ jobs:
   regenerate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           components: rustfmt, clippy
           rustflags: ""
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 20
 
@@ -54,31 +58,10 @@ jobs:
             uuid-dev freerdp3-dev \
             openssh-server
 
-      - name: Build guacd from the persea fork (same recipe as release.yml)
-        env:
-          GUACD_REPO: https://github.com/persea-grove/persea-guacamole-server.git
-          GUACD_COMMIT: d9218fe1
-        run: |
-          if [ ! -f /tmp/guacd-build/Makefile ]; then
-            git clone --depth 1 --branch persea-1.6.1-freerdp3 $GUACD_REPO /tmp/guacamole-server
-            git -C /tmp/guacamole-server checkout $GUACD_COMMIT 2>/dev/null || true
-            cd /tmp/guacamole-server && autoreconf -fi
-            mkdir /tmp/guacd-build && cd /tmp/guacd-build
-            /tmp/guacamole-server/configure \
-              --prefix=/opt/persea \
-              --with-ssh --with-vnc --with-rdp \
-              --without-telnet --without-kubernetes \
-              --disable-guacenc --disable-guaclog --disable-static
-          fi
-          make -C /tmp/guacd-build -j"$(nproc)"
-          /tmp/guacd-build/src/guacd -b 127.0.0.1 -L /tmp/guacd-build/guacd.log &
-          for i in $(seq 1 60); do
-            if bash -c 'echo > /dev/tcp/127.0.0.1/4822' 2>/dev/null; then
-              echo "guacd (fork d9218fe1) ready after ${i}s"
-              break
-            fi
-            sleep 1
-          done
+      - name: Build guacd from the persea fork
+        uses: ./.github/actions/build-guacd
+        with:
+          start-guacd: "true"
 
       - name: Set up demo sshd (fixed prompt, deterministic terminal)
         run: |
@@ -186,7 +169,7 @@ jobs:
       - name: Open regeneration PR
         if: github.event_name == 'workflow_dispatch' && steps.diff-check.outputs.changed == 'true'
         continue-on-error: true
-        uses: peter-evans/create-pull-request@v8
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
         with:
           add-paths: docs/screenshots
           branch: screenshots/regen
