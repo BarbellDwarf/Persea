@@ -2249,7 +2249,10 @@ async fn run_server(
             "/api/users/{email}/sessions",
             delete(api::delete_user_sessions),
         )
-        .route("/api/users/{email}", delete(api::delete_user))
+        .route(
+            "/api/users/{email}",
+            delete(api::delete_user).put(api::update_user),
+        )
         .route("/api/users/{email}/disable", post(api::disable_user))
         .route("/api/users/{email}/enable", post(api::enable_user))
         .route("/api/admin/group-mappings", get(api::list_group_mappings))

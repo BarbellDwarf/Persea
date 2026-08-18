@@ -326,6 +326,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             disabled       INTEGER NOT NULL DEFAULT 0,
             created_at     TEXT NOT NULL DEFAULT (datetime('now')),
             last_login_at  TEXT,
+            password_hash  TEXT,
             auth_source    TEXT NOT NULL DEFAULT 'database'
         );
 
@@ -486,6 +487,16 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
         conn.execute_batch(
             "ALTER TABLE users ADD COLUMN auth_source TEXT NOT NULL DEFAULT 'database'",
         )?;
+    }
+
+    // Migration: password_hash column. Fresh databases get the column from
+    // the CREATE TABLE above; existing databases are ALTERed here. The
+    // admin user-edit endpoint and the password-change flow both write it.
+    let has_password_hash: bool = conn
+        .prepare("SELECT password_hash FROM users LIMIT 0")
+        .is_ok();
+    if !has_password_hash {
+        conn.execute_batch("ALTER TABLE users ADD COLUMN password_hash TEXT")?;
     }
 
     // Migration: connection reason column (V09). Fresh databases get the
@@ -1359,6 +1370,47 @@ pub fn update_user_name(db: &Db, email: &str, name: &str) -> rusqlite::Result<bo
         params![name, email],
     )?;
     Ok(changed > 0)
+}
+
+/// Update a user's name, email, and/or password hash in one statement.
+/// `None` fields are left unchanged; at least one must be `Some`. Returns
+/// the updated user, or `None` when `email` does not match any user.
+///
+/// Sessions, API tokens, and RBAC grants are keyed by `users.id`, so an
+/// email change preserves them without re-keying. The SQLx backends mirror
+/// `email` into the `username` column, which is updated in the same
+/// statement.
+pub fn update_user(
+    db: &Db,
+    email: &str,
+    new_name: Option<&str>,
+    new_email: Option<&str>,
+    new_password_hash: Option<&str>,
+) -> rusqlite::Result<Option<User>> {
+    db_route!(
+        db,
+        update_user_pool,
+        email.to_string(),
+        new_name.map(|s| s.to_string()),
+        new_email.map(|s| s.to_string()),
+        new_password_hash.map(|s| s.to_string())
+    );
+    let changed = {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "UPDATE users SET
+                name = COALESCE(?1, name),
+                email = COALESCE(?2, email),
+                password_hash = COALESCE(?3, password_hash)
+             WHERE email = ?4",
+            params![new_name, new_email, new_password_hash, email],
+        )?
+    };
+    if changed == 0 {
+        return Ok(None);
+    }
+    let lookup_email = new_email.unwrap_or(email);
+    get_user_by_email(db, lookup_email).map(Some)
 }
 
 /// Disable a user by email.
@@ -3952,6 +4004,144 @@ mod tests {
     }
 
     #[test]
+    fn test_update_user_name_email_and_password() {
+        let db = test_db();
+        let hash = crate::password::hash_password("a-very-long-password").unwrap();
+        create_user_with_password(
+            &db,
+            "old@example.com",
+            "Old Name",
+            &hash,
+            "viewer",
+            "database",
+        )
+        .unwrap();
+        let uid = get_user_by_email(&db, "old@example.com").unwrap().id;
+
+        let updated = update_user(
+            &db,
+            "old@example.com",
+            Some("New Name"),
+            Some("new@example.com"),
+            Some("a-different-long-password"),
+        )
+        .unwrap()
+        .expect("user must exist");
+        assert_eq!(updated.id, uid, "email change must keep the user id");
+        assert_eq!(updated.email, "new@example.com");
+        assert_eq!(updated.name, "New Name");
+        // The old email no longer resolves.
+        assert!(get_user_by_email(&db, "old@example.com").is_err());
+    }
+
+    #[test]
+    fn test_update_user_partial_fields() {
+        let db = test_db();
+        let hash = crate::password::hash_password("a-very-long-password").unwrap();
+        create_user_with_password(
+            &db,
+            "user@example.com",
+            "Original",
+            &hash,
+            "viewer",
+            "database",
+        )
+        .unwrap();
+        // Name only: email and hash untouched.
+        let updated = update_user(&db, "user@example.com", Some("Renamed"), None, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.name, "Renamed");
+        assert_eq!(updated.email, "user@example.com");
+        // Email only: name untouched.
+        let updated = update_user(&db, "user@example.com", None, Some("moved@example.com"), None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.name, "Renamed");
+        assert_eq!(updated.email, "moved@example.com");
+    }
+
+    #[test]
+    fn test_update_user_unknown_email_returns_none() {
+        let db = test_db();
+        assert!(update_user(&db, "nobody@example.com", Some("X"), None, None)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn test_update_user_email_uniqueness_conflict() {
+        let db = test_db();
+        let hash = crate::password::hash_password("a-very-long-password").unwrap();
+        create_user_with_password(
+            &db,
+            "a@example.com",
+            "A",
+            &hash,
+            "viewer",
+            "database",
+        )
+        .unwrap();
+        create_user_with_password(
+            &db,
+            "b@example.com",
+            "B",
+            &hash,
+            "viewer",
+            "database",
+        )
+        .unwrap();
+        let err = update_user(&db, "a@example.com", None, Some("b@example.com"), None)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("UNIQUE"),
+            "expected UNIQUE violation, got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_update_user_email_preserves_sessions_and_tokens() {
+        let db = test_db();
+        let hash = crate::password::hash_password("a-very-long-password").unwrap();
+        create_user_with_password(
+            &db,
+            "old@example.com",
+            "Old Name",
+            &hash,
+            "viewer",
+            "database",
+        )
+        .unwrap();
+        let uid = get_user_by_email(&db, "old@example.com").unwrap().id;
+
+        // A session and an API token, both keyed by user id.
+        let session = create_auth_session(&db, uid, 3600).unwrap();
+        let (token_id, _token) = create_user_token(&db, uid, "test-token", None, None).unwrap();
+
+        let updated = update_user(
+            &db,
+            "old@example.com",
+            Some("New Name"),
+            Some("new@example.com"),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(updated.id, uid);
+
+        // The session still validates and resolves to the same user id.
+        let validated = validate_auth_session(&db, &session).unwrap();
+        assert_eq!(validated.id, uid);
+        assert_eq!(validated.email, "new@example.com");
+
+        // The token row is untouched.
+        let tokens = list_user_tokens(&db, uid).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].id, token_id);
+        assert_eq!(tokens[0].name, "test-token");
+    }
+
+    #[test]
     fn test_session_history_insert_and_query() {
         let db = test_db();
         insert_session_history(
@@ -5591,6 +5781,43 @@ async fn update_user_name_pool(
     .await
     .map_err(map_sqlx_err)?;
     Ok(changed > 0)
+}
+
+async fn update_user_pool(
+    pool: &DbPool,
+    email: String,
+    new_name: Option<String>,
+    new_email: Option<String>,
+    new_password_hash: Option<String>,
+) -> rusqlite::Result<Option<User>> {
+    let lookup_email = new_email.clone().unwrap_or_else(|| email.clone());
+    let sql = qsql!(
+        pool,
+        "UPDATE users SET name = COALESCE($1, name), email = COALESCE($2, email), username = COALESCE($2, username), password_hash = COALESCE($3, password_hash) WHERE email = $4",
+        "UPDATE users SET name = COALESCE(?, name), email = COALESCE(?, email), username = COALESCE(?, username), password_hash = COALESCE(?, password_hash) WHERE email = ?"
+    );
+    let args = match pool {
+        // MySQL and SQLite have no $n reuse: the email placeholder appears
+        // twice (email + username columns), so it needs two binds.
+        DbPool::MySQL(_) | DbPool::SQLite(_) => vec![
+            Arg::OptStr(new_name),
+            Arg::OptStr(new_email.clone()),
+            Arg::OptStr(new_email),
+            Arg::OptStr(new_password_hash),
+            Arg::Str(email),
+        ],
+        _ => vec![
+            Arg::OptStr(new_name),
+            Arg::OptStr(new_email),
+            Arg::OptStr(new_password_hash),
+            Arg::Str(email),
+        ],
+    };
+    let changed = pool_exec(pool, sql, &args).await.map_err(map_sqlx_err)?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    get_user_by_email_pool(pool, lookup_email).await.map(Some)
 }
 
 async fn set_user_disabled_pool(

@@ -37,6 +37,23 @@ pub struct CreateUserRequest {
     pub custom_role: Option<String>,
 }
 
+/// Body for `PUT /api/users/{email}`. Every field is optional; at least
+/// one must be present. Name edits apply to any user; email and password
+/// changes are restricted to database users (LDAP/OIDC identities are
+/// provider-owned).
+#[derive(Deserialize)]
+pub struct UpdateUserRequest {
+    /// New display name.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// New login email (database users only).
+    #[serde(default)]
+    pub email: Option<String>,
+    /// New password (database users only, policy enforced).
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
 /// Body for `POST /api/admin/group-mappings`.
 #[derive(Deserialize)]
 pub struct CreateGroupMappingRequest {
@@ -233,6 +250,184 @@ pub async fn create_user(
             "custom_role": custom_role_name
         })),
     ))
+}
+
+/// `PUT /api/users/{email}`: edit a user's name, email, and/or password.
+/// Admin only. Name edits apply to any user; email and password changes
+/// are restricted to database users (LDAP/OIDC identities are
+/// provider-owned). Returns 404 for unknown users, 400 for invalid
+/// input, and 409 when the new email is already in use.
+pub async fn update_user(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    policy: Option<Extension<crate::password::PasswordPolicy>>,
+    Path(email): Path<String>,
+    Json(body): Json<UpdateUserRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let id = identity
+        .as_ref()
+        .map(|Extension(id)| id)
+        .ok_or(AppError::Forbidden("authentication required".into()))?;
+    if !id.has_role("admin") {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+
+    if body.name.is_none() && body.email.is_none() && body.password.is_none() {
+        return Err(AppError::Validation("nothing to update".into()));
+    }
+
+    // Handlers fall back to the documented defaults when the extension is
+    // absent (test routers).
+    let policy = policy.map(|Extension(p)| p).unwrap_or_default();
+
+    // Resolve the target user up front: 404 for unknown accounts, and the
+    // auth source gates the email/password fields.
+    let db_for_read = database.clone();
+    let email_for_read = email.clone();
+    let user = tokio::task::spawn_blocking(move || {
+        db::get_user_by_email(&db_for_read, &email_for_read)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(|_| AppError::NotFound("user not found".into()))?;
+    let is_database = user.auth_source == "database";
+
+    let new_name = match &body.name {
+        Some(name) => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return Err(AppError::Validation("name must not be empty".into()));
+            }
+            Some(trimmed.to_string())
+        }
+        None => None,
+    };
+
+    let new_email = match &body.email {
+        Some(new_email) => {
+            if !is_database {
+                return Err(AppError::Validation(
+                    "email is managed by the identity provider for this user".into(),
+                ));
+            }
+            let trimmed = new_email.trim();
+            if trimmed.is_empty()
+                || !trimmed.contains('@')
+                || trimmed.chars().any(char::is_whitespace)
+            {
+                return Err(AppError::Validation("invalid email address".into()));
+            }
+            Some(trimmed.to_string())
+        }
+        None => None,
+    };
+
+    // Password length is checked up front (cheap); the reuse check and the
+    // Argon2id hash run in the blocking pool.
+    if let Some(password) = &body.password {
+        if !is_database {
+            return Err(AppError::Validation(
+                "password is managed by the identity provider for this user".into(),
+            ));
+        }
+        policy.check_length(password).map_err(AppError::Validation)?;
+    }
+
+    let history = policy.history;
+    let db_clone = database.clone();
+    let email_clone = email.clone();
+    let name_for_update = new_name.clone();
+    let email_for_update = new_email.clone();
+    let password_for_update = body.password.clone();
+    let user_id = user.id;
+
+    let updated = tokio::task::spawn_blocking(move || {
+        // Reuse check + hashing run in the blocking pool (Argon2id is
+        // expensive); the DB write happens in the same call so the new
+        // password and its history entry land together.
+        let password_hash = match &password_for_update {
+            Some(pw) => {
+                if crate::password::password_is_recent(&db_clone, user_id, pw, history)
+                    .map_err(|e| AppError::Internal(e.to_string()))?
+                {
+                    return Err(AppError::Validation(format!(
+                        "password must differ from the user's last {} passwords",
+                        history
+                    )));
+                }
+                Some(
+                    crate::password::hash_password(pw)
+                        .map_err(|e| AppError::Internal(e.to_string()))?,
+                )
+            }
+            None => None,
+        };
+        let updated = db::update_user(
+            &db_clone,
+            &email_clone,
+            name_for_update.as_deref(),
+            email_for_update.as_deref(),
+            password_hash.as_deref(),
+        )
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("UNIQUE") {
+                AppError::Conflict("a user with this email already exists".into())
+            } else {
+                AppError::Internal(msg)
+            }
+        })?;
+        if let (Some(hash), Some(user)) = (&password_hash, &updated) {
+            let _ = crate::password::record_password_history(&db_clone, user.id, hash, history);
+        }
+        Ok::<_, AppError>(updated)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))??;
+
+    let user = updated.ok_or(AppError::NotFound("user not found".into()))?;
+
+    // Audit: user edit (no secrets — just which fields changed).
+    {
+        let db_audit = database.clone();
+        let email_audit = email.clone();
+        let new_email_audit = new_email.clone();
+        let name_changed = new_name.is_some();
+        let email_changed = new_email.is_some();
+        let password_changed = body.password.is_some();
+        let admin_name = identity
+            .as_ref()
+            .map(|id| id.display_name().to_string())
+            .unwrap_or_default();
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let _ = audit::log_event(
+                &db_audit,
+                &mut audit::EventBuilder::new("admin.user.edit", "success")
+                    .user_id(&admin_name)
+                    .details(serde_json::json!({
+                        "target_email": email_audit,
+                        "new_email": new_email_audit,
+                        "name_changed": name_changed,
+                        "email_changed": email_changed,
+                        "password_changed": password_changed,
+                    }))
+                    .build(),
+            );
+        })
+        .await
+        {
+            tracing::error!(error = %e, "audit task failed");
+        }
+    }
+
+    Ok(Json(json!({
+        "ok": true,
+        "id": user.id,
+        "email": user.email,
+        "name": user.name,
+        "role": user.role,
+        "auth_source": user.auth_source,
+    })))
 }
 
 /// `POST /api/admin/users/{email}/role`: assign a premade role

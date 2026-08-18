@@ -129,6 +129,36 @@
     </div>
 </div>
 
+<!-- Edit User Modal -->
+<div id="edit-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="edit-user-title">
+    <div class="card w-full max-w-md">
+        <h2 id="edit-user-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Edit User</h2>
+        <form id="edit-user-form">
+            <input type="hidden" name="email" id="edit-user-email">
+            <div class="space-y-4">
+                <div>
+                    <label class="form-label">Name</label>
+                    <input type="text" name="name" id="edit-user-name" class="form-input">
+                </div>
+                <div>
+                    <label class="form-label">Email</label>
+                    <input type="email" name="email" id="edit-user-email-input" class="form-input">
+                    <p id="edit-user-email-note" class="hidden text-xs text-[var(--text-muted)] mt-1">Email is managed by the identity provider for this user.</p>
+                </div>
+                <div>
+                    <label class="form-label">New Password</label>
+                    <input type="password" name="password" id="edit-user-password" class="form-input" placeholder="Leave blank to keep the current password">
+                    <p id="edit-user-password-note" class="hidden text-xs text-[var(--text-muted)] mt-1">Password is managed by the identity provider for this user.</p>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button type="button" id="btn-cancel-edit-user" data-close class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <!-- Delete Confirm Modal -->
 <div id="delete-user-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="delete-user-title">
     <div class="card w-full max-w-sm">
@@ -185,6 +215,19 @@ function editUserRole(email, currentRole, customRole) {
     openModal('edit-role-modal');
 }
 
+function editUser(user) {
+    document.getElementById('edit-user-email').value = user.email;
+    document.getElementById('edit-user-name').value = user.name || '';
+    document.getElementById('edit-user-email-input').value = user.email;
+    document.getElementById('edit-user-password').value = '';
+    var isDatabase = user.auth_source === 'database';
+    document.getElementById('edit-user-email-input').disabled = !isDatabase;
+    document.getElementById('edit-user-password').disabled = !isDatabase;
+    document.getElementById('edit-user-email-note').classList.toggle('hidden', isDatabase);
+    document.getElementById('edit-user-password-note').classList.toggle('hidden', isDatabase);
+    openModal('edit-user-modal');
+}
+
 function deleteUser(email) {
     document.getElementById('delete-user-name').textContent = email;
     document.getElementById('delete-user-email').value = email;
@@ -233,6 +276,7 @@ function renderUserRow(user) {
         '<td class="px-4 py-3 text-sm ' + statusClass + '">' + statusText + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + safeLogin + '</td>' +
         '<td class="px-4 py-3 text-right text-sm">' +
+            '<button data-action="edit-user" data-email="' + safeEmail + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit</button>' +
             '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + esc(user.role || '') + '" data-custom-role="' + esc((user.custom_role && user.custom_role.name) || '') + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit Role</button>' +
             '<button data-action="toggle-status" data-email="' + safeEmail + '" data-status="' + statusLower + '" class="' + toggleClass + ' mr-3">' + toggleLabel + '</button>' +
             '<button data-action="delete-user" data-email="' + safeEmail + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
@@ -283,7 +327,13 @@ document.getElementById('user-table-body').addEventListener('click', function(e)
     if (!btn) return;
     var action = btn.getAttribute('data-action');
     var email = btn.getAttribute('data-email');
-    if (action === 'edit-role') {
+    if (action === 'edit-user') {
+        var u = null;
+        for (var i = 0; i < _allUsers.length; i++) {
+            if (_allUsers[i].email === email) { u = _allUsers[i]; break; }
+        }
+        if (u) { editUser(u); }
+    } else if (action === 'edit-role') {
         editUserRole(email, btn.getAttribute('data-role'), btn.getAttribute('data-custom-role'));
     } else if (action === 'toggle-status') {
         toggleUserStatus(email, btn.getAttribute('data-status'));
@@ -304,6 +354,9 @@ document.getElementById('btn-cancel-add-user').addEventListener('click', functio
 });
 document.getElementById('btn-cancel-edit-role').addEventListener('click', function() {
     closeModal('edit-role-modal');
+});
+document.getElementById('btn-cancel-edit-user').addEventListener('click', function() {
+    closeModal('edit-user-modal');
 });
 document.getElementById('btn-cancel-delete-user').addEventListener('click', function() {
     closeModal('delete-user-modal');
@@ -363,6 +416,35 @@ document.getElementById('edit-role-form').addEventListener('submit', function(e)
             return r.json().then(function(j) { alert(j.error || 'Failed to update role'); });
         }
     }).catch(function() { alert('Failed to update role'); });
+});
+
+document.getElementById('edit-user-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    var email = document.getElementById('edit-user-email').value;
+    var data = {};
+    var name = document.getElementById('edit-user-name').value;
+    var newEmail = document.getElementById('edit-user-email-input').value;
+    var password = document.getElementById('edit-user-password').value;
+    if (name !== '') { data.name = name; }
+    if (newEmail !== email) { data.email = newEmail; }
+    if (password !== '') { data.password = password; }
+    if (Object.keys(data).length === 0) {
+        closeModal('edit-user-modal');
+        return;
+    }
+    fetch('/api/users/' + encodeURIComponent(email), {
+        method: 'PUT',
+        headers: apiHeaders(),
+        credentials: 'same-origin',
+        body: JSON.stringify(data)
+    }).then(function(r) {
+        if (r.ok) {
+            closeModal('edit-user-modal');
+            loadUsers();
+        } else {
+            return r.json().then(function(j) { alert(j.error || 'Failed to update user'); });
+        }
+    }).catch(function() { alert('Failed to update user'); });
 });
 
 document.getElementById('delete-user-form').addEventListener('submit', function(e) {
