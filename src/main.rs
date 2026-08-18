@@ -2305,6 +2305,11 @@ async fn run_server(
         .route("/api/audit/events", get(api::admin::audit_events))
         .route("/api/audit/verify", get(api::admin::audit_verify))
         .route("/api/audit/export", get(api::admin::audit_export))
+        // TLS certificate metadata for the Security page's TLS tab.
+        .route(
+            "/api/admin/tls-cert-info",
+            get(api::admin::tls_cert_info),
+        )
         .route(
             "/api/admin/upload-logo",
             post(api::settings::upload_logo)
@@ -2667,6 +2672,12 @@ async fn run_server(
         .route("/sessions.html", get(handlers::pages::sessions_page))
         .route("/reports.html", get(handlers::pages::admin_reports_page))
         .route("/admin.html", get(handlers::pages::admin_users_page))
+        // Consolidated Security page: hash tabs host the users/groups/roles/
+        // auth/audit section partials plus the TLS certificates tab.
+        .route(
+            "/admin/security.html",
+            get(handlers::pages::admin_security_page),
+        )
         // Account pages (templates)
         .route(
             "/account/profile.html",

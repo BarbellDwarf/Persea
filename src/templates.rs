@@ -144,6 +144,11 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     )
     .expect("Failed to register pages/admin/branding.html");
     env.add_template(
+        "pages/admin/security.html",
+        include_str!("../templates/pages/admin/security.html"),
+    )
+    .expect("Failed to register pages/admin/security.html");
+    env.add_template(
         "pages/account/profile.html",
         include_str!("../templates/pages/account/profile.html"),
     )
@@ -673,6 +678,29 @@ impl IntoResponse for AdminBrandingTemplate {
     }
 }
 
+/// Admin security page template context.
+#[derive(Serialize)]
+pub struct AdminSecurityTemplate {
+    /// Site title shown in the page header and browser tab.
+    pub site_title: String,
+    /// Branding logo URL resolved from config and DB settings; empty
+    /// renders the default placeholder.
+    pub logo_url: String,
+    /// Whether the signed-in user holds the admin role; drives the admin
+    /// entries in the sidebar.
+    pub is_admin: bool,
+    /// Sidebar highlight key naming the current page, e.g. "connections".
+    pub active_page: String,
+    /// CSP nonce that inline scripts in the rendered page must carry.
+    pub csp_nonce: String,
+}
+
+impl IntoResponse for AdminSecurityTemplate {
+    fn into_response(self) -> Response {
+        render_template("pages/admin/security.html", &self)
+    }
+}
+
 /// Client (remote desktop) page template context.
 #[derive(Serialize)]
 pub struct ClientTemplate {
@@ -899,5 +927,143 @@ pub struct SetupTemplate {
 impl IntoResponse for SetupTemplate {
     fn into_response(self) -> Response {
         render_template("pages/setup.html", &self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Admin context shared by the render assertions below.
+    fn admin_ctx(active_page: &str) -> serde_json::Value {
+        serde_json::json!({
+            "site_title": "persea",
+            "logo_url": "",
+            "is_admin": true,
+            "active_page": active_page,
+            "csp_nonce": "test-nonce",
+        })
+    }
+
+    async fn render_body(template: &str, ctx: &serde_json::Value) -> String {
+        let resp = render_template(template, ctx);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn security_page_renders_all_six_hash_tabs_and_section_partials() {
+        let html = render_body("pages/admin/security.html", &admin_ctx("security")).await;
+        for tab in ["users", "groups", "roles", "auth", "audit", "tls"] {
+            assert!(
+                html.contains(&format!("id=\"tab-{tab}\"")),
+                "tab {tab} must render"
+            );
+            assert!(
+                html.contains(&format!("id=\"panel-{tab}\"")),
+                "panel {tab} must render"
+            );
+        }
+        // Each tab hosts the matching #171 section partial; the partial
+        // headers prove the includes expanded.
+        for header in [
+            "User Management",
+            "Group Management",
+            "Role Management",
+            "Authentication Providers",
+            "Audit Log",
+        ] {
+            assert!(
+                html.contains(header),
+                "partial header {header} must render inside the page"
+            );
+        }
+        assert!(
+            html.contains("TLS Certificate"),
+            "the TLS certificates panel must render"
+        );
+        // Default tab is Users: its panel is visible, the other five hidden.
+        assert!(
+            html.contains("id=\"panel-users\" aria-labelledby=\"tab-users\" tabindex=\"-1\">"),
+            "users panel must be visible by default"
+        );
+        assert_eq!(
+            html.matches("tabindex=\"-1\" hidden").count(),
+            5,
+            "the five non-default panels must start hidden"
+        );
+    }
+
+    #[tokio::test]
+    async fn sidebar_consolidates_admin_items_under_security() {
+        let html = render_body("partials/sidebar.html", &admin_ctx("security")).await;
+        assert!(
+            html.contains("href=\"/admin/security.html\""),
+            "sidebar must link the Security item"
+        );
+        assert!(
+            html.contains(">Security</span>"),
+            "sidebar must label the item Security"
+        );
+        for removed in [
+            "/admin/users.html",
+            "/admin/groups.html",
+            "/admin/roles.html",
+            "/admin/auth.html",
+            "/admin/audit.html",
+        ] {
+            assert!(
+                !html.contains(&format!("href=\"{removed}\"")),
+                "sidebar must drop the {removed} link"
+            );
+        }
+        for kept in [
+            "/admin/settings.html",
+            "/admin/branding.html",
+            "/admin/reports.html",
+        ] {
+            assert!(
+                html.contains(&format!("href=\"{kept}\"")),
+                "sidebar must keep the {kept} link"
+            );
+        }
+        assert!(
+            html.contains("class=\"nav-item active\""),
+            "the Security item must highlight on the security page"
+        );
+    }
+
+    #[tokio::test]
+    async fn sidebar_security_item_highlights_for_moved_admin_pages() {
+        // Deep links: the old admin pages keep working as thin shells with
+        // their own active_page values; the Security item must still
+        // highlight so navigation context survives the move.
+        for page in ["users", "groups", "roles", "auth", "audit"] {
+            let html = render_body("partials/sidebar.html", &admin_ctx(page)).await;
+            assert!(
+                html.contains("class=\"nav-item active\""),
+                "Security item must highlight when active_page == {page}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn settings_page_has_no_security_tab() {
+        let html = render_body("pages/admin/settings.html", &admin_ctx("settings")).await;
+        for gone in ["tab-security", "rail-security", "panel-security", ">Security</button>"] {
+            assert!(
+                !html.contains(gone),
+                "settings must no longer render {gone}"
+            );
+        }
+        assert!(
+            !html.contains("'security'"),
+            "settingsSections must drop the security entry"
+        );
+        for kept in ["tab-session", "tab-features", "tab-storage", "tab-updates"] {
+            assert!(html.contains(kept), "settings must keep the {kept} tab");
+        }
     }
 }

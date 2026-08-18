@@ -179,7 +179,6 @@
             <button type="button" role="tab" id="rail-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-rail-tab">Session</button>
             <button type="button" role="tab" id="rail-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-rail-tab">Features</button>
             <button type="button" role="tab" id="rail-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-rail-tab">Storage</button>
-            <button type="button" role="tab" id="rail-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="settings-rail-tab">Security</button>
             <button type="button" role="tab" id="rail-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-rail-tab">Updates</button>
         </nav>
 
@@ -200,7 +199,6 @@
                 <button type="button" role="tab" id="tab-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-tab">Session</button>
                 <button type="button" role="tab" id="tab-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-tab">Features</button>
                 <button type="button" role="tab" id="tab-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-tab">Storage</button>
-                <button type="button" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="settings-tab">Security</button>
                 <button type="button" role="tab" id="tab-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-tab">Updates</button>
             </div>
 
@@ -700,24 +698,6 @@
                     </div>
                 </section>
 
-                <!-- Security -->
-                <section role="tabpanel" id="panel-security" aria-labelledby="tab-security" tabindex="-1" hidden class="space-y-4">
-                    <div class="card">
-                        <h2 class="settings-card-header">
-                            Security
-                        </h2>
-                        <p class="text-sm text-[var(--text-muted)] mb-4">
-                            The TLS certificate and key used by the server are configured in the Session section.
-                            Everything else security-related has its own page:
-                        </p>
-                        <ul class="space-y-2 text-sm">
-                            <li><a class="text-[var(--accent)] hover:underline" href="/admin/auth.html">Auth Providers</a> <span class="text-[var(--text-muted)]">(authentication methods, account lockout, password policy)</span></li>
-                            <li><a class="text-[var(--accent)] hover:underline" href="/admin/roles.html">Roles &amp; Permissions</a> <span class="text-[var(--text-muted)]">(system and connection-level RBAC)</span></li>
-                            <li><a class="text-[var(--accent)] hover:underline" href="/admin/audit.html">Audit Log</a> <span class="text-[var(--text-muted)]">(tamper-evident session audit trail)</span></li>
-                        </ul>
-                    </div>
-                </section>
-
                 <!-- Updates -->
                 <section role="tabpanel" id="panel-updates" aria-labelledby="tab-updates" tabindex="-1" hidden class="space-y-4">
                     <div class="card">
@@ -908,11 +888,11 @@ if (applyBtn) {
 // ── Settings section tabs ──
 // Plain-JS tab switch: no inline handlers (CSP), wired with
 // addEventListener. The active section survives a reload via the location
-// hash (#session, #features, #storage, #security, #updates). Two controls
-// exist — the left rail on wide screens and the tab bar below 1280px — and
-// both carry the same aria-selected/tabindex state, so the hash and the
-// roving focus work identically whichever one is rendered.
-var settingsSections = ['session', 'features', 'storage', 'security', 'updates'];
+// hash (#session, #features, #storage, #updates). Two controls exist — the
+// left rail on wide screens and the tab bar below 1280px — and both carry
+// the same aria-selected/tabindex state, so the hash and the roving focus
+// work identically whichever one is rendered.
+var settingsSections = ['session', 'features', 'storage', 'updates'];
 
 function settingsPanel(name) {
     return document.getElementById('panel-' + name);
@@ -1191,7 +1171,7 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
 
 // ── Settings search ──
 // Client-side filter: typing hides the cards whose label text does not
-// match, and hides whole sections with no matches, across all five tabs.
+// match, and hides whole sections with no matches, across all four tabs.
 // When the active section has no matches the search jumps to the first
 // section that does, so results stay visible. Clearing the input restores
 // the tab-driven visibility. All wiring is addEventListener: the page CSP
