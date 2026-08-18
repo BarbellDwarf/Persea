@@ -895,7 +895,13 @@ pub async fn get_session_banner(
     }
 
     match manager.get_session(id).await {
-        Some(info) => Ok(Json(json!({ "banner": info.banner }))),
+        // `auto_size` rides along so share viewers honor the flag too: the
+        // client skips its `size` instructions when false, so a joined
+        // session is never resized against the owner's setting.
+        Some(info) => Ok(Json(json!({
+            "banner": info.banner,
+            "auto_size": info.auto_size,
+        }))),
         None => Err(AppError::Session("session not found".into())),
     }
 }
@@ -1400,6 +1406,7 @@ mod drive_tests {
             share_allowed: false,
             fullscreen_on_connect: false,
             autohide_side_tabs: false,
+            auto_size: true,
             last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
             source_ip: None,
             user_id: Some(created_by.to_string()),

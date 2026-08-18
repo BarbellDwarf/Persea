@@ -344,8 +344,9 @@ impl SessionManager {
 
         let session_id = Uuid::new_v4();
 
-        // Auto-size flag (persea#142): per-entry `protocol_config.auto_size`
-        // wins, then the per-protocol global default
+        // Auto-size flag (persea#142): the per-entry
+        // `protocol_config.auto_size` wins, then an explicit request value
+        // (ad-hoc API clients), then the per-protocol global default
         // (`default_rdp_auto_size` / `default_ssh_auto_size`, which itself
         // falls back to true), then true, the behaviour of the pre-feature
         // client. Only rdp and ssh sessions are affected; the entry is read
@@ -358,7 +359,7 @@ impl SessionManager {
                 tokio::task::spawn_blocking(move || entry_auto_size(&db, key.as_deref()))
                     .await
                     .unwrap_or(None);
-            entry_value.unwrap_or(defaults.auto_size)
+            resolve_auto_size(entry_value, req.auto_size, defaults.auto_size)
         } else {
             defaults.auto_size
         };
@@ -1564,6 +1565,7 @@ impl SessionManager {
             share_allowed,
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
             autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
+            auto_size,
             last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
             source_ip: client_ip.clone(),
             user_id: Some(created_by),
@@ -2014,6 +2016,15 @@ fn entry_auto_size(db: &Option<crate::db::Db>, address_book_entry: Option<&str>)
     config.get("auto_size").and_then(|v| v.as_bool())
 }
 
+/// Resolve the session auto-size flag (persea#142) from its precedence
+/// chain: the per-entry `protocol_config.auto_size`, then an explicit
+/// request value (ad-hoc API clients), then the per-protocol global
+/// default, then true (the pre-feature behaviour). Pure so the chain is
+/// unit-testable without a manager or guacd.
+fn resolve_auto_size(entry_value: Option<bool>, request: Option<bool>, default: bool) -> bool {
+    entry_value.or(request).unwrap_or(default)
+}
+
 /// Which `enable_*` lockdown toggle gates a session type. `Vnc` and `Ssh`
 /// have no toggles (the settings page offers none) and are never blocked
 /// here — SSH is always allowed like VNC; `enable_ssh_tunnels` only gates
@@ -2446,6 +2457,31 @@ mod tests {
         assert_eq!(entry_auto_size(&some_db, Some("shared/IT/ssh1")), None);
     }
 
+    #[test]
+    fn resolve_auto_size_entry_flag_wins_over_request() {
+        // The per-entry flag is the most specific input: a stored false
+        // must not be overridden by a client-supplied true (the entry was
+        // bulk-applied by an admin and is authoritative).
+        assert!(!resolve_auto_size(Some(false), Some(true), true));
+        assert!(resolve_auto_size(Some(true), Some(false), false));
+    }
+
+    #[test]
+    fn resolve_auto_size_request_fills_entries_without_a_flag() {
+        // No entry flag (ad-hoc session, or an entry never touched by the
+        // bulk apply): the explicit request value applies.
+        assert!(!resolve_auto_size(None, Some(false), true));
+        assert!(resolve_auto_size(None, Some(true), false));
+    }
+
+    #[test]
+    fn resolve_auto_size_global_default_then_true() {
+        // Nothing explicit: the per-protocol global default applies, and an
+        // unset global default falls back to true (pre-feature behaviour).
+        assert!(!resolve_auto_size(None, None, false));
+        assert!(resolve_auto_size(None, None, true));
+    }
+
     #[tokio::test]
     async fn test_check_allowed_network_ipv4_match() {
         assert!(
@@ -2792,6 +2828,7 @@ mod tests {
             share_allowed: true,
             fullscreen_on_connect: false,
             autohide_side_tabs: false,
+            auto_size: true,
             last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
             source_ip: None,
             user_id: Some("alice".into()),

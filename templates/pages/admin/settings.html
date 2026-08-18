@@ -285,7 +285,18 @@
                                         </select>
                                     </div>
                                 </div>
-                                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                        <div>
+                                            <span class="text-sm text-[var(--text-primary)]">Auto Size</span>
+                                            <p class="text-xs text-[var(--text-muted)]">Scale the session to the browser window</p>
+                                        </div>
+                                        <div class="toggle-switch">
+                                            <input type="checkbox" id="default_rdp_auto_size" checked>
+                                            <span class="toggle-slider"></span>
+                                        </div>
+                                    </label>
+                                    <input type="hidden" name="default_rdp_auto_size" id="default_rdp_auto_size-hidden" value="false">
                                     <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
                                         <div>
                                             <span class="text-sm text-[var(--text-primary)]">H.264</span>
@@ -335,6 +346,19 @@
                                         <input type="number" name="default_ssh_height" value="1080" class="form-input">
                                     </div>
                                 </div>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                        <div>
+                                            <span class="text-sm text-[var(--text-primary)]">Auto Size</span>
+                                            <p class="text-xs text-[var(--text-muted)]">Scale the terminal to the browser window</p>
+                                        </div>
+                                        <div class="toggle-switch">
+                                            <input type="checkbox" id="default_ssh_auto_size" checked>
+                                            <span class="toggle-slider"></span>
+                                        </div>
+                                    </label>
+                                    <input type="hidden" name="default_ssh_auto_size" id="default_ssh_auto_size-hidden" value="false">
+                                </div>
                             </div>
 
                             <!-- VNC -->
@@ -369,6 +393,22 @@
                                         </label>
                                         <input type="hidden" name="default_vnc_disable_paste" id="default_vnc_disable_paste-hidden" value="false">
                                     </div>
+                                </div>
+                            </div>
+
+                            <!-- Bulk apply: write the current RDP/SSH Auto Size
+                                 defaults into every saved connection entry. -->
+                            <div class="pt-3 border-t border-[var(--border)]">
+                                <div class="flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                        <p class="text-sm font-semibold text-[var(--text-primary)]">Apply to existing connections</p>
+                                        <p class="text-xs text-[var(--text-muted)] mt-1">
+                                            Write the current Auto Size defaults above into every saved RDP and SSH connection.
+                                            Per-connection settings in the address book are overwritten.
+                                        </p>
+                                    </div>
+                                    <button type="button" id="btn-apply-auto-size"
+                                            class="btn btn-secondary btn-sm">Apply to existing connections</button>
                                 </div>
                             </div>
                         </div>
@@ -678,6 +718,25 @@
     </div>
 </div>
 
+<!-- Apply Auto Size defaults: confirmation dialog. The count of entries
+     the bulk endpoint updated is shown after the request completes. -->
+<div id="apply-auto-size-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="apply-auto-size-title">
+    <div class="card w-full max-w-sm text-center">
+        <h2 id="apply-auto-size-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Apply Auto Size defaults?</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">
+            Every saved RDP and SSH connection gets the current Auto Size defaults above,
+            overwriting its per-connection setting.
+        </p>
+        <p id="apply-auto-size-status" class="text-sm mb-4" aria-live="polite"></p>
+        <div class="flex justify-center gap-3">
+            <button id="apply-auto-size-cancel"
+                    class="btn btn-secondary btn-sm">Cancel</button>
+            <button id="apply-auto-size-ok"
+                    class="btn btn-primary btn-sm">Apply</button>
+        </div>
+    </div>
+</div>
+
 <script src="/vendor/htmx-json-enc.js"></script>
 <script nonce="{{ csp_nonce }}">
 function showError(message) {
@@ -719,6 +778,7 @@ var toggleBoxes = [
     'desktop_kiosk', 'desktop_transfers', 'desktop_pairing',
     'vault_enabled', 'db_only_mode',
     'default_rdp_h264', 'default_rdp_gfx', 'default_rdp_drive',
+    'default_rdp_auto_size', 'default_ssh_auto_size',
     'default_vnc_disable_copy', 'default_vnc_disable_paste'
 ];
 
@@ -736,6 +796,65 @@ document.getElementById('settings-form').addEventListener(
 document.getElementById('save-confirm-ok').addEventListener('click', function() {
     document.getElementById('save-confirm').classList.add('hidden');
 });
+
+// ── Apply Auto Size defaults to existing connections ──
+// PUT /api/addressbook/defaults/apply writes the current global defaults
+// into every saved rdp/ssh entry (admin-only, idempotent). Confirm first,
+// then show the count of entries updated. All wiring is addEventListener:
+// the page CSP blocks inline handlers.
+var applyBtn = document.getElementById('btn-apply-auto-size');
+var applyDialog = document.getElementById('apply-auto-size-confirm');
+var applyStatus = document.getElementById('apply-auto-size-status');
+var applyOk = document.getElementById('apply-auto-size-ok');
+var applyCancel = document.getElementById('apply-auto-size-cancel');
+
+function closeApplyDialog() {
+    applyDialog.classList.add('hidden');
+    applyStatus.textContent = '';
+    applyOk.disabled = false;
+    applyOk.textContent = 'Apply';
+    applyOk.style.display = '';
+    applyCancel.style.display = '';
+}
+
+if (applyBtn) {
+    applyBtn.addEventListener('click', function() {
+        applyStatus.textContent = '';
+        applyStatus.className = 'text-sm mb-4';
+        applyDialog.classList.remove('hidden');
+    });
+    applyCancel.addEventListener('click', closeApplyDialog);
+    applyOk.addEventListener('click', function() {
+        applyOk.disabled = true;
+        applyOk.textContent = 'Applying\u2026';
+        fetch('/api/addressbook/defaults/apply', {
+            method: 'PUT',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({})
+        }).then(function(r) {
+            return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+        }).then(function(res) {
+            if (!res.ok) {
+                applyOk.disabled = false;
+                applyOk.textContent = 'Apply';
+                applyStatus.className = 'text-sm mb-4 text-red-400';
+                applyStatus.textContent = (res.data && res.data.error) || 'Failed to apply defaults.';
+                return;
+            }
+            var count = (res.data && typeof res.data.applied === 'number') ? res.data.applied : 0;
+            applyStatus.className = 'text-sm mb-4 text-emerald-400';
+            applyStatus.textContent = 'Updated ' + count + ' connection' + (count === 1 ? '' : 's') + '.';
+            applyOk.style.display = 'none';
+            applyCancel.style.display = 'none';
+        }).catch(function() {
+            applyOk.disabled = false;
+            applyOk.textContent = 'Apply';
+            applyStatus.className = 'text-sm mb-4 text-red-400';
+            applyStatus.textContent = 'Failed to apply defaults.';
+        });
+    });
+}
 
 // ── Settings section tabs ──
 // Plain-JS tab switch: no inline handlers (CSP), wired with

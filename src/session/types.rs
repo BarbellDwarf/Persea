@@ -253,6 +253,17 @@ pub struct CreateSessionRequest {
     /// when the pointer nears the left edge). Populated from the source
     /// entry; ad-hoc sessions leave it None (client behaves as if false).
     pub autohide_side_tabs: Option<bool>,
+    /// Auto-size the session to the browser window (persea#142). The
+    /// client skips its `size` instructions when this resolves to false
+    /// and the session stays at the protocol defaults (1920x1080), with
+    /// the display merely scaled to fit. Resolution at session creation:
+    /// the source entry's `protocol_config.auto_size` wins, then an
+    /// explicit request value (ad-hoc API clients), then the per-protocol
+    /// global default (`default_rdp_auto_size` / `default_ssh_auto_size`),
+    /// then true (the pre-feature behaviour). Only rdp/ssh sessions are
+    /// affected; the resolved value is surfaced via `SessionInfo`.
+    #[serde(default)]
+    pub auto_size: Option<bool>,
     // Protocol-specific parameters (flat JSON keys route into these).
     /// SSH-specific parameters (`private_key`, `generate_keypair`, ...).
     #[serde(flatten)]
@@ -376,6 +387,14 @@ pub struct SessionInfo {
     /// client.html from the /api/sessions/:id fetch; omitted when false.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub autohide_side_tabs: bool,
+    /// Auto-size the session to the browser window (persea#142). Resolved
+    /// at session creation (entry flag → request → global default → true)
+    /// and always serialized: client.html skips `sendSize` on connect and
+    /// resize when this is false, keeping the session at the protocol
+    /// defaults while the display still scales to fit. Share viewers read
+    /// the same value from the banner endpoint so a joined session is
+    /// never resized against the flag.
+    pub auto_size: bool,
     /// Whether file transfer (RDP drive / SSH SFTP) is enabled for this
     /// session. Read by client.html to show/hide the upload button.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -522,6 +541,11 @@ pub struct Session {
     /// Surfaced in `SessionInfo` so client.html can auto-hide the
     /// clipboard/files side tabs.
     pub autohide_side_tabs: bool,
+    /// Auto-size the session to the browser window (persea#142). Resolved
+    /// at session creation (entry flag → request → global default → true);
+    /// surfaced in `SessionInfo` so client.html skips `sendSize` when
+    /// false and the session keeps the protocol-default dimensions.
+    pub auto_size: bool,
     /// Last activity timestamp (epoch seconds). Updated on every WebSocket
     /// input event from the browser. Used by the idle-session reaper.
     pub last_activity: AtomicI64,
@@ -656,6 +680,7 @@ impl Session {
             thumbnail_url: Some(format!("/api/sessions/{}/thumbnail", self.id)),
             fullscreen_on_connect: self.fullscreen_on_connect,
             autohide_side_tabs: self.autohide_side_tabs,
+            auto_size: self.auto_size,
             drive_enabled: self.drive_enabled,
             owner_instance: None,
             owner_base_url: None,
@@ -703,6 +728,7 @@ impl SessionInfo {
             thumbnail_url: None,
             fullscreen_on_connect: false,
             autohide_side_tabs: false,
+            auto_size: true,
             drive_enabled: false,
             owner_instance: Some(row.owner_instance.clone()),
             owner_base_url: if row.owner_base_url.is_empty() {
@@ -750,7 +776,8 @@ mod tests {
         let json = r#"{
             "session_type":"rdp","hostname":"winbox","port":3389,
             "domain":"CORP","security":"any","auth_pkg":"ntlm",
-            "remote_app":"notepad","enable_gfx":true,"enable_h264":true
+            "remote_app":"notepad","enable_gfx":true,"enable_h264":true,
+            "auto_size":false
         }"#;
         let req: CreateSessionRequest = serde_json::from_str(json).unwrap();
         let rdp = req.rdp.as_ref().expect("rdp params");
@@ -760,6 +787,11 @@ mod tests {
         assert_eq!(rdp.remote_app.as_deref(), Some("notepad"));
         assert_eq!(rdp.enable_gfx, Some(true));
         assert_eq!(rdp.enable_h264, Some(true));
+        assert_eq!(
+            req.auto_size,
+            Some(false),
+            "the client-facing auto_size flag rides the flat request JSON"
+        );
         assert!(
             req.ssh.as_ref().unwrap().private_key.is_none(),
             "hostname must not leak into SshParams"
@@ -855,6 +887,11 @@ mod tests {
         assert!(req.rdp.as_ref().unwrap().domain.is_none());
         assert!(req.web.as_ref().unwrap().url.is_none());
         assert!(req.proxmox.as_ref().unwrap().proxmox_url.is_none());
+        assert_eq!(
+            req.auto_size,
+            None,
+            "auto_size is absent unless the caller sets it; the server resolves entry → default → true"
+        );
     }
 
     #[test]
