@@ -260,7 +260,16 @@ pub async fn login_submit(
             client_ip,
             ..AuthRequest::default()
         };
-        return match auth_chain.authenticate(&auth_request).await {
+        // Providers may do blocking I/O (the LDAP client creates its own
+        // tokio runtime internally), so run the chain off the async runtime.
+        let result = tokio::task::spawn_blocking(move || {
+            tokio::runtime::Handle::current().block_on(auth_chain.authenticate(&auth_request))
+        })
+        .await
+        .unwrap_or(crate::auth_provider::AuthResult::Failure(
+            "no provider could authenticate".into(),
+        ));
+        return match result {
             crate::auth_provider::AuthResult::Redirect(url) => {
                 Redirect::temporary(&url).into_response()
             }
@@ -292,8 +301,18 @@ pub async fn login_submit(
         ..AuthRequest::default()
     };
 
-    // Try each provider in chain order (first success wins)
-    let result = auth_chain.authenticate(&auth_request).await;
+    // Try each provider in chain order (first success wins). Providers may
+    // do blocking I/O (the LDAP client creates its own tokio runtime
+    // internally), so run the chain off the async runtime: a sync client
+    // started on a tokio worker thread panics with "Cannot start a runtime
+    // from within a runtime" and kills the request.
+    let result = tokio::task::spawn_blocking(move || {
+        tokio::runtime::Handle::current().block_on(auth_chain.authenticate(&auth_request))
+    })
+    .await
+    .unwrap_or(crate::auth_provider::AuthResult::Failure(
+        "no provider could authenticate".into(),
+    ));
 
     match result {
         crate::auth_provider::AuthResult::Success {
