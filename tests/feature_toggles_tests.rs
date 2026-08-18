@@ -524,25 +524,38 @@ async fn render_settings_page() -> String {
 #[tokio::test]
 async fn settings_page_renders_five_section_tabs() {
     let html = render_settings_page().await;
-    assert!(html.contains("role=\"tablist\""), "tablist must render");
-    assert_eq!(html.matches("role=\"tab\"").count(), 5, "exactly five tabs");
+    // Two tablists since #160: the left rail (wide screens) and the tab
+    // bar (narrow screens), each with the same five sections.
+    assert_eq!(
+        html.matches("role=\"tablist\"").count(),
+        2,
+        "two tablists must render"
+    );
+    // Count the button classes: a JS querySelectorAll string also contains
+    // the literal `role="tab"`, so raw matches overcount by one.
+    let rail_tabs = html.matches("class=\"settings-rail-tab\"").count();
+    let bar_tabs = html.matches("class=\"settings-tab\"").count();
+    assert_eq!(rail_tabs + bar_tabs, 10, "ten tabs (rail + bar)");
     for tab in ["Session", "Features", "Storage", "Security", "Updates"] {
-        assert!(
-            html.contains(&format!(">{tab}</button>")),
-            "tab {tab} must render"
+        assert_eq!(
+            html.matches(&format!(">{tab}</button>")).count(),
+            2,
+            "tab {tab} must render in both the rail and the bar"
         );
     }
-    // Exactly one tab is selected: the default Session tab. (The style
-    // block also contains `[aria-selected="true"]`, so assert the false
-    // count and the session tab markup directly.)
+    // Exactly one tab per tablist is selected: the default Session tab.
     assert_eq!(
         html.matches("aria-selected=\"false\"").count(),
-        4,
-        "the other four tabs must be unselected"
+        8,
+        "the other eight tabs must be unselected"
     );
     assert!(
         html.contains("id=\"tab-session\" aria-controls=\"panel-session\" aria-selected=\"true\""),
-        "session tab must be the selected one"
+        "session tab must be the selected one in the bar"
+    );
+    assert!(
+        html.contains("id=\"rail-session\" aria-controls=\"panel-session\" aria-selected=\"true\""),
+        "session tab must be the selected one in the rail"
     );
 }
 
