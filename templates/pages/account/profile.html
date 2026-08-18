@@ -276,7 +276,7 @@
                 document.getElementById('auth-source-badge').textContent = data.auth_source || 'OIDC';
                 var roleEl = document.getElementById('role-badge');
                 var roleColors = {
-                    admin: 'bg-red-900/50 text-red-300 border-red-800',
+                    admin: 'bg-gray-700 text-gray-300 border-gray-600',
                     poweruser: 'bg-amber-900/50 text-amber-300 border-amber-800',
                     operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
                     viewer: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]'
@@ -284,7 +284,18 @@
                 var role = data.role || 'viewer';
                 roleEl.textContent = role;
                 roleEl.className = 'inline-block px-2 py-0.5 text-xs rounded border ' + (roleColors[role] || roleColors.viewer);
-                document.getElementById('member-since').textContent = data.created_at || 'Unknown';
+                // Member Since: the API returns a raw ISO timestamp; format
+                // it in the user's locale instead of rendering it verbatim.
+                var createdRaw = data.created_at;
+                var memberSinceEl = document.getElementById('member-since');
+                if (createdRaw) {
+                    var created = new Date(createdRaw);
+                    memberSinceEl.textContent = isNaN(created.getTime())
+                        ? createdRaw
+                        : created.toLocaleString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+                } else {
+                    memberSinceEl.textContent = 'Unknown';
+                }
                 // TOTP status
                 var totpText = document.getElementById('totp-status-text');
                 if (totpText) {

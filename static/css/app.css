@@ -48,7 +48,10 @@
     --border-focus: #10b981;
     --text-primary: #1e293b;
     --text-secondary: #64748b;
-    --text-muted: #64748b;
+    /* slate-600: one step darker than the dark theme's muted so placeholder
+       and helper text clears WCAG AA on light backgrounds (slate-500 is
+       ~4.4:1 on the card, just under the 4.5:1 small-text threshold). */
+    --text-muted: #475569;
     --accent: #10b981;
     --accent-hover: #059669;
     --primary: #10b981;
@@ -479,6 +482,20 @@ body {
     background: rgba(239,68,68,0.15);
 }
 
+/* Logout (header) uses a neutral outline so the danger hue stays reserved
+   for destructive actions (Delete, Clear). Scoped to #logout-btn: every
+   other .btn-danger keeps the red treatment. */
+#logout-btn.btn-danger {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+}
+
+#logout-btn.btn-danger:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
 .btn-info {
     background: var(--info);
     color: #fff;
@@ -863,6 +880,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     table { font-size: 0.875rem; }
 
     .content { padding: 16px; }
+
+    /* Connections: the content padding shrinks to 16px on mobile, pulling
+       the page title closer to the header than the desktop rhythm (24px).
+       Add the missing 8px so the title keeps the same breathing room. */
+    .connections-topbar { margin-top: 8px; }
 
     /* Connections: stack two-panel layout vertically */
     .detail-panel-mobile-stack {

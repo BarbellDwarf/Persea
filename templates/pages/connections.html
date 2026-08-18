@@ -5,7 +5,7 @@
 <div style="margin:0">
 
     <!-- Top bar -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
+    <div class="connections-topbar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
         <div>
             <h1 style="font-size:22px;font-weight:600;color:var(--text-primary);margin:0">Connections</h1>
             <p style="font-size:13px;color:var(--text-muted);margin-top:4px">Manage your server address book</p>
@@ -133,9 +133,12 @@
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
                     <button id="detail-add-to-folder" class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:16px">Add to personal folder</button>
                     <div id="detail-pf-note" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;color:#fbbf24;font-size:13px;margin-bottom:16px"></div>
-                    <div id="detail-reason-row" style="margin-bottom:16px">
-                        <label class="form-label" for="detail-reason">Reason <span style="color:var(--text-muted);font-weight:400">— why are you connecting?</span></label>
-                        <select id="detail-reason-preset" class="form-input" style="margin-bottom:8px">
+                    <!-- Reason is secondary to Connect: smaller label, muted
+                         color and tighter spacing so it reads as an optional
+                         annotation rather than a fifth stacked zone. -->
+                    <div id="detail-reason-row" style="margin-bottom:12px">
+                        <label for="detail-reason" style="display:block;font-size:12px;font-weight:500;color:var(--text-muted);margin-bottom:6px">Reason <span style="color:var(--text-muted);font-weight:400">— why are you connecting?</span></label>
+                        <select id="detail-reason-preset" class="form-input" style="margin-bottom:6px;padding:8px 12px">
                             <option value="">Select a reason…</option>
                             <option>Maintenance</option>
                             <option>Password rotation</option>
@@ -147,7 +150,7 @@
                             <option>Security audit</option>
                             <option>Other</option>
                         </select>
-                        <input type="text" id="detail-reason" class="form-input" placeholder="Free text (optional)" maxlength="500" autocomplete="off">
+                        <input type="text" id="detail-reason" class="form-input" style="padding:8px 12px" placeholder="Free text (optional)" maxlength="500" autocomplete="off">
                     </div>
                     <button id="detail-rotate-cred" class="btn btn-sm admin-only" style="width:100%;margin-bottom:16px;background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);display:none">
                         <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-8.243a.75.75 0 00.219-.53V3.253a.75.75 0 00-1.5 0V5.23l-.312-.312A7 7 0 003.398 8.073a.75.75 0 101.449.39A5.5 5.5 0 0114.5 5.648l.312.311h-2.433a.75.75 0 000 1.5h3.634a.75.75 0 00.53-.219z" clip-rule="evenodd"/></svg>
