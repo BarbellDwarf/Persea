@@ -1294,27 +1294,30 @@ pub async fn ab_get_custom_fields(
 
 /// Request body for `PUT /api/addressbook/defaults/apply`.
 #[derive(Debug, Deserialize)]
-pub struct ApplyAutoSizeDefaultsRequest {
-    /// Protocols whose entries get the current global auto-size default
-    /// written into their `protocol_config`: `"rdp"` and/or `"ssh"`.
-    /// Missing or empty applies both. Anything else is rejected.
+pub struct ApplyDefaultsRequest {
+    /// Protocols whose entries get the current global defaults written into
+    /// their `protocol_config`: `"rdp"` and/or `"ssh"`. Missing or empty
+    /// applies both. Anything else is rejected.
     #[serde(default)]
     pub protocols: Option<Vec<String>>,
 }
 
 /// `PUT /api/addressbook/defaults/apply`: apply the current global
-/// auto-size defaults (`default_rdp_auto_size` / `default_ssh_auto_size`)
-/// to every rdp and/or ssh entry's `protocol_config.auto_size`. Admin-only,
-/// idempotent (a second run changes nothing and counts 0), audited on the
-/// admin hash chain. Returns the number of entries updated, the protocols
-/// touched, and the defaults that were applied.
-pub async fn ab_apply_auto_size_defaults(
+/// per-protocol defaults to every saved entry. RDP entries get the
+/// auto-size, security, and auth-package defaults
+/// (`default_rdp_auto_size` / `default_rdp_security` /
+/// `default_rdp_auth_pkg`); SSH (and PowerShell) entries get the auto-size
+/// default (`default_ssh_auto_size`). Admin-only, idempotent (a second run
+/// changes nothing and counts 0), audited on the admin hash chain. Returns
+/// the number of entries updated, the protocols touched, and the defaults
+/// that were applied.
+pub async fn ab_apply_defaults(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
-    Json(req): Json<ApplyAutoSizeDefaultsRequest>,
+    Json(req): Json<ApplyDefaultsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
@@ -1352,7 +1355,8 @@ pub async fn ab_apply_auto_size_defaults(
     }
 
     // The current global defaults drive the bulk write. An unset key falls
-    // back to true, the pre-feature client behaviour.
+    // back to the pre-feature behaviour: auto-size on, security "any"
+    // (guacd's own fallback), auth package unset (config value, then NTLM).
     let db_clone = database.clone();
     let settings =
         tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db_clone))
@@ -1363,6 +1367,22 @@ pub async fn ab_apply_auto_size_defaults(
         crate::settings_merge::toggle_enabled(&settings, "default_rdp_auto_size", true);
     let ssh_auto_size =
         crate::settings_merge::toggle_enabled(&settings, "default_ssh_auto_size", true);
+    let rdp_security = settings
+        .iter()
+        .find(|(k, _)| k == "default_rdp_security")
+        .map(|(_, v)| v.as_str())
+        .filter(|v| matches!(*v, "any" | "rdp" | "tls" | "nla"))
+        .unwrap_or("any")
+        .to_string();
+    // An empty stored auth package means "no global default": entries keep
+    // their per-entry value (or none), so the create path falls back to
+    // the `[rdp]` config value, then NTLM.
+    let rdp_auth_pkg = settings
+        .iter()
+        .find(|(k, _)| k == "default_rdp_auth_pkg")
+        .map(|(_, v)| v.as_str())
+        .filter(|v| !v.is_empty() && matches!(*v, "ntlm" | "kerberos" | "negotiate"))
+        .map(str::to_string);
 
     // PowerShell entries are SSH sessions (session creation maps them to
     // SessionType::Ssh), so the SSH default applies to them too.
@@ -1385,28 +1405,60 @@ pub async fn ab_apply_auto_size_defaults(
     .map_err(|e| AppError::Internal(e.to_string()))?
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    // Write auto_size where the stored value differs from the default. The
-    // update runs in one spawn_blocking so the loop holds the lock once.
+    // Write the defaults where the stored value differs. RDP entries get
+    // auto_size + security + auth_pkg; SSH/PowerShell entries get
+    // auto_size only. The update runs in one spawn_blocking so the loop
+    // holds the lock once.
     let db_clone = database.clone();
+    let rdp_security_for_write = rdp_security.clone();
+    let rdp_auth_pkg_for_write = rdp_auth_pkg.clone();
     let applied = tokio::task::spawn_blocking(move || {
         let mut applied = 0u64;
         for entry in &entries {
-            let default = if entry.protocol == "rdp" {
-                rdp_auto_size
-            } else {
-                ssh_auto_size
-            };
             let mut config: serde_json::Map<String, serde_json::Value> =
                 serde_json::from_str(&entry.protocol_config)
                     .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
                     .as_object()
                     .cloned()
                     .unwrap_or_default();
-            let current = config.get("auto_size").and_then(|v| v.as_bool());
-            if current == Some(default) {
+            let mut changed = false;
+            if entry.protocol == "rdp" {
+                let current = config.get("auto_size").and_then(|v| v.as_bool());
+                if current != Some(rdp_auto_size) {
+                    config.insert("auto_size".into(), json!(rdp_auto_size));
+                    changed = true;
+                }
+                let current = config.get("security").and_then(|v| v.as_str());
+                if current != Some(rdp_security_for_write.as_str()) {
+                    config.insert("security".into(), json!(rdp_security_for_write));
+                    changed = true;
+                }
+                match &rdp_auth_pkg_for_write {
+                    Some(pkg) => {
+                        let current = config.get("auth_pkg").and_then(|v| v.as_str());
+                        if current != Some(pkg.as_str()) {
+                            config.insert("auth_pkg".into(), json!(pkg));
+                            changed = true;
+                        }
+                    }
+                    // No global auth-package default: drop any per-entry
+                    // value so the create path falls back to config/NTLM.
+                    None => {
+                        if config.remove("auth_pkg").is_some() {
+                            changed = true;
+                        }
+                    }
+                }
+            } else {
+                let current = config.get("auto_size").and_then(|v| v.as_bool());
+                if current != Some(ssh_auto_size) {
+                    config.insert("auto_size".into(), json!(ssh_auto_size));
+                    changed = true;
+                }
+            }
+            if !changed {
                 continue;
             }
-            config.insert("auto_size".into(), json!(default));
             let serialized = serde_json::to_string(&config).unwrap_or_else(|_| "{}".into());
             let changed =
                 db::set_ab_entry_protocol_config(&db_clone, entry.id, &serialized).unwrap_or(false);
@@ -1427,10 +1479,12 @@ pub async fn ab_apply_auto_size_defaults(
         let admin_name = admin_email.clone();
         let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
         let details = json!({
-            "action": "apply_auto_size_defaults",
+            "action": "apply_defaults",
             "protocols": protocols.clone(),
             "applied": applied,
             "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
+            "security": {"rdp": rdp_security},
+            "auth_pkg": {"rdp": rdp_auth_pkg.clone().unwrap_or_default()},
         });
         if let Err(e) = tokio::task::spawn_blocking(move || {
             let _ = crate::audit::log_event(
@@ -1452,6 +1506,8 @@ pub async fn ab_apply_auto_size_defaults(
         "applied": applied,
         "protocols": protocols,
         "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
+        "security": {"rdp": rdp_security},
+        "auth_pkg": {"rdp": rdp_auth_pkg.unwrap_or_default()},
     })))
 }
 
@@ -3711,7 +3767,7 @@ mod tests {
             )
             .route(
                 "/api/addressbook/defaults/apply",
-                put(super::ab_apply_auto_size_defaults),
+                put(super::ab_apply_defaults),
             )
             .route(
                 "/api/addressbook/folders/{scope}/{folder}/entries",
@@ -4434,6 +4490,147 @@ mod tests {
                 _ => panic!("unexpected protocol {}", e.protocol),
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_apply_defaults_writes_security_and_auth_pkg_to_rdp_only() {
+        let db = test_db();
+        let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "win1",
+            "Win 1",
+            "rdp",
+            "10.0.0.5",
+            Some(3389),
+            "user",
+            r#"{"auto_size":false,"security":"rdp","auth_pkg":"ntlm"}"#,
+            "",
+        )
+        .unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "ssh1",
+            "Ssh 1",
+            "ssh",
+            "10.0.0.7",
+            Some(22),
+            "user",
+            r#"{"security":"nla","auth_pkg":"kerberos"}"#,
+            "",
+        )
+        .unwrap();
+        // Stored global defaults: security nla, auth package kerberos,
+        // auto-size off for both protocols.
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                [],
+            )
+            .unwrap();
+            for (key, value) in [
+                ("default_rdp_auto_size", "false"),
+                ("default_ssh_auto_size", "false"),
+                ("default_rdp_security", "nla"),
+                ("default_rdp_auth_pkg", "kerberos"),
+            ] {
+                conn.execute(
+                    "INSERT INTO system_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    rusqlite::params![key, value],
+                )
+                .unwrap();
+            }
+        }
+
+        let key = insert_test_admin(&db, "admin");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/defaults/apply",
+                &key,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["applied"], json!(2));
+        assert_eq!(body["security"]["rdp"], json!("nla"));
+        assert_eq!(body["auth_pkg"]["rdp"], json!("kerberos"));
+
+        let entries = db::list_ab_entries(&db, folder).unwrap();
+        for e in &entries {
+            let cfg: Value = serde_json::from_str(&e.protocol_config).unwrap();
+            match e.protocol.as_str() {
+                "rdp" => {
+                    assert_eq!(cfg["auto_size"], json!(false), "entry {}", e.name);
+                    assert_eq!(cfg["security"], json!("nla"), "entry {}", e.name);
+                    assert_eq!(cfg["auth_pkg"], json!("kerberos"), "entry {}", e.name);
+                }
+                "ssh" => {
+                    assert_eq!(cfg["auto_size"], json!(false), "entry {}", e.name);
+                    assert!(
+                        cfg.get("security").is_none(),
+                        "ssh entries must not get the RDP security default"
+                    );
+                    assert!(
+                        cfg.get("auth_pkg").is_none(),
+                        "ssh entries must not get the RDP auth package default"
+                    );
+                }
+                _ => panic!("unexpected protocol {}", e.protocol),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_defaults_unset_auth_pkg_clears_entry_value() {
+        let db = test_db();
+        let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "win1",
+            "Win 1",
+            "rdp",
+            "10.0.0.5",
+            Some(3389),
+            "user",
+            r#"{"auth_pkg":"kerberos"}"#,
+            "",
+        )
+        .unwrap();
+        // No stored defaults at all: auto-size falls back to true, security
+        // to "any", and the unset auth package must clear the per-entry
+        // value so the create path falls back to config/NTLM.
+        let key = insert_test_admin(&db, "admin");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/defaults/apply",
+                &key,
+                json!({"protocols": ["rdp"]}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["applied"], json!(1));
+        assert_eq!(body["auth_pkg"]["rdp"], json!(""));
+
+        let entries = db::list_ab_entries(&db, folder).unwrap();
+        let cfg: Value = serde_json::from_str(&entries[0].protocol_config).unwrap();
+        assert!(
+            cfg.get("auth_pkg").is_none(),
+            "unset global auth package must clear the per-entry value"
+        );
+        assert_eq!(cfg["security"], json!("any"));
+        assert_eq!(cfg["auto_size"], json!(true));
     }
 
     #[tokio::test]

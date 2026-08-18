@@ -2370,7 +2370,7 @@ async fn run_server(
         )
         .route(
             "/api/addressbook/defaults/apply",
-            put(api::ab_apply_auto_size_defaults),
+            put(api::ab_apply_defaults),
         )
         .route("/api/ssh/probe-host-key", post(api::ssh_probe_host_key))
         // Personal folders (owner-only, any authenticated user)

@@ -298,6 +298,16 @@
                                             <option value="nla">nla</option>
                                         </select>
                                     </div>
+                                    <div>
+                                        <label class="form-label">Auth Package</label>
+                                        <select name="default_rdp_auth_pkg" class="form-input">
+                                            <option value="">Default</option>
+                                            <option value="ntlm">ntlm</option>
+                                            <option value="kerberos">kerberos</option>
+                                            <option value="negotiate">negotiate</option>
+                                        </select>
+                                        <p class="text-xs text-[var(--text-muted)] mt-1">Empty falls back to the [rdp] config, then NTLM</p>
+                                    </div>
                                 </div>
                                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
                                     <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
@@ -410,19 +420,20 @@
                                 </div>
                             </div>
 
-                            <!-- Bulk apply: write the current RDP/SSH Auto Size
-                                 defaults into every saved connection entry. -->
+                            <!-- Bulk apply: write the current RDP/SSH defaults
+                                 into every saved connection entry. -->
                             <div class="pt-3 border-t border-[var(--border)]">
                                 <div class="flex flex-wrap items-center justify-between gap-3">
                                     <div>
-                                        <p class="text-sm font-semibold text-[var(--text-primary)]">Apply to existing connections</p>
+                                        <p class="text-sm font-semibold text-[var(--text-primary)]">Apply to all RDP connections</p>
                                         <p class="text-xs text-[var(--text-muted)] mt-1">
-                                            Write the current Auto Size defaults above into every saved RDP and SSH connection.
+                                            Write the current RDP defaults (Auto Size, Security Mode, Auth Package)
+                                            into every saved RDP connection, and Auto Size into every saved SSH connection.
                                             Per-connection settings in the address book are overwritten.
                                         </p>
                                     </div>
                                     <button type="button" id="btn-apply-auto-size"
-                                            class="btn btn-secondary btn-sm">Apply to existing connections</button>
+                                            class="btn btn-secondary btn-sm">Apply to all RDP connections</button>
                                 </div>
                             </div>
                         </div>
@@ -755,14 +766,14 @@
     </div>
 </div>
 
-<!-- Apply Auto Size defaults: confirmation dialog. The count of entries
+<!-- Apply RDP defaults: confirmation dialog. The count of entries
      the bulk endpoint updated is shown after the request completes. -->
 <div id="apply-auto-size-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="apply-auto-size-title">
     <div class="card w-full max-w-sm text-center">
-        <h2 id="apply-auto-size-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Apply Auto Size defaults?</h2>
+        <h2 id="apply-auto-size-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Apply RDP defaults?</h2>
         <p class="text-sm text-[var(--text-muted)] mb-4">
-            Every saved RDP and SSH connection gets the current Auto Size defaults above,
-            overwriting its per-connection setting.
+            Every saved RDP connection gets the current Auto Size, Security Mode, and Auth Package
+            defaults above, overwriting its per-connection settings. SSH connections get the Auto Size default.
         </p>
         <p id="apply-auto-size-status" class="text-sm mb-4" aria-live="polite"></p>
         <div class="flex justify-center gap-3">
@@ -834,11 +845,12 @@ document.getElementById('save-confirm-ok').addEventListener('click', function() 
     document.getElementById('save-confirm').classList.add('hidden');
 });
 
-// ── Apply Auto Size defaults to existing connections ──
+// ── Apply RDP defaults to existing connections ──
 // PUT /api/addressbook/defaults/apply writes the current global defaults
-// into every saved rdp/ssh entry (admin-only, idempotent). Confirm first,
-// then show the count of entries updated. All wiring is addEventListener:
-// the page CSP blocks inline handlers.
+// (auto size, security, auth package for RDP; auto size for SSH) into every
+// saved rdp/ssh entry (admin-only, idempotent). Confirm first, then show
+// the count of entries updated. All wiring is addEventListener: the page
+// CSP blocks inline handlers.
 var applyBtn = document.getElementById('btn-apply-auto-size');
 var applyDialog = document.getElementById('apply-auto-size-confirm');
 var applyStatus = document.getElementById('apply-auto-size-status');
@@ -1140,6 +1152,10 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
             var sel = document.querySelector('select[name="default_rdp_security"]');
             if (sel && s.default_rdp_security) {
                 sel.value = s.default_rdp_security;
+            }
+            var authSel = document.querySelector('select[name="default_rdp_auth_pkg"]');
+            if (authSel && s.default_rdp_auth_pkg !== undefined && s.default_rdp_auth_pkg !== null) {
+                authSel.value = s.default_rdp_auth_pkg;
             }
             var boxes = toggleBoxes;
             boxes.forEach(function(name) {

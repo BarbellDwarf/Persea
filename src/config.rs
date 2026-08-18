@@ -23,6 +23,9 @@ pub const PROTOCOL_DEFAULT_KEYS: &[(&str, &str)] = &[
     ("default_rdp_height", "1080"),
     ("default_rdp_dpi", "96"),
     ("default_rdp_security", "any"),
+    // Empty auth package = no global default: the create path falls back
+    // to the `[rdp] default_auth_pkg` config value, then NTLM.
+    ("default_rdp_auth_pkg", ""),
     ("default_rdp_h264", "true"),
     ("default_rdp_gfx", "true"),
     ("default_rdp_drive", "false"),
