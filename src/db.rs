@@ -3856,7 +3856,7 @@ mod tests {
     #[test]
     fn test_upsert_oidc_update_keeps_auth_source() {
         let db = test_db();
-        upsert_user(&db, "oidc@example.com", "OIDC User", Some("sub-1"), "viewer", &["admins"])
+        upsert_user(&db, "oidc@example.com", "OIDC User", Some("sub-1"), "viewer", &["admins".to_string()])
             .unwrap();
         // Update path: a second OIDC login refreshes the row and must not
         // reset auth_source back to the column default.
@@ -3866,7 +3866,7 @@ mod tests {
             "OIDC User",
             Some("sub-1"),
             "viewer",
-            &["admins", "ops"],
+            &["admins".to_string(), "ops".to_string()],
         )
         .unwrap();
         assert_eq!(updated.auth_source, "oidc");
