@@ -44,6 +44,31 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     )
     .expect("Failed to register partials/header.html");
     env.add_template(
+        "partials/admin/users-section.html",
+        include_str!("../templates/partials/admin/users-section.html"),
+    )
+    .expect("Failed to register partials/admin/users-section.html");
+    env.add_template(
+        "partials/admin/groups-section.html",
+        include_str!("../templates/partials/admin/groups-section.html"),
+    )
+    .expect("Failed to register partials/admin/groups-section.html");
+    env.add_template(
+        "partials/admin/roles-section.html",
+        include_str!("../templates/partials/admin/roles-section.html"),
+    )
+    .expect("Failed to register partials/admin/roles-section.html");
+    env.add_template(
+        "partials/admin/auth-section.html",
+        include_str!("../templates/partials/admin/auth-section.html"),
+    )
+    .expect("Failed to register partials/admin/auth-section.html");
+    env.add_template(
+        "partials/admin/audit-section.html",
+        include_str!("../templates/partials/admin/audit-section.html"),
+    )
+    .expect("Failed to register partials/admin/audit-section.html");
+    env.add_template(
         "pages/login.html",
         include_str!("../templates/pages/login.html"),
     )

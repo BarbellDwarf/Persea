@@ -1,0 +1,471 @@
+<div class="max-w-7xl mx-auto">
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)]">Authentication Providers</h1>
+            <p class="text-sm text-[var(--text-muted)] mt-1">Configure and manage authentication backends</p>
+        </div>
+        <button data-action="open-add-modal"
+                class="btn btn-primary btn-sm">
+            + Add Provider
+        </button>
+    </div>
+
+    <!-- Providers Table -->
+    <div class="card table-wrapper">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b border-[var(--border)] text-left text-xs text-[var(--text-muted)] uppercase tracking-wider">
+                    <th class="w-8"></th>
+                    <th>Provider Name</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Priority</th>
+                    <th class="text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="provider-table-body" class="divide-y divide-[var(--border)]">
+                <tr><td colspan="6" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">Loading providers...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Add Provider Modal -->
+<div id="add-provider-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="add-provider-title">
+    <div class="card w-full max-w-md">
+        <h2 id="add-provider-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Add Auth Provider</h2>
+        <form id="add-provider-form">
+            <div class="space-y-4">
+                <div>
+                    <label class="form-label">Provider Name</label>
+                    <input type="text" name="name" required class="form-input">
+                </div>
+                <div>
+                    <label class="form-label">Type</label>
+                    <select name="type" id="new-provider-type"
+                            class="form-input">
+                        <option value="ldap">LDAP / Active Directory</option>
+                        <option value="saml">SAML 2.0</option>
+                        <option value="radius">RADIUS</option>
+                        <option value="database">Database</option>
+                        <option value="totp">TOTP (MFA)</option>
+                        <option value="oidc">OIDC / OpenID Connect (Authentik, Keycloak, Google)</option>
+                    </select>
+                </div>
+
+                <!-- LDAP Fields -->
+                <div id="ldap-fields" class="space-y-4">
+                    <div><label class="form-label">LDAP Host</label>
+                        <input type="text" name="ldap_host" placeholder="ldap.example.com" class="form-input"></div>
+                    <div><label class="form-label">LDAP Port</label>
+                        <input type="number" name="ldap_port" value="389" class="form-input"></div>
+                    <div><label class="form-label">Bind DN</label>
+                        <input type="text" name="ldap_bind_dn" placeholder="cn=admin,dc=example,dc=com" class="form-input"></div>
+                    <div><label class="form-label">Bind Password</label>
+                        <input type="password" name="ldap_bind_password" class="form-input"></div>
+                    <div><label class="form-label">Search Base DN</label>
+                        <input type="text" name="ldap_search_base" placeholder="ou=users,dc=example,dc=com" class="form-input"></div>
+                    <div><label class="form-label">Search Filter</label>
+                        <input type="text" name="ldap_search_filter" placeholder="(uid={0})" class="form-input"></div>
+                    <div class="flex items-center gap-4">
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                            <input type="checkbox" name="ldap_start_tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500"> StartTLS
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+                            <input type="checkbox" name="ldap_tls_skip_verify" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500"> Skip TLS Verify
+                        </label>
+                    </div>
+                </div>
+
+                <!-- SAML Fields -->
+                <div id="saml-fields" class="hidden space-y-4">
+                    <div><label class="form-label">IdP Metadata URL</label>
+                        <input type="url" name="saml_metadata_url" placeholder="https://idp.example.com/metadata" class="form-input"></div>
+                    <div><label class="form-label">Entity ID</label>
+                        <input type="text" name="saml_entity_id" placeholder="https://persea.example.com/saml" class="form-input"></div>
+                    <div><label class="form-label">ACS URL</label>
+                        <input type="url" name="saml_acs_url" placeholder="https://persea.example.com/auth/saml/acs" class="form-input"></div>
+                    <div><label class="form-label">SLO URL</label>
+                        <input type="url" name="saml_slo_url" placeholder="https://persea.example.com/auth/saml/slo" class="form-input"></div>
+                </div>
+
+                <!-- RADIUS Fields -->
+                <div id="radius-fields" class="hidden space-y-4">
+                    <div><label class="form-label">RADIUS Host</label>
+                        <input type="text" name="radius_host" placeholder="radius.example.com" class="form-input"></div>
+                    <div><label class="form-label">RADIUS Port</label>
+                        <input type="number" name="radius_port" value="1812" class="form-input"></div>
+                    <div><label class="form-label">Shared Secret</label>
+                        <input type="password" name="radius_secret" class="form-input"></div>
+                    <div><label class="form-label">Timeout (seconds)</label>
+                        <input type="number" name="radius_timeout" value="10" class="form-input"></div>
+                </div>
+
+                <!-- Database Fields (minimal) -->
+                <div id="database-fields" class="hidden">
+                    <p class="text-sm text-[var(--text-muted)]">Database authentication uses the built-in users table. No additional configuration required.</p>
+                </div>
+
+                <!-- TOTP Fields -->
+                <div id="totp-fields" class="hidden space-y-4">
+                    <div><label class="form-label">Issuer</label>
+                        <input type="text" name="totp_issuer" placeholder="persea" class="form-input"></div>
+                    <div><label class="form-label">Digits</label>
+                        <select name="totp_digits" class="form-input">
+                            <option value="6" selected>6</option>
+                            <option value="8">8</option>
+                        </select>
+                    </div>
+                    <div><label class="form-label">Period (seconds)</label>
+                        <input type="number" name="totp_period" value="30" class="form-input"></div>
+                    <div>
+                        <label class="form-label">Enforcement</label>
+                        <select name="totp_enforcement" class="form-input">
+                            <option value="optional">Optional</option>
+                            <option value="required">Required</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- OIDC Fields -->
+                <div id="oidc-fields" class="hidden space-y-4">
+                    <div><label class="form-label">Issuer URL</label>
+                        <input type="url" name="oidc_issuer_url" placeholder="https://auth.example.com/application/o/persea/" class="form-input"></div>
+                    <div><label class="form-label">Client ID</label>
+                        <input type="text" name="oidc_client_id" placeholder="persea" class="form-input"></div>
+                    <div><label class="form-label">Client Secret</label>
+                        <input type="password" name="oidc_client_secret" class="form-input"></div>
+                    <div><label class="form-label">Redirect URI</label>
+                        <input type="url" name="oidc_redirect_uri" placeholder="https://persea.example.com/auth/callback" class="form-input"></div>
+                    <div><label class="form-label">Groups Claim</label>
+                        <input type="text" name="oidc_groups_claim" placeholder="groups" class="form-input"></div>
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button type="button" data-action="close-add-modal"
+                        class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Provider Config Modal -->
+<div id="provider-config-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="provider-config-title">
+    <div class="card w-full max-w-lg">
+        <h2 id="provider-config-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Configure Provider</h2>
+        <div id="provider-config-body"></div>
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" data-action="close-config-modal"
+                    class="btn btn-secondary btn-sm">Close</button>
+            <button data-action="test-provider"
+                    class="btn btn-info btn-sm">Test Connection</button>
+            <button data-action="save-provider-config"
+                    class="btn btn-primary">Save</button>
+        </div>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+function showProviderFields(type) {
+    ['ldap', 'saml', 'radius', 'database', 'totp', 'oidc'].forEach(function(t) {
+        var el = document.getElementById(t + '-fields');
+        if (el) el.classList.toggle('hidden', t !== type);
+    });
+}
+
+function providerTypeBadge(type) {
+    var colors = {
+        oidc: 'bg-blue-900/50 text-blue-300 border-blue-800',
+        ldap: 'bg-purple-900/50 text-purple-300 border-purple-800',
+        saml: 'bg-cyan-900/50 text-cyan-300 border-cyan-800',
+        radius: 'bg-orange-900/50 text-orange-300 border-orange-800',
+        database: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]',
+        totp: 'bg-teal-900/50 text-teal-300 border-teal-800'
+    };
+    return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[type] || colors.database) + '">' + type.toUpperCase() + '</span>';
+}
+
+function renderProviderRow(provider) {
+    var statusToggle = provider.enabled
+        ? '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="false" class="text-emerald-400 hover:text-red-400">Enabled</button>'
+        : '<button data-action="toggle-provider" data-id="' + provider.id + '" data-enable="true" class="text-[var(--text-muted)] hover:text-emerald-400">Disabled</button>';
+
+    return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
+        '<td class="px-4 py-3 text-[var(--text-muted)] cursor-grab">⠿</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-primary)]">' + escapeHtml(provider.name) + '</td>' +
+        '<td class="px-4 py-3">' + providerTypeBadge(provider.type) + '</td>' +
+        '<td class="px-4 py-3 text-sm">' + statusToggle + '</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + provider.position + '</td>' +
+        '<td class="px-4 py-3 text-right text-sm">' +
+            '<button data-action="move-provider" data-id="' + provider.id + '" data-direction="up" class="text-[var(--text-muted)] hover:text-[var(--text-primary)] mr-2" title="Move up">↑</button>' +
+            '<button data-action="move-provider" data-id="' + provider.id + '" data-direction="down" class="text-[var(--text-muted)] hover:text-[var(--text-primary)] mr-2" title="Move down">↓</button>' +
+            '<button data-action="configure-provider" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-2">Configure</button>' +
+            '<button data-action="test-provider-connection" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-blue-400 mr-2">Test</button>' +
+            '<button data-action="delete-provider" data-id="' + provider.id + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
+        '</td></tr>';
+}
+
+function toggleProvider(id, enable) {
+    fetch('/api/auth/providers/' + id + (enable ? '/enable' : '/disable'), {
+        method: 'POST',
+        headers: apiHeaders()
+    }).then(function(r) {
+        if (r.status === 401) { window.location.href = '/'; return; }
+        loadProviders();
+    }).catch(function() { loadProviders(); });
+}
+
+function moveProvider(id, direction) {
+    fetch('/api/auth/providers/' + id + '/move', {
+        method: 'POST',
+        headers: apiHeaders(),
+        body: JSON.stringify({ direction: direction })
+    }).then(function(r) {
+        if (r.status === 401) { window.location.href = '/'; return; }
+        loadProviders();
+    }).catch(function() { loadProviders(); });
+}
+
+function configureProvider(id) {
+    editingProviderId = id;
+    document.getElementById('provider-config-body').innerHTML = '<p class="text-sm text-[var(--text-muted)]">Loading configuration...</p>';
+    document.getElementById('provider-config-modal').classList.remove('hidden');
+    fetch('/api/auth/providers/' + id + '/config', { headers: apiHeaders() })
+        .then(function(r) {
+            if (r.status === 401) { window.location.href = '/'; throw new Error('unauthorized'); }
+            if (!r.ok) { throw new Error('HTTP ' + r.status); }
+            return r.json();
+        })
+        .then(function(cfg) {
+            document.getElementById('provider-config-body').innerHTML = buildConfigForm(cfg);
+        })
+        .catch(function(e) {
+            if (e && e.message === 'unauthorized') { return; }
+            document.getElementById('provider-config-body').innerHTML =
+                '<p class="text-sm text-red-400">Failed to load configuration.</p>';
+        });
+}
+
+var editingProviderId = null;
+var editingProviderConfig = null;
+
+var SECRET_CONFIG_KEYS = ['client_secret', 'bind_password', 'shared_secret', 'secret'];
+
+function buildConfigForm(config) {
+    editingProviderConfig = config;
+    var html = '<div class="space-y-4">';
+    for (var key in config) {
+        if (!config.hasOwnProperty(key)) continue;
+        var val = config[key];
+        var isSecret = SECRET_CONFIG_KEYS.indexOf(key) !== -1;
+        html += '<div><label class="form-label">' + key.replace(/_/g, ' ') + '</label>';
+        if (typeof val === 'boolean') {
+            html += '<input type="checkbox" name="' + escapeAttr(key) + '" ' + (val ? 'checked' : '') + ' class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">';
+        } else if (typeof val === 'number') {
+            html += '<input type="number" name="' + escapeAttr(key) + '" value="' + val + '" class="form-input">';
+        } else if (isSecret) {
+            html += '<input type="password" name="' + escapeAttr(key) + '" value="" placeholder="leave blank to keep" autocomplete="new-password" class="form-input">';
+        } else {
+            html += '<input type="text" name="' + escapeAttr(key) + '" value="' + escapeAttr(val || '') + '" class="form-input">';
+        }
+        html += '</div>';
+    }
+    html += '<div id="provider-config-error" class="hidden text-red-400 text-sm" role="alert"></div>';
+    html += '</div>';
+    return html;
+}
+
+function testProvider() {
+    if (!editingProviderId) { return; }
+    testProviderConnection(editingProviderId);
+}
+
+function saveProviderConfig() {
+    var inputs = document.querySelectorAll('#provider-config-body input');
+    var cfg = {};
+    var errEl = document.getElementById('provider-config-error');
+    if (errEl) { errEl.classList.add('hidden'); }
+    for (var i = 0; i < inputs.length; i++) {
+        var el = inputs[i];
+        if (el.type === 'checkbox') {
+            cfg[el.name] = el.checked;
+        } else if (el.type === 'number') {
+            cfg[el.name] = Number(el.value);
+        } else {
+            cfg[el.name] = el.value;
+        }
+    }
+    fetch('/api/auth/providers/' + editingProviderId, {
+        method: 'PUT',
+        headers: apiHeaders(),
+        body: JSON.stringify(cfg)
+    }).then(function(r) {
+        if (r.status === 401) { window.location.href = '/'; return null; }
+        if (!r.ok) {
+            return r.json().catch(function() { return {}; }).then(function(data) {
+                if (errEl) {
+                    errEl.textContent = data.error || ('HTTP ' + r.status);
+                    errEl.classList.remove('hidden');
+                }
+                return null;
+            });
+        }
+        return r.json();
+    }).then(function(saved) {
+        if (!saved) { return; }
+        document.getElementById('provider-config-modal').classList.add('hidden');
+        loadProviders();
+    }).catch(function() {
+        if (errEl) { errEl.textContent = 'Network error saving config'; errEl.classList.remove('hidden'); }
+    });
+}
+
+function testProviderConnection(id) {
+    fetch('/api/auth/providers/' + id + '/test', { method: 'POST', headers: apiHeaders() })
+        .then(function(r) {
+            if (r.status === 401) { window.location.href = '/'; return null; }
+            return r.json();
+        })
+        .then(function(r) {
+            if (!r) { return; }
+            alert(r.ok ? 'Connection successful' : 'Connection failed: ' + (r.detail || 'unknown error'));
+        })
+        .catch(function() { alert('Connection test failed (network error)'); });
+}
+
+function deleteProvider(id) {
+    if (!confirm('Delete this auth provider?')) return;
+    fetch('/api/auth/providers/' + id, { method: 'DELETE', headers: apiHeaders() })
+        .then(function() { loadProviders(); });
+}
+
+function loadProviders() {
+    fetch('/api/auth/providers', { headers: apiHeaders() })
+        .then(function(r) {
+            if (r.status === 401) { window.location.href = '/'; throw new Error('unauthorized'); }
+            return r.json();
+        })
+        .then(function(data) {
+            window.__providers = data.providers || [];
+            var tbody = document.getElementById('provider-table-body');
+            if (!window.__providers.length) {
+                tbody.innerHTML = '<tr><td colspan="6" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">No providers configured. Add one above.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = window.__providers.map(renderProviderRow).join('');
+        })
+        .catch(function(e) {
+            if (e && e.message === 'unauthorized') { return; }
+            document.getElementById('provider-table-body').innerHTML =
+                '<tr><td colspan="6" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load providers</td></tr>';
+        });
+}
+
+// Map form field names to config JSON keys per provider type.
+function providerConfigForType(type, form) {
+    var fieldMap = {
+        ldap: {
+            ldap_host: 'url', ldap_port: 'port', ldap_bind_dn: 'bind_dn',
+            ldap_bind_password: 'bind_password', ldap_search_base: 'search_base',
+            ldap_search_filter: 'search_filter', ldap_start_tls: 'start_tls',
+            ldap_tls_skip_verify: 'tls_skip_verify'
+        },
+        saml: {
+            saml_metadata_url: 'idp_metadata_url', saml_entity_id: 'entity_id',
+            saml_acs_url: 'acs_url', saml_slo_url: 'slo_url'
+        },
+        radius: {
+            radius_host: 'hostname', radius_port: 'auth_port',
+            radius_secret: 'secret', radius_timeout: 'timeout'
+        },
+        totp: {
+            totp_issuer: 'issuer', totp_digits: 'digits',
+            totp_period: 'period', totp_enforcement: 'enforcement'
+        },
+        oidc: {
+            oidc_issuer_url: 'issuer_url', oidc_client_id: 'client_id',
+            oidc_client_secret: 'client_secret', oidc_redirect_uri: 'redirect_uri',
+            oidc_groups_claim: 'groups_claim'
+        }
+    };
+    var map = fieldMap[type] || {};
+    var config = {};
+    for (var name in map) {
+        var el = form.querySelector('[name="' + name + '"]');
+        if (!el) continue;
+        var val = el.value;
+        if (el.type === 'checkbox') val = el.checked;
+        else if (el.type === 'number') val = el.value === '' ? null : Number(el.value);
+        if (val === '' || val === null || val === undefined) continue;
+        config[map[name]] = val;
+    }
+    return config;
+}
+
+(function() {
+    var newTypeSelect = document.getElementById('new-provider-type');
+    if (newTypeSelect) {
+        newTypeSelect.addEventListener('change', function() {
+            showProviderFields(this.value);
+        });
+    }
+
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        var action = btn.getAttribute('data-action');
+        var id = btn.getAttribute('data-id');
+
+        if (action === 'open-add-modal') {
+            document.getElementById('add-provider-modal').classList.remove('hidden');
+        } else if (action === 'close-add-modal') {
+            document.getElementById('add-provider-modal').classList.add('hidden');
+        } else if (action === 'close-config-modal') {
+            document.getElementById('provider-config-modal').classList.add('hidden');
+        } else if (action === 'test-provider') {
+            testProvider();
+        } else if (action === 'save-provider-config') {
+            saveProviderConfig();
+        } else if (action === 'toggle-provider') {
+            toggleProvider(id, btn.getAttribute('data-enable') === 'true');
+        } else if (action === 'move-provider') {
+            moveProvider(id, btn.getAttribute('data-direction'));
+        } else if (action === 'configure-provider') {
+            configureProvider(id);
+        } else if (action === 'test-provider-connection') {
+            testProviderConnection(id);
+        } else if (action === 'delete-provider') {
+            deleteProvider(id);
+        }
+    });
+
+    var form = document.getElementById('add-provider-form');
+    if (form) {
+        form.addEventListener('submit', function(evt) {
+            evt.preventDefault();
+            var type = document.getElementById('new-provider-type').value;
+            var payload = {
+                name: form.querySelector('[name="name"]').value,
+                type: type,
+                config: providerConfigForType(type, form)
+            };
+            fetch('/api/auth/providers', {
+                method: 'POST',
+                headers: apiHeaders(),
+                body: JSON.stringify(payload)
+            }).then(function(r) {
+                if (!r.ok) {
+                    return r.json().then(function(b) { throw new Error(b.error || 'create failed'); });
+                }
+                document.getElementById('add-provider-modal').classList.add('hidden');
+                form.reset();
+                loadProviders();
+            }).catch(function(e) {
+                alert('Failed to create provider: ' + e.message);
+            });
+        });
+    }
+    loadProviders();
+})();
+</script>
