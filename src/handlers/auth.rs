@@ -934,8 +934,21 @@ pub async fn saml_acs(
         ..AuthRequest::default()
     };
 
-    // Try each provider in chain order (first success wins).
-    let result = auth_chain.authenticate(&auth_request).await;
+    // Try each provider in chain order (first success wins). Providers
+    // may do blocking I/O (the LDAP client creates its own tokio runtime
+    // internally), so run the chain off the async runtime; a panic in the
+    // chain is logged distinctly instead of masking as a rejection.
+    let result = match tokio::task::spawn_blocking(move || {
+        futures::executor::block_on(auth_chain.authenticate(&auth_request))
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!(error = %e, "auth chain panicked during SAML ACS");
+            return Redirect::to("/?error=saml_auth_failed").into_response();
+        }
+    };
 
     match result {
         AuthResult::Success {
