@@ -95,9 +95,24 @@ body {
 /* Collapsed: hide text, center icons */
 .sidebar.collapsed .nav-text,
 .sidebar.collapsed .sidebar-logo-text,
-.sidebar.collapsed .nav-section-label { opacity: 0; width: 0; overflow: hidden; }
+.sidebar.collapsed .nav-section-label,
+.sidebar.collapsed .sidebar-version { opacity: 0; width: 0; overflow: hidden; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 10px 0; gap: 0; }
 .sidebar.collapsed .sidebar-logo { justify-content: center; padding: 0; gap: 0; }
+
+/* Version indicator: login card footer + sidebar bottom */
+.login-version {
+    margin-top: 16px;
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.sidebar-version {
+    margin: 8px 20px 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
 .sidebar.collapsed .sidebar-logo-icon { margin: 0 auto; }
 .sidebar.collapsed .sidebar-toggle { display: none; }
 .sidebar.collapsed .sidebar-logo-text { width: 0; }
