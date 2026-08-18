@@ -2,13 +2,13 @@
 #
 # Start it with:
 #   docker compose -f docker-compose.ldap.yml up -d --wait
+# then seed the test data (the osixia bootstrap cannot take bind mounts,
+# so the seed is copied in after startup, mirroring the CI job):
+#   docker cp tests/fixtures/ldap-seed.ldif persea-ldap-test:/tmp/ldap-seed.ldif
+#   docker exec persea-ldap-test ldapadd -x -H ldap://localhost:389 \
+#       -D cn=admin,dc=example,dc=com -w admin -f /tmp/ldap-seed.ldif
 # then run the integration tests against it:
 #   TEST_LDAP_URL=ldap://127.0.0.1:3389 cargo test --test ldap_integration
-#
-# The seed LDIF is mounted into the osixia bootstrap custom directory, so the
-# users (alice, bob) and the engineers group exist as soon as the container
-# is healthy. The health check verifies the seed actually loaded, and --wait
-# blocks until it passes.
 services:
   ldap:
     image: osixia/openldap:1.5.0
@@ -19,13 +19,11 @@ services:
       LDAP_ADMIN_PASSWORD: admin
     ports:
       - "3389:389"
-    volumes:
-      - ./tests/fixtures/ldap-seed.ldif:/container/service/slapd/assets/config/bootstrap/ldif/custom/50-seed.ldif:ro
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "ldapsearch -x -H ldap://localhost:389 -b dc=example,dc=com -D cn=admin,dc=example,dc=com -w admin '(objectClass=*)' | grep -q uid=alice",
+          "ldapsearch -x -H ldap://localhost:389 -b dc=example,dc=com -D cn=admin,dc=example,dc=com -w admin '(objectClass=*)'",
         ]
       interval: 5s
       timeout: 5s
