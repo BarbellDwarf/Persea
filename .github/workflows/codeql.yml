@@ -50,20 +50,17 @@ jobs:
         with:
           components: clippy, rustfmt
           rustflags: ""
-      - name: Install rust-src and set the extractor option
-        run: |
-          rustup component add rust-src
-          SRC_DIR="$(rustc --print sysroot)/lib/rustlib/src/rust"
-          test -d "$SRC_DIR"
-          echo "CODEQL_EXTRACTOR_RUST_OPTION_RUST_SRC_DIR=$SRC_DIR" >> "$GITHUB_ENV"
+      - name: Install rust-src
+        run: rustup component add rust-src
       - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           languages: rust
-          build-mode: manual
-      - name: Build (full extraction)
-        run: cargo build --all-targets --locked
-        env:
-          CARGO_INCREMENTAL: "0"
+          # CodeQL 2.26.3's Rust support only offers standalone extraction
+          # ("build-mode: none"; manual and autobuild are rejected). There is
+          # no build trace, so call-target resolution is capped and the
+          # analysis-quality notice from GitHub is expected until a bundle
+          # with Rust build support ships.
+          build-mode: none
       - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           category: "/language:rust"
