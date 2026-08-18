@@ -298,21 +298,12 @@ async fn full_stack_login_via_http() {
         .send()
         .await
         .expect("POST /auth/login (wrong password)");
-    let status = resp.status();
-    let location = resp
-        .headers()
-        .get("location")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    assert_eq!(
-        status,
-        reqwest::StatusCode::SEE_OTHER,
-        "wrong-password login returned {status}"
-    );
+    // The client follows the 303 to /?error=invalid_credentials, which
+    // renders the login page; assert on the final URL.
+    let final_url = resp.url().as_str().to_string();
     assert!(
-        location.contains("error=invalid_credentials"),
-        "expected invalid_credentials redirect, got {location}"
+        final_url.contains("error=invalid_credentials"),
+        "expected invalid_credentials redirect, got {final_url}"
     );
 
     // Valid LDAP credentials: session cookie + redirect to connections.
@@ -329,31 +320,15 @@ async fn full_stack_login_via_http() {
         .send()
         .await
         .expect("POST /auth/login");
-    let status = resp.status();
-    let headers = resp.headers().clone();
-    let location = headers
-        .get("location")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-    let set_cookie = headers
-        .get_all("set-cookie")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .collect::<Vec<_>>()
-        .join("; ");
-    assert_eq!(
-        status,
-        reqwest::StatusCode::SEE_OTHER,
-        "login returned {status}"
-    );
+    // The client follows the 303 to /connections.html with the session
+    // cookie (cookies feature enabled), so the final URL is the
+    // connections page.
+    let final_url = resp.url().as_str().to_string();
+    // Landing on /connections.html proves the session cookie was set and
+    // sent on the follow (the page requires an authenticated session).
     assert!(
-        location.ends_with("/connections.html"),
-        "expected redirect to /connections.html, got {location}"
-    );
-    assert!(
-        set_cookie.contains("persea_session="),
-        "no session cookie set: {set_cookie}"
+        final_url.ends_with("/connections.html"),
+        "expected to land on /connections.html, got {final_url}"
     );
 
     terminate(&mut app);

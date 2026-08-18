@@ -262,8 +262,11 @@ pub async fn login_submit(
         };
         // Providers may do blocking I/O (the LDAP client creates its own
         // tokio runtime internally), so run the chain off the async runtime.
+        // futures::executor::block_on drives the future without a tokio
+        // runtime context on the thread (Handle::current().block_on would
+        // set one and the sync client would panic).
         let result = tokio::task::spawn_blocking(move || {
-            tokio::runtime::Handle::current().block_on(auth_chain.authenticate(&auth_request))
+            futures::executor::block_on(auth_chain.authenticate(&auth_request))
         })
         .await
         .unwrap_or(crate::auth_provider::AuthResult::Failure(
@@ -307,7 +310,7 @@ pub async fn login_submit(
     // started on a tokio worker thread panics with "Cannot start a runtime
     // from within a runtime" and kills the request.
     let result = tokio::task::spawn_blocking(move || {
-        tokio::runtime::Handle::current().block_on(auth_chain.authenticate(&auth_request))
+        futures::executor::block_on(auth_chain.authenticate(&auth_request))
     })
     .await
     .unwrap_or(crate::auth_provider::AuthResult::Failure(
