@@ -272,7 +272,6 @@ async fn full_stack_login_via_http() {
     // invalid_credentials redirect a local-account failure produces.
     let resp = client
         .post(format!("{base}/auth/login"))
-        .redirect(reqwest::redirect::Policy::none())
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
@@ -304,7 +303,6 @@ async fn full_stack_login_via_http() {
     // Valid LDAP credentials: session cookie + redirect to connections.
     let resp = client
         .post(format!("{base}/auth/login"))
-        .redirect(reqwest::redirect::Policy::none())
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
