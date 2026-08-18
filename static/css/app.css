@@ -869,6 +869,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
         flex-direction: column !important;
     }
     .detail-panel-mobile-stack > div { flex: none !important; width: 100% !important; }
+    .detail-panel-mobile-stack .conn-sidebar { max-height: none; padding-right: 0; }
+    .detail-panel-mobile-stack .conn-content { padding-left: 0; }
 }
 
 /* ── Responsive: 480px ─────────────────────────────────── */

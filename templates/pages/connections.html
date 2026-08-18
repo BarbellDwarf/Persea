@@ -77,22 +77,28 @@
             <div id="recent-list" style="display:flex;flex-direction:column;gap:8px"></div>
         </div>
 
-        <!-- Active sessions bar -->
+        <!-- Active sessions (wired to GET /api/sessions) -->
         <div id="active-sessions" class="hidden" style="margin-bottom:24px">
-            <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Active Sessions</p>
-            <div id="active-sessions-grid" style="display:flex;gap:12px;overflow-x:auto;padding-bottom:8px"></div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+                <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Active Sessions</p>
+                <span id="active-sessions-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
+            </div>
+            <div id="active-sessions-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(min(280px,100%),1fr));gap:12px"></div>
+            <div id="active-sessions-empty" class="hidden" style="text-align:center;padding:20px 16px;color:var(--text-muted);font-size:13px;border:1px dashed var(--border);border-radius:12px">
+                No active sessions right now. Start one from the address book below.
+            </div>
         </div>
 
-        <!-- Two-panel layout -->
-        <div style="display:flex;gap:24px;align-items:flex-start;width:100%" class="detail-panel-mobile-stack">
+        <!-- Three-panel layout -->
+        <div style="display:flex;gap:24px;align-items:flex-start;width:100%;max-width:1600px;margin:0 auto" class="detail-panel-mobile-stack">
 
-            <!-- Left sidebar: Folder tree -->
+            <!-- Left: Folder tree -->
             <div class="conn-sidebar">
                 <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Folders</p>
-                <div id="folder-tree"></div>
+                <div id="folder-tree" class="conn-panel"></div>
             </div>
 
-            <!-- Right: Entries / content area -->
+            <!-- Middle: Entries / content area -->
             <div class="conn-content">
                 <div id="no-folder-selected" style="text-align:center;padding:48px 0">
                     <p style="color:var(--text-muted);font-size:14px">Select a folder from the sidebar</p>
@@ -109,13 +115,11 @@
                         <button id="btn-delete-entry" class="btn btn-danger btn-sm admin-only" style="width:auto" disabled>Delete Entry</button>
                     </div>
                 </div>
-                <div id="entries-content">
-                    <p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center"></p>
-                </div>
+                <div id="entries-content" class="conn-panel"></div>
             </div>
 
-            <!-- Right panel: Connection details -->
-            <div id="detail-panel" class="hidden" style="flex:0 0 340px;min-width:0;max-height:calc(100vh - 120px);overflow-y:auto">
+            <!-- Right: Connection details -->
+            <div id="detail-panel" class="hidden" style="flex:0 0 clamp(300px, 26vw, 400px);min-width:0;max-height:calc(100vh - 120px);overflow-y:auto">
                 <div class="card" style="position:sticky;top:24px">
                     <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
                         <h3 id="detail-name" style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></h3>
@@ -557,10 +561,47 @@
     .status-logged_out { background:rgba(233,69,96,.12);color:#f87171;border-color:rgba(233,69,96,.3) }
     .status-completed,.status-expired,.status-error { background:rgba(107,114,128,.12);color:#9ca3af;border-color:rgba(107,114,128,.3) }
     .conn-sidebar {
-        flex: 0 0 clamp(260px, 22vw, 360px); min-width:0; max-height:80vh; overflow-y:auto;
-        border-right:1px solid var(--border); padding-right:12px;
+        flex: 0 0 clamp(240px, 20vw, 320px); min-width:0; max-height:80vh; overflow-y:auto;
+        padding-right:16px;
     }
-    .conn-content { flex:1; min-width:0; padding-left:24px; }
+    .conn-content { flex:1 1 0; min-width:0; padding-left:8px; }
+    .conn-panel {
+        background: var(--bg-card); border:1px solid var(--border); border-radius:12px;
+        padding:8px; min-height:120px;
+    }
+    .loading-indicator {
+        display:flex; align-items:center; gap:10px;
+        padding:24px 12px; color:var(--text-muted); font-size:13px;
+    }
+    .loading-spinner {
+        width:16px; height:16px; border-radius:50%; flex-shrink:0;
+        border:2px solid var(--border); border-top-color:var(--accent);
+        animation:conn-spin 0.8s linear infinite;
+    }
+    @keyframes conn-spin { to { transform: rotate(360deg); } }
+    .conn-empty { text-align:center; padding:40px 16px; color:var(--text-muted); }
+    .conn-empty svg { margin:0 auto 12px; color:var(--text-muted); }
+    .conn-empty h3 { font-size:14px; font-weight:500; color:var(--text-secondary); margin-bottom:6px; }
+    .conn-empty p { font-size:13px; }
+    .active-session-card {
+        background:var(--bg-card); border:1px solid var(--border); border-radius:12px;
+        padding:14px 16px; transition:border-color 0.15s;
+    }
+    .active-session-card:hover { border-color:var(--border-focus); }
+    .detail-section { border-top:1px solid var(--border); padding-top:12px; margin-top:16px; }
+    .detail-section-toggle {
+        display:flex; align-items:center; gap:8px; width:100%;
+        background:none; border:none; padding:0; margin:0 0 6px;
+        font-size:11px; font-weight:500; color:var(--text-muted);
+        text-transform:uppercase; letter-spacing:0.05em; cursor:pointer;
+        font-family:var(--font-sans); text-align:left;
+    }
+    .detail-section-toggle:hover { color:var(--text-primary); }
+    .detail-section-chevron {
+        display:inline-flex; width:14px; height:14px; align-items:center; justify-content:center;
+        font-size:10px; color:var(--text-muted); flex-shrink:0;
+    }
+    .detail-section-body { padding-bottom:4px; }
     .folder-actions { display:none; gap:2px; margin-left:8px; flex-shrink:0; }
     .folder-item:hover .folder-actions.is-admin { display:flex; }
     .folder-actions svg { width:14px; height:14px; cursor:pointer; color:var(--text-muted); border-radius:4px; padding:2px; box-sizing:content-box; }
@@ -681,7 +722,6 @@
     var selectedEntryKey = null;
     var searchQuery = '';
     var retryTimer = null;
-    var entriesReqId = 0;
     var knownGroupsCache = null;
     var fmGroups = [];
     var emGroups = [];
@@ -747,19 +787,27 @@
     }
 
     // ── Address book: folders + entries ─────────────────────────────
+    // One batched fetch: GET /api/addressbook returns the whole visible
+    // tree (folders with their entries inline), replacing the previous
+    // N+1 pattern of one entries fetch per folder.
     function loadFolders() {
-        fetch('/api/addressbook/folders', { headers: apiHeaders(), credentials: 'same-origin' })
+        var tree = document.getElementById('folder-tree');
+        var entries = document.getElementById('entries-content');
+        tree.innerHTML = '<div class="loading-indicator"><span class="loading-spinner"></span>Loading folders\u2026</div>';
+        entries.innerHTML = '<div class="loading-indicator"><span class="loading-spinner"></span>Loading connections\u2026</div>';
+        fetch('/api/addressbook', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(res) {
                 if (res.status === 502 || res.status === 503) { showUnavailable(); return null; }
                 if (res.status === 401) { window.location.href = '/'; return null; }
                 if (res.status === 403) { showNoAccess(); return null; }
-                if (!res.ok) throw new Error('Failed to load folders (HTTP ' + res.status + ')');
+                if (!res.ok) throw new Error('Failed to load connections (HTTP ' + res.status + ')');
                 return res.json();
             })
             .then(function(data) {
                 if (!data) return;
                 clearUnavailable();
-                folders = (data || []).map(function(f) {
+                var folderList = (data.folders || []);
+                folders = folderList.map(function(f) {
                     return {
                         name: f.name,
                         scope: f.scope,
@@ -771,6 +819,10 @@
                 folderMap = new Map();
                 folders.forEach(function(f) { folderMap.set(folderKey(f.scope, f.path), f); });
                 folders.forEach(function(f) { expandedKeys.add(folderKey(f.scope, f.path)); });
+                entriesByFolder = new Map();
+                folderList.forEach(function(f) {
+                    entriesByFolder.set(folderKey(f.scope, f.path || f.name), (f.entries || []));
+                });
                 populateFilterFolders();
                 document.getElementById('filter-bar').classList.toggle('hidden', folders.length === 0);
                 document.getElementById('btn-filters').classList.toggle('hidden', folders.length === 0);
@@ -789,41 +841,20 @@
                 document.getElementById('empty-state').classList.add('hidden');
                 document.getElementById('main-content').classList.remove('hidden');
                 renderFolders();
-                loadAllEntries();
+                refreshCustomFilterOptions();
+                var af = activeFilters();
+                if (searchQuery || af.active) runSearch();
+                else if (selectedFolder && folderMap.get(folderKey(selectedFolder.scope, selectedFolder.path))) {
+                    selectFolder(selectedFolder);
+                } else if (folders.length) {
+                    var first = firstFolderInScope();
+                    if (first) selectFolder(first);
+                }
             })
             .catch(function(err) {
                 document.getElementById('folder-tree').innerHTML =
                     '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">Failed to load connections: ' + escapeHtml(err.message) + '</p>';
             });
-    }
-    function loadAllEntries() {
-        var reqId = ++entriesReqId;
-        var buffer = new Map();
-        var unavailable = false;
-        Promise.all(folders.map(function(f) {
-            var key = folderKey(f.scope, f.path);
-            return fetch('/api/addressbook/folders/' + encodeURIComponent(f.scope) + '/' + encodeURIComponent(f.path) + '/entries', { headers: apiHeaders(), credentials: 'same-origin' })
-                .then(function(r) {
-                    if (r.status === 502 || r.status === 503) { unavailable = true; return null; }
-                    return r.ok ? r.json() : [];
-                })
-                .then(function(list) { if (list !== null) buffer.set(key, list || []); })
-                .catch(function() {});
-        })).then(function() {
-            if (reqId !== entriesReqId) return;
-            if (unavailable) { showUnavailable(); return; }
-            entriesByFolder = buffer;
-            refreshCustomFilterOptions();
-            renderFolders();
-            var af = activeFilters();
-            if (searchQuery || af.active) runSearch();
-            else if (selectedFolder && folderMap.get(folderKey(selectedFolder.scope, selectedFolder.path))) {
-                selectFolder(selectedFolder);
-            } else if (folders.length) {
-                var first = firstFolderInScope();
-                if (first) selectFolder(first);
-            }
-        });
     }
     function firstFolderInScope() {
         var sf = document.getElementById('scope-filter').value;
@@ -976,12 +1007,23 @@
             + '<button class="btn btn-primary btn-sm entry-connect" style="width:auto">Connect</button>'
             + '</div>';
     }
+    function emptyStateHtml(iconPath, title, hint) {
+        return '<div class="conn-empty">'
+            + '<svg width="40" height="40" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">' + iconPath + '</svg>'
+            + '<h3>' + escapeHtml(title) + '</h3>'
+            + (hint ? '<p>' + escapeHtml(hint) + '</p>' : '')
+            + '</div>';
+    }
     function renderEntries() {
         var container = document.getElementById('entries-content');
         if (!selectedFolder) return;
         var list = entriesByFolder.get(folderKey(selectedFolder.scope, selectedFolder.path)) || [];
         if (list.length === 0) {
-            container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">No entries in this folder.</p>';
+            container.innerHTML = emptyStateHtml(
+                '<path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>',
+                'No entries in this folder',
+                isAdmin ? 'Use "Add Entry" above to create the first connection here.' : 'Ask an administrator to add a connection here.'
+            );
             return;
         }
         container.innerHTML = list.map(function(e) {
@@ -1192,7 +1234,11 @@
         for (var ck in filters.custom) descParts.push(ck + ' = ' + filters.custom[ck]);
         document.getElementById('entries-desc').textContent = descParts.length ? descParts.join(' \u00B7 ') : '';
         if (results.length === 0) {
-            container.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:32px 0;text-align:center">No connections match your search.</p>';
+            container.innerHTML = emptyStateHtml(
+                '<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z"/>',
+                'No connections match your search',
+                'Try a different term or clear the filters.'
+            );
             return;
         }
         container.innerHTML = results.map(function(r) {
@@ -1322,11 +1368,37 @@
             + '<span style="color:var(--text-muted);flex-shrink:0">' + escapeHtml(label) + '</span>'
             + '<span style="color:var(--text-secondary);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(String(value)) + '</span></div>';
     }
+    // Collapsible detail sections: Connection / Access / Advanced. All
+    // three start open so no information is hidden by default; the user
+    // can collapse any of them and the choice sticks for the page load.
+    var detailOpenSections = new Set(['connection', 'access', 'advanced']);
     function detailSection(title, body) {
         if (!body) return '';
-        return '<div style="border-top:1px solid var(--border);padding-top:12px;margin-top:16px">'
-            + '<p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0 0 6px">' + escapeHtml(title) + '</p>'
-            + body + '</div>';
+        var key = title.toLowerCase();
+        var open = detailOpenSections.has(key);
+        return '<div class="detail-section" data-section="' + escapeAttr(key) + '">'
+            + '<button type="button" class="detail-section-toggle" aria-expanded="' + (open ? 'true' : 'false') + '">'
+            + '<span class="detail-section-chevron">' + (open ? '\u25BE' : '\u25B8') + '</span>'
+            + '<span>' + escapeHtml(title) + '</span>'
+            + '</button>'
+            + '<div class="detail-section-body' + (open ? '' : ' hidden') + '">' + body + '</div>'
+            + '</div>';
+    }
+    function wireDetailSections() {
+        var container = document.getElementById('detail-details');
+        container.querySelectorAll('.detail-section-toggle').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var section = btn.closest('.detail-section');
+                if (!section) return;
+                var key = section.getAttribute('data-section');
+                var body = section.querySelector('.detail-section-body');
+                var wasOpen = !body.classList.contains('hidden');
+                body.classList.toggle('hidden');
+                btn.setAttribute('aria-expanded', String(!wasOpen));
+                if (wasOpen) detailOpenSections.delete(key);
+                else detailOpenSections.add(key);
+            });
+        });
     }
     function detailHtmlFor(e, folderPath, scope) {
         var rows = '';
@@ -1453,6 +1525,7 @@
             }
             document.getElementById('detail-connect').onclick = function() { maybePromptConnect(scope, folder, entry); };
             document.getElementById('detail-details').innerHTML = detailHtmlFor(e, folder, scope);
+            wireDetailSections();
         };
         var e = findByName(list, entry);
         if (e) { render(e); return; }
@@ -3001,10 +3074,11 @@
                 document.getElementById('recent-sessions').classList.add('hidden');
             });
     }
-    // Reconnect: live rows rejoin the session page; ended rows relaunch
-    // the address-book entry they came from. CSP-safe: buttons only carry
-    // data attributes; the click is handled here.
-    document.getElementById('recent-list').addEventListener('click', function(ev) {
+    // Reconnect/relaunch: live rows rejoin the session page; ended rows
+    // relaunch the address-book entry they came from. Shared by the
+    // Recently Connected list and the Active Sessions grid. CSP-safe:
+    // buttons only carry data attributes; the click is handled here.
+    function handleSessionAction(ev) {
         var btn = ev.target.closest('[data-session-id], [data-relaunch]');
         if (!btn) return;
         var id = btn.getAttribute('data-session-id') || btn.getAttribute('data-relaunch');
@@ -3012,10 +3086,9 @@
             if (id) openSessionUrl('/client/' + encodeURIComponent(id));
             return;
         }
-        var row = ev.target.closest('.recent-row');
-        if (!row) return;
-        var entryKey = row.getAttribute('data-address-book-entry') || '';
-        var folder = row.getAttribute('data-address-book-folder') || '';
+        var row = btn.closest('.recent-row, .active-session-card');
+        var entryKey = btn.getAttribute('data-address-book-entry') || (row ? row.getAttribute('data-address-book-entry') : '') || '';
+        var folder = btn.getAttribute('data-address-book-folder') || (row ? row.getAttribute('data-address-book-folder') : '') || '';
         var firstSlash = entryKey.indexOf('/');
         var lastSlash = entryKey.lastIndexOf('/');
         if (firstSlash < 0 || lastSlash <= firstSlash || !folder) return;
@@ -3037,7 +3110,70 @@
             });
         })
         .catch(function() { btn.disabled = false; btn.textContent = 'Reconnect'; });
-    });
+    }
+    document.getElementById('recent-list').addEventListener('click', handleSessionAction);
+    document.getElementById('active-sessions-grid').addEventListener('click', handleSessionAction);
+
+    // ── Active Sessions ────────────────────────────────────────────
+    // GET /api/sessions returns the caller's sessions (newest first);
+    // non-admins only see their own. Live sessions (active/pending/
+    // disconnected) get a Reconnect button that rejoins /client/{id};
+    // ended sessions that came from an address-book entry get a
+    // Reconnect button that relaunches the entry. Refreshes every 30s
+    // so the section tracks reality without a page reload.
+    function loadActiveSessions() {
+        fetch('/api/sessions', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) {
+                if (r.status === 401) { window.location.href = '/'; return null; }
+                return r.ok ? r.json() : null;
+            })
+            .then(function(sessions) {
+                var section = document.getElementById('active-sessions');
+                var grid = document.getElementById('active-sessions-grid');
+                var empty = document.getElementById('active-sessions-empty');
+                var countEl = document.getElementById('active-sessions-count');
+                var list = Array.isArray(sessions) ? sessions : [];
+                var live = list.filter(function(s) {
+                    return s.status === 'active' || s.status === 'pending' || s.status === 'disconnected';
+                });
+                var relaunchable = list.filter(function(s) {
+                    return (s.status === 'completed' || s.status === 'error' || s.status === 'expired' || s.status === 'logged_out')
+                        && !!s.address_book_entry && !!s.address_book_folder;
+                });
+                var shown = live.concat(relaunchable);
+                section.classList.remove('hidden');
+                countEl.textContent = String(shown.length);
+                empty.classList.toggle('hidden', shown.length > 0);
+                if (shown.length === 0) { grid.innerHTML = ''; return; }
+                var statusClass = {
+                    active: 'status-active', pending: 'status-pending',
+                    disconnected: 'status-disconnected', logged_out: 'status-logged_out'
+                };
+                grid.innerHTML = shown.map(function(s) {
+                    var proto = (s.session_type || '').toLowerCase();
+                    var name = s.entry_display_name || s.hostname || s.session_id;
+                    var target = s.url || s.hostname || '\u2014';
+                    var sc = statusClass[s.status] || 'status-completed';
+                    var isLive = s.status === 'active' || s.status === 'pending' || s.status === 'disconnected';
+                    var btn = isLive
+                        ? '<button class="btn btn-primary btn-sm" data-session-id="' + escapeAttr(s.session_id) + '" style="width:auto">Reconnect</button>'
+                        : '<button class="btn btn-primary btn-sm" data-relaunch="' + escapeAttr(s.session_id) + '" data-address-book-entry="' + escapeAttr(s.address_book_entry || '') + '" data-address-book-folder="' + escapeAttr(s.address_book_folder || '') + '" style="width:auto">Reconnect</button>';
+                    return '<div class="active-session-card">'
+                        + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">'
+                        + '<span class="' + protoClass(proto) + '" style="padding:2px 8px;font-size:11px;font-weight:500;border-radius:6px;border:1px solid;flex-shrink:0">' + escapeHtml((proto || '?').toUpperCase()) + '</span>'
+                        + '<span class="status-pill ' + sc + '" style="flex-shrink:0">' + escapeHtml((s.status || 'unknown').toUpperCase()) + '</span>'
+                        + '</div>'
+                        + '<div style="font-size:13px;color:var(--text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeAttr(name) + '">' + escapeHtml(name) + '</div>'
+                        + '<div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:10px">' + escapeHtml(target) + '</div>'
+                        + '<div style="display:flex;justify-content:flex-end;border-top:1px solid var(--border);padding-top:10px">' + btn + '</div>'
+                        + '</div>';
+                }).join('');
+            })
+            .catch(function() {
+                document.getElementById('active-sessions').classList.add('hidden');
+            });
+    }
+    setInterval(loadActiveSessions, 30000);
 
     // ── Address book init ────────────────────────────────────────────
     fetch('/api/me', { headers: apiHeaders(), credentials: 'same-origin' })
@@ -3047,6 +3183,7 @@
             applyAdminVisibility();
             loadFolders();
             loadRecentSessions();
+            loadActiveSessions();
         })
         .catch(function() { loadFolders(); });
 })();
