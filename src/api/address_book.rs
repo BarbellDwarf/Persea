@@ -5385,4 +5385,61 @@ mod tests {
         .unwrap();
         assert!(folders.is_empty(), "personal folders are gone");
     }
+    #[tokio::test]
+    async fn test_personal_folders_folder_acl_gates_references() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry_id = make_shared_entry(&db, "srv-a");
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+                json!({"scope": "shared", "folder": "Shared", "entry": "srv-a"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Visible while the folder is open.
+        let list = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(body_json(list).await.as_array().unwrap().len(), 1);
+
+        // Tighten the folder ACL to a group Alice is not in: the reference
+        // must disappear from the personal view (same rule as the shared
+        // tree) while the reference row survives.
+        let shared_folder = db::get_ab_folder(&db, "shared", "Shared").unwrap();
+        db::update_ab_folder(&db, "shared", "Shared", "", "admins", false).unwrap();
+        let list = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        let body = body_json(list).await;
+        assert_eq!(
+            body.as_array().unwrap().len(),
+            0,
+            "a tightened folder hides its references"
+        );
+        // The reference row itself still exists (folder + entry intact).
+        let alice_user = db::get_user_by_email(&db, "alice@test.com").unwrap();
+        let refs = db::list_user_folder_entries(&db, alice_user.id, folder).unwrap();
+        assert_eq!(refs.len(), 1);
+        let _ = entry_id;
+    }
 }
