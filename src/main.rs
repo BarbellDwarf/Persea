@@ -2684,10 +2684,14 @@ async fn run_server(
     // identity; the sidebar it embeds gates on `features_context` like the
     // authenticated pages (all-enabled defaults when the DB overlay is
     // unreadable, which matches the no-cookie visitor's read-only view).
+    // `optional_auth` populates the identity when a session cookie or API
+    // key is present, so signed-in admins see the full sidebar; anonymous
+    // visitors pass through unauthenticated and keep the public view.
     let public_html_routes = Router::new()
         .route("/docs.html", get(handlers::account::docs_page))
         .route("/docs", get(handlers::account::docs_page))
         .layer(middleware::from_fn(features_context))
+        .layer(middleware::from_fn(auth::optional_auth))
         .layer(Extension(database.clone()));
 
     let html_routes = protected_html_routes.merge(public_html_routes);
