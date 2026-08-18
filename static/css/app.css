@@ -949,3 +949,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .um-theme-info { display: flex; flex-direction: column; gap: 1px; }
 .um-theme-name { font-weight: 500; text-transform: capitalize; }
 .um-theme-desc { font-size: var(--text-xs); color: var(--text-muted); }
+
+/* ── Personal folders: drag-and-drop (persea#167) ─────────── */
+.folder-item.drop-target {
+    background: rgba(16,185,129,0.15);
+    border: 1px solid var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+}
+.folder-item.dragging,
+.entry-row.dragging { opacity: 0.45; }
+.pf-toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    z-index: 300; background: var(--bg-card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 18px; box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    font-size: 13px; color: var(--text-primary); max-width: 90vw;
+    animation: fadeInUp 0.2s ease;
+}

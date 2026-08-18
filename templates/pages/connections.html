@@ -15,11 +15,13 @@
                 <option value="">All Scopes</option>
                 <option value="shared">Shared</option>
                 <option value="instance">Instance</option>
+                <option value="personal">Personal</option>
             </select>
             <input type="search" id="connections-search" placeholder="Search connections..."
                    class="form-input" style="width:260px" autocomplete="off">
             <button id="btn-filters" class="btn btn-secondary btn-sm" style="width:auto" aria-expanded="false">Filters</button>
             <button id="btn-new-folder" class="btn btn-primary btn-sm admin-only" style="width:auto">+ New Folder</button>
+            <button id="btn-new-personal-folder" class="btn btn-primary btn-sm personal-scope-only" style="width:auto">+ New Folder</button>
             <div style="position:relative">
                 <button id="btn-overflow" class="btn btn-secondary btn-sm" style="width:auto" aria-label="More actions" aria-expanded="false">...</button>
                 <div id="overflow-menu" class="hidden" style="position:absolute;right:0;top:calc(100% + 4px);background:var(--bg-card);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.25);z-index:40;min-width:180px;padding:4px">
@@ -94,7 +96,7 @@
 
             <!-- Left: Folder tree -->
             <div class="conn-sidebar">
-                <p style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Folders</p>
+                <p id="folder-tree-label" style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Folders</p>
                 <div id="folder-tree" class="conn-panel"></div>
             </div>
 
@@ -107,6 +109,7 @@
                 <div id="entries-header" class="hidden" style="margin-bottom:16px">
                     <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
                         <h2 id="entries-title" style="font-size:16px;font-weight:600;color:var(--text-primary);margin:0"></h2>
+                        <span id="entries-personal-badge" class="hidden" style="padding:2px 8px;background:rgba(16,185,129,0.12);color:#34d399;font-size:11px;border-radius:12px">Personal</span>
                         <span id="entries-count" style="padding:2px 8px;background:var(--bg-input);color:var(--text-muted);font-size:11px;border-radius:12px"></span>
                         <span id="entries-desc" style="font-size:13px;color:var(--text-muted);font-style:italic"></span>
                         <div style="flex:1"></div>
@@ -128,6 +131,8 @@
                     <div id="detail-host" style="font-size:13px;color:var(--text-secondary);margin-bottom:12px"></div>
                     <div id="detail-description" class="hidden" style="margin-bottom:16px;padding:10px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px;font-size:13px;color:var(--text-primary);white-space:pre-wrap;word-break:break-word"></div>
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
+                    <button id="detail-add-to-folder" class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:16px">Add to personal folder</button>
+                    <div id="detail-pf-note" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;color:#fbbf24;font-size:13px;margin-bottom:16px"></div>
                     <div id="detail-reason-row" style="margin-bottom:16px">
                         <label class="form-label" for="detail-reason">Reason <span style="color:var(--text-muted);font-weight:400">— why are you connecting?</span></label>
                         <select id="detail-reason-preset" class="form-input" style="margin-bottom:8px">
@@ -229,6 +234,49 @@
         <div class="flex justify-end gap-3 mt-6">
             <button type="button" id="fm-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
             <button type="button" id="fm-save" class="btn btn-primary btn-sm" style="width:auto">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Personal folder create/rename modal (owner-only, any user) -->
+<div id="pf-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="pf-modal-title">
+    <div class="card w-full max-w-md" style="max-height:90vh;overflow-y:auto">
+        <h2 id="pf-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">New Personal Folder</h2>
+        <div class="space-y-4">
+            <div>
+                <label class="form-label" for="pfm-name">Name</label>
+                <input type="text" id="pfm-name" class="form-input" placeholder="e.g. Work" maxlength="128" autocomplete="off">
+                <p class="text-xs text-[var(--text-muted)] mt-1">Use "Parent/Child" to nest folders. Only you can see these folders.</p>
+            </div>
+            <div id="pfm-desc-field">
+                <label class="form-label" for="pfm-desc">Description</label>
+                <input type="text" id="pfm-desc" class="form-input" placeholder="e.g. My daily servers" autocomplete="off">
+            </div>
+            <div id="pfm-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+        </div>
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" id="pfm-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
+            <button type="button" id="pfm-save" class="btn btn-primary btn-sm" style="width:auto">Save</button>
+        </div>
+    </div>
+</div>
+
+<!-- Add to personal folder modal (non-drag fallback) -->
+<div id="add-to-folder-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="atf-title">
+    <div class="card w-full max-w-md">
+        <h2 id="atf-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Add to Personal Folder</h2>
+        <p id="atf-entry-name" class="text-sm text-[var(--text-muted)] mb-4"></p>
+        <div class="space-y-4">
+            <div>
+                <label class="form-label" for="atf-folder">Folder</label>
+                <select id="atf-folder" class="form-input"></select>
+                <p id="atf-empty" class="hidden text-xs text-[var(--text-muted)] mt-1">You have no personal folders yet. Create one from the Personal scope first.</p>
+            </div>
+            <div id="atf-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+        </div>
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" id="atf-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
+            <button type="button" id="atf-save" class="btn btn-primary btn-sm" style="width:auto">Add</button>
         </div>
     </div>
 </div>
@@ -606,6 +654,21 @@
     .folder-item:hover .folder-actions.is-admin { display:flex; }
     .folder-actions svg { width:14px; height:14px; cursor:pointer; color:var(--text-muted); border-radius:4px; padding:2px; box-sizing:content-box; }
     .folder-actions svg:hover { color:var(--text-primary); background:var(--bg-input); }
+    .personal-scope-only { display: none; }
+    .personal-scope-only.personal-visible { display: inline-flex; }
+    .pf-actions { display:none; gap:2px; margin-left:8px; flex-shrink:0; }
+    .folder-item:hover .pf-actions { display:flex; }
+    .pf-actions svg { width:14px; height:14px; cursor:pointer; color:var(--text-muted); border-radius:4px; padding:2px; box-sizing:content-box; }
+    .pf-actions svg:hover { color:var(--text-primary); background:var(--bg-input); }
+    .pf-tree-hint { padding:8px 10px 6px; font-size:11px; color:var(--text-muted); line-height:1.5; border-bottom:1px solid var(--border); margin-bottom:6px; }
+    .pf-section-header {
+        display:flex; align-items:baseline; gap:8px; flex-wrap:wrap;
+        padding:10px 12px 4px; margin-top:8px;
+        font-size:11px; font-weight:600; color:var(--text-muted);
+        text-transform:uppercase; letter-spacing:0.05em;
+        border-top:1px solid var(--border);
+    }
+    .pf-section-note { font-weight:400; text-transform:none; letter-spacing:0; color:var(--text-muted); }
     .chip-picker {
         margin-top:8px; border:1px solid var(--border); border-radius:var(--radius);
         background:var(--bg-input); padding:8px; display:flex; flex-direction:column; gap:8px;
@@ -735,6 +798,21 @@
     var emRbac = [];
     var emRbacOrig = [];
     var customFieldDefs = [];
+    // Personal folders (persea#138/#167): owner-only folder tree merged
+    // into `folders` with scope 'personal'. `pfEditMode` drives the
+    // personal folder modal (null = new, {id,path} = rename,
+    // {parentPath} = inline sub-folder). `selScope/selFolder/selEntry`
+    // track the detail-panel selection so the non-drag "Add to folder"
+    // fallback knows what to add. `pfLocations` is a localStorage cache
+    // mapping personal-folder path + entry name to the shared entry's
+    // scope/folder, because the personal entries API resolves references
+    // to their real rows but does not expose where the shared entry lives.
+    var pfEditMode = null;
+    var selScope = null;
+    var selFolder = null;
+    var selEntry = null;
+    var pfLocations = null;
+    var PF_LOCATIONS_KEY = 'persea_pf_locations';
 
     function folderKey(scope, path) {
         return scope + '\u0000' + path;
@@ -755,6 +833,364 @@
             if (list[i].name === name) return list[i];
         }
         return null;
+    }
+
+    // ── Personal folders (persea#138 / persea#167) ────────────────────
+    // Every authenticated user owns a private folder tree (GET
+    // /api/personal/folders). Folders nest via slash paths and reference
+    // shared address book entries without copying them. The API is
+    // owner-only and fail closed, so only the caller's own folders can
+    // ever render here.
+    function loadPersonalFolders() {
+        return fetch('/api/personal/folders', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(res) {
+                if (res.status === 401) { window.location.href = '/'; return []; }
+                return res.ok ? res.json() : [];
+            })
+            .then(function(list) {
+                // Drop stale personal folders (and their cached entries)
+                // before merging the fresh list.
+                var stale = folders.filter(function(f) { return f.scope === 'personal'; });
+                stale.forEach(function(f) {
+                    folderMap.delete(folderKey('personal', f.path));
+                    entriesByFolder.delete(folderKey('personal', f.path));
+                });
+                folders = folders.filter(function(f) { return f.scope !== 'personal'; });
+                var pf = (list || []).map(function(f) {
+                    return {
+                        id: f.id,
+                        name: f.name,
+                        scope: 'personal',
+                        path: f.path || f.name,
+                        description: f.description || '',
+                        has_children: !!f.has_children
+                    };
+                });
+                pf.forEach(function(f) {
+                    folderMap.set(folderKey('personal', f.path), f);
+                    expandedKeys.add(folderKey('personal', f.path));
+                });
+                folders = folders.concat(pf);
+                // Prefetch every personal folder's referenced entries so
+                // selection and search work without per-click round trips.
+                return Promise.all(pf.map(function(f) {
+                    return fetch('/api/personal/folders/' + encodeURIComponent(f.id) + '/entries', { headers: apiHeaders(), credentials: 'same-origin' })
+                        .then(function(r) { return r.ok ? r.json() : []; })
+                        .then(function(entries) {
+                            entriesByFolder.set(folderKey('personal', f.path), entries || []);
+                        })
+                        .catch(function() {
+                            entriesByFolder.set(folderKey('personal', f.path), []);
+                        });
+                }));
+            });
+    }
+    function reloadPersonalFolderEntries(folder) {
+        fetch('/api/personal/folders/' + encodeURIComponent(folder.id) + '/entries', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(list) {
+                entriesByFolder.set(folderKey('personal', folder.path), list || []);
+                refreshCustomFilterOptions();
+                var af = activeFilters();
+                if (searchQuery || af.active) runSearch();
+                else if (selectedFolder) selectFolder(selectedFolder);
+            });
+    }
+    // The personal entries API resolves references to their real rows but
+    // does not expose the shared scope/folder, so connect needs a bridge.
+    // The UI records the shared location when an entry is added (drag or
+    // fallback) and caches it in localStorage; a unique-name match in the
+    // loaded shared tree covers entries whose cache entry is missing.
+    function loadPfLocations() {
+        if (pfLocations !== null) return pfLocations;
+        try { pfLocations = JSON.parse(localStorage.getItem(PF_LOCATIONS_KEY)) || {}; }
+        catch (e) { pfLocations = {}; }
+        return pfLocations;
+    }
+    function savePfLocations() {
+        try { localStorage.setItem(PF_LOCATIONS_KEY, JSON.stringify(pfLocations)); } catch (e) {}
+    }
+    function rememberPfLocation(pfPath, entryName, scope, folder) {
+        loadPfLocations();
+        pfLocations[pfPath + '\u0000' + entryName] = { scope: scope, folder: folder };
+        savePfLocations();
+    }
+    function sharedLocationFor(pfPath, entryName) {
+        var loc = loadPfLocations()[pfPath + '\u0000' + entryName];
+        if (loc && loc.scope && loc.folder) return loc;
+        var matches = [];
+        folders.forEach(function(f) {
+            if (f.scope === 'personal') return;
+            (entriesByFolder.get(folderKey(f.scope, f.path)) || []).forEach(function(e) {
+                if (e.name === entryName) matches.push({ scope: f.scope, folder: f.path });
+            });
+        });
+        if (matches.length === 1) return matches[0];
+        return null;
+    }
+    function resolvePersonalEntry(scope, folder, entry) {
+        if (scope !== 'personal') return { scope: scope, folder: folder, entry: entry };
+        var loc = sharedLocationFor(folder, entry);
+        return loc ? { scope: loc.scope, folder: loc.folder, entry: entry } : null;
+    }
+    function showPfToast(msg) {
+        var existing = document.querySelector('.pf-toast');
+        if (existing) existing.remove();
+        var toast = document.createElement('div');
+        toast.className = 'pf-toast';
+        toast.textContent = msg;
+        document.body.appendChild(toast);
+        setTimeout(function() { toast.remove(); }, 3000);
+    }
+    function addEntryToPersonalFolder(folder, scope, folderPath, entryName) {
+        fetch('/api/personal/folders/' + encodeURIComponent(folder.id) + '/entries', {
+            method: 'POST',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({ scope: scope, folder: folderPath, entry: entryName })
+        }).then(function(res) {
+            if (res.status === 401) { window.location.href = '/'; return; }
+            if (res.status === 409) {
+                showPfToast('This entry is already in "' + folderLabel(folder.path) + '".');
+                return;
+            }
+            if (!res.ok) { showPfToast('Failed to add the entry to the folder.'); return; }
+            rememberPfLocation(folder.path, entryName, scope, folderPath);
+            showPfToast('Added "' + entryName + '" to "' + folderLabel(folder.path) + '".');
+            reloadPersonalFolderEntries(folder);
+        }).catch(function() {
+            showPfToast('Failed to add the entry to the folder.');
+        });
+    }
+    // Rename a personal folder and every descendant so slash-path nesting
+    // holds (the API renames one folder; children keep their paths).
+    function renamePersonalFolderSubtree(folderId, oldPath, newPath) {
+        var affected = folders.filter(function(f) {
+            return f.scope === 'personal' && (f.path === oldPath || f.path.startsWith(oldPath + '/'));
+        });
+        var chain = Promise.resolve();
+        affected.forEach(function(f) {
+            var suffix = f.path === oldPath ? '' : f.path.slice(oldPath.length);
+            chain = chain.then(function() {
+                return fetch('/api/personal/folders/' + encodeURIComponent(f.id), {
+                    method: 'PUT',
+                    headers: apiHeaders(),
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ name: newPath + suffix })
+                }).then(function(res) {
+                    if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
+                    if (!res.ok) throw new Error('Failed to rename folder (HTTP ' + res.status + ')');
+                });
+            });
+        });
+        return chain;
+    }
+    function movePersonalFolder(targetFolder, data) {
+        if (data.id === targetFolder.id) return;
+        if (targetFolder.path === data.path || targetFolder.path.startsWith(data.path + '/')) {
+            showPfToast('A folder cannot be moved into itself or its own subfolder.');
+            return;
+        }
+        var label = data.path.split('/').pop();
+        var newPath = targetFolder.path + '/' + label;
+        renamePersonalFolderSubtree(data.id, data.path, newPath).then(function() {
+            showPfToast('Moved "' + label + '" into "' + targetFolder.path + '".');
+            return loadPersonalFolders().then(function() { renderFolders(); });
+        }).catch(function(err) {
+            if (err && err.message === 'redirect') return;
+            showPfToast(err.message || 'Failed to move the folder.');
+            loadPersonalFolders().then(function() { renderFolders(); });
+        });
+    }
+    function deletePersonalFolder(folder) {
+        var affected = folders.filter(function(f) {
+            return f.scope === 'personal' && (f.path === folder.path || f.path.startsWith(folder.path + '/'));
+        });
+        affected.sort(function(a, b) { return b.path.length - a.path.length; });
+        var warning = affected.length > 1
+            ? 'Delete personal folder "' + folder.path + '" and its ' + (affected.length - 1) + ' subfolder(s)?\n\nEntry references are removed; the shared entries themselves are untouched.'
+            : 'Delete personal folder "' + folder.path + '"?\n\nEntry references are removed; the shared entries themselves are untouched.';
+        if (!confirm(warning)) return;
+        var chain = Promise.resolve();
+        affected.forEach(function(f) {
+            chain = chain.then(function() {
+                return fetch('/api/personal/folders/' + encodeURIComponent(f.id), {
+                    method: 'DELETE',
+                    headers: apiHeaders(),
+                    credentials: 'same-origin'
+                }).then(function(res) {
+                    if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
+                    if (!res.ok) throw new Error('Failed to delete folder (HTTP ' + res.status + ')');
+                });
+            });
+        });
+        chain.then(function() {
+            if (selectedFolder && selectedFolder.scope === 'personal'
+                && (selectedFolder.path === folder.path || selectedFolder.path.startsWith(folder.path + '/'))) {
+                selectedFolder = null;
+                clearEntrySelection();
+                document.getElementById('entries-header').classList.add('hidden');
+                document.getElementById('entries-content').innerHTML = '';
+                syncPlaceholder();
+            }
+            return loadPersonalFolders().then(function() { renderFolders(); });
+        }).catch(function(err) {
+            if (err && err.message === 'redirect') return;
+            showInlineError('<p style="color:#f87171;font-size:13px;padding:32px 0;text-align:center">' + escapeHtml(err.message || 'Delete failed.') + '</p>');
+        });
+    }
+    function openNewPersonalFolder() {
+        pfEditMode = null;
+        document.getElementById('pf-modal-title').textContent = 'New Personal Folder';
+        document.getElementById('pfm-name').value = '';
+        document.getElementById('pfm-desc').value = '';
+        document.getElementById('pfm-desc-field').style.display = '';
+        document.getElementById('pfm-error').textContent = '';
+        document.getElementById('pfm-error').classList.add('hidden');
+        openModal('pf-modal');
+    }
+    function openNewPersonalSubFolder(folder) {
+        pfEditMode = { parentPath: folder.path };
+        document.getElementById('pf-modal-title').textContent = 'New Sub-folder in ' + folderLabel(folder.path);
+        document.getElementById('pfm-name').value = '';
+        document.getElementById('pfm-desc').value = '';
+        document.getElementById('pfm-desc-field').style.display = '';
+        document.getElementById('pfm-error').textContent = '';
+        document.getElementById('pfm-error').classList.add('hidden');
+        openModal('pf-modal');
+    }
+    function openRenamePersonalFolder(folder) {
+        pfEditMode = { id: folder.id, path: folder.path };
+        document.getElementById('pf-modal-title').textContent = 'Rename Folder';
+        document.getElementById('pfm-name').value = folderLabel(folder.path);
+        document.getElementById('pfm-desc').value = folder.description || '';
+        // The rename API only accepts a name; hide the description field so
+        // it is not mistaken for an editable value.
+        document.getElementById('pfm-desc-field').style.display = 'none';
+        document.getElementById('pfm-error').textContent = '';
+        document.getElementById('pfm-error').classList.add('hidden');
+        openModal('pf-modal');
+    }
+    function savePersonalFolder() {
+        var name = document.getElementById('pfm-name').value.trim();
+        var desc = document.getElementById('pfm-desc').value.trim();
+        var errEl = document.getElementById('pfm-error');
+        if (!name) {
+            errEl.textContent = 'Folder name is required.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        if (name.charAt(0) === '/' || name.charAt(name.length - 1) === '/' || name.indexOf('//') !== -1) {
+            errEl.textContent = 'Folder names cannot start or end with a slash or contain empty path segments.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        errEl.textContent = '';
+        errEl.classList.add('hidden');
+        var saveBtn = document.getElementById('pfm-save');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving\u2026';
+        var req;
+        if (pfEditMode && pfEditMode.id) {
+            var oldPath = pfEditMode.path;
+            var parentPath = oldPath.indexOf('/') === -1 ? '' : oldPath.slice(0, oldPath.lastIndexOf('/'));
+            var newPath = parentPath ? parentPath + '/' + name : name;
+            req = renamePersonalFolderSubtree(pfEditMode.id, oldPath, newPath);
+        } else {
+            var fullName = (pfEditMode && pfEditMode.parentPath) ? pfEditMode.parentPath + '/' + name : name;
+            req = fetch('/api/personal/folders', {
+                method: 'POST',
+                headers: apiHeaders(),
+                credentials: 'same-origin',
+                body: JSON.stringify({ name: fullName, description: desc })
+            }).then(function(res) {
+                if (res.status === 401) { window.location.href = '/'; throw new Error('redirect'); }
+                if (!res.ok) return res.json().catch(function() { return {}; }).then(function(d) { throw new Error(d.error || 'HTTP ' + res.status); });
+            });
+        }
+        req.then(function() {
+            closeModal('pf-modal');
+            return loadPersonalFolders().then(function() {
+                var targetPath;
+                if (pfEditMode && pfEditMode.id) {
+                    var oldPath = pfEditMode.path;
+                    var parentPath = oldPath.indexOf('/') === -1 ? '' : oldPath.slice(0, oldPath.lastIndexOf('/'));
+                    targetPath = parentPath ? parentPath + '/' + name : name;
+                } else {
+                    targetPath = (pfEditMode && pfEditMode.parentPath) ? pfEditMode.parentPath + '/' + name : name;
+                }
+                var f = folderMap.get(folderKey('personal', targetPath));
+                if (f) selectFolder(f);
+                else renderFolders();
+            });
+        }).catch(function(err) {
+            if (err && err.message === 'redirect') return;
+            errEl.textContent = err.message || 'Save failed.';
+            errEl.classList.remove('hidden');
+            // A partial rename failure can leave the tree stale; resync it.
+            loadPersonalFolders().then(function() { renderFolders(); });
+        }).then(function() {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save';
+        });
+    }
+    // Non-drag fallback: pick a personal folder from a modal and add the
+    // currently selected entry to it.
+    var atfTarget = null;
+    function openAddToFolder() {
+        if (!selScope || !selFolder || !selEntry) return;
+        var resolved = resolvePersonalEntry(selScope, selFolder, selEntry);
+        if (!resolved) {
+            showPfToast('This entry\u2019s shared location is unknown. Re-add it to restore this action.');
+            return;
+        }
+        atfTarget = resolved;
+        var sel = document.getElementById('atf-folder');
+        sel.innerHTML = '';
+        var pfs = folders.filter(function(f) { return f.scope === 'personal'; });
+        pfs.forEach(function(f) {
+            var opt = document.createElement('option');
+            opt.value = String(f.id);
+            opt.textContent = f.path;
+            sel.appendChild(opt);
+        });
+        document.getElementById('atf-entry-name').textContent = 'Add "' + resolved.entry + '" to:';
+        document.getElementById('atf-empty').classList.toggle('hidden', pfs.length > 0);
+        document.getElementById('atf-error').textContent = '';
+        document.getElementById('atf-error').classList.add('hidden');
+        document.getElementById('atf-save').disabled = pfs.length === 0;
+        openModal('add-to-folder-modal');
+    }
+    function saveAddToFolder() {
+        var sel = document.getElementById('atf-folder');
+        var id = sel.value;
+        if (!id) {
+            var errEl = document.getElementById('atf-error');
+            errEl.textContent = 'Choose a folder first.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+        var f = null;
+        folders.forEach(function(x) { if (x.scope === 'personal' && String(x.id) === id) f = x; });
+        if (!f || !atfTarget) return;
+        closeModal('add-to-folder-modal');
+        addEntryToPersonalFolder(f, atfTarget.scope, atfTarget.folder, atfTarget.entry);
+    }
+    function updateScopeUi() {
+        var sf = document.getElementById('scope-filter').value;
+        var label = document.getElementById('folder-tree-label');
+        if (label) label.textContent = sf === 'personal' ? 'Personal Folders' : 'Folders';
+        var pfBtn = document.getElementById('btn-new-personal-folder');
+        if (pfBtn) pfBtn.classList.toggle('personal-visible', sf === 'personal');
+        var adminBtn = document.getElementById('btn-new-folder');
+        if (adminBtn) adminBtn.classList.toggle('hidden', sf === 'personal');
+        // Entry create/edit/delete, credential rotation and CSV import all
+        // target the shared address book API, which has no personal scope:
+        // hide them there (personal folders only reference shared entries).
+        ['btn-new-entry', 'btn-edit-entry', 'btn-delete-entry', 'btn-overflow', 'detail-rotate-cred'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.classList.toggle('hidden', sf === 'personal');
+        });
     }
 
     // ── Unavailable / access states ──────────────────────────────────
@@ -823,33 +1259,38 @@
                 folderList.forEach(function(f) {
                     entriesByFolder.set(folderKey(f.scope, f.path || f.name), (f.entries || []));
                 });
-                populateFilterFolders();
-                document.getElementById('filter-bar').classList.toggle('hidden', folders.length === 0);
-                document.getElementById('btn-filters').classList.toggle('hidden', folders.length === 0);
-                if (folders.length === 0) {
-                    if (isAdmin) {
-                        document.getElementById('main-content').classList.add('hidden');
-                        document.getElementById('empty-state').classList.remove('hidden');
-                    } else {
-                        document.getElementById('empty-state').classList.add('hidden');
-                        document.getElementById('main-content').classList.remove('hidden');
-                        document.getElementById('folder-tree').innerHTML =
-                            '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders available.</p>';
+                // Merge the caller's personal folders (owner-only API) so
+                // the scope filter can show them; render happens after.
+                return loadPersonalFolders().then(function() {
+                    populateFilterFolders();
+                    var sf = document.getElementById('scope-filter').value;
+                    document.getElementById('filter-bar').classList.toggle('hidden', folders.length === 0);
+                    document.getElementById('btn-filters').classList.toggle('hidden', folders.length === 0);
+                    if (treeEmptyForScope(sf)) {
+                        if (sf === 'personal' || isAdmin) {
+                            document.getElementById('main-content').classList.add('hidden');
+                            document.getElementById('empty-state').classList.remove('hidden');
+                        } else {
+                            document.getElementById('empty-state').classList.add('hidden');
+                            document.getElementById('main-content').classList.remove('hidden');
+                            document.getElementById('folder-tree').innerHTML =
+                                '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders available.</p>';
+                        }
+                        return;
                     }
-                    return;
-                }
-                document.getElementById('empty-state').classList.add('hidden');
-                document.getElementById('main-content').classList.remove('hidden');
-                renderFolders();
-                refreshCustomFilterOptions();
-                var af = activeFilters();
-                if (searchQuery || af.active) runSearch();
-                else if (selectedFolder && folderMap.get(folderKey(selectedFolder.scope, selectedFolder.path))) {
-                    selectFolder(selectedFolder);
-                } else if (folders.length) {
-                    var first = firstFolderInScope();
-                    if (first) selectFolder(first);
-                }
+                    document.getElementById('empty-state').classList.add('hidden');
+                    document.getElementById('main-content').classList.remove('hidden');
+                    renderFolders();
+                    refreshCustomFilterOptions();
+                    var af = activeFilters();
+                    if (searchQuery || af.active) runSearch();
+                    else if (selectedFolder && folderMap.get(folderKey(selectedFolder.scope, selectedFolder.path))) {
+                        selectFolder(selectedFolder);
+                    } else if (folders.length) {
+                        var first = firstFolderInScope();
+                        if (first) selectFolder(first);
+                    }
+                });
             })
             .catch(function(err) {
                 document.getElementById('folder-tree').innerHTML =
@@ -862,6 +1303,14 @@
             if (!sf || folders[i].scope === sf) return folders[i];
         }
         return null;
+    }
+    // The tree is empty when the scope filter matches no folders AND there
+    // is no Personal section to fall back on (personal folders render in
+    // every non-personal scope so entries can be dragged onto them).
+    function treeEmptyForScope(sf) {
+        var inScope = folders.filter(function(f) { return !sf || f.scope === sf; }).length;
+        var personalCount = folders.filter(function(f) { return f.scope === 'personal'; }).length;
+        return inScope === 0 && (sf === 'personal' || personalCount === 0);
     }
     function folderChildren(visible, parentPath) {
         if (!parentPath) return visible.filter(function(f) { return f.path.indexOf('/') === -1; });
@@ -891,17 +1340,25 @@
             var count = (entriesByFolder.get(key) || []).length;
             var active = selectedFolder && selectedFolder.scope === f.scope && selectedFolder.path === f.path ? ' active' : '';
             var expanded = expandedKeys.has(key);
+            var isPf = f.scope === 'personal';
             var chevron = f.has_children
                 ? '<span class="folder-chevron" data-key="' + escapeAttr(key) + '" title="' + (expanded ? 'Collapse' : 'Expand') + '" style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;flex-shrink:0;color:var(--text-muted);font-size:10px;cursor:pointer;user-select:none">' + (expanded ? '\u25BE' : '\u25B8') + '</span>'
                 : '<span style="width:16px;flex-shrink:0"></span>';
-            out += '<div class="folder-item' + active + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '" style="padding-left:' + (12 + depth * 14) + 'px" title="' + escapeAttr(f.path + ' (' + f.scope + ')') + '">'
+            var actions = isPf
+                ? '<span class="pf-actions" data-pf-id="' + escapeAttr(String(f.id)) + '" data-path="' + escapeAttr(f.path) + '">'
+                    + '<svg class="pf-add-btn" viewBox="0 0 20 20" fill="currentColor" title="New sub-folder"><path d="M10 4a1 1 0 011 1v4h4a1 1 0 110 2h-4v4a1 1 0 11-2 0v-4H5a1 1 0 110-2h4V5a1 1 0 011-1z"/></svg>'
+                    + '<svg class="pf-edit-btn" viewBox="0 0 20 20" fill="currentColor" title="Rename folder"><path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/></svg>'
+                    + '<svg class="pf-delete-btn" viewBox="0 0 20 20" fill="currentColor" title="Delete folder"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>'
+                    + '</span>'
+                : '<span class="folder-actions admin-only is-admin" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '">'
+                    + '<svg class="folder-edit-btn" viewBox="0 0 20 20" fill="currentColor" title="Edit folder"><path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/></svg>'
+                    + '<svg class="folder-delete-btn" viewBox="0 0 20 20" fill="currentColor" title="Delete folder"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>'
+                    + '</span>';
+            out += '<div class="folder-item' + active + '" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '"' + (isPf ? ' data-pf-id="' + escapeAttr(String(f.id)) + '" draggable="true"' : '') + ' style="padding-left:' + (12 + depth * 14) + 'px" title="' + escapeAttr(f.path + (isPf ? ' (personal)' : ' (' + f.scope + ')')) + '">'
                 + chevron
                 + '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escapeHtml(folderLabel(f.path)) + '</span>'
                 + '<span style="font-size:11px;color:var(--text-muted);margin-left:8px">' + count + '</span>'
-                + '<span class="folder-actions admin-only is-admin" data-scope="' + escapeAttr(f.scope) + '" data-path="' + escapeAttr(f.path) + '">'
-                + '<svg class="folder-edit-btn" viewBox="0 0 20 20" fill="currentColor" title="Edit folder"><path d="M2.695 14.763l-1.262 3.154a.5.5 0 00.65.65l3.155-1.262a4 4 0 001.343-.885L17.5 5.5a2.121 2.121 0 00-3-3L3.58 13.42a4 4 0 00-.885 1.343z"/></svg>'
-                + '<svg class="folder-delete-btn" viewBox="0 0 20 20" fill="currentColor" title="Delete folder"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd"/></svg>'
-                + '</span>'
+                + actions
                 + '</div>';
             if (expanded) out += renderFolderLevel(visible, f.path, depth + 1);
         });
@@ -911,11 +1368,26 @@
         var tree = document.getElementById('folder-tree');
         var scopeFilter = document.getElementById('scope-filter').value;
         var visible = folders.filter(function(f) { return !scopeFilter || f.scope === scopeFilter; });
-        if (visible.length === 0) {
-            tree.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders in this scope.</p>';
-            return;
+        var personal = folders.filter(function(f) { return f.scope === 'personal'; });
+        if (scopeFilter === 'personal') {
+            if (visible.length === 0) {
+                tree.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders in this scope.</p>';
+                return;
+            }
+            tree.innerHTML = '<div class="pf-tree-hint">Only you can see these folders. Drag entries or folders here to organize them.</div>'
+                + renderFolderLevel(visible, null, 0);
+        } else {
+            if (visible.length === 0 && personal.length === 0) {
+                tree.innerHTML = '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders in this scope.</p>';
+                return;
+            }
+            var html = renderFolderLevel(visible, null, 0);
+            if (personal.length > 0) {
+                html += '<div class="pf-section-header">Personal <span class="pf-section-note">only you can see these, drag entries here to add them</span></div>'
+                    + renderFolderLevel(personal, null, 0);
+            }
+            tree.innerHTML = html;
         }
-        tree.innerHTML = renderFolderLevel(visible, null, 0);
         tree.querySelectorAll('.folder-item').forEach(function(el) {
             el.addEventListener('click', function(ev) {
                 if (ev.target.closest('.folder-chevron')) return;
@@ -949,6 +1421,53 @@
                 }
             });
         });
+        // Personal folders: owner actions (sub-folder / rename / delete),
+        // drag source for sub-folder moves, and drop targets for entries
+        // and sub-folders.
+        tree.querySelectorAll('.pf-actions').forEach(function(el) {
+            el.addEventListener('click', function(ev) {
+                ev.stopPropagation();
+                var folder = folderMap.get(folderKey('personal', el.getAttribute('data-path')));
+                if (!folder) return;
+                if (ev.target.closest('.pf-add-btn')) {
+                    openNewPersonalSubFolder(folder);
+                } else if (ev.target.closest('.pf-edit-btn')) {
+                    openRenamePersonalFolder(folder);
+                } else if (ev.target.closest('.pf-delete-btn')) {
+                    deletePersonalFolder(folder);
+                }
+            });
+        });
+        tree.querySelectorAll('.folder-item[data-pf-id]').forEach(function(el) {
+            el.addEventListener('dragstart', function(ev) {
+                var f = folderMap.get(folderKey('personal', el.getAttribute('data-path')));
+                if (!f) return;
+                ev.dataTransfer.setData('text/plain', JSON.stringify({ kind: 'folder', id: f.id, path: f.path }));
+                ev.dataTransfer.effectAllowed = 'move';
+                el.classList.add('dragging');
+            });
+            el.addEventListener('dragend', function() { el.classList.remove('dragging'); });
+            el.addEventListener('dragover', function(ev) {
+                ev.preventDefault();
+                ev.dataTransfer.dropEffect = 'copy';
+                el.classList.add('drop-target');
+            });
+            el.addEventListener('dragleave', function() { el.classList.remove('drop-target'); });
+            el.addEventListener('drop', function(ev) {
+                ev.preventDefault();
+                el.classList.remove('drop-target');
+                var data = null;
+                try { data = JSON.parse(ev.dataTransfer.getData('text/plain')); } catch (e) { data = null; }
+                if (!data) return;
+                var f = folderMap.get(folderKey('personal', el.getAttribute('data-path')));
+                if (!f) return;
+                if (data.kind === 'entry') {
+                    addEntryToPersonalFolder(f, data.scope, data.folder, data.entry);
+                } else if (data.kind === 'folder' && data.id !== f.id) {
+                    movePersonalFolder(f, data);
+                }
+            });
+        });
     }
     function syncPlaceholder() {
         var ph = document.getElementById('no-folder-selected');
@@ -964,6 +1483,7 @@
         renderFolders();
         document.getElementById('entries-header').classList.remove('hidden');
         document.getElementById('entries-title').textContent = f.name;
+        document.getElementById('entries-personal-badge').classList.toggle('hidden', f.scope !== 'personal');
         document.getElementById('entries-count').textContent =
             String((entriesByFolder.get(folderKey(f.scope, f.path)) || []).length);
         document.getElementById('entries-desc').textContent = f.description || '';
@@ -973,7 +1493,12 @@
     function clearEntrySelection() {
         selectedEntry = null;
         selectedEntryKey = null;
+        selScope = null;
+        selFolder = null;
+        selEntry = null;
         document.getElementById('detail-panel').classList.add('hidden');
+        var pfNote = document.getElementById('detail-pf-note');
+        if (pfNote) pfNote.classList.add('hidden');
         var rows = document.querySelectorAll('.entry-row.selected');
         for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
         updateEntryActionButtons();
@@ -990,8 +1515,22 @@
             });
             row.querySelector('.entry-connect').addEventListener('click', function() {
                 selectConnection(scope, path, name, row);
-                maybePromptConnect(scope, path, name);
+                var resolved = resolvePersonalEntry(scope, path, name);
+                if (resolved) maybePromptConnect(resolved.scope, resolved.folder, resolved.entry);
+                else showPfToast('This entry\u2019s shared location is unknown. Re-add it to restore connect.');
             });
+            // Drag source: entry rows can be dropped into personal folders.
+            // Personal rows carry the resolved shared location so the drop
+            // adds a reference to the real shared entry.
+            row.setAttribute('draggable', 'true');
+            row.addEventListener('dragstart', function(ev) {
+                var resolved = resolvePersonalEntry(scope, path, name);
+                if (!resolved) { ev.preventDefault(); return; }
+                ev.dataTransfer.setData('text/plain', JSON.stringify({ kind: 'entry', scope: resolved.scope, folder: resolved.folder, entry: resolved.entry }));
+                ev.dataTransfer.effectAllowed = 'copy';
+                row.classList.add('dragging');
+            });
+            row.addEventListener('dragend', function() { row.classList.remove('dragging'); });
         });
     }
     function entryRowHtml(scope, path, folderName, e) {
@@ -1019,10 +1558,13 @@
         if (!selectedFolder) return;
         var list = entriesByFolder.get(folderKey(selectedFolder.scope, selectedFolder.path)) || [];
         if (list.length === 0) {
+            var hint = selectedFolder.scope === 'personal'
+                ? 'Drag entries here from the Shared or Instance scopes, or select an entry and use "Add to personal folder".'
+                : (isAdmin ? 'Use "Add Entry" above to create the first connection here.' : 'Ask an administrator to add a connection here.');
             container.innerHTML = emptyStateHtml(
                 '<path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>',
                 'No entries in this folder',
-                isAdmin ? 'Use "Add Entry" above to create the first connection here.' : 'Ask an administrator to add a connection here.'
+                hint
             );
             return;
         }
@@ -1143,7 +1685,7 @@
             if (sf && f.scope !== sf) return;
             var opt = document.createElement('option');
             opt.value = f.scope + '|' + f.path;
-            opt.textContent = f.path + (f.scope === 'instance' ? ' (instance)' : '');
+            opt.textContent = f.path + (f.scope === 'instance' ? ' (instance)' : (f.scope === 'personal' ? ' (personal)' : ''));
             sel.appendChild(opt);
         });
     }
@@ -1222,6 +1764,7 @@
         header.classList.remove('hidden');
         syncPlaceholder();
         document.getElementById('entries-title').textContent = 'Search results';
+        document.getElementById('entries-personal-badge').classList.toggle('hidden', scopeFilter !== 'personal');
         document.getElementById('entries-count').textContent = String(results.length);
         var descParts = [];
         if (q) descParts.push('"' + q + '"');
@@ -1249,6 +1792,10 @@
     }
     function reloadSelectedEntries() {
         if (!selectedFolder) return;
+        if (selectedFolder.scope === 'personal') {
+            reloadPersonalFolderEntries(selectedFolder);
+            return;
+        }
         fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries', { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(r) { return r.ok ? r.json() : []; })
             .then(function(list) {
@@ -1501,6 +2048,9 @@
         for (var i = 0; i < rows.length; i++) rows[i].classList.remove('selected');
         if (el) el.classList.add('selected');
         selectedEntryKey = entryKey(scope, folder, entry);
+        selScope = scope;
+        selFolder = folder;
+        selEntry = entry;
         var list = entriesByFolder.get(folderKey(scope, folder)) || [];
         var render = function(e) {
             if (!e) return;
@@ -1523,14 +2073,41 @@
             } else {
                 descEl.classList.add('hidden');
             }
-            document.getElementById('detail-connect').onclick = function() { maybePromptConnect(scope, folder, entry); };
+            // Mirrored personal entries connect through their shared
+            // location; when it cannot be resolved the Connect button is
+            // disabled with an explanation instead of failing silently.
+            var resolved = resolvePersonalEntry(scope, folder, entry);
+            var connectBtn = document.getElementById('detail-connect');
+            var pfNote = document.getElementById('detail-pf-note');
+            if (resolved) {
+                connectBtn.disabled = false;
+                connectBtn.title = '';
+                connectBtn.onclick = function() { maybePromptConnect(resolved.scope, resolved.folder, resolved.entry); };
+                if (pfNote) pfNote.classList.add('hidden');
+            } else {
+                connectBtn.disabled = true;
+                connectBtn.title = 'Re-add this entry to a personal folder to restore connect.';
+                connectBtn.onclick = null;
+                if (pfNote) {
+                    pfNote.textContent = 'This entry\u2019s shared location is unknown, so it cannot be connected from here. Re-add it to a personal folder to restore connect.';
+                    pfNote.classList.remove('hidden');
+                }
+            }
             document.getElementById('detail-details').innerHTML = detailHtmlFor(e, folder, scope);
             wireDetailSections();
         };
         var e = findByName(list, entry);
         if (e) { render(e); return; }
         var requestedKey = entryKey(scope, folder, entry);
-        fetch('/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries', { headers: apiHeaders(), credentials: 'same-origin' })
+        var fetchUrl;
+        if (scope === 'personal') {
+            var pf = folderMap.get(folderKey('personal', folder));
+            if (!pf) return;
+            fetchUrl = '/api/personal/folders/' + encodeURIComponent(pf.id) + '/entries';
+        } else {
+            fetchUrl = '/api/addressbook/folders/' + encodeURIComponent(scope) + '/' + encodeURIComponent(folder) + '/entries';
+        }
+        fetch(fetchUrl, { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(r) { return r.ok ? r.json() : []; })
             .then(function(entries) {
                 // A newer selection may have happened while this fetch was in
@@ -1713,6 +2290,7 @@
         sel.innerHTML = '<option value="">(root)</option>';
         var sf = document.getElementById('scope-filter').value;
         folders.forEach(function(f) {
+            if (f.scope === 'personal') return;
             if (sf && f.scope !== sf) return;
             var opt = document.createElement('option');
             opt.value = f.scope + '|' + f.path;
@@ -2838,18 +3416,11 @@
             else folderActions[i].classList.remove('is-admin');
         }
         updateEntryActionButtons();
+        updateScopeUi();
     }
     function onScopeChange() {
         var sf = document.getElementById('scope-filter').value;
-        populateFilterFolders();
-        var ff = document.getElementById('filter-folder');
-        if (ff.value) {
-            var parts = ff.value.split('|');
-            var still = folders.some(function(f) {
-                return f.scope === parts[0] && f.path === parts[1] && (!sf || f.scope === sf);
-            });
-            if (!still) ff.value = '';
-        }
+        updateScopeUi();
         if (selectedFolder && sf && selectedFolder.scope !== sf) {
             selectedFolder = null;
             clearEntrySelection();
@@ -2857,9 +3428,39 @@
             document.getElementById('entries-content').innerHTML = '';
             syncPlaceholder();
         }
-        var af = activeFilters();
-        if (searchQuery || af.active) runSearch();
-        else renderFolders();
+        var finish = function() {
+            populateFilterFolders();
+            var ff = document.getElementById('filter-folder');
+            if (ff.value) {
+                var parts = ff.value.split('|');
+                var still = folders.some(function(f) {
+                    return f.scope === parts[0] && f.path === parts[1] && (!sf || f.scope === sf);
+                });
+                if (!still) ff.value = '';
+            }
+            if (treeEmptyForScope(sf)) {
+                if (sf === 'personal' || isAdmin) {
+                    document.getElementById('main-content').classList.add('hidden');
+                    document.getElementById('empty-state').classList.remove('hidden');
+                } else {
+                    document.getElementById('empty-state').classList.add('hidden');
+                    document.getElementById('main-content').classList.remove('hidden');
+                    document.getElementById('folder-tree').innerHTML =
+                        '<p style="color:var(--text-muted);font-size:13px;padding:16px 0">No folders available.</p>';
+                }
+                return;
+            }
+            document.getElementById('empty-state').classList.add('hidden');
+            document.getElementById('main-content').classList.remove('hidden');
+            var af = activeFilters();
+            if (searchQuery || af.active) runSearch();
+            else renderFolders();
+        };
+        if (sf === 'personal') {
+            loadPersonalFolders().then(finish).catch(finish);
+        } else {
+            finish();
+        }
     }
     function debounce(fn, ms) {
         var t;
@@ -2870,7 +3471,11 @@
 
     // ── Wire up ──────────────────────────────────────────────────────
     document.getElementById('btn-new-folder').addEventListener('click', openNewFolder);
-    document.getElementById('btn-empty-create-folder').addEventListener('click', openNewFolder);
+    document.getElementById('btn-new-personal-folder').addEventListener('click', openNewPersonalFolder);
+    document.getElementById('btn-empty-create-folder').addEventListener('click', function() {
+        if (document.getElementById('scope-filter').value === 'personal') openNewPersonalFolder();
+        else openNewFolder();
+    });
     document.getElementById('btn-new-entry').addEventListener('click', openNewEntry);
     document.getElementById('btn-edit-entry').addEventListener('click', openEditEntry);
     document.getElementById('btn-delete-entry').addEventListener('click', deleteEntry);
@@ -2896,11 +3501,17 @@
         document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
     });
     document.getElementById('detail-rotate-cred').addEventListener('click', rotateCredential);
+    document.getElementById('detail-add-to-folder').addEventListener('click', openAddToFolder);
 
     document.getElementById('fm-cancel').addEventListener('click', function() { closeModal('folder-modal'); });
     document.getElementById('fm-save').addEventListener('click', saveFolder);
     document.getElementById('fm-groups-add').addEventListener('click', function() { addGroupFromInput('fm'); });
     wireGroupCombo('fm');
+
+    document.getElementById('pfm-cancel').addEventListener('click', function() { closeModal('pf-modal'); });
+    document.getElementById('pfm-save').addEventListener('click', savePersonalFolder);
+    document.getElementById('atf-cancel').addEventListener('click', function() { closeModal('add-to-folder-modal'); });
+    document.getElementById('atf-save').addEventListener('click', saveAddToFolder);
 
     document.getElementById('em-cancel').addEventListener('click', function() { closeModal('entry-modal'); });
     document.getElementById('em-save').addEventListener('click', saveEntry);
@@ -2985,7 +3596,7 @@
     });
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
-            ['folder-modal', 'entry-modal', 'import-modal', 'prompt-modal'].forEach(function(id) {
+            ['folder-modal', 'entry-modal', 'import-modal', 'prompt-modal', 'pf-modal', 'add-to-folder-modal'].forEach(function(id) {
                 document.getElementById(id).classList.add('hidden');
             });
             var rotateToast = document.querySelector('.rotate-toast');
