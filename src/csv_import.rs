@@ -67,7 +67,7 @@ pub const OPTIONAL_HEADERS: [&str; 13] = [
 ];
 
 /// Protocols accepted by the address book.
-pub const VALID_PROTOCOLS: [&str; 7] = ["ssh", "rdp", "vnc", "spice", "web", "vdi", "proxmox"];
+pub const VALID_PROTOCOLS: [&str; 8] = ["ssh", "rdp", "vnc", "spice", "web", "vdi", "proxmox", "powershell"];
 
 /// Parsed values of the optional settings columns (see [`OPTIONAL_HEADERS`]).
 /// `None` means the column was absent or the cell was blank; the importer
