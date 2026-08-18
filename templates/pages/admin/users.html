@@ -223,7 +223,7 @@ function renderUserRow(user) {
     var statusLower = statusText.toLowerCase();
     var safeName = esc(user.name || '-');
     var safeEmail = esc(user.email || '-');
-    var safeAuth = esc(user.auth_source || 'oidc');
+    var safeAuth = esc(user.auth_source || '-');
     var safeLogin = esc(user.last_login_at || 'never');
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
         '<td class="px-4 py-3 text-sm text-[var(--text-primary)]">' + safeName + '</td>' +

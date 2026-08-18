@@ -96,6 +96,7 @@ pub async fn list_users(
                 "created_at": u.created_at,
                 "last_login_at": u.last_login_at,
                 "oidc_groups": u.oidc_groups,
+                "auth_source": u.auth_source,
                 "custom_role": custom_role.unwrap_or(serde_json::Value::Null),
             })
         })
@@ -170,7 +171,7 @@ pub async fn create_user(
             &name,
             &password_hash,
             &role_clone,
-            "local",
+            "database",
         )
         .map_err(|e| AppError::Internal(e.to_string()))?;
         // Record the initial hash in the reuse history. The user row was
