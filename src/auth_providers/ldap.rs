@@ -538,18 +538,15 @@ impl AuthProvider for LdapProvider {
 
         // AD status attributes, interpreted only when present so generic
         // directories (OpenLDAP, FreeIPA) get the existence check alone.
-        if let Some(uac) = entry_attr(&entry, "userAccountControl")
-            .and_then(|v| v.parse::<u32>().ok())
+        if let Some(uac) =
+            entry_attr(&entry, "userAccountControl").and_then(|v| v.parse::<u32>().ok())
         {
             if uac_disabled_or_locked(uac) {
-                debug!(
-                    "LDAP re-validation: account disabled or locked (userAccountControl={uac})"
-                );
+                debug!("LDAP re-validation: account disabled or locked (userAccountControl={uac})");
                 return RecheckVerdict::Invalid;
             }
         }
-        if let Some(exp) = entry_attr(&entry, "accountExpires")
-            .and_then(|v| v.parse::<i64>().ok())
+        if let Some(exp) = entry_attr(&entry, "accountExpires").and_then(|v| v.parse::<i64>().ok())
         {
             if ad_account_expired(exp, chrono::Utc::now().timestamp()) {
                 debug!("LDAP re-validation: account expired (accountExpires={exp})");
@@ -745,7 +742,10 @@ mod tests {
         assert!(dn_under_base("uid=alice,ou=users,dc=example,dc=com", base));
         assert!(dn_under_base("UID=alice,OU=Users,DC=example,DC=com", base));
         assert!(dn_under_base(base, base));
-        assert!(!dn_under_base("uid=alice,ou=people,dc=example,dc=com", base));
+        assert!(!dn_under_base(
+            "uid=alice,ou=people,dc=example,dc=com",
+            base
+        ));
         assert!(!dn_under_base("alice@example.com", base));
         assert!(!dn_under_base("", base));
     }
@@ -757,6 +757,7 @@ mod tests {
         let entry = SearchEntry {
             dn: "uid=alice,ou=users,dc=example,dc=com".into(),
             attrs,
+            bin_attrs: std::collections::HashMap::new(),
         };
         assert_eq!(entry_attr(&entry, "userAccountControl"), Some("514"));
         assert_eq!(entry_attr(&entry, "useraccountcontrol"), Some("514"));

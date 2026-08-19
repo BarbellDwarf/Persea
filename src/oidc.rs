@@ -873,10 +873,8 @@ pub async fn callback(
     // connected page instead of the redirect, so the client that asked for
     // the token gets it in the response (persea#227).
     if desktop_login {
-        return match crate::api::pairing::mint_login_scoped_token(
-            &database, user.id, &client_ip,
-        )
-        .await
+        return match crate::api::pairing::mint_login_scoped_token(&database, user.id, &client_ip)
+            .await
         {
             Ok((token_id, plaintext, _name, _max_role, _expires_db, expires_rfc)) => {
                 tracing::info!(
@@ -1401,8 +1399,7 @@ mod tests {
         assert!(!p.desktop);
         // Other params still parse alongside the flag.
         let p: LoginParams =
-            serde_urlencoded::from_str("provider=corp&desktop=1&next=%2Fconnections.html")
-                .unwrap();
+            serde_urlencoded::from_str("provider=corp&desktop=1&next=%2Fconnections.html").unwrap();
         assert!(p.desktop);
         assert_eq!(p.provider.as_deref(), Some("corp"));
         assert_eq!(p.next.as_deref(), Some("/connections.html"));

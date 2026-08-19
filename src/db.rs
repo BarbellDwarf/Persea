@@ -1912,7 +1912,7 @@ pub mod revalidation {
     pub fn check(user_id: i64, subject: &str) -> RecheckVerdict {
         let now = Instant::now();
         let previous = {
-            let mut cache = cache().lock().unwrap();
+            let cache = cache().lock().unwrap();
             match cache.get(&(user_id, subject.to_string())) {
                 Some(entry) => {
                     if now.duration_since(entry.checked_at) < entry_ttl(&entry.verdict) {
@@ -5132,6 +5132,15 @@ mod tests {
             crate::auth_provider::Capabilities::AUTHENTICATE
         }
 
+        async fn authenticate(
+            &self,
+            _request: &crate::auth_provider::AuthRequest,
+        ) -> crate::auth_provider::AuthResult {
+            crate::auth_provider::AuthResult::Failure(
+                "mock revalidator does not authenticate".into(),
+            )
+        }
+
         async fn revalidate_account(
             &self,
             subject: &str,
@@ -5174,9 +5183,7 @@ mod tests {
         let (_uid, _id, plaintext) = scoped_token_for(&db, "recheck-valid@example.com");
         register_mock(MockRevalidator::new(
             "recheck-valid@example.com",
-            vec![RecheckVerdict::Valid {
-                pwd_last_set: None,
-            }],
+            vec![RecheckVerdict::Valid { pwd_last_set: None }],
         ));
         let (user, meta) = validate_user_token(&db, &plaintext).unwrap();
         assert_eq!(user.email, "recheck-valid@example.com");
@@ -5273,9 +5280,16 @@ mod tests {
         let _guard = REVALIDATION_TEST_LOCK.lock().unwrap();
         revalidation::reset_for_tests();
         let db = test_db();
-        let uid = upsert_user(&db, "recheck-plain@example.com", "Plain", None, "viewer", &[])
-            .unwrap()
-            .id;
+        let uid = upsert_user(
+            &db,
+            "recheck-plain@example.com",
+            "Plain",
+            None,
+            "viewer",
+            &[],
+        )
+        .unwrap()
+        .id;
         let (_id, plaintext) = create_user_token(&db, uid, "self-service", None, None).unwrap();
         // Even with a revalidator that would kill the account, ordinary
         // user tokens are untouched: the re-check targets scoped tokens.
@@ -5294,14 +5308,16 @@ mod tests {
         let (_uid, _id, plaintext) = scoped_token_for(&db, "recheck-cache@example.com");
         let mock = register_mock(MockRevalidator::new(
             "recheck-cache@example.com",
-            vec![RecheckVerdict::Valid {
-                pwd_last_set: None,
-            }],
+            vec![RecheckVerdict::Valid { pwd_last_set: None }],
         ));
         assert!(validate_user_token(&db, &plaintext).is_ok());
         assert!(validate_user_token(&db, &plaintext).is_ok());
         // The second validation within the TTL must not hit the provider.
-        assert_eq!(mock.calls(), 1, "the cached verdict must serve the second use");
+        assert_eq!(
+            mock.calls(),
+            1,
+            "the cached verdict must serve the second use"
+        );
     }
 
     #[test]
