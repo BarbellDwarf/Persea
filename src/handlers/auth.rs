@@ -1050,16 +1050,33 @@ pub struct LoginFormData {
     pub password: String,
     /// Set by the login page's SAML button (hidden `saml=1` field): starts
     /// the SAML SSO flow instead of password auth. The form then carries no
-    /// username or password.
-    #[serde(default)]
+    /// username or password. The value may arrive as `1` (the template's
+    /// convention), which serde_urlencoded rejects for plain `bool`, hence
+    /// the tolerant flag deserializer.
+    #[serde(default, deserialize_with = "deserialize_flag")]
     pub saml: bool,
     /// Desktop login flag (persea#227): when set, the login flow mints a
     /// scoped desktop token (12h TTL) after all gates pass and answers
     /// with the connected page carrying the token plaintext. The client
     /// posts this alongside the normal credentials (and the SAML start
     /// flag when SAML is used).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_flag")]
     pub desktop: bool,
+}
+
+/// Deserialize a form flag that may arrive as `1`/`0` (the HTML checkbox
+/// convention used by the login page and desktop client) or `true`/`false`.
+/// serde_urlencoded deserializes `bool` via `str::parse::<bool>()`, which
+/// rejects `1` and would 422 the whole form.
+fn deserialize_flag<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    Ok(matches!(
+        s.as_str(),
+        "1" | "true" | "on" | "yes" | "True" | "TRUE"
+    ))
 }
 
 // ── SAML handlers ──────────────────────────────────────────────────────────
@@ -1540,8 +1557,11 @@ mod tests {
     async fn desktop_mfa_login_issues_scoped_token() {
         let db = test_db();
         let user = create_user(&db, "desktop@example.com", "poweruser");
-        let secret_b32 = "JBSWY3DPEHPK3PXP";
-        db::store_totp_secret(&db, user.id, secret_b32, "SHA1", 6, 30).unwrap();
+        // Full-length generated secret: hardcoded short base32 values (e.g.
+        // JBSWY3DPEHPK3PXP, 80 bits) fail totp_rs's minimum secret check.
+        let secret = totp_rs::Secret::generate();
+        let secret_b32 = secret.to_base32();
+        db::store_totp_secret(&db, user.id, &secret_b32, "SHA1", 6, 30).unwrap();
         // The login with TOTP enforcement would have redirected to the MFA
         // page with a desktop-marked pending record; simulate that record.
         let pending = db::create_pending_mfa_desktop(
@@ -1556,10 +1576,7 @@ mod tests {
         .unwrap();
 
         // Generate a valid code for the stored secret.
-        let secret_bytes = totp_rs::Secret::try_from_base32(secret_b32)
-            .unwrap()
-            .as_bytes()
-            .to_vec();
+        let secret_bytes = secret.as_bytes().to_vec();
         let totp = totp_rs::Builder::new()
             .with_algorithm(totp_rs::Algorithm::SHA1)
             .with_digits(6)

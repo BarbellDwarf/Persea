@@ -292,7 +292,7 @@ pub async fn totp_disable(
     State(state): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(body): Json<TotpCodeRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let Extension(AuthIdentity::User { email, .. }) =
