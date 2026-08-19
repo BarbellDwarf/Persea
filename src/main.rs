@@ -2643,7 +2643,9 @@ async fn run_server(
         .layer(Extension(database.clone()));
 
     // Feature-gated pages: recordings and API-key account pages 404 when
-    // their `enable_*` toggle is off (request-time check).
+    // their `enable_*` toggle is off (request-time check). The API-key
+    // pages render the combined profile page with the API Keys tab active
+    // (see handlers::account::tokens_page).
     let gated_recordings_page = Router::new()
         .route("/recordings.html", get(handlers::pages::recordings_page))
         .layer(middleware::from_fn(feature_gate))

@@ -154,11 +154,6 @@ static TEMPLATES: LazyLock<Arc<Environment<'static>>> = LazyLock::new(|| {
     )
     .expect("Failed to register pages/account/profile.html");
     env.add_template(
-        "pages/account/tokens.html",
-        include_str!("../templates/pages/account/tokens.html"),
-    )
-    .expect("Failed to register pages/account/tokens.html");
-    env.add_template(
         "pages/account/totp.html",
         include_str!("../templates/pages/account/totp.html"),
     )
@@ -754,34 +749,14 @@ pub struct ProfileTemplate {
     pub active_page: String,
     /// CSP nonce that inline scripts in the rendered page must carry.
     pub csp_nonce: String,
+    /// Section shown on load when no hash is present: "profile" (default),
+    /// "security" (TOTP deep link) or "tokens" (API-keys deep link).
+    pub initial_tab: String,
 }
 
 impl IntoResponse for ProfileTemplate {
     fn into_response(self) -> Response {
         render_template("pages/account/profile.html", &self)
-    }
-}
-
-/// Account tokens page template context.
-#[derive(Serialize)]
-pub struct AccountTokensTemplate {
-    /// Site title shown in the page header and browser tab.
-    pub site_title: String,
-    /// Branding logo URL resolved from config and DB settings; empty
-    /// renders the default placeholder.
-    pub logo_url: String,
-    /// Whether the signed-in user holds the admin role; drives the admin
-    /// entries in the sidebar.
-    pub is_admin: bool,
-    /// Sidebar highlight key naming the current page, e.g. "connections".
-    pub active_page: String,
-    /// CSP nonce that inline scripts in the rendered page must carry.
-    pub csp_nonce: String,
-}
-
-impl IntoResponse for AccountTokensTemplate {
-    fn into_response(self) -> Response {
-        render_template("pages/account/tokens.html", &self)
     }
 }
 

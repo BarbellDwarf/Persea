@@ -3,485 +3,1166 @@
 {% block title %}{{ site_title }} — Profile{% endblock %}
 
 {% block content %}
-<div class="max-w-2xl mx-auto">
-    <div class="mb-8">
+<div class="max-w-5xl mx-auto" data-initial-tab="{{ initial_tab }}">
+    <div class="mb-6">
         <h1 class="text-2xl font-bold text-[var(--text-primary)]">Profile</h1>
         <p class="text-sm text-[var(--text-muted)] mt-1">Manage your account settings</p>
     </div>
 
-    <!-- Profile Card -->
-    <div class="card mb-6">
-        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Account Information</h2>
-        <form id="profile-form" class="space-y-5">
-            <!-- Display Name -->
-            <div>
-                <label for="display-name" class="form-label">Display Name</label>
-                <input type="text" id="display-name" name="display_name"
-                    class="form-input"
-                    placeholder="Your display name">
-            </div>
-
-            <!-- Email -->
-            <div>
-                <label for="email" class="form-label">Email</label>
-                <input type="email" id="email" name="email"
-                    class="form-input">
-                <p class="text-xs text-[var(--text-muted)] mt-1" id="email-note">Managed by your identity provider</p>
-            </div>
-
-            <!-- Current password (required to change email) -->
-            <div id="email-password-field" class="hidden">
-                <label for="email-current-password" class="form-label">Current Password</label>
-                <input type="password" id="email-current-password" class="form-input"
-                    autocomplete="current-password" placeholder="Required to change your email">
-            </div>
-
-            <!-- Auth Source -->
-            <div>
-                <label class="form-label">Auth Source</label>
-                <div id="auth-source-badge" class="badge badge-blue">
-                    Loading...
-                </div>
-            </div>
-
-            <!-- Role -->
-            <div>
-                <label class="form-label">Role</label>
-                <span id="role-badge" class="inline-block px-2 py-0.5 text-xs rounded border bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]">
-                    Loading...
-                </span>
-            </div>
-
-            <!-- Member Since -->
-            <div>
-                <label class="form-label">Member Since</label>
-                <p id="member-since" class="text-sm text-[var(--text-secondary)]">Loading...</p>
-            </div>
-
-            <!-- Save Button -->
-            <div class="pt-2">
-                <button type="submit" id="save-btn"
-                    class="btn btn-primary btn-sm">
-                    Save Changes
-                </button>
-                <span id="save-status" class="ml-3 text-sm text-[var(--text-muted)] hidden"></span>
-            </div>
-        </form>
-    </div>
-
-    <!-- Change Password (database accounts only) -->
-    <div class="card mb-6 hidden" id="password-section">
-        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Change Password</h2>
-        <form id="password-form" class="space-y-5">
-            <div>
-                <label for="pw-current-password" class="form-label">Current Password</label>
-                <input type="password" id="pw-current-password" class="form-input"
-                    autocomplete="current-password">
-            </div>
-            <div>
-                <label for="pw-new-password" class="form-label">New Password</label>
-                <input type="password" id="pw-new-password" class="form-input"
-                    autocomplete="new-password">
-                <p class="text-xs text-[var(--text-muted)] mt-1">At least 15 characters, and must not match any of your last 5 passwords.</p>
-            </div>
-            <div>
-                <label for="pw-confirm-password" class="form-label">Confirm New Password</label>
-                <input type="password" id="pw-confirm-password" class="form-input"
-                    autocomplete="new-password">
-            </div>
-            <div class="pt-2">
-                <button type="submit" id="pw-save-btn" class="btn btn-primary btn-sm">
-                    Change Password
-                </button>
-                <span id="pw-status" class="ml-3 text-sm text-[var(--text-muted)] hidden"></span>
-            </div>
-        </form>
-    </div>
-
-    <!-- Appearance -->
-    <div class="card mb-6">
-        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Appearance</h2>
-        <div class="space-y-5">
-            <!-- Mode -->
-            <div>
-                <label class="form-label">Mode</label>
-                <div class="flex gap-3" id="appearance-mode">
-                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
-                        <input type="radio" name="theme-mode" value="light" class="accent-emerald-500">
-                        <span class="text-sm text-[var(--text-secondary)]">Light</span>
-                    </label>
-                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
-                        <input type="radio" name="theme-mode" value="dark" class="accent-emerald-500">
-                        <span class="text-sm text-[var(--text-secondary)]">Dark</span>
-                    </label>
-                    <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
-                        <input type="radio" name="theme-mode" value="auto" class="accent-emerald-500">
-                        <span class="text-sm text-[var(--text-secondary)]">Auto</span>
-                    </label>
-                </div>
-            </div>
-            <!-- Color Accent -->
-            <div>
-                <label class="form-label">Color Accent</label>
-                <div id="um-theme-list" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div>
-            </div>
+    <div class="page-layout">
+        <!-- Left rail: the wide-screen (1280px+) section list. Shares the
+             hash persistence, aria-selected state and roving tabindex of
+             the tab bar; the script block drives both. -->
+        <div class="page-rail-wrap">
+            <p class="page-rail-label">Account</p>
+            <nav class="page-rail" role="tablist" aria-label="Profile sections">
+                <button type="button" role="tab" id="rail-profile" aria-controls="panel-profile" aria-selected="true" tabindex="0" class="page-rail-tab">Profile</button>
+                <button type="button" role="tab" id="rail-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="page-rail-tab">Security</button>
+                <button type="button" role="tab" id="rail-tokens" aria-controls="panel-tokens" aria-selected="false" tabindex="-1" class="page-rail-tab">API Keys</button>
+            </nav>
         </div>
-    </div>
 
-    <!-- Sessions -->
-    <div class="card mb-6">
-        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-1">Sessions</h2>
-        <p class="text-xs text-[var(--text-muted)] mb-4">
-            How session tabs open when you connect or rejoin a session.
-        </p>
-        <div>
-            <label for="session-open-mode" class="form-label">Open sessions in</label>
-            <select id="session-open-mode" class="form-input">
-                <option value="tab">New tab</option>
-                <option value="window">New window</option>
-                <option value="same">Same tab</option>
-            </select>
-            <p class="text-xs text-[var(--text-muted)] mt-1">New tab (default) opens each session in its own tab; New window uses a dedicated window; Same tab replaces the current page. Stored in your browser, applied to every connect path.</p>
-        </div>
-    </div>
+        <div class="page-main">
+            <!-- Submenu bar: the narrow-screen (below 1280px) control; one
+                 section at a time, hash preserves the active tab -->
+            <div class="page-tabs" role="tablist" aria-label="Profile sections">
+                <button type="button" role="tab" id="tab-profile" aria-controls="panel-profile" aria-selected="true" tabindex="0" class="page-tab">Profile</button>
+                <button type="button" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="page-tab">Security</button>
+                <button type="button" role="tab" id="tab-tokens" aria-controls="panel-tokens" aria-selected="false" tabindex="-1" class="page-tab">API Keys</button>
+            </div>
 
-    <!-- My Credentials (preset fallback for entries without credentials) -->
-    <div class="card mb-6">
-        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-1">My Credentials</h2>
-        <p class="text-xs text-[var(--text-muted)] mb-4">
-            Used when a connection entry has no credentials of its own (e.g. rotating passwords — leave
-            entry credentials blank and set yours here). If you have none set, you'll be asked for
-            credentials when you connect. Stored encrypted, never shown back to you.
-        </p>
-        <form id="creds-form" class="space-y-4">
-            <div>
-                <label for="creds-username" class="form-label">Username</label>
-                <input type="text" id="creds-username" class="form-input" autocomplete="off" placeholder="e.g. jsmith">
-            </div>
-            <div>
-                <label for="creds-password" class="form-label">Password</label>
-                <input type="password" id="creds-password" class="form-input" autocomplete="new-password" placeholder="Leave blank to keep the stored password">
-                <p class="text-xs text-[var(--text-muted)] mt-1" id="creds-status-line"></p>
-            </div>
-            <div class="flex items-center gap-3 pt-1">
-                <button type="submit" id="creds-save" class="btn btn-primary btn-sm">Save Credentials</button>
-                <button type="button" id="creds-clear" class="btn btn-danger btn-sm">Clear</button>
-                <span id="creds-status" class="text-sm hidden"></span>
-            </div>
-        </form>
-    </div>
+            <!-- Profile: identity, appearance, session preference, preset
+                 credentials -->
+            <section role="tabpanel" id="panel-profile" aria-labelledby="tab-profile" tabindex="-1" class="space-y-4">
+                <!-- Profile Card -->
+                <div class="card">
+                    <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Account Information</h2>
+                    <form id="profile-form" class="space-y-5">
+                        <!-- Display Name -->
+                        <div>
+                            <label for="display-name" class="form-label">Display Name</label>
+                            <input type="text" id="display-name" name="display_name"
+                                class="form-input"
+                                placeholder="Your display name">
+                        </div>
 
-    <!-- Quick Links -->
-    <div class="card">
-        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Security</h2>
-        <div class="space-y-3">
-            <a href="/account/totp.html" class="flex items-center justify-between p-3 bg-[var(--bg-card)] rounded-lg hover:bg-[var(--bg-hover)] transition-colors group">
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-lg bg-purple-900/50 border border-purple-800 flex items-center justify-center">
-                        <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-                    </div>
-                    <div>
-                        <p class="text-sm font-medium text-[var(--text-primary)] group-hover:text-[var(--text-primary)]">Two-Factor Authentication</p>
-                        <p class="text-xs text-[var(--text-muted)]" id="totp-status-text">Loading...</p>
+                        <!-- Email -->
+                        <div>
+                            <label for="email" class="form-label">Email</label>
+                            <input type="email" id="email" name="email"
+                                class="form-input">
+                            <p class="text-xs text-[var(--text-muted)] mt-1" id="email-note">Managed by your identity provider</p>
+                        </div>
+
+                        <!-- Current password (required to change email) -->
+                        <div id="email-password-field" class="hidden">
+                            <label for="email-current-password" class="form-label">Current Password</label>
+                            <input type="password" id="email-current-password" class="form-input"
+                                autocomplete="current-password" placeholder="Required to change your email">
+                        </div>
+
+                        <!-- Auth Source -->
+                        <div>
+                            <label class="form-label">Auth Source</label>
+                            <div id="auth-source-badge" class="badge badge-blue">
+                                Loading...
+                            </div>
+                        </div>
+
+                        <!-- Role -->
+                        <div>
+                            <label class="form-label">Role</label>
+                            <span id="role-badge" class="inline-block px-2 py-0.5 text-xs rounded border bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]">
+                                Loading...
+                            </span>
+                        </div>
+
+                        <!-- Member Since -->
+                        <div>
+                            <label class="form-label">Member Since</label>
+                            <p id="member-since" class="text-sm text-[var(--text-secondary)]">Loading...</p>
+                        </div>
+
+                        <!-- Save Button -->
+                        <div class="pt-2">
+                            <button type="submit" id="save-btn"
+                                class="btn btn-primary btn-sm">
+                                Save Changes
+                            </button>
+                            <span id="save-status" class="ml-3 text-sm text-[var(--text-muted)] hidden"></span>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Appearance -->
+                <div class="card">
+                    <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Appearance</h2>
+                    <div class="space-y-5">
+                        <!-- Mode -->
+                        <div>
+                            <label class="form-label">Mode</label>
+                            <div class="flex gap-3" id="appearance-mode">
+                                <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                                    <input type="radio" name="theme-mode" value="light" class="accent-emerald-500">
+                                    <span class="text-sm text-[var(--text-secondary)]">Light</span>
+                                </label>
+                                <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                                    <input type="radio" name="theme-mode" value="dark" class="accent-emerald-500">
+                                    <span class="text-sm text-[var(--text-secondary)]">Dark</span>
+                                </label>
+                                <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--border-focus)] transition-colors has-[:checked]:border-emerald-500 has-[:checked]:bg-emerald-900/20">
+                                    <input type="radio" name="theme-mode" value="auto" class="accent-emerald-500">
+                                    <span class="text-sm text-[var(--text-secondary)]">Auto</span>
+                                </label>
+                            </div>
+                        </div>
+                        <!-- Color Accent -->
+                        <div>
+                            <label class="form-label">Color Accent</label>
+                            <div id="um-theme-list" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div>
+                        </div>
                     </div>
                 </div>
-                <svg class="w-5 h-5 text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            </a>
-            <a href="/account/tokens.html" class="flex items-center justify-between p-3 bg-[var(--bg-card)] rounded-lg hover:bg-[var(--bg-hover)] transition-colors group">
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 rounded-lg bg-amber-900/50 border border-amber-800 flex items-center justify-center">
-                        <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
-                    </div>
+
+                <!-- Sessions -->
+                <div class="card">
+                    <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-1">Sessions</h2>
+                    <p class="text-xs text-[var(--text-muted)] mb-4">
+                        How session tabs open when you connect or rejoin a session.
+                    </p>
                     <div>
-                        <p class="text-sm font-medium text-[var(--text-primary)] group-hover:text-[var(--text-primary)]">API Tokens</p>
-                        <p class="text-xs text-[var(--text-muted)]">Manage your personal API tokens</p>
+                        <label for="session-open-mode" class="form-label">Open sessions in</label>
+                        <select id="session-open-mode" class="form-input">
+                            <option value="tab">New tab</option>
+                            <option value="window">New window</option>
+                            <option value="same">Same tab</option>
+                        </select>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">New tab (default) opens each session in its own tab; New window uses a dedicated window; Same tab replaces the current page. Stored in your browser, applied to every connect path.</p>
                     </div>
                 </div>
-                <svg class="w-5 h-5 text-[var(--text-muted)] group-hover:text-[var(--text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            </a>
+
+                <!-- My Credentials (preset fallback for entries without credentials) -->
+                <div class="card">
+                    <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-1">My Credentials</h2>
+                    <p class="text-xs text-[var(--text-muted)] mb-4">
+                        Used when a connection entry has no credentials of its own (e.g. rotating passwords — leave
+                        entry credentials blank and set yours here). If you have none set, you'll be asked for
+                        credentials when you connect. Stored encrypted, never shown back to you.
+                    </p>
+                    <form id="creds-form" class="space-y-4">
+                        <div>
+                            <label for="creds-username" class="form-label">Username</label>
+                            <input type="text" id="creds-username" class="form-input" autocomplete="off" placeholder="e.g. jsmith">
+                        </div>
+                        <div>
+                            <label for="creds-password" class="form-label">Password</label>
+                            <input type="password" id="creds-password" class="form-input" autocomplete="new-password" placeholder="Leave blank to keep the stored password">
+                            <p class="text-xs text-[var(--text-muted)] mt-1" id="creds-status-line"></p>
+                        </div>
+                        <div class="flex items-center gap-3 pt-1">
+                            <button type="submit" id="creds-save" class="btn btn-primary btn-sm">Save Credentials</button>
+                            <button type="button" id="creds-clear" class="btn btn-danger btn-sm">Clear</button>
+                            <span id="creds-status" class="text-sm hidden"></span>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Security: password change + TOTP status/enrollment -->
+            <section role="tabpanel" id="panel-security" aria-labelledby="tab-security" tabindex="-1" hidden class="space-y-4">
+                <!-- Change Password (database accounts only) -->
+                <div class="card hidden" id="password-section">
+                    <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Change Password</h2>
+                    <form id="password-form" class="space-y-5">
+                        <div>
+                            <label for="pw-current-password" class="form-label">Current Password</label>
+                            <input type="password" id="pw-current-password" class="form-input"
+                                autocomplete="current-password">
+                        </div>
+                        <div>
+                            <label for="pw-new-password" class="form-label">New Password</label>
+                            <input type="password" id="pw-new-password" class="form-input"
+                                autocomplete="new-password">
+                            <p class="text-xs text-[var(--text-muted)] mt-1">At least 15 characters, and must not match any of your last 5 passwords.</p>
+                        </div>
+                        <div>
+                            <label for="pw-confirm-password" class="form-label">Confirm New Password</label>
+                            <input type="password" id="pw-confirm-password" class="form-input"
+                                autocomplete="new-password">
+                        </div>
+                        <div class="pt-2">
+                            <button type="submit" id="pw-save-btn" class="btn btn-primary btn-sm">
+                                Change Password
+                            </button>
+                            <span id="pw-status" class="ml-3 text-sm text-[var(--text-muted)] hidden"></span>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- TOTP Status Card -->
+                <div id="totp-status-card" class="card">
+                    <div class="flex items-center gap-4">
+                        <div id="totp-icon" class="w-12 h-12 rounded-lg flex items-center justify-center shrink-0">
+                            <!-- filled by JS -->
+                        </div>
+                        <div class="flex-1">
+                            <h2 class="text-lg font-semibold text-[var(--text-primary)]" id="totp-title">Loading...</h2>
+                            <p class="text-sm text-[var(--text-muted)]" id="totp-description"></p>
+                        </div>
+                        <div id="totp-actions" class="flex items-center gap-2">
+                            <!-- filled by JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Enrollment Flow (hidden by default) -->
+                <div id="enrollment-section" class="hidden">
+                    <div class="card">
+                        <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Step 1: Scan QR Code</h3>
+                        <p class="text-sm text-[var(--text-muted)] mb-4">Scan this QR code with your authenticator app (Google Authenticator, Authy, 1Password, etc.)</p>
+                        <div class="flex items-start gap-6">
+                            <div class="shrink-0">
+                                <img id="qr-code-img" class="rounded-lg border border-[var(--border)]" alt="TOTP QR Code" style="image-rendering: pixelated;">
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <p class="text-xs text-[var(--text-muted)] mb-2">Or enter this key manually:</p>
+                                <code id="totp-secret" class="block px-3 py-2 bg-[var(--bg-card)] rounded text-sm text-[var(--text-secondary)] font-mono select-all break-all mb-3"></code>
+                                <p class="text-xs text-[var(--text-muted)]">Issuer: <span id="totp-issuer" class="text-[var(--text-muted)]"></span></p>
+                                <p class="text-xs text-[var(--text-muted)]">Account: <span id="totp-account" class="text-[var(--text-muted)]"></span></p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Step 2: Verify Code</h3>
+                        <p class="text-sm text-[var(--text-muted)] mb-4">Enter the 6-digit code from your authenticator app to complete setup.</p>
+                        <form id="verify-form" class="flex items-end gap-3">
+                            <div class="flex-1">
+                                <label for="verify-code" class="form-label">Verification Code</label>
+                                <input type="text" id="verify-code" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required
+                                    class="form-input text-center text-lg tracking-[0.3em] font-mono"
+                                    placeholder="000000">
+                            </div>
+                            <button type="submit" id="btn-verify"
+                                class="btn btn-primary btn-sm">
+                                Verify & Enable
+                            </button>
+                        </form>
+                        <p id="verify-error" class="text-sm text-red-400 mt-2 hidden"></p>
+                    </div>
+                </div>
+
+                <!-- Recovery Codes Section (shown when enrolled) -->
+                <div id="recovery-codes-section" class="hidden">
+                    <div class="card">
+                        <div class="flex items-center justify-between mb-4">
+                            <h3 class="text-lg font-semibold text-[var(--text-primary)]">Recovery Codes</h3>
+                            <button id="btn-copy-codes" class="btn btn-secondary btn-sm">
+                                Copy All
+                            </button>
+                        </div>
+                        <div class="bg-yellow-900/20 border border-yellow-700/50 rounded-lg p-3 mb-4">
+                            <p class="text-xs text-yellow-400">
+                                <strong>Warning:</strong> Each recovery code can only be used once. Save these codes in a secure location.
+                                If you lose access to your authenticator app, you can use these codes to log in.
+                            </p>
+                        </div>
+                        <div id="recovery-codes-list" class="grid grid-cols-2 gap-2">
+                            <!-- filled by JS -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- API Keys: device pairing + token management -->
+            <section role="tabpanel" id="panel-tokens" aria-labelledby="tab-tokens" tabindex="-1" hidden class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <h2 class="text-lg font-semibold text-[var(--text-primary)]">API Keys</h2>
+                        <p class="text-sm text-[var(--text-muted)] mt-1">Manage personal API tokens for scripting and integrations</p>
+                    </div>
+                    <button id="btn-create-token" class="btn btn-primary btn-sm">
+                        + Create Token
+                    </button>
+                </div>
+
+                <!-- Device Pairing -->
+                <div class="card p-6">
+                    <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-1">Pair this device</h2>
+                    <p class="text-sm text-[var(--text-muted)] mb-4">
+                        Get a pairing code from the Persea Desktop app, then enter it here to approve
+                        this device. Approving mints an API token named
+                        <code class="text-xs">Persea Desktop (hostname)</code> that appears in the table
+                        below and can be revoked there to unpair the device.
+                    </p>
+                    <form id="pair-form" class="flex items-center gap-3 flex-wrap">
+                        <label for="pair-code" class="sr-only">Pairing code</label>
+                        <input type="text" id="pair-code" required maxlength="9" autocomplete="off" spellcheck="false"
+                            class="form-input w-48 font-mono uppercase text-center tracking-widest"
+                            placeholder="XXXX-XXXX" pattern="[A-Za-z0-9 -]{8,9}">
+                        <button type="submit" id="btn-pair-confirm" class="btn btn-primary btn-sm">
+                            Approve Device
+                        </button>
+                    </form>
+                    <div id="pair-message" class="hidden mt-3 text-sm"></div>
+                </div>
+
+                <!-- Tokens Table -->
+                <div class="card table-wrapper">
+                    <table class="w-full text-sm">
+                        <thead>
+                            <tr class="border-b border-[var(--border)] text-left">
+                                <th>Name</th>
+                                <th>Max Role</th>
+                                <th>Status</th>
+                                <th>Created</th>
+                                <th>Last Used</th>
+                                <th class="text-right">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tokens-tbody">
+                            <tr>
+                                <td colspan="6" class="px-4 py-8 text-center text-[var(--text-muted)]">Loading tokens...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Empty State -->
+                <div id="empty-state" class="hidden text-center py-12">
+                    <svg class="w-12 h-12 mx-auto text-[var(--text-muted)] mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                    <p class="text-[var(--text-muted)] mb-2">No API tokens yet</p>
+                    <p class="text-[var(--text-muted)] text-sm mb-4">Create a token to use the API from scripts or integrations.</p>
+                    <button id="btn-create-first-token" class="btn btn-primary btn-sm">
+                        Create First Token
+                    </button>
+                </div>
+
+                <!-- New Token Display (shown once after creation) -->
+                <div id="new-token-banner" class="hidden bg-emerald-900/30 border border-emerald-700 rounded-lg p-4">
+                    <div class="flex items-start justify-between">
+                        <div>
+                            <h3 class="text-sm font-semibold text-emerald-300 mb-1">Token Created</h3>
+                            <p class="text-xs text-emerald-400/70 mb-3">Copy this token now — it won't be shown again.</p>
+                            <div class="flex items-center gap-2">
+                                <code id="new-token-value" class="px-3 py-1.5 bg-[var(--bg-card)] rounded text-sm text-emerald-300 font-mono select-all break-all"></code>
+                                <button id="btn-copy-token" class="btn btn-secondary btn-sm shrink-0">
+                                    Copy
+                                </button>
+                            </div>
+                        </div>
+                        <button id="btn-dismiss-token" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] ml-4" aria-label="Dismiss">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </section>
         </div>
     </div>
 </div>
 
+<!-- Create Token Modal -->
+<div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative card w-full max-w-md shadow-xl">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-4">Create API Token</h2>
+        <form id="create-token-form" class="space-y-4">
+            <div>
+                <label for="token-name" class="form-label">Name</label>
+                <input type="text" id="token-name" required maxlength="100"
+                    class="form-input"
+                    placeholder="e.g. CI pipeline, monitoring">
+            </div>
+            <div>
+                <label for="token-max-role" class="form-label">Max Role</label>
+                <select id="token-max-role"
+                    class="form-input">
+                    <option value="">Inherit my role</option>
+                    <option value="admin">Admin</option>
+                    <option value="poweruser">Power User</option>
+                    <option value="operator">Operator</option>
+                    <option value="viewer">Viewer</option>
+                </select>
+                <p class="text-xs text-[var(--text-muted)] mt-1">Limit this token's permissions to at most this role</p>
+            </div>
+            <div>
+                <label for="token-expiry" class="form-label">Expiry</label>
+                <select id="token-expiry"
+                    class="form-input">
+                    <option value="">Never</option>
+                    <option value="7d">7 days</option>
+                    <option value="30d">30 days</option>
+                    <option value="90d">90 days</option>
+                    <option value="180d">180 days</option>
+                    <option value="365d">1 year</option>
+                </select>
+            </div>
+            <div class="flex items-center justify-end gap-3 pt-2">
+                <button type="button" id="btn-cancel-token" class="px-4 py-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] text-sm transition-colors">
+                    Cancel
+                </button>
+                <button type="submit" id="btn-submit-token"
+                    class="btn btn-primary btn-sm">
+                    Create Token
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Disable TOTP Confirmation Modal -->
+<div id="disable-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center" role="dialog" aria-modal="true">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+    <div class="relative card w-full max-w-md shadow-xl">
+        <h2 class="text-lg font-semibold text-[var(--text-primary)] mb-2">Disable Two-Factor Authentication?</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-6">This will remove the TOTP requirement from your account. You'll only need your password to log in.</p>
+        <form id="disable-form" class="space-y-4">
+            <div>
+                <label for="disable-code" class="form-label">Enter current code to confirm</label>
+                <input type="text" id="disable-code" maxlength="6" pattern="[0-9]{6}" autocomplete="one-time-code" required
+                    class="form-input text-center text-lg tracking-[0.3em] font-mono"
+                    placeholder="000000">
+            </div>
+            <div class="flex items-center justify-end gap-3">
+                <button type="button" id="btn-cancel-disable" class="px-4 py-2 text-[var(--text-muted)] hover:text-[var(--text-primary)] text-sm transition-colors">
+                    Cancel
+                </button>
+                <button type="submit" class="btn btn-danger btn-sm">
+                    Disable TOTP
+                </button>
+            </div>
+        </form>
+        <p id="disable-error" class="text-sm text-red-400 mt-2 hidden"></p>
+    </div>
+</div>
+
 <script nonce="{{ csp_nonce }}">
-    // ── Appearance: mode radio buttons ──
-    (function() {
-        var currentMode = localStorage.getItem('theme') || 'auto';
-        var radios = document.querySelectorAll('input[name="theme-mode"]');
-        radios.forEach(function(r) {
-            if (r.value === currentMode) r.checked = true;
-            r.addEventListener('change', function() {
-                var mode = this.value;
-                localStorage.setItem('theme', mode);
-                var root = document.documentElement;
-                root.classList.remove('dark', 'light');
-                if (mode === 'auto') {
-                    var mq = window.matchMedia('(prefers-color-scheme: dark)');
-                    root.classList.add(mq.matches ? 'dark' : 'light');
-                } else {
-                    root.classList.add(mode);
-                }
+// ── Profile section tabs ──
+// Plain-JS tab switch: no inline handlers (CSP), wired with
+// addEventListener. The active section survives a reload via the location
+// hash (#profile, #security, #tokens). Two controls exist — the left rail
+// on wide screens and the tab bar below 1280px — and both carry the same
+// aria-selected/tabindex state, so the hash and the roving focus work
+// identically whichever one is rendered. The deep-link pages
+// (/account/tokens.html, /account/totp.html) render this same page with a
+// data-initial-tab attribute that picks the section when no hash is set.
+var profileSections = ['profile', 'security', 'tokens'];
+
+function profilePanel(name) {
+    return document.getElementById('panel-' + name);
+}
+
+// Both nav buttons for a section (rail + tab bar); the hidden one stays in
+// sync so a layout switch never leaves stale state behind.
+function profileNavs(name) {
+    var out = [];
+    ['tab', 'rail'].forEach(function(kind) {
+        var el = document.getElementById(kind + '-' + name);
+        if (el) out.push(el);
+    });
+    return out;
+}
+
+function showProfileSection(name, opts) {
+    if (profileSections.indexOf(name) === -1) name = 'profile';
+    var focusPanel = !opts || opts.focus !== false;
+    profileSections.forEach(function(s) {
+        var panel = profilePanel(s);
+        if (!panel) return;
+        if (s === name) {
+            panel.hidden = false;
+            profileNavs(s).forEach(function(tab) {
+                tab.setAttribute('aria-selected', 'true');
+                tab.setAttribute('tabindex', '0');
             });
+            if (focusPanel) panel.focus();
+        } else {
+            panel.hidden = true;
+            profileNavs(s).forEach(function(tab) {
+                tab.setAttribute('aria-selected', 'false');
+                tab.setAttribute('tabindex', '-1');
+            });
+        }
+    });
+    if (location.hash !== '#' + name) {
+        location.hash = name;
+    }
+}
+
+var profileTabButtons = Array.prototype.slice.call(
+    document.querySelectorAll('.page-tab, .page-rail-tab'));
+profileTabButtons.forEach(function(tab) {
+    tab.addEventListener('click', function() {
+        showProfileSection(tab.getAttribute('aria-controls').replace(/^panel-/, ''));
+    });
+});
+
+// Arrow/Home/End roving between nav buttons; activating a button
+// (Enter/Space/click) moves focus into the section, handled by
+// showProfileSection. The bar reads left/right arrows, the rail also
+// reads up/down.
+function wireProfileNav(tablist) {
+    var buttons = Array.prototype.slice.call(tablist.querySelectorAll('[role="tab"]'));
+    tablist.addEventListener('keydown', function(evt) {
+        var idx = buttons.indexOf(document.activeElement);
+        if (idx === -1) return;
+        var key = evt.key;
+        var horizontal = key === 'ArrowLeft' || key === 'ArrowRight';
+        var vertical = key === 'ArrowUp' || key === 'ArrowDown';
+        if (!horizontal && !vertical && key !== 'Home' && key !== 'End') return;
+        evt.preventDefault();
+        if (key === 'Home') idx = 0;
+        else if (key === 'End') idx = buttons.length - 1;
+        else if (key === 'ArrowLeft' || key === 'ArrowUp') idx = (idx - 1 + buttons.length) % buttons.length;
+        else idx = (idx + 1) % buttons.length;
+        var target = buttons[idx];
+        showProfileSection(target.getAttribute('aria-controls').replace(/^panel-/, ''), { focus: false });
+        target.focus();
+    });
+}
+var profileNavLists = document.querySelectorAll('.page-tabs, .page-rail');
+for (var i = 0; i < profileNavLists.length; i++) wireProfileNav(profileNavLists[i]);
+
+window.addEventListener('hashchange', function() {
+    showProfileSection((location.hash || '').replace(/^#/, ''), { focus: false });
+});
+
+// Server-rendered default is the Profile section; a hash on load overrides
+// it, and the deep-link pages fall back to their data-initial-tab value.
+// Neither path steals focus.
+(function() {
+    var initial = (location.hash || '').replace(/^#/, '');
+    if (profileSections.indexOf(initial) === -1) {
+        var holder = document.querySelector('[data-initial-tab]');
+        initial = holder ? holder.getAttribute('data-initial-tab') : '';
+        if (profileSections.indexOf(initial) === -1) initial = 'profile';
+    }
+    profileSections.forEach(function(s) {
+        var panel = profilePanel(s);
+        if (!panel) return;
+        var active = s === initial;
+        panel.hidden = !active;
+        profileNavs(s).forEach(function(tab) {
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            tab.setAttribute('tabindex', active ? '0' : '-1');
         });
-    })();
+    });
+})();
 
-    // ── Session open preference ──
-    (function() {
-        var sel = document.getElementById('session-open-mode');
-        if (!sel) return;
-        var current = localStorage.getItem('persea_session_open') || 'tab';
-        if (current !== 'window' && current !== 'same') current = 'tab';
-        sel.value = current;
-        sel.addEventListener('change', function() {
-            localStorage.setItem('persea_session_open', this.value);
+// ── Appearance: mode radio buttons ──
+(function() {
+    var currentMode = localStorage.getItem('theme') || 'auto';
+    var radios = document.querySelectorAll('input[name="theme-mode"]');
+    radios.forEach(function(r) {
+        if (r.value === currentMode) r.checked = true;
+        r.addEventListener('change', function() {
+            var mode = this.value;
+            localStorage.setItem('theme', mode);
+            var root = document.documentElement;
+            root.classList.remove('dark', 'light');
+            if (mode === 'auto') {
+                var mq = window.matchMedia('(prefers-color-scheme: dark)');
+                root.classList.add(mq.matches ? 'dark' : 'light');
+            } else {
+                root.classList.add(mode);
+            }
         });
-    })();
+    });
+})();
 
-    document.addEventListener('DOMContentLoaded', function() {
-        // Load current user info
-        if (typeof apiHeaders === 'undefined') { console.error('apiHeaders not defined'); return; }
-        var originalName = '';
-        var originalEmail = '';
-        fetch('/api/me', { headers: apiHeaders() })
-            .then(function(r) {
-                if (!r.ok) throw new Error('HTTP ' + r.status);
-                return r.json();
-            })
-            .then(function(data) {
-                if (!data) return;
-                var isDatabase = data.auth_source === 'database';
-                var nameInput = document.getElementById('display-name');
-                var emailInput = document.getElementById('email');
-                nameInput.value = data.name || '';
-                nameInput.readOnly = !isDatabase;
-                emailInput.value = data.email || '';
-                emailInput.readOnly = !isDatabase;
-                originalName = data.name || '';
-                originalEmail = data.email || '';
-                var emailNote = document.getElementById('email-note');
-                var emailPwField = document.getElementById('email-password-field');
-                var pwSection = document.getElementById('password-section');
-                var saveBtn = document.getElementById('save-btn');
-                if (isDatabase) {
-                    emailNote.textContent = 'Changing your email requires your current password.';
-                    emailPwField.classList.remove('hidden');
-                    pwSection.classList.remove('hidden');
-                    saveBtn.disabled = false;
-                } else {
-                    emailNote.textContent = 'Managed by your identity provider';
-                    emailPwField.classList.add('hidden');
-                    pwSection.classList.add('hidden');
-                    saveBtn.disabled = true;
-                }
-                document.getElementById('auth-source-badge').textContent = data.auth_source || 'OIDC';
-                var roleEl = document.getElementById('role-badge');
-                var roleColors = {
-                    admin: 'bg-gray-700 text-gray-300 border-gray-600',
-                    poweruser: 'bg-amber-900/50 text-amber-300 border-amber-800',
-                    operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
-                    viewer: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]'
-                };
-                var role = data.role || 'viewer';
-                roleEl.textContent = role;
-                roleEl.className = 'inline-block px-2 py-0.5 text-xs rounded border ' + (roleColors[role] || roleColors.viewer);
-                // Member Since: the API returns a raw ISO timestamp; format
-                // it in the user's locale instead of rendering it verbatim.
-                var createdRaw = data.created_at;
-                var memberSinceEl = document.getElementById('member-since');
-                if (createdRaw) {
-                    var created = new Date(createdRaw);
-                    memberSinceEl.textContent = isNaN(created.getTime())
-                        ? createdRaw
-                        : created.toLocaleString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
-                } else {
-                    memberSinceEl.textContent = 'Unknown';
-                }
-                // TOTP status
-                var totpText = document.getElementById('totp-status-text');
-                if (totpText) {
-                    totpText.textContent = data.totp_enabled ? 'Enabled' : 'Not configured';
-                }
-            })
-            .catch(function(e) { console.error('Profile load failed:', e); });
+// ── Session open preference ──
+(function() {
+    var sel = document.getElementById('session-open-mode');
+    if (!sel) return;
+    var current = localStorage.getItem('persea_session_open') || 'tab';
+    if (current !== 'window' && current !== 'same') current = 'tab';
+    sel.value = current;
+    sel.addEventListener('change', function() {
+        localStorage.setItem('persea_session_open', this.value);
+    });
+})();
 
-        // Save profile
-        document.getElementById('profile-form').addEventListener('submit', function(e) {
-            e.preventDefault();
-            var status = document.getElementById('save-status');
+document.addEventListener('DOMContentLoaded', function() {
+    // Load current user info
+    if (typeof apiHeaders === 'undefined') { console.error('apiHeaders not defined'); return; }
+    var originalName = '';
+    var originalEmail = '';
+    fetch('/api/me', { headers: apiHeaders() })
+        .then(function(r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.json();
+        })
+        .then(function(data) {
+            if (!data) return;
+            var isDatabase = data.auth_source === 'database';
             var nameInput = document.getElementById('display-name');
             var emailInput = document.getElementById('email');
-            var payload = {};
-            if (nameInput.value.trim() !== originalName) {
-                payload.name = nameInput.value.trim();
+            nameInput.value = data.name || '';
+            nameInput.readOnly = !isDatabase;
+            emailInput.value = data.email || '';
+            emailInput.readOnly = !isDatabase;
+            originalName = data.name || '';
+            originalEmail = data.email || '';
+            var emailNote = document.getElementById('email-note');
+            var emailPwField = document.getElementById('email-password-field');
+            var pwSection = document.getElementById('password-section');
+            var saveBtn = document.getElementById('save-btn');
+            if (isDatabase) {
+                emailNote.textContent = 'Changing your email requires your current password.';
+                emailPwField.classList.remove('hidden');
+                pwSection.classList.remove('hidden');
+                saveBtn.disabled = false;
+            } else {
+                emailNote.textContent = 'Managed by your identity provider';
+                emailPwField.classList.add('hidden');
+                pwSection.classList.add('hidden');
+                saveBtn.disabled = true;
             }
-            var emailChanged = emailInput.value.trim() !== originalEmail;
-            if (emailChanged) {
-                var currentPw = document.getElementById('email-current-password').value;
-                if (!currentPw) {
-                    status.textContent = 'Enter your current password to change your email';
-                    status.className = 'ml-3 text-sm text-red-400';
-                    status.classList.remove('hidden');
-                    setTimeout(function() { status.classList.add('hidden'); }, 4000);
-                    return;
-                }
-                payload.email = emailInput.value.trim();
-                payload.current_password = currentPw;
+            document.getElementById('auth-source-badge').textContent = data.auth_source || 'OIDC';
+            var roleEl = document.getElementById('role-badge');
+            var roleColors = {
+                admin: 'bg-gray-700 text-gray-300 border-gray-600',
+                poweruser: 'bg-amber-900/50 text-amber-300 border-amber-800',
+                operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
+                viewer: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]'
+            };
+            var role = data.role || 'viewer';
+            roleEl.textContent = role;
+            roleEl.className = 'inline-block px-2 py-0.5 text-xs rounded border ' + (roleColors[role] || roleColors.viewer);
+            // Member Since: the API returns a raw ISO timestamp; format
+            // it in the user's locale instead of rendering it verbatim.
+            var createdRaw = data.created_at;
+            var memberSinceEl = document.getElementById('member-since');
+            if (createdRaw) {
+                var created = new Date(createdRaw);
+                memberSinceEl.textContent = isNaN(created.getTime())
+                    ? createdRaw
+                    : created.toLocaleString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+            } else {
+                memberSinceEl.textContent = 'Unknown';
             }
-            if (Object.keys(payload).length === 0) {
-                status.textContent = 'No changes to save';
-                status.className = 'ml-3 text-sm text-[var(--text-muted)]';
-                status.classList.remove('hidden');
-                setTimeout(function() { status.classList.add('hidden'); }, 3000);
-                return;
-            }
-            status.textContent = 'Saving...';
-            status.classList.remove('hidden');
-            fetch('/api/me', {
-                method: 'PUT',
-                headers: apiHeaders(),
-                body: JSON.stringify(payload)
-            })
-            .then(function(r) {
-                return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
-            })
-            .then(function(res) {
-                if (res.ok) {
-                    status.textContent = 'Saved!';
-                    status.className = 'ml-3 text-sm text-emerald-400';
-                    originalName = nameInput.value.trim();
-                    originalEmail = emailInput.value.trim();
-                    document.getElementById('email-current-password').value = '';
-                } else {
-                    status.textContent = res.data.error || 'Failed to save';
-                    status.className = 'ml-3 text-sm text-red-400';
-                }
-                setTimeout(function() { status.classList.add('hidden'); }, 4000);
-            })
-            .catch(function() {
-                status.textContent = 'Network error';
-                status.className = 'ml-3 text-sm text-red-400';
-                setTimeout(function() { status.classList.add('hidden'); }, 3000);
-            });
-        });
+        })
+        .catch(function(e) { console.error('Profile load failed:', e); });
 
-        // ── Change Password ────────────────────────────────────────────
-        document.getElementById('password-form').addEventListener('submit', function(e) {
-            e.preventDefault();
-            var status = document.getElementById('pw-status');
-            var current = document.getElementById('pw-current-password').value;
-            var next = document.getElementById('pw-new-password').value;
-            var confirm = document.getElementById('pw-confirm-password').value;
-            if (next !== confirm) {
-                status.textContent = 'New passwords do not match';
+    // Save profile
+    document.getElementById('profile-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var status = document.getElementById('save-status');
+        var nameInput = document.getElementById('display-name');
+        var emailInput = document.getElementById('email');
+        var payload = {};
+        if (nameInput.value.trim() !== originalName) {
+            payload.name = nameInput.value.trim();
+        }
+        var emailChanged = emailInput.value.trim() !== originalEmail;
+        if (emailChanged) {
+            var currentPw = document.getElementById('email-current-password').value;
+            if (!currentPw) {
+                status.textContent = 'Enter your current password to change your email';
                 status.className = 'ml-3 text-sm text-red-400';
                 status.classList.remove('hidden');
                 setTimeout(function() { status.classList.add('hidden'); }, 4000);
                 return;
             }
-            var btn = document.getElementById('pw-save-btn');
-            btn.disabled = true;
-            btn.textContent = 'Changing\u2026';
-            status.textContent = 'Changing...';
+            payload.email = emailInput.value.trim();
+            payload.current_password = currentPw;
+        }
+        if (Object.keys(payload).length === 0) {
+            status.textContent = 'No changes to save';
             status.className = 'ml-3 text-sm text-[var(--text-muted)]';
             status.classList.remove('hidden');
-            fetch('/api/me/password', {
-                method: 'POST',
-                headers: apiHeaders(),
-                body: JSON.stringify({ current_password: current, new_password: next })
-            })
-            .then(function(r) {
-                return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
-            })
-            .then(function(res) {
-                if (res.ok) {
-                    status.textContent = 'Password changed';
-                    status.className = 'ml-3 text-sm text-emerald-400';
-                    document.getElementById('pw-current-password').value = '';
-                    document.getElementById('pw-new-password').value = '';
-                    document.getElementById('pw-confirm-password').value = '';
-                } else {
-                    status.textContent = res.data.error || 'Failed to change password';
-                    status.className = 'ml-3 text-sm text-red-400';
-                }
-                setTimeout(function() { status.classList.add('hidden'); }, 5000);
-            })
-            .catch(function() {
-                status.textContent = 'Network error';
+            setTimeout(function() { status.classList.add('hidden'); }, 3000);
+            return;
+        }
+        status.textContent = 'Saving...';
+        status.classList.remove('hidden');
+        fetch('/api/me', {
+            method: 'PUT',
+            headers: apiHeaders(),
+            body: JSON.stringify(payload)
+        })
+        .then(function(r) {
+            return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+        })
+        .then(function(res) {
+            if (res.ok) {
+                status.textContent = 'Saved!';
+                status.className = 'ml-3 text-sm text-emerald-400';
+                originalName = nameInput.value.trim();
+                originalEmail = emailInput.value.trim();
+                document.getElementById('email-current-password').value = '';
+            } else {
+                status.textContent = res.data.error || 'Failed to save';
                 status.className = 'ml-3 text-sm text-red-400';
-                setTimeout(function() { status.classList.add('hidden'); }, 3000);
-            })
-            .then(function() {
-                btn.disabled = false;
-                btn.textContent = 'Change Password';
-            });
+            }
+            setTimeout(function() { status.classList.add('hidden'); }, 4000);
+        })
+        .catch(function() {
+            status.textContent = 'Network error';
+            status.className = 'ml-3 text-sm text-red-400';
+            setTimeout(function() { status.classList.add('hidden'); }, 3000);
         });
-
-        // ── My Credentials ────────────────────────────────────────────
-        var credsStatus = document.getElementById('creds-status');
-        function credsMsg(text, ok) {
-            credsStatus.textContent = text;
-            credsStatus.className = 'text-sm ' + (ok === false ? 'text-red-400' : (ok === true ? 'text-emerald-400' : 'text-[var(--text-muted)]'));
-            credsStatus.classList.remove('hidden');
-            setTimeout(function() { credsStatus.classList.add('hidden'); }, 4000);
-        }
-        function loadPreset() {
-            fetch('/api/me/preset-credentials', { headers: apiHeaders(), credentials: 'same-origin' })
-                .then(function(r) { return r.ok ? r.json() : null; })
-                .then(function(d) {
-                    if (!d) return;
-                    document.getElementById('creds-username').value = d.username || '';
-                    document.getElementById('creds-status-line').textContent = d.has_password
-                        ? 'A password is stored' + (d.has_username ? ' for "' + d.username + '".' : '.')
-                        : 'No password stored yet.';
-                })
-                .catch(function() {});
-        }
-        document.getElementById('creds-form').addEventListener('submit', function(e) {
-            e.preventDefault();
-            var saveBtn = document.getElementById('creds-save');
-            saveBtn.disabled = true;
-            saveBtn.textContent = 'Saving\u2026';
-            fetch('/api/me/preset-credentials', {
-                method: 'PUT',
-                headers: apiHeaders(),
-                credentials: 'same-origin',
-                body: JSON.stringify({
-                    username: document.getElementById('creds-username').value.trim(),
-                    password: document.getElementById('creds-password').value
-                })
-            }).then(function(r) {
-                return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
-            }).then(function(res) {
-                if (res.ok) {
-                    credsMsg(res.data.cleared ? 'Credentials cleared.' : 'Credentials saved.', true);
-                    document.getElementById('creds-password').value = '';
-                    loadPreset();
-                } else {
-                    credsMsg(res.data.error || 'Failed to save credentials.', false);
-                }
-            }).catch(function() { credsMsg('Network error.', false); })
-              .then(function() {
-                saveBtn.disabled = false;
-                saveBtn.textContent = 'Save Credentials';
-            });
-        });
-        document.getElementById('creds-clear').addEventListener('click', function() {
-            if (!confirm('Clear your preset credentials?')) return;
-            fetch('/api/me/preset-credentials', {
-                method: 'PUT',
-                headers: apiHeaders(),
-                credentials: 'same-origin',
-                body: JSON.stringify({ username: '', password: '' })
-            }).then(function(r) { return r.ok; }).then(function(ok) {
-                credsMsg(ok ? 'Credentials cleared.' : 'Failed to clear.', ok);
-                if (ok) {
-                    document.getElementById('creds-username').value = '';
-                    document.getElementById('creds-password').value = '';
-                    loadPreset();
-                }
-            }).catch(function() { credsMsg('Network error.', false); });
-        });
-        loadPreset();
     });
+
+    // ── Change Password ────────────────────────────────────────────
+    document.getElementById('password-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var status = document.getElementById('pw-status');
+        var current = document.getElementById('pw-current-password').value;
+        var next = document.getElementById('pw-new-password').value;
+        var confirm = document.getElementById('pw-confirm-password').value;
+        if (next !== confirm) {
+            status.textContent = 'New passwords do not match';
+            status.className = 'ml-3 text-sm text-red-400';
+            status.classList.remove('hidden');
+            setTimeout(function() { status.classList.add('hidden'); }, 4000);
+            return;
+        }
+        var btn = document.getElementById('pw-save-btn');
+        btn.disabled = true;
+        btn.textContent = 'Changing\u2026';
+        status.textContent = 'Changing...';
+        status.className = 'ml-3 text-sm text-[var(--text-muted)]';
+        status.classList.remove('hidden');
+        fetch('/api/me/password', {
+            method: 'POST',
+            headers: apiHeaders(),
+            body: JSON.stringify({ current_password: current, new_password: next })
+        })
+        .then(function(r) {
+            return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+        })
+        .then(function(res) {
+            if (res.ok) {
+                status.textContent = 'Password changed';
+                status.className = 'ml-3 text-sm text-emerald-400';
+                document.getElementById('pw-current-password').value = '';
+                document.getElementById('pw-new-password').value = '';
+                document.getElementById('pw-confirm-password').value = '';
+            } else {
+                status.textContent = res.data.error || 'Failed to change password';
+                status.className = 'ml-3 text-sm text-red-400';
+            }
+            setTimeout(function() { status.classList.add('hidden'); }, 5000);
+        })
+        .catch(function() {
+            status.textContent = 'Network error';
+            status.className = 'ml-3 text-sm text-red-400';
+            setTimeout(function() { status.classList.add('hidden'); }, 3000);
+        })
+        .then(function() {
+            btn.disabled = false;
+            btn.textContent = 'Change Password';
+        });
+    });
+
+    // ── My Credentials ────────────────────────────────────────────
+    var credsStatus = document.getElementById('creds-status');
+    function credsMsg(text, ok) {
+        credsStatus.textContent = text;
+        credsStatus.className = 'text-sm ' + (ok === false ? 'text-red-400' : (ok === true ? 'text-emerald-400' : 'text-[var(--text-muted)]'));
+        credsStatus.classList.remove('hidden');
+        setTimeout(function() { credsStatus.classList.add('hidden'); }, 4000);
+    }
+    function loadPreset() {
+        fetch('/api/me/preset-credentials', { headers: apiHeaders(), credentials: 'same-origin' })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(d) {
+                if (!d) return;
+                document.getElementById('creds-username').value = d.username || '';
+                document.getElementById('creds-status-line').textContent = d.has_password
+                    ? 'A password is stored' + (d.has_username ? ' for "' + d.username + '".' : '.')
+                    : 'No password stored yet.';
+            })
+            .catch(function() {});
+    }
+    document.getElementById('creds-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var saveBtn = document.getElementById('creds-save');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving\u2026';
+        fetch('/api/me/preset-credentials', {
+            method: 'PUT',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({
+                username: document.getElementById('creds-username').value.trim(),
+                password: document.getElementById('creds-password').value
+            })
+        }).then(function(r) {
+            return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+        }).then(function(res) {
+            if (res.ok) {
+                credsMsg(res.data.cleared ? 'Credentials cleared.' : 'Credentials saved.', true);
+                document.getElementById('creds-password').value = '';
+                loadPreset();
+            } else {
+                credsMsg(res.data.error || 'Failed to save credentials.', false);
+            }
+        }).catch(function() { credsMsg('Network error.', false); })
+          .then(function() {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save Credentials';
+        });
+    });
+    document.getElementById('creds-clear').addEventListener('click', function() {
+        if (!confirm('Clear your preset credentials?')) return;
+        fetch('/api/me/preset-credentials', {
+            method: 'PUT',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({ username: '', password: '' })
+        }).then(function(r) { return r.ok; }).then(function(ok) {
+            credsMsg(ok ? 'Credentials cleared.' : 'Failed to clear.', ok);
+            if (ok) {
+                document.getElementById('creds-username').value = '';
+                document.getElementById('creds-password').value = '';
+                loadPreset();
+            }
+        }).catch(function() { credsMsg('Network error.', false); });
+    });
+    loadPreset();
+});
+
+// ── API Keys: tokens table, create modal, device pairing ──
+(function() {
+    var roleColors = {
+        admin: 'bg-red-900/50 text-red-300 border-red-800',
+        poweruser: 'bg-purple-900/50 text-purple-300 border-purple-800',
+        operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
+        viewer: 'bg-[var(--bg-hover)]/50 text-[var(--text-muted)] border-[var(--border)]'
+    };
+
+    function formatDate(d) {
+        if (!d) return '—';
+        try { return new Date(d).toLocaleDateString('en-US', { year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }); }
+        catch(e) { return d; }
+    }
+
+    function loadTokens() {
+        fetch('/api/me/tokens', { headers: apiHeaders() })
+            .then(function(r) { return r.ok ? r.json() : []; })
+            .then(function(tokens) {
+                var tbody = document.getElementById('tokens-tbody');
+                var empty = document.getElementById('empty-state');
+                if (!tokens || tokens.length === 0) {
+                    tbody.innerHTML = '';
+                    empty.classList.remove('hidden');
+                    return;
+                }
+                empty.classList.add('hidden');
+                var html = '';
+                tokens.forEach(function(t) {
+                    var roleBadge = t.max_role
+                        ? '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ' + (roleColors[t.max_role] || roleColors.viewer) + '">' + escapeHtml(t.max_role) + '</span>'
+                        : '<span class="text-[var(--text-muted)]">—</span>';
+                    var statusClass = t.disabled ? 'bg-red-900/50 text-red-300' : 'bg-emerald-900/50 text-emerald-300';
+                    var statusText = t.disabled ? 'Revoked' : 'Active';
+                    html += '<tr class="border-b border-[var(--border)]/50 hover:bg-[var(--bg-hover)]/30">';
+                    html += '<td class="px-4 py-3 text-[var(--text-primary)] font-medium">' + escapeHtml(t.name) + '</td>';
+                    html += '<td class="px-4 py-3">' + roleBadge + '</td>';
+                    html += '<td class="px-4 py-3"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ' + statusClass + '">' + statusText + '</span></td>';
+                    html += '<td class="px-4 py-3 text-[var(--text-muted)] text-xs">' + formatDate(t.created_at) + '</td>';
+                    html += '<td class="px-4 py-3 text-[var(--text-muted)] text-xs">' + formatDate(t.last_used_at) + '</td>';
+                    html += '<td class="px-4 py-3 text-right">';
+                    if (!t.disabled) {
+                        html += '<button type="button" data-revoke-id="' + t.id + '" class="text-xs text-red-400 hover:text-red-300 transition-colors">Revoke</button>';
+                    }
+                    html += '</td></tr>';
+                });
+                tbody.innerHTML = html;
+                // CSP-safe wiring: the page CSP blocks inline onclick, so the
+                // revoke buttons are wired here after the rows are built.
+                Array.prototype.forEach.call(tbody.querySelectorAll('button[data-revoke-id]'), function(btn) {
+                    btn.addEventListener('click', function() {
+                        revokeToken(parseInt(btn.getAttribute('data-revoke-id'), 10));
+                    });
+                });
+            })
+            .catch(function() {});
+    }
+
+    function revokeToken(id) {
+        if (!confirm('Revoke this token? It will stop working immediately.')) return;
+        fetch('/api/me/tokens/' + id, { method: 'DELETE', headers: apiHeaders() })
+            .then(function(r) { if (r.ok) loadTokens(); });
+    }
+
+    function openCreateModal() {
+        document.getElementById('create-modal').classList.remove('hidden');
+        document.getElementById('token-name').focus();
+    }
+    function closeCreateModal() {
+        document.getElementById('create-modal').classList.add('hidden');
+        document.getElementById('create-token-form').reset();
+    }
+
+    function expiryToISO(val) {
+        if (!val) return undefined;
+        var ms = parseInt(val) * 86400000;
+        return new Date(Date.now() + ms).toISOString();
+    }
+
+    document.getElementById('create-token-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var name = document.getElementById('token-name').value.trim();
+        var maxRole = document.getElementById('token-max-role').value || undefined;
+        var expiry = expiryToISO(document.getElementById('token-expiry').value);
+        document.getElementById('btn-submit-token').disabled = true;
+
+        fetch('/api/me/tokens', {
+            method: 'POST',
+            headers: apiHeaders(),
+            body: JSON.stringify({ name: name, max_role: maxRole, expires_at: expiry })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            closeCreateModal();
+            if (data.token) {
+                document.getElementById('new-token-value').textContent = data.token;
+                document.getElementById('new-token-banner').classList.remove('hidden');
+            }
+            loadTokens();
+        })
+        .catch(function() { alert('Failed to create token'); })
+        .finally(function() { document.getElementById('btn-submit-token').disabled = false; });
+    });
+
+    function dismissNewToken() {
+        document.getElementById('new-token-banner').classList.add('hidden');
+    }
+
+    document.getElementById('btn-copy-token').addEventListener('click', function() {
+        var val = document.getElementById('new-token-value').textContent;
+        navigator.clipboard.writeText(val).then(function() {
+            document.getElementById('btn-copy-token').textContent = 'Copied!';
+            setTimeout(function() { document.getElementById('btn-copy-token').textContent = 'Copy'; }, 2000);
+        });
+    });
+
+    document.getElementById('btn-create-token').addEventListener('click', openCreateModal);
+    document.getElementById('btn-create-first-token').addEventListener('click', openCreateModal);
+    document.getElementById('btn-cancel-token').addEventListener('click', closeCreateModal);
+    document.getElementById('btn-dismiss-token').addEventListener('click', dismissNewToken);
+
+    // ── Device pairing ──
+    var pairForm = document.getElementById('pair-form');
+    var pairMessage = document.getElementById('pair-message');
+    var pairCode = document.getElementById('pair-code');
+    var pairBtn = document.getElementById('btn-pair-confirm');
+
+    function showPairMessage(text, ok) {
+        pairMessage.textContent = text;
+        pairMessage.className = 'mt-3 text-sm ' + (ok ? 'text-emerald-400' : 'text-red-400');
+        pairMessage.classList.remove('hidden');
+    }
+
+    pairForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        pairBtn.disabled = true;
+        fetch('/api/desktop/confirm', {
+            method: 'POST',
+            headers: apiHeaders(),
+            body: JSON.stringify({ code: pairCode.value.trim() })
+        })
+        .then(function(r) {
+            return r.json().then(function(data) { return { ok: r.ok, status: r.status, data: data }; });
+        })
+        .then(function(res) {
+            if (res.ok && res.data.ok) {
+                var dev = res.data.device_name ? ' (' + res.data.device_name + ')' : '';
+                showPairMessage('Device approved' + dev + '. The token appears in the list above; revoke it there to unpair the device.', true);
+                pairCode.value = '';
+                loadTokens();
+            } else if (res.status === 410) {
+                showPairMessage('This code has expired or was already used. Generate a new one in the desktop app.', false);
+            } else if (res.status === 404) {
+                showPairMessage('Unknown pairing code. Check the code shown by the desktop app.', false);
+            } else if (res.status === 429) {
+                showPairMessage('Too many requests — wait a minute and try again.', false);
+            } else if (res.status === 403) {
+                showPairMessage('Approval failed: your session may have expired. Reload the page and try again.', false);
+            } else {
+                showPairMessage('Approval failed: ' + (res.data.error || 'unknown error'), false);
+            }
+        })
+        .catch(function() { showPairMessage('Approval failed — check your connection.', false); })
+        .finally(function() { pairBtn.disabled = false; });
+    });
+
+    loadTokens();
+})();
+
+// ── TOTP: status, enrollment, recovery codes, disable ──
+(function() {
+    var totpEnabled = false;
+
+    function setStatus(enabled) {
+        totpEnabled = enabled;
+        var icon = document.getElementById('totp-icon');
+        var title = document.getElementById('totp-title');
+        var desc = document.getElementById('totp-description');
+        var actions = document.getElementById('totp-actions');
+        var enroll = document.getElementById('enrollment-section');
+        var recovery = document.getElementById('recovery-codes-section');
+
+        if (enabled) {
+            icon.className = 'w-12 h-12 rounded-lg bg-emerald-900/50 border border-emerald-800 flex items-center justify-center shrink-0';
+            icon.innerHTML = '<svg class="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>';
+            title.textContent = 'Two-Factor Authentication Enabled';
+            desc.textContent = 'Your account is protected with TOTP.';
+            actions.innerHTML = '<button type="button" id="btn-show-recovery" class="btn btn-secondary btn-sm">View Recovery Codes</button>' +
+                '<button type="button" id="btn-disable-totp" class="btn btn-danger btn-sm">Disable</button>';
+            enroll.classList.add('hidden');
+        } else {
+            icon.className = 'w-12 h-12 rounded-lg bg-[var(--bg-card)] border border-[var(--border)] flex items-center justify-center shrink-0';
+            icon.innerHTML = '<svg class="w-6 h-6 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>';
+            title.textContent = 'Two-Factor Authentication Not Enabled';
+            desc.textContent = 'Add an extra layer of security to your account.';
+            actions.innerHTML = '<button type="button" id="btn-enable-totp" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-[var(--text-primary)] rounded-lg text-sm font-medium transition-colors">Enable TOTP</button>';
+            enroll.classList.add('hidden');
+            recovery.classList.add('hidden');
+        }
+    }
+
+    function loadStatus() {
+        fetch('/api/me/totp', { headers: apiHeaders() })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(data) {
+                if (!data) return;
+                setStatus(data.enabled);
+            })
+            .catch(function() {});
+    }
+
+    var pendingEnrollment = null;
+
+    function startEnrollment() {
+        fetch('/api/me/totp/enroll', { method: 'POST', headers: apiHeaders() })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(data) {
+                if (!data) return;
+                pendingEnrollment = data;
+                document.getElementById('qr-code-img').src = 'data:image/png;base64,' + data.qr_png;
+                document.getElementById('totp-secret').textContent = data.secret_b32;
+                document.getElementById('totp-issuer').textContent = data.issuer || 'persea';
+                document.getElementById('totp-account').textContent = data.email || '';
+                document.getElementById('enrollment-section').classList.remove('hidden');
+                document.getElementById('verify-code').focus();
+            })
+            .catch(function() {});
+    }
+
+    document.getElementById('verify-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var code = document.getElementById('verify-code').value.trim();
+        var errEl = document.getElementById('verify-error');
+        errEl.classList.add('hidden');
+        document.getElementById('btn-verify').disabled = true;
+
+        fetch('/api/me/totp/verify', {
+            method: 'POST',
+            headers: apiHeaders(),
+            body: JSON.stringify({ code: code })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.ok) {
+                setStatus(true);
+                if (data.recovery_codes) showRecoveryCodesList(data.recovery_codes);
+            } else {
+                errEl.textContent = data.error || 'Invalid code. Try again.';
+                errEl.classList.remove('hidden');
+            }
+        })
+        .catch(function() {
+            errEl.textContent = 'Network error';
+            errEl.classList.remove('hidden');
+        })
+        .finally(function() { document.getElementById('btn-verify').disabled = false; });
+    });
+
+    function showRecoveryCodes() {
+        fetch('/api/me/totp/recovery-codes', { headers: apiHeaders() })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(data) {
+                if (data && data.codes) showRecoveryCodesList(data.codes);
+            })
+            .catch(function() {});
+    }
+
+    function showRecoveryCodesList(codes) {
+        var section = document.getElementById('recovery-codes-section');
+        var list = document.getElementById('recovery-codes-list');
+        var html = '';
+        codes.forEach(function(c) {
+            html += '<div class="px-3 py-2 bg-[var(--bg-card)] rounded font-mono text-sm text-[var(--text-secondary)] text-center">' + escapeHtml(c) + '</div>';
+        });
+        list.innerHTML = html;
+        section.classList.remove('hidden');
+    }
+
+    document.getElementById('btn-copy-codes').addEventListener('click', function() {
+        var codes = [];
+        document.querySelectorAll('#recovery-codes-list div').forEach(function(el) {
+            codes.push(el.textContent.trim());
+        });
+        navigator.clipboard.writeText(codes.join('\n')).then(function() {
+            document.getElementById('btn-copy-codes').textContent = 'Copied!';
+            setTimeout(function() { document.getElementById('btn-copy-codes').textContent = 'Copy All'; }, 2000);
+        });
+    });
+
+    function openDisableModal() {
+        document.getElementById('disable-modal').classList.remove('hidden');
+        document.getElementById('disable-code').focus();
+    }
+    function closeDisableModal() {
+        document.getElementById('disable-modal').classList.add('hidden');
+        document.getElementById('disable-form').reset();
+        document.getElementById('disable-error').classList.add('hidden');
+    }
+
+    document.getElementById('disable-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        var code = document.getElementById('disable-code').value.trim();
+        var errEl = document.getElementById('disable-error');
+        errEl.classList.add('hidden');
+
+        fetch('/api/me/totp', {
+            method: 'DELETE',
+            headers: apiHeaders(),
+            body: JSON.stringify({ code: code })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.ok) {
+                closeDisableModal();
+                setStatus(false);
+            } else {
+                errEl.textContent = data.error || 'Invalid code';
+                errEl.classList.remove('hidden');
+            }
+        })
+        .catch(function() {
+            errEl.textContent = 'Network error';
+            errEl.classList.remove('hidden');
+        });
+    });
+
+    // CSP-safe wiring for the dynamically built action buttons: the page
+    // CSP blocks inline onclick, so clicks on the status card's actions are
+    // delegated here instead.
+    document.getElementById('totp-actions').addEventListener('click', function(evt) {
+        var btn = evt.target.closest('button');
+        if (!btn) return;
+        if (btn.id === 'btn-enable-totp') startEnrollment();
+        else if (btn.id === 'btn-show-recovery') showRecoveryCodes();
+        else if (btn.id === 'btn-disable-totp') openDisableModal();
+    });
+    document.getElementById('btn-cancel-disable').addEventListener('click', closeDisableModal);
+
+    loadStatus();
+})();
 </script>
 {% endblock %}
