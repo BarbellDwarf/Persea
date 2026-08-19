@@ -475,7 +475,15 @@ function showProfileSection(name, opts) {
                 tab.setAttribute('aria-selected', 'true');
                 tab.setAttribute('tabindex', '0');
             });
-            if (focusPanel) panel.focus();
+            if (focusPanel) {
+                // Focus without scrolling: the panels are stacked in the DOM
+                // and carry tabindex="-1", so a plain focus() scrolls the
+                // activated panel into view, jumping the page to mid-scroll
+                // for sections below the tall Session panel. The view stays
+                // at the top of the page; the user scrolls down themselves.
+                panel.focus({ preventScroll: true });
+                window.scrollTo(0, 0);
+            }
         } else {
             panel.hidden = true;
             profileNavs(s).forEach(function(tab) {
