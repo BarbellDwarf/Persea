@@ -806,6 +806,16 @@ Guacamole.SessionRecording = function SessionRecording(source, refreshInterval) 
         if (activeSeek) {
             activeSeek.aborted = true;
             activeSeek = null;
+
+            // A user-initiated seek hides the display while it replays
+            // frames. Aborting a seek means the display must be usable
+            // again: a newer seek re-hides it, while pause/play/cancel
+            // paths continue with it visible. Without this restore, a
+            // pause or play click during a seek leaves the display
+            // hidden until the next seek completes.
+            var displayElement = playbackClient.getDisplay().getElement();
+            if (displayElement)
+                displayElement.style.visibility = 'visible';
         }
     };
 
