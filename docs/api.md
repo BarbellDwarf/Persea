@@ -338,6 +338,33 @@ This is the same endpoint the built-in client uses. WebSocket upgrades
 are validated against a strict Origin check (cross-origin requests are
 rejected) and rate-limited unconditionally.
 
+### Session continuity and token lifecycle
+
+A session authenticates its viewers **once, at connect**. The WebSocket
+upgrade checks the caller's credentials (cookie, ticket, or token), the
+connection joins the session, and the stream is then proxied straight to
+guacd: the token store is never consulted again for the life of that
+connection. The session lifecycle and the token lifecycle are therefore
+independent in both directions:
+
+- **Revoking, expiring, or invalidating a token never tears down an
+  open session.** Rotating an AD/LDAP password, hitting the 12-hour
+  scoped-token TTL, self-revoking a token in the account page, or
+  failing the server-side account re-validation only affects *future*
+  authentication attempts. Viewers already attached to `/ws/{id}` keep
+  streaming; the session pages keep working.
+- **Ending a session never revokes a token.** Deleting or terminating a
+  session touches the session only, and the tokens that authenticated
+  the caller keep working.
+
+A client whose token was invalidated reconnects by signing in again
+through the normal interactive login flow (`/auth/login`, the MFA page,
+or the SSO button), exactly as it did the first time. The login flow
+issues a fresh scoped token (`Persea Desktop (login)`, 12-hour TTL) and
+revokes the previous login-issued token; that revocation only stops the
+old token from authenticating future API calls. Signing in again never
+affects sessions that are still open.
+
 ## Address book (connections)
 
 The address book stores named, reusable connections in folders. Entries
@@ -479,6 +506,11 @@ sharing their login session or an admin API key.
 | `GET /api/admin/user-tokens` | admin | List all tokens across all users |
 | `DELETE /api/admin/user-tokens/{id}` | admin | Revoke any token |
 | `GET /api/admin/token-audit` | admin | Token audit log (`limit`, `email` query params) |
+
+Revoking a token takes effect immediately and only affects future
+requests made with that token: sessions already open stay open, and
+reconnecting means signing in again (see
+[Session continuity and token lifecycle](#session-continuity-and-token-lifecycle)).
 
 ## Recordings and typescripts
 
