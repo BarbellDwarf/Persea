@@ -226,6 +226,13 @@ pub struct LoginParams {
     /// OIDC provider name (multi-provider SSO). Defaults to the first
     /// configured provider when absent.
     pub provider: Option<String>,
+    /// Desktop login intent (persea#227): when set, the callback mints a
+    /// scoped desktop token (12h TTL) after all gates pass and answers
+    /// with the connected page carrying the token plaintext. The desktop
+    /// shell navigates to `/auth/login?desktop=1`. Accepts `1`/`true`/`on`
+    /// like the password form's desktop flag.
+    #[serde(default, deserialize_with = "crate::handlers::auth::deserialize_flag")]
+    pub desktop: bool,
 }
 
 /// GET /auth/login — redirect user to OIDC provider.
@@ -316,6 +323,17 @@ pub async fn login(
         }
     }
 
+    // Desktop login intent rides a cookie so the callback can recover it
+    // after the IdP round trip (mirrors the SAML RelayState mechanism).
+    // The value is a fixed marker, never user input.
+    if params.desktop {
+        let desktop_cookie = format!(
+            "persea_desktop=1; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=600",
+            sec
+        );
+        cookies.push((header::SET_COOKIE, desktop_cookie));
+    }
+
     (
         AppendHeaders(cookies),
         Redirect::temporary(auth_url.as_str()),
@@ -342,7 +360,9 @@ pub struct CallbackParams {
 /// enrollment gate (target `/auth/enroll`, cookie scoped to `/` so the
 /// enrollment page and the TOTP self-service API can read it). Neither
 /// path mints a session: the session is created only after the factor is
-/// verified on the MFA page.
+/// verified on the MFA page. `desktop` marks the record as a desktop
+/// login so the MFA completion handler mints the scoped token after the
+/// TOTP gate (persea#227).
 #[allow(clippy::too_many_arguments)]
 async fn redirect_with_pending_mfa(
     database: &Db,
@@ -354,6 +374,7 @@ async fn redirect_with_pending_mfa(
     ttl_secs: u64,
     target: &str,
     cookie_path: &str,
+    desktop: bool,
     headers: &HeaderMap,
     tls_enabled: bool,
     trusted_proxies: Option<&TrustedProxies>,
@@ -365,15 +386,27 @@ async fn redirect_with_pending_mfa(
     let role_for_mfa = role.to_string();
     let subject_for_mfa = subject.map(str::to_string);
     let pending_token = match tokio::task::spawn_blocking(move || {
-        db::create_pending_mfa(
-            &db_clone,
-            user_id,
-            &email_for_mfa,
-            &name_for_mfa,
-            &role_for_mfa,
-            subject_for_mfa.as_deref(),
-            ttl_secs,
-        )
+        if desktop {
+            db::create_pending_mfa_desktop(
+                &db_clone,
+                user_id,
+                &email_for_mfa,
+                &name_for_mfa,
+                &role_for_mfa,
+                subject_for_mfa.as_deref(),
+                ttl_secs,
+            )
+        } else {
+            db::create_pending_mfa(
+                &db_clone,
+                user_id,
+                &email_for_mfa,
+                &name_for_mfa,
+                &role_for_mfa,
+                subject_for_mfa.as_deref(),
+                ttl_secs,
+            )
+        }
     })
     .await
     {
@@ -400,12 +433,20 @@ async fn redirect_with_pending_mfa(
         "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
         sec
     );
+    // The desktop intent is consumed here: the pending-MFA record carries
+    // it through the TOTP gate, so the cookie must not survive to mint a
+    // scoped token for a later web login.
+    let clear_desktop_cookie = format!(
+        "persea_desktop=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        sec
+    );
 
     (
         AppendHeaders([
             (header::SET_COOKIE, mfa_cookie),
             (header::SET_COOKIE, clear_state_cookie),
             (header::SET_COOKIE, clear_next_cookie),
+            (header::SET_COOKIE, clear_desktop_cookie),
         ]),
         Redirect::temporary(target),
     )
@@ -421,6 +462,7 @@ pub async fn callback(
     Extension(totp_enforcement): Extension<TotpEnforcement>,
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(tls_enabled): Extension<TlsEnabled>,
+    Extension(csp_nonce): Extension<crate::CspNonce>,
     headers: axum::http::HeaderMap,
     Query(params): Query<CallbackParams>,
 ) -> Response {
@@ -513,6 +555,12 @@ pub async fn callback(
                 .into_response();
         }
     };
+
+    // Desktop login intent, carried through the IdP round trip by the
+    // `persea_desktop` cookie set at /auth/login?desktop=1 (persea#227).
+    // A forged cookie cannot help: the assertion itself must still
+    // validate, and the cookie is cleared on every callback.
+    let desktop_login = extract_cookie(&headers, "persea_desktop").as_deref() == Some("1");
 
     // Exchange authorization code for tokens
     let code_request = match oidc.client.exchange_code(AuthorizationCode::new(code)) {
@@ -718,6 +766,7 @@ pub async fn callback(
             300,
             "/auth/mfa",
             "/auth/mfa",
+            desktop_login,
             &headers,
             tls_enabled.0,
             Some(&trusted_proxies),
@@ -743,6 +792,7 @@ pub async fn callback(
             300,
             "/auth/enroll",
             "/",
+            desktop_login,
             &headers,
             tls_enabled.0,
             Some(&trusted_proxies),
@@ -794,7 +844,8 @@ pub async fn callback(
         .filter(|n| is_safe_redirect_path(n))
         .unwrap_or_else(|| "/addressbook.html".to_string());
 
-    // Set session cookie and redirect; clear OIDC state and next cookies
+    // Set session cookie and redirect; clear OIDC state, next, and
+    // desktop-intent cookies
     let sec = crate::csrf::cookie_secure_attr(
         &headers,
         tls_enabled.0,
@@ -813,12 +864,63 @@ pub async fn callback(
         "persea_next=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
         sec
     );
+    let clear_desktop_cookie = format!(
+        "persea_desktop=; Path=/; HttpOnly;{} SameSite=Lax; Max-Age=0",
+        sec
+    );
+
+    // Desktop login: mint the scoped token (12h TTL) and answer with the
+    // connected page instead of the redirect, so the client that asked for
+    // the token gets it in the response (persea#227).
+    if desktop_login {
+        return match crate::api::pairing::mint_login_scoped_token(
+            &database, user.id, &client_ip,
+        )
+        .await
+        {
+            Ok((token_id, plaintext, _name, _max_role, _expires_db, expires_rfc)) => {
+                tracing::info!(
+                    email = %email,
+                    token_id,
+                    "Desktop scoped token issued after OIDC login"
+                );
+                (
+                    AppendHeaders([
+                        (header::SET_COOKIE, session_cookie),
+                        (header::SET_COOKIE, clear_state_cookie),
+                        (header::SET_COOKIE, clear_next_cookie),
+                        (header::SET_COOKIE, clear_desktop_cookie),
+                    ]),
+                    crate::handlers::auth::desktop_connected_page(
+                        &csp_nonce.0,
+                        &plaintext,
+                        &expires_rfc,
+                    ),
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to mint desktop scoped token after OIDC login");
+                (
+                    AppendHeaders([
+                        (header::SET_COOKIE, session_cookie),
+                        (header::SET_COOKIE, clear_state_cookie),
+                        (header::SET_COOKIE, clear_next_cookie),
+                        (header::SET_COOKIE, clear_desktop_cookie),
+                    ]),
+                    Redirect::temporary(&redirect_to),
+                )
+                    .into_response()
+            }
+        };
+    }
 
     (
         AppendHeaders([
             (header::SET_COOKIE, session_cookie),
             (header::SET_COOKIE, clear_state_cookie),
             (header::SET_COOKIE, clear_next_cookie),
+            (header::SET_COOKIE, clear_desktop_cookie),
         ]),
         Redirect::temporary(&redirect_to),
     )
@@ -1281,5 +1383,28 @@ mod tests {
         ] {
             assert!(!is_safe_redirect_path(p), "{p}");
         }
+    }
+
+    // ── Desktop login intent (persea#227) ──────────────────────────────
+
+    #[test]
+    fn login_params_desktop_flag_is_tolerant() {
+        // The desktop shell's convention is `desktop=1`; plain `bool`
+        // deserialization would reject it.
+        let p: LoginParams = serde_urlencoded::from_str("desktop=1").unwrap();
+        assert!(p.desktop);
+        let p: LoginParams = serde_urlencoded::from_str("desktop=true").unwrap();
+        assert!(p.desktop);
+        let p: LoginParams = serde_urlencoded::from_str("desktop=0").unwrap();
+        assert!(!p.desktop);
+        let p: LoginParams = serde_urlencoded::from_str("").unwrap();
+        assert!(!p.desktop);
+        // Other params still parse alongside the flag.
+        let p: LoginParams =
+            serde_urlencoded::from_str("provider=corp&desktop=1&next=%2Fconnections.html")
+                .unwrap();
+        assert!(p.desktop);
+        assert_eq!(p.provider.as_deref(), Some("corp"));
+        assert_eq!(p.next.as_deref(), Some("/connections.html"));
     }
 }

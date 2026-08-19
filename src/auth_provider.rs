@@ -147,6 +147,34 @@ impl Default for AuthRequest {
 }
 
 // ---------------------------------------------------------------------------
+// RecheckVerdict
+// ---------------------------------------------------------------------------
+
+/// Outcome of an account re-validation check (scoped-token re-validation,
+/// persea#226).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecheckVerdict {
+    /// The account is valid. `pwd_last_set` carries the directory's
+    /// password-last-set marker (AD `pwdLastSet`), when the directory
+    /// exposes one; the caller stores it and passes it back on the next
+    /// re-check so a credential rotation is detected.
+    Valid {
+        /// Directory marker for when the password was last set, if the
+        /// directory exposes one.
+        pwd_last_set: Option<String>,
+    },
+    /// The account is gone, locked, disabled, or expired (or its
+    /// credentials rotated): the token must be invalidated.
+    Invalid,
+    /// The subject is not an account this provider manages; no re-check
+    /// applies.
+    NotApplicable,
+    /// The provider could not be reached; skip this round and retry on
+    /// the next use.
+    Unavailable,
+}
+
+// ---------------------------------------------------------------------------
 // UserInfo
 // ---------------------------------------------------------------------------
 
@@ -200,6 +228,27 @@ pub trait AuthProvider: Send + Sync {
     /// Only needed by providers that can resolve user info independently.
     async fn lookup_user(&self, _subject: &str) -> Option<UserInfo> {
         None
+    }
+
+    /// Re-validate that the account behind `subject` still exists and is
+    /// usable (not locked, disabled, or expired). Called by the scoped
+    /// token validation path on use, bounded by a short-TTL cache, so a
+    /// rotated, locked, or expired account kills its tokens within the
+    /// re-check interval (persea#226).
+    ///
+    /// `previous_pwd_last_set` is the marker from the last successful
+    /// re-check, if any; a provider that can detect credential rotation
+    /// compares it against the current value.
+    ///
+    /// The default returns [`RecheckVerdict::NotApplicable`]: providers
+    /// that cannot re-check account state (database, OIDC, RADIUS, SAML)
+    /// leave scoped tokens untouched.
+    async fn revalidate_account(
+        &self,
+        _subject: &str,
+        _previous_pwd_last_set: Option<&str>,
+    ) -> RecheckVerdict {
+        RecheckVerdict::NotApplicable
     }
 
     /// Whether this provider renders an inline username + password login form.

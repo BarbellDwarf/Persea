@@ -970,8 +970,9 @@ pub async fn enroll_page(
 /// DOM; a plain browser user can copy it manually. No-store so the
 /// plaintext never lands in a cache. The token charset is
 /// `[a-zA-Z0-9_]` and the other interpolations are server-generated, so
-/// no HTML escaping is required.
-fn desktop_connected_page(nonce: &str, token: &str, expires_rfc: &str) -> Response {
+/// no HTML escaping is required. Shared with the OIDC callback
+/// (persea#227), which mints the same token after the IdP round trip.
+pub(crate) fn desktop_connected_page(nonce: &str, token: &str, expires_rfc: &str) -> Response {
     let html = format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -1067,8 +1068,9 @@ pub struct LoginFormData {
 /// Deserialize a form flag that may arrive as `1`/`0` (the HTML checkbox
 /// convention used by the login page and desktop client) or `true`/`false`.
 /// serde_urlencoded deserializes `bool` via `str::parse::<bool>()`, which
-/// rejects `1` and would 422 the whole form.
-fn deserialize_flag<'de, D>(deserializer: D) -> Result<bool, D::Error>
+/// rejects `1` and would 422 the whole form. Shared with the OIDC login
+/// query params (persea#227), which accept the same flag conventions.
+pub(crate) fn deserialize_flag<'de, D>(deserializer: D) -> Result<bool, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
