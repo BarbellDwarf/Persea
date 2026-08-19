@@ -3214,6 +3214,7 @@ pub fn create_pending_mfa_desktop(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_pending_mfa_inner(
     db: &Db,
     user_id: i64,
@@ -8676,6 +8677,7 @@ macro_rules! pending_mfa_row {
     };
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create_pending_mfa_pool(
     pool: &DbPool,
     user_id: i64,
