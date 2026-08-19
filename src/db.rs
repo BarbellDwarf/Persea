@@ -4798,12 +4798,12 @@ mod tests {
         let (_id2, _t2) = create_user_token(&db, uid, "self-service", None, None).unwrap();
         let tokens = list_user_tokens(&db, uid).unwrap();
         assert_eq!(tokens.len(), 2);
-        assert!(
-            tokens
-                .iter()
-                .any(|t| t.name == "Persea Desktop (login)" && t.token_type == "scoped")
-        );
-        assert!(tokens.iter().any(|t| t.name == "self-service" && t.token_type == "user"));
+        assert!(tokens
+            .iter()
+            .any(|t| t.name == "Persea Desktop (login)" && t.token_type == "scoped"));
+        assert!(tokens
+            .iter()
+            .any(|t| t.name == "self-service" && t.token_type == "user"));
     }
 
     #[test]
@@ -4877,8 +4877,8 @@ mod tests {
         let pending = get_pending_mfa(&db, &plain).unwrap().unwrap();
         assert!(pending.desktop);
         // The ordinary path stays a web login.
-        let plain2 = create_pending_mfa(&db, uid, "mfa@example.com", "MFA", "viewer", None, 300)
-            .unwrap();
+        let plain2 =
+            create_pending_mfa(&db, uid, "mfa@example.com", "MFA", "viewer", None, 300).unwrap();
         let pending2 = get_pending_mfa(&db, &plain2).unwrap().unwrap();
         assert!(!pending2.desktop);
     }

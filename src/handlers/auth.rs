@@ -546,9 +546,7 @@ pub async fn login_submit(
             // client that asked for the token gets it in the response.
             if form.desktop {
                 return match crate::api::pairing::mint_login_scoped_token(
-                    &database,
-                    user.id,
-                    &client_ip,
+                    &database, user.id, &client_ip,
                 )
                 .await
                 {
@@ -1027,7 +1025,10 @@ fn desktop_connected_page(nonce: &str, token: &str, expires_rfc: &str) -> Respon
     );
 
     (
-        AppendHeaders([(header::CACHE_CONTROL, "no-store".parse().unwrap())]),
+        AppendHeaders([(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        )]),
         Html(html),
     )
         .into_response()
@@ -1275,9 +1276,7 @@ pub async fn saml_acs(
             // client that asked for the token gets it in the response.
             if desktop_login {
                 return match crate::api::pairing::mint_login_scoped_token(
-                    &database,
-                    user.id,
-                    &client_ip,
+                    &database, user.id, &client_ip,
                 )
                 .await
                 {
@@ -1479,7 +1478,10 @@ mod tests {
             "session cookie must be set: {set_cookies:?}"
         );
         let body = body_text(response).await;
-        assert!(body.contains("Desktop Connected"), "expected connected page");
+        assert!(
+            body.contains("Desktop Connected"),
+            "expected connected page"
+        );
         assert!(body.contains("Expires:"), "expiry must be shown");
         let token = extract_token(&body);
         assert!(token.starts_with("rgu_"), "token plaintext: {token}");
@@ -1521,8 +1523,13 @@ mod tests {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default()
             .to_string();
-        assert!(location.ends_with("/connections.html"), "redirect: {location}");
-        let uid = db::get_user_by_email(&db, "desktop@example.com").unwrap().id;
+        assert!(
+            location.ends_with("/connections.html"),
+            "redirect: {location}"
+        );
+        let uid = db::get_user_by_email(&db, "desktop@example.com")
+            .unwrap()
+            .id;
         assert!(
             db::list_user_tokens(&db, uid).unwrap().is_empty(),
             "a web login must not mint a scoped token"
@@ -1577,7 +1584,10 @@ mod tests {
         // scoped token, not the /connections.html redirect.
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_text(response).await;
-        assert!(body.contains("Desktop Connected"), "expected connected page");
+        assert!(
+            body.contains("Desktop Connected"),
+            "expected connected page"
+        );
         let token = extract_token(&body);
         let (u, meta) = db::validate_user_token(&db, &token).unwrap();
         assert_eq!(u.id, user.id);

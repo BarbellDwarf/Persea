@@ -867,7 +867,15 @@ async fn mint_paired_token(
     ip: &std::net::IpAddr,
 ) -> Result<(i64, String, String, String), AppError> {
     let name = token_name(hostname);
-    mint_desktop_token(database, user_id, name, None, ip, "device pairing (desktop shell)").await
+    mint_desktop_token(
+        database,
+        user_id,
+        name,
+        None,
+        ip,
+        "device pairing (desktop shell)",
+    )
+    .await
 }
 
 /// Mint the scoped token issued by an interactive desktop login
@@ -933,7 +941,8 @@ async fn mint_desktop_token(
         let msg = e.to_string();
         if msg.contains("UNIQUE constraint") {
             AppError::Conflict(
-                "token name already exists — revoke the previous desktop token and sign in again".into(),
+                "token name already exists — revoke the previous desktop token and sign in again"
+                    .into(),
             )
         } else {
             AppError::Internal("failed to create token".into())
@@ -945,6 +954,7 @@ async fn mint_desktop_token(
     let email_clone = email.clone();
     let name_clone = name.clone();
     let ip_str = ip.to_string();
+    let audit_note_owned = audit_note.to_string();
     let _ = tokio::task::spawn_blocking(move || {
         db::log_token_event(
             &db,
@@ -953,7 +963,7 @@ async fn mint_desktop_token(
             &email_clone,
             "created",
             Some(&ip_str),
-            Some(audit_note),
+            Some(&audit_note_owned),
         )
     })
     .await;
@@ -1026,8 +1036,15 @@ mod tests {
     async fn login_scoped_token_is_scoped_with_12h_ttl() {
         use crate::db::{self, Db};
         let db: Db = db::init_db(std::path::Path::new(":memory:")).unwrap();
-        let user = db::upsert_user(&db, "desktop@example.com", "Desktop", None, "poweruser", &[])
-            .unwrap();
+        let user = db::upsert_user(
+            &db,
+            "desktop@example.com",
+            "Desktop",
+            None,
+            "poweruser",
+            &[],
+        )
+        .unwrap();
         let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
         let (token_id, plaintext, name, max_role, expires_db, expires_rfc) =
             mint_login_scoped_token(&db, user.id, &ip).await.unwrap();
@@ -1051,7 +1068,10 @@ mod tests {
             (11.0..13.0).contains(&hours_ahead),
             "TTL should be about 12 hours, got {hours_ahead:.1}h"
         );
-        assert!(expires_rfc.starts_with("20"), "rfc3339 expiry: {expires_rfc}");
+        assert!(
+            expires_rfc.starts_with("20"),
+            "rfc3339 expiry: {expires_rfc}"
+        );
 
         // The token validates through the normal user-token path (same
         // surface the pairing token covers), role-capped at the user role.
@@ -1065,8 +1085,8 @@ mod tests {
     async fn login_scoped_token_refreshes_and_is_revocable() {
         use crate::db::{self, Db};
         let db: Db = db::init_db(std::path::Path::new(":memory:")).unwrap();
-        let user = db::upsert_user(&db, "desktop@example.com", "Desktop", None, "operator", &[])
-            .unwrap();
+        let user =
+            db::upsert_user(&db, "desktop@example.com", "Desktop", None, "operator", &[]).unwrap();
         let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
         let (token_id, _t1, _n, _r, _e1, _e2) =
             mint_login_scoped_token(&db, user.id, &ip).await.unwrap();

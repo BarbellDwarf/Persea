@@ -1831,7 +1831,11 @@ impl AuthProvider for SamlProvider {
             Err(e) => return AuthResult::Unavailable(format!("SAML IdP metadata error: {e}")),
         };
 
-        match build_authn_request(&self.config, &metadata.sso_url, request.relay_state.as_deref()) {
+        match build_authn_request(
+            &self.config,
+            &metadata.sso_url,
+            request.relay_state.as_deref(),
+        ) {
             Ok((id, _xml, redirect_url)) => {
                 // Store the request ID per flow so InResponseTo can be
                 // verified on callback. Concurrent logins each get their
