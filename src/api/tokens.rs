@@ -1139,8 +1139,7 @@ mod tests {
     async fn revoking_a_token_leaves_session_rows_untouched() {
         use crate::db::{self, Db};
         let db: Db = db::init_db(std::path::Path::new(":memory:")).unwrap();
-        let user =
-            db::upsert_user(&db, "alice@test.com", "Alice", None, "operator", &[]).unwrap();
+        let user = db::upsert_user(&db, "alice@test.com", "Alice", None, "operator", &[]).unwrap();
 
         // A live session history row: ended_at NULL is the "still running"
         // signal the teardown guards on, the record every open
@@ -1184,6 +1183,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, "active");
-        assert!(ended.is_none(), "revoking a token must not close session rows");
+        assert!(
+            ended.is_none(),
+            "revoking a token must not close session rows"
+        );
     }
 }

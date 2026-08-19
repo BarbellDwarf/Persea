@@ -2133,15 +2133,21 @@ mod drive_tests {
         let (token_id, plaintext) =
             db::create_user_token(&db, user.id, "ci-token", None, None).unwrap();
 
-        let tmp = std::env::temp_dir().join(format!(
-            "persea-session-token-api-test-{}",
-            Uuid::new_v4()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("persea-session-token-api-test-{}", Uuid::new_v4()));
         let mut config = crate::config::Config::default();
         config.recording_path = Some(tmp.join("recordings"));
         let manager: AppState = Arc::new(SessionManager::new_with_db(config, None, db.clone()));
         let id = Uuid::new_v4();
-        seed_session(&manager, id, SessionType::Rdp, false, None, "alice@example.com").await;
+        seed_session(
+            &manager,
+            id,
+            SessionType::Rdp,
+            false,
+            None,
+            "alice@example.com",
+        )
+        .await;
 
         // End the session through the same manager path the API's
         // DELETE /api/sessions/{id} uses.
