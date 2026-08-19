@@ -339,10 +339,19 @@ const SETTING_DESKTOP_KIOSK: &str = "desktop_kiosk";
 const SETTING_DESKTOP_TRANSFERS: &str = "desktop_transfers";
 const SETTING_DESKTOP_PAIRING: &str = "desktop_pairing";
 
+/// `system_settings` key backing the compliance-mode gate (S3, persea#228):
+/// closes the direct API surface (admin API keys + self-service user
+/// tokens) while interactive sessions and scoped desktop tokens keep
+/// authenticating. Default OFF, read by the auth middleware per request.
+const SETTING_COMPLIANCE_MODE: &str = "compliance_mode";
+
 /// `GET /api/auth/status`: login-page configuration for anonymous
 /// callers: OIDC availability, site title, drive flag, the resolved
 /// theme data, the server version, the desktop-shell capability
-/// probe, and the cached server update-check result (S16).
+/// probe, the compliance-mode flag (S3, persea#228), and the cached
+/// server update-check result (S16). Answers without authentication so
+/// the desktop app can detect the mode and switch to the login-prompt
+/// flow.
 pub async fn auth_status(
     Extension(oidc_enabled): Extension<OidcEnabled>,
     Extension(site_title): Extension<SiteTitle>,
@@ -358,11 +367,14 @@ pub async fn auth_status(
         crate::settings_merge::toggle_enabled(&settings, SETTING_DESKTOP_TRANSFERS, true);
     let desktop_pairing = COMPILED_DESKTOP_PAIRING
         && crate::settings_merge::toggle_enabled(&settings, SETTING_DESKTOP_PAIRING, true);
+    let compliance_mode =
+        crate::settings_merge::toggle_enabled(&settings, SETTING_COMPLIANCE_MODE, false);
 
     let mut resp = json!({
         "oidc_enabled": oidc_enabled.0,
         "site_title": site_title.0,
         "drive_configured": drive_configured.0,
+        "compliance_mode": compliance_mode,
         "version": env!("CARGO_PKG_VERSION"),
         "capabilities": {
             "drive_api": true,
@@ -1166,5 +1178,89 @@ mod tests {
         assert_eq!(cert_status(now, now), "expiring_soon");
         assert_eq!(cert_status(now - 1, now), "expired");
         assert_eq!(cert_status(now - 365 * day, now), "expired");
+    }
+
+    // ── Compliance probe (GET /api/auth/status, persea#228) ──────────────
+
+    fn status_router(db: Option<Db>) -> Router {
+        let r = Router::new()
+            .route("/api/auth/status", get(auth_status))
+            .layer(Extension(crate::api::OidcEnabled(false)))
+            .layer(Extension(crate::api::SiteTitle("Persea".into())))
+            .layer(Extension(crate::api::DriveConfigured(false)))
+            .layer(Extension(crate::api::ThemeData {
+                admin_preset: "dark".into(),
+                admin_colors: crate::config::builtin_presets()
+                    .first()
+                    .map(|(_, c)| c.clone())
+                    .expect("builtin presets exist"),
+                logo_url: None,
+                presets: std::collections::HashMap::new(),
+            }));
+        match db {
+            Some(db) => r.layer(Extension(db)),
+            None => r,
+        }
+    }
+
+    /// Store a compliance setting row exactly as the settings API would.
+    fn set_system_setting(db: &Db, key: &str, value: &str) {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS system_settings (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL DEFAULT '',
+                updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO system_settings (key, value, updated_at)
+             VALUES (?1, ?2, CURRENT_TIMESTAMP)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+            rusqlite::params![key, value],
+        )
+        .unwrap();
+    }
+
+    async fn get_status_json(router: &Router) -> serde_json::Value {
+        let resp = router
+            .clone()
+            .oneshot(req_get("/api/auth/status"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        serde_json::from_str(&body_string(resp).await).unwrap()
+    }
+
+    #[tokio::test]
+    async fn auth_status_advertises_compliance_mode() {
+        // Unset toggle → off (existing deployments unaffected).
+        let body = get_status_json(&status_router(Some(test_db()))).await;
+        assert_eq!(body["compliance_mode"], json!(false));
+
+        // Stored "true" → advertised, so the desktop app can switch to the
+        // login-prompt flow.
+        let db = test_db();
+        set_system_setting(&db, SETTING_COMPLIANCE_MODE, "true");
+        let body = get_status_json(&status_router(Some(db))).await;
+        assert_eq!(body["compliance_mode"], json!(true));
+
+        // Flipped back to "false" → advertised off.
+        let db = test_db();
+        set_system_setting(&db, SETTING_COMPLIANCE_MODE, "false");
+        let body = get_status_json(&status_router(Some(db))).await;
+        assert_eq!(body["compliance_mode"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn auth_status_answers_without_auth_or_db() {
+        // The probe is anonymous by design and must keep answering without
+        // a DB handle, advertising the default (off) mode.
+        let body = get_status_json(&status_router(None)).await;
+        assert_eq!(body["compliance_mode"], json!(false));
+        assert!(body["version"].as_str().is_some());
+        assert!(body["capabilities"]["desktop_bridge"].as_bool().is_some());
     }
 }

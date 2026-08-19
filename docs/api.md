@@ -27,9 +27,34 @@ must authenticate one of three ways:
 2. **User API token**: the same headers, with a personal token
    (`rgu_...`). The token's effective role is the *lower* of the user's
    current role and the token's `max_role` cap, so a demoted user's
-   tokens lose power immediately.
+   tokens lose power immediately. Scoped tokens (minted by an
+   interactive desktop login or device pairing) are a subtype that
+   re-validates the account on use; login-minted scoped tokens carry a
+   12-hour TTL.
 3. **Login session cookie**: `persea_session`, set by the web login.
    Useful in browsers; for scripts, an API key is simpler.
+
+### Compliance mode
+
+The `compliance_mode` system setting (Admin → Settings → Features)
+closes the direct API surface for instances where security teams
+disallow scripted key access. When it is on:
+
+- **Admin API keys are rejected** with `403` and the message `API key
+  authentication is disabled in compliance mode`.
+- **Self-service user tokens are rejected** with `403` (`user token
+  authentication is disabled in compliance mode; sign in interactively
+  or use a scoped desktop token`).
+- **Login session cookies and scoped tokens keep working**, so the
+  desktop bridge surface (pairing, WebSockets, the session API) stays
+  available to the desktop app through the scoped token its login flow
+  mints.
+- The anonymous `GET /api/auth/status` probe keeps answering and
+  reports `"compliance_mode": true`, which the desktop app uses to
+  switch to its login-prompt flow.
+
+The kill switch remains `enable_api_keys`: with that off, *all* key
+auth (including scoped tokens) is rejected.
 
 ## CSRF requirement
 
