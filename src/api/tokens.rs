@@ -817,6 +817,7 @@ pub async fn admin_list_user_tokens(
                 "name": t.name,
                 "max_role": t.max_role,
                 "expires_at": t.expires_at,
+                "token_type": t.token_type,
                 "disabled": t.disabled,
                 "created_at": t.created_at,
                 "last_used_at": t.last_used_at,

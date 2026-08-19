@@ -122,6 +122,11 @@ pub struct AuthRequest {
     pub callback_params: Option<HashMap<String, String>>,
     /// Bearer / API key token.
     pub bearer_token: Option<String>,
+    /// RelayState for redirect providers (SAML): echoed by the IdP on the
+    /// callback so the ACS handler can recover flow intent (e.g. a desktop
+    /// login that must mint a scoped token). `None` leaves the request
+    /// byte-identical to the pre-desktop build.
+    pub relay_state: Option<String>,
     /// Raw request headers — providers that need special headers can read them
     /// here without coupling to axum.
     pub headers: HashMap<String, String>,
@@ -135,6 +140,7 @@ impl Default for AuthRequest {
             password: None,
             callback_params: None,
             bearer_token: None,
+            relay_state: None,
             headers: HashMap::new(),
         }
     }

@@ -177,6 +177,11 @@ pub struct UserApiToken {
     pub max_role: Option<String>,
     /// Optional expiry; an expired token is rejected.
     pub expires_at: Option<String>,
+    /// Token kind: `user` (self-service/admin-minted) or `scoped`
+    /// (desktop bridge token, issued by interactive login or device
+    /// pairing). The bridge layers (LDAP re-validation, compliance mode)
+    /// target `scoped` rows only.
+    pub token_type: String,
     /// Whether the token is disabled.
     pub disabled: bool,
     /// When the token was created (UTC).
@@ -357,6 +362,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             token_hash    TEXT NOT NULL UNIQUE,
             max_role      TEXT,
             expires_at    TEXT,
+            token_type    TEXT NOT NULL DEFAULT 'user',
             disabled      INTEGER NOT NULL DEFAULT 0,
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
             last_used_at  TEXT,
@@ -454,6 +460,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             user_name     TEXT NOT NULL DEFAULT '',
             user_role     TEXT NOT NULL DEFAULT 'viewer',
             oidc_subject  TEXT,
+            desktop       INTEGER NOT NULL DEFAULT 0,
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
             expires_at    TEXT NOT NULL
         );",
@@ -512,6 +519,31 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
     // column from the CREATE TABLE above; existing databases are ALTERed
     // here, idempotent-guarded like the other column migrations.
     if let Err(e) = conn.execute("ALTER TABLE session_history ADD COLUMN source_ip TEXT", []) {
+        if !e.to_string().contains("duplicate column") {
+            return Err(e);
+        }
+    }
+
+    // Migration: scoped token type discriminator (persea#227). Fresh
+    // databases get the column from the CREATE TABLE above; existing
+    // databases are ALTERed here, idempotent-guarded like the other
+    // column migrations.
+    if let Err(e) = conn.execute(
+        "ALTER TABLE user_api_tokens ADD COLUMN token_type TEXT NOT NULL DEFAULT 'user'",
+        [],
+    ) {
+        if !e.to_string().contains("duplicate column") {
+            return Err(e);
+        }
+    }
+
+    // Migration: desktop-login intent on the pending MFA record
+    // (persea#227). The MFA completion handler reads it to mint the
+    // scoped desktop token after the TOTP gate.
+    if let Err(e) = conn.execute(
+        "ALTER TABLE auth_pending_mfa ADD COLUMN desktop INTEGER NOT NULL DEFAULT 0",
+        [],
+    ) {
         if !e.to_string().contains("duplicate column") {
             return Err(e);
         }
@@ -1679,12 +1711,45 @@ pub fn create_user_token(
     Ok((id, token))
 }
 
+/// Create a scoped user token (desktop bridge): same storage as
+/// [`create_user_token`], but stamped `token_type = 'scoped'` so the
+/// bridge layers (LDAP re-validation, compliance mode) can target these
+/// rows. Returns the plaintext token (shown once), prefixed `rgu_` like
+/// every other user token.
+pub fn create_scoped_user_token(
+    db: &Db,
+    user_id: i64,
+    name: &str,
+    max_role: Option<&str>,
+    expires_at: Option<&str>,
+) -> rusqlite::Result<(i64, String)> {
+    db_route!(
+        db,
+        create_scoped_user_token_pool,
+        user_id,
+        name.to_string(),
+        max_role.map(str::to_string),
+        expires_at.map(str::to_string)
+    );
+    let raw_key = generate_key();
+    let token = format!("rgu_{}", raw_key);
+    let token_hash = hash_key(&token);
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO user_api_tokens (user_id, name, token_hash, max_role, expires_at, token_type)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'scoped')",
+        params![user_id, name, token_hash, max_role, expires_at],
+    )?;
+    let id = conn.last_insert_rowid();
+    Ok((id, token))
+}
+
 /// List all tokens for a specific user (no key material).
 pub fn list_user_tokens(db: &Db, user_id: i64) -> rusqlite::Result<Vec<UserApiToken>> {
     db_route!(db, list_user_tokens_pool, user_id);
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at
+        "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at, token_type
          FROM user_api_tokens WHERE user_id = ?1 ORDER BY id",
     )?;
     let rows = stmt.query_map(params![user_id], |row| {
@@ -1694,6 +1759,7 @@ pub fn list_user_tokens(db: &Db, user_id: i64) -> rusqlite::Result<Vec<UserApiTo
             name: row.get(2)?,
             max_role: row.get(3)?,
             expires_at: row.get(4)?,
+            token_type: row.get(8)?,
             disabled: row.get::<_, i32>(5)? != 0,
             created_at: row.get(6)?,
             last_used_at: row.get(7)?,
@@ -1707,7 +1773,7 @@ pub fn list_all_user_tokens(db: &Db) -> rusqlite::Result<Vec<(UserApiToken, Stri
     db_route!(db, list_all_user_tokens_pool);
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, u.email
+        "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, t.token_type, u.email
          FROM user_api_tokens t
          JOIN users u ON u.id = t.user_id
          ORDER BY t.id",
@@ -1719,11 +1785,12 @@ pub fn list_all_user_tokens(db: &Db) -> rusqlite::Result<Vec<(UserApiToken, Stri
             name: row.get(2)?,
             max_role: row.get(3)?,
             expires_at: row.get(4)?,
+            token_type: row.get(8)?,
             disabled: row.get::<_, i32>(5)? != 0,
             created_at: row.get(6)?,
             last_used_at: row.get(7)?,
         };
-        let email: String = row.get(8)?;
+        let email: String = row.get(9)?;
         Ok((token, email))
     })?;
     rows.collect()
@@ -1745,7 +1812,7 @@ pub fn validate_user_token(db: &Db, token: &str) -> Result<(User, UserApiToken),
         .prepare(
             "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at,
                     u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups,
-                    t.token_hash, u.custom_role_id, u.auth_source
+                    t.token_hash, u.custom_role_id, u.auth_source, t.token_type
              FROM user_api_tokens t
              JOIN users u ON u.id = t.user_id",
         )
@@ -1759,6 +1826,7 @@ pub fn validate_user_token(db: &Db, token: &str) -> Result<(User, UserApiToken),
                 name: row.get(2)?,
                 max_role: row.get(3)?,
                 expires_at: row.get(4)?,
+                token_type: row.get(20)?,
                 disabled: row.get::<_, i32>(5)? != 0,
                 created_at: row.get(6)?,
                 last_used_at: row.get(7)?,
@@ -3090,6 +3158,9 @@ pub struct PendingMfa {
     pub user_role: String,
     /// OIDC subject carried through the pending login, so the post-MFA upsert matches the right user.
     pub oidc_subject: Option<String>,
+    /// Desktop-login intent: when set, the MFA completion handler mints a
+    /// scoped desktop token alongside the session (persea#227).
+    pub desktop: bool,
     /// When the record was created (UTC).
     pub created_at: String,
     /// When the record expires; lookups ignore expired rows.
@@ -3106,6 +3177,53 @@ pub fn create_pending_mfa(
     oidc_subject: Option<&str>,
     ttl_secs: u64,
 ) -> rusqlite::Result<String> {
+    create_pending_mfa_inner(
+        db,
+        user_id,
+        user_email,
+        user_name,
+        user_role,
+        oidc_subject,
+        ttl_secs,
+        false,
+    )
+}
+
+/// Create a pending MFA record for a desktop login. Identical to
+/// [`create_pending_mfa`] except the record carries the desktop-login
+/// intent so the MFA completion handler mints the scoped token after the
+/// TOTP gate (persea#227).
+pub fn create_pending_mfa_desktop(
+    db: &Db,
+    user_id: i64,
+    user_email: &str,
+    user_name: &str,
+    user_role: &str,
+    oidc_subject: Option<&str>,
+    ttl_secs: u64,
+) -> rusqlite::Result<String> {
+    create_pending_mfa_inner(
+        db,
+        user_id,
+        user_email,
+        user_name,
+        user_role,
+        oidc_subject,
+        ttl_secs,
+        true,
+    )
+}
+
+fn create_pending_mfa_inner(
+    db: &Db,
+    user_id: i64,
+    user_email: &str,
+    user_name: &str,
+    user_role: &str,
+    oidc_subject: Option<&str>,
+    ttl_secs: u64,
+    desktop: bool,
+) -> rusqlite::Result<String> {
     db_route!(
         db,
         create_pending_mfa_pool,
@@ -3114,16 +3232,26 @@ pub fn create_pending_mfa(
         user_name.to_string(),
         user_role.to_string(),
         oidc_subject.map(str::to_string),
-        ttl_secs
+        ttl_secs,
+        desktop
     );
     let token = generate_key();
     let token_hash = hash_key(&token);
     let conn = db.lock().unwrap();
     let ttl_modifier = format!("+{} seconds", ttl_secs);
     conn.execute(
-        "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', ?7))",
-        params![token_hash, user_id, user_email, user_name, user_role, oidc_subject, ttl_modifier],
+        "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, desktop, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now', ?8))",
+        params![
+            token_hash,
+            user_id,
+            user_email,
+            user_name,
+            user_role,
+            oidc_subject,
+            desktop as i32,
+            ttl_modifier
+        ],
     )?;
     Ok(token)
 }
@@ -3134,7 +3262,7 @@ pub fn get_pending_mfa(db: &Db, token: &str) -> rusqlite::Result<Option<PendingM
     let token_hash = hash_key(token);
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT user_id, user_email, user_name, user_role, oidc_subject, created_at, expires_at
+        "SELECT user_id, user_email, user_name, user_role, oidc_subject, created_at, expires_at, desktop
          FROM auth_pending_mfa WHERE token_hash = ?1 AND expires_at > datetime('now')",
     )?;
     let mut rows = stmt.query_map(params![token_hash], |row| {
@@ -3144,6 +3272,7 @@ pub fn get_pending_mfa(db: &Db, token: &str) -> rusqlite::Result<Option<PendingM
             user_name: row.get(2)?,
             user_role: row.get(3)?,
             oidc_subject: row.get(4)?,
+            desktop: row.get::<_, i32>(7)? != 0,
             created_at: row.get(5)?,
             expires_at: row.get(6)?,
         })
@@ -4650,6 +4779,108 @@ mod tests {
         assert!(validate_api_key(&db, &k, None).is_ok());
         let k = add_admin(&db, "none", None, None).unwrap();
         assert!(validate_api_key(&db, &k, None).is_ok());
+    }
+
+    #[test]
+    fn scoped_token_is_stamped_and_listed() {
+        let db = test_db();
+        let uid = upsert_user(&db, "scoped@example.com", "Scoped", None, "viewer", &[])
+            .unwrap()
+            .id;
+        let (id, _plaintext) =
+            create_scoped_user_token(&db, uid, "Persea Desktop (login)", Some("viewer"), None)
+                .unwrap();
+        let tokens = list_user_tokens(&db, uid).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].id, id);
+        assert_eq!(tokens[0].token_type, "scoped");
+        // The ordinary create path stays 'user'.
+        let (_id2, _t2) = create_user_token(&db, uid, "self-service", None, None).unwrap();
+        let tokens = list_user_tokens(&db, uid).unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.name == "Persea Desktop (login)" && t.token_type == "scoped")
+        );
+        assert!(tokens.iter().any(|t| t.name == "self-service" && t.token_type == "user"));
+    }
+
+    #[test]
+    fn scoped_token_expires_server_side() {
+        let db = test_db();
+        let uid = upsert_user(&db, "expire@example.com", "Expire", None, "viewer", &[])
+            .unwrap()
+            .id;
+        // Future expiry: the token validates.
+        let (_id, plaintext) = create_scoped_user_token(
+            &db,
+            uid,
+            "Persea Desktop (login)",
+            Some("viewer"),
+            Some("2999-01-01 00:00:00"),
+        )
+        .unwrap();
+        let (user, meta) = validate_user_token(&db, &plaintext).unwrap();
+        assert_eq!(user.id, uid);
+        assert_eq!(meta.token_type, "scoped");
+        // Past expiry: rejected with Expired (fail closed), and the row is
+        // still revocable by id.
+        let (_id2, plaintext2) = create_scoped_user_token(
+            &db,
+            uid,
+            "Persea Desktop (old)",
+            Some("viewer"),
+            Some("2000-01-01 00:00:00"),
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_user_token(&db, &plaintext2),
+            Err(AuthError::Expired)
+        ));
+        // The expiry cleanup also reaps expired scoped rows.
+        cleanup_expired_user_tokens(&db).unwrap();
+        let tokens = list_user_tokens(&db, uid).unwrap();
+        assert_eq!(tokens.len(), 1, "expired scoped token must be reaped");
+    }
+
+    #[test]
+    fn scoped_token_is_revocable_by_user_and_admin() {
+        let db = test_db();
+        let uid = upsert_user(&db, "revoke@example.com", "Revoke", None, "viewer", &[])
+            .unwrap()
+            .id;
+        let (token_id, _plaintext) =
+            create_scoped_user_token(&db, uid, "Persea Desktop (login)", Some("viewer"), None)
+                .unwrap();
+        // User (owner) revocation.
+        assert!(revoke_user_token(&db, uid, token_id).unwrap());
+        assert!(list_user_tokens(&db, uid).unwrap().is_empty());
+        // Admin revocation (no ownership check).
+        let (_id2, _t2) =
+            create_scoped_user_token(&db, uid, "Persea Desktop (login)", Some("viewer"), None)
+                .unwrap();
+        let tokens = list_user_tokens(&db, uid).unwrap();
+        assert!(admin_revoke_user_token(&db, tokens[0].id).unwrap());
+        assert!(list_user_tokens(&db, uid).unwrap().is_empty());
+    }
+
+    #[test]
+    fn pending_mfa_desktop_flag_roundtrips() {
+        let db = test_db();
+        let uid = upsert_user(&db, "mfa@example.com", "MFA", None, "viewer", &[])
+            .unwrap()
+            .id;
+        let plain =
+            create_pending_mfa_desktop(&db, uid, "mfa@example.com", "MFA", "viewer", None, 300)
+                .unwrap();
+        let pending = get_pending_mfa(&db, &plain).unwrap().unwrap();
+        assert!(pending.desktop);
+        // The ordinary path stays a web login.
+        let plain2 = create_pending_mfa(&db, uid, "mfa@example.com", "MFA", "viewer", None, 300)
+            .unwrap();
+        let pending2 = get_pending_mfa(&db, &plain2).unwrap().unwrap();
+        assert!(!pending2.desktop);
     }
 }
 
@@ -6869,6 +7100,7 @@ macro_rules! user_token_row {
             name: $row.get(2),
             max_role: $row.get(3),
             expires_at: $row.get(4),
+            token_type: $row.get(8),
             disabled: $row.get(5),
             created_at: $row.get(6),
             last_used_at: $row.get(7),
@@ -6906,16 +7138,48 @@ async fn create_user_token_pool(
     Ok((id, token))
 }
 
+/// Pool variant of [`create_scoped_user_token`]: stamps `token_type =
+/// 'scoped'` on the row so the desktop bridge layers can target it.
+async fn create_scoped_user_token_pool(
+    pool: &DbPool,
+    user_id: i64,
+    name: String,
+    max_role: Option<String>,
+    expires_at: Option<String>,
+) -> rusqlite::Result<(i64, String)> {
+    let raw_key = generate_key();
+    let token = format!("rgu_{}", raw_key);
+    let token_hash = hash_key(&token);
+    let id = exec_returning_id(
+        pool,
+        qsql!(
+            pool,
+            "INSERT INTO user_api_tokens (user_id, name, token_hash, max_role, expires_at, token_type) VALUES ($1, $2, $3, $4, $5, 'scoped') RETURNING id",
+            "INSERT INTO user_api_tokens (user_id, name, token_hash, max_role, expires_at, token_type) VALUES (?, ?, ?, ?, ?, 'scoped')"
+        ),
+        &[
+            Arg::I64(user_id),
+            Arg::Str(name),
+            Arg::Str(token_hash),
+            Arg::OptStr(max_role),
+            Arg::OptStr(expires_at),
+        ],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok((id, token))
+}
+
 async fn list_user_tokens_pool(pool: &DbPool, user_id: i64) -> rusqlite::Result<Vec<UserApiToken>> {
     let rows = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at FROM user_api_tokens WHERE user_id = $1 ORDER BY id", &[Arg::I64(user_id)]).await
+            pg_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at, token_type FROM user_api_tokens WHERE user_id = $1 ORDER BY id", &[Arg::I64(user_id)]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at FROM user_api_tokens WHERE user_id = ? ORDER BY id", &[Arg::I64(user_id)]).await
+            mysql_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at, token_type FROM user_api_tokens WHERE user_id = ? ORDER BY id", &[Arg::I64(user_id)]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at FROM user_api_tokens WHERE user_id = ? ORDER BY id", &[Arg::I64(user_id)]).await
+            sqlite_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at, token_type FROM user_api_tokens WHERE user_id = ? ORDER BY id", &[Arg::I64(user_id)]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
@@ -6926,20 +7190,20 @@ async fn list_user_tokens_pool(pool: &DbPool, user_id: i64) -> rusqlite::Result<
 async fn list_all_user_tokens_pool(pool: &DbPool) -> rusqlite::Result<Vec<(UserApiToken, String)>> {
     let rows = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
+            pg_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, t.token_type, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
+            mysql_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, t.token_type, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
+            sqlite_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, t.token_type, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
     Ok(rows
         .iter()
-        .map(|row| (user_token_row!(row), row.get::<String>(8)))
+        .map(|row| (user_token_row!(row), row.get::<String>(9)))
         .collect())
 }
 
@@ -6953,11 +7217,11 @@ async fn validate_user_token_pool(
         pool,
         "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, \
                 u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, \
-                t.token_hash, u.custom_role_id, u.auth_source \
+                t.token_hash, u.custom_role_id, u.auth_source, t.token_type \
          FROM user_api_tokens t JOIN users u ON u.id = t.user_id",
         "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, \
                 u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, \
-                t.token_hash, u.custom_role_id, u.auth_source \
+                t.token_hash, u.custom_role_id, u.auth_source, t.token_type \
          FROM user_api_tokens t JOIN users u ON u.id = t.user_id"
     );
     let rows = match pool {
@@ -6982,6 +7246,7 @@ async fn validate_user_token_pool(
         name: row.get(2),
         max_role: row.get(3),
         expires_at: row.get(4),
+        token_type: row.get(20),
         disabled: row.get(5),
         created_at: row.get(6),
         last_used_at: row.get(7),
@@ -8404,6 +8669,7 @@ macro_rules! pending_mfa_row {
             user_name: $row.get(2),
             user_role: $row.get(3),
             oidc_subject: $row.get(4),
+            desktop: $row.get(7),
             created_at: $row.get(5),
             expires_at: $row.get(6),
         }
@@ -8418,15 +8684,16 @@ async fn create_pending_mfa_pool(
     user_role: String,
     oidc_subject: Option<String>,
     ttl_secs: u64,
+    desktop: bool,
 ) -> rusqlite::Result<String> {
     let token = generate_key();
     let token_hash = hash_key(&token);
     let (sql, args) = match pool {
         DbPool::Postgres(_) => (
             format!(
-                "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, expires_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, {})",
-                ts_now_plus_secs(pool, "$7")
+                "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, desktop, expires_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, {})",
+                ts_now_plus_secs(pool, "$8")
             ),
             vec![
                 Arg::Str(token_hash),
@@ -8435,13 +8702,14 @@ async fn create_pending_mfa_pool(
                 Arg::Str(user_name),
                 Arg::Str(user_role),
                 Arg::OptStr(oidc_subject),
+                Arg::Bool(desktop),
                 Arg::I64(ttl_secs as i64),
             ],
         ),
         DbPool::MySQL(_) => (
             format!(
-                "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, expires_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, {})",
+                "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, desktop, expires_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, {})",
                 ts_now_plus_secs(pool, "?")
             ),
             vec![
@@ -8451,12 +8719,13 @@ async fn create_pending_mfa_pool(
                 Arg::Str(user_name),
                 Arg::Str(user_role),
                 Arg::OptStr(oidc_subject),
+                Arg::Bool(desktop),
                 Arg::I64(ttl_secs as i64),
             ],
         ),
         _ => (
-            "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, expires_at) \
-             VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?))"
+            "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, desktop, expires_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', ?))"
                 .to_string(),
             vec![
                 Arg::Str(token_hash),
@@ -8465,6 +8734,7 @@ async fn create_pending_mfa_pool(
                 Arg::Str(user_name),
                 Arg::Str(user_role),
                 Arg::OptStr(oidc_subject),
+                Arg::Bool(desktop),
                 Arg::Str(format!("+{} seconds", ttl_secs)),
             ],
         ),
@@ -8479,7 +8749,7 @@ async fn get_pending_mfa_pool(
 ) -> rusqlite::Result<Option<PendingMfa>> {
     let token_hash = hash_key(&token);
     let sql = format!(
-        "SELECT user_id, user_email, user_name, user_role, oidc_subject, created_at, expires_at \
+        "SELECT user_id, user_email, user_name, user_role, oidc_subject, created_at, expires_at, desktop \
          FROM auth_pending_mfa WHERE token_hash = {} AND expires_at > {}",
         ph1(pool),
         ts_now(pool)

@@ -974,6 +974,7 @@ fn parse_der_length(data: &[u8], pos: &mut usize) -> Result<usize, String> {
 fn build_authn_request(
     config: &SamlConfig,
     idp_sso_url: &str,
+    relay_state: Option<&str>,
 ) -> Result<(String, String, String), String> {
     let request_id = format!("_{}", Uuid::new_v4());
     let issue_instant = Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -1021,11 +1022,17 @@ fn build_authn_request(
     // Build redirect URL with deflate + base64 encoding
     let deflated = deflate_encode(signed_request.as_bytes());
     let encoded = base64::engine::general_purpose::STANDARD.encode(&deflated);
-    let redirect_url = format!(
+    let mut redirect_url = format!(
         "{}?SAMLRequest={}",
         idp_sso_url,
         urlencoding::encode(&encoded)
     );
+    // RelayState rides as a query parameter alongside SAMLRequest (HTTP
+    // Redirect binding); the IdP echoes it back on the ACS POST so the
+    // handler can recover flow intent (e.g. a desktop login).
+    if let Some(relay) = relay_state {
+        redirect_url.push_str(&format!("&RelayState={}", urlencoding::encode(relay)));
+    }
 
     Ok((request_id, signed_request, redirect_url))
 }
@@ -1824,7 +1831,7 @@ impl AuthProvider for SamlProvider {
             Err(e) => return AuthResult::Unavailable(format!("SAML IdP metadata error: {e}")),
         };
 
-        match build_authn_request(&self.config, &metadata.sso_url) {
+        match build_authn_request(&self.config, &metadata.sso_url, request.relay_state.as_deref()) {
             Ok((id, _xml, redirect_url)) => {
                 // Store the request ID per flow so InResponseTo can be
                 // verified on callback. Concurrent logins each get their
