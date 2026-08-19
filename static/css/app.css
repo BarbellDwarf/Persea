@@ -1220,3 +1220,87 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     }
     .page-tabs, .settings-tabs { display: none; }
 }
+/* ── Connections: consolidated top bar (persea#215) ───────── */
+/* One search input spanning the content width, a Filters dropdown
+   holding every filter field, and active filters as removable chips.
+   The scope filter lives in the tree header. */
+.connections-search-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+.connections-search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.connections-search-wrap #connections-search { flex: 1; min-width: 0; }
+.connections-dropdown-wrap { position: relative; }
+.connections-dropdown {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    z-index: 40;
+    min-width: 240px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+#filters-dropdown { min-width: 260px; }
+#filters-dropdown .form-input { width: 100%; }
+#filters-dropdown #filter-custom-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.conn-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.connections-filter-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: default;
+}
+.filter-chip-remove {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1;
+}
+.filter-chip-remove:hover { color: var(--accent); }
+.filter-chip-clear-all {
+    background: transparent;
+    border-color: var(--accent);
+    color: var(--accent);
+    cursor: pointer;
+    font-family: var(--font-sans);
+    font-weight: 500;
+}
+.filter-chip-clear-all:hover { background: rgba(16,185,129,0.1); } (feat: consolidate connections page top bar (persea#215))

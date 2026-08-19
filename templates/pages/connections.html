@@ -11,45 +11,46 @@
             <p style="font-size:13px;color:var(--text-muted);margin-top:4px">Manage your server address book</p>
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-            <select id="scope-filter" class="form-input" style="width:150px">
-                <option value="">All Scopes</option>
-                <option value="shared">Shared</option>
-                <option value="instance">Instance</option>
-                <option value="personal">Personal</option>
-            </select>
-            <input type="search" id="connections-search" placeholder="Search connections..."
-                   class="form-input" style="width:260px" autocomplete="off">
-            <button id="btn-filters" class="btn btn-secondary btn-sm" style="width:auto" aria-expanded="false">Filters</button>
             <button id="btn-new-folder" class="btn btn-primary btn-sm admin-only" style="width:auto">+ New Folder</button>
             <button id="btn-new-personal-folder" class="btn btn-primary btn-sm personal-scope-only" style="width:auto">+ New Folder</button>
-            <div style="position:relative">
+            <div class="connections-dropdown-wrap" id="overflow-wrap">
                 <button id="btn-overflow" class="btn btn-secondary btn-sm" style="width:auto" aria-label="More actions" aria-expanded="false">...</button>
-                <div id="overflow-menu" class="hidden" style="position:absolute;right:0;top:calc(100% + 4px);background:var(--bg-card);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.25);z-index:40;min-width:180px;padding:4px">
+                <div id="overflow-menu" class="hidden connections-dropdown">
                     <button id="btn-import" class="btn btn-secondary btn-sm admin-only" style="width:100%;justify-content:flex-start;background:transparent;border:none;padding:8px 10px">Import CSV</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Filter bar (hidden until folders exist) -->
-    <div id="filter-bar" class="hidden" style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
-        <select id="filter-type" class="form-input" style="width:150px" title="Filter by session type">
-            <option value="">All types</option>
-            <option value="ssh">SSH</option>
-            {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
-            <option value="vnc">VNC</option>
-            {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
-            {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
-            {% if features.vdi %}<option value="vdi">VDI</option>{% endif %}
-            {% if features.powershell_ssh %}<option value="powershell">PowerShell (SSH)</option>{% endif %}
-            {% if features.proxmox %}<option value="proxmox">Proxmox</option>{% endif %}
-        </select>
-        <select id="filter-folder" class="form-input" style="width:200px" title="Filter by folder">
-            <option value="">All folders</option>
-        </select>
-        <input type="text" id="filter-desc" class="form-input" style="width:200px" placeholder="Filter by description..." autocomplete="off">
-        <div id="filter-custom-fields" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"></div>
-        <button id="filter-clear" class="btn btn-secondary btn-sm" style="width:auto">Clear filters</button>
+    <!-- Search + filters: one search input spanning the content width; all
+         filter fields live in the Filters dropdown; active filters render
+         as removable chips below the search. -->
+    <div class="connections-search-row">
+        <div class="connections-search-wrap" id="filters-wrap">
+            <input type="search" id="connections-search" placeholder="Search connections..."
+                   class="form-input" autocomplete="off">
+            <button id="btn-filters" class="btn btn-secondary btn-sm" style="width:auto" aria-expanded="false">Filters</button>
+            <div id="filters-dropdown" class="hidden connections-dropdown">
+                <select id="filter-type" class="form-input" title="Filter by session type">
+                    <option value="">All types</option>
+                    <option value="ssh">SSH</option>
+                    {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
+                    <option value="vnc">VNC</option>
+                    {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
+                    {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
+                    {% if features.vdi %}<option value="vdi">VDI</option>{% endif %}
+                    {% if features.powershell_ssh %}<option value="powershell">PowerShell (SSH)</option>{% endif %}
+                    {% if features.proxmox %}<option value="proxmox">Proxmox</option>{% endif %}
+                </select>
+                <select id="filter-folder" class="form-input" title="Filter by folder">
+                    <option value="">All folders</option>
+                </select>
+                <input type="text" id="filter-desc" class="form-input" placeholder="Filter by description..." autocomplete="off">
+                <div id="filter-custom-fields"></div>
+                <button id="filter-clear" class="btn btn-secondary btn-sm" style="width:100%">Clear filters</button>
+            </div>
+        </div>
+        <div id="filter-chips" class="connections-filter-chips hidden"></div>
     </div>
 
     <!-- Vault unavailable warning (hidden by default) -->
@@ -64,7 +65,15 @@
         </svg>
         <h3 style="font-size:16px;font-weight:500;color:var(--text-secondary);margin-top:16px">No connections configured</h3>
         <p style="font-size:13px;color:var(--text-muted);margin-top:8px">Create a folder to start organizing connection entries.</p>
-        <button id="btn-empty-create-folder" class="btn btn-primary" style="margin-top:16px;width:auto">Create First Folder</button>
+        <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:16px;flex-wrap:wrap">
+            <select id="empty-scope-filter" class="form-input" style="width:150px" title="Filter the tree by scope">
+                <option value="">All Scopes</option>
+                <option value="shared">Shared</option>
+                <option value="instance">Instance</option>
+                <option value="personal">Personal</option>
+            </select>
+            <button id="btn-empty-create-folder" class="btn btn-primary" style="width:auto">Create First Folder</button>
+        </div>
     </div>
 
     <!-- Main content (hidden by default) -->
@@ -96,7 +105,15 @@
 
             <!-- Left: Folder tree -->
             <div class="conn-sidebar">
-                <p id="folder-tree-label" style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Folders</p>
+                <div class="conn-sidebar-header">
+                    <p id="folder-tree-label" style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Folders</p>
+                    <select id="scope-filter" class="form-input" style="width:130px" title="Filter the tree by scope">
+                        <option value="">All Scopes</option>
+                        <option value="shared">Shared</option>
+                        <option value="instance">Instance</option>
+                        <option value="personal">Personal</option>
+                    </select>
+                </div>
                 <div id="folder-tree" class="conn-panel"></div>
             </div>
 
@@ -1348,7 +1365,6 @@
                 return loadPersonalFolders().then(function() {
                     populateFilterFolders();
                     var sf = document.getElementById('scope-filter').value;
-                    document.getElementById('filter-bar').classList.toggle('hidden', folders.length === 0);
                     document.getElementById('btn-filters').classList.toggle('hidden', folders.length === 0);
                     if (treeEmptyForScope(sf)) {
                         if (sf === 'personal' || isAdmin) {
@@ -1721,7 +1737,6 @@
         customFieldDefs.forEach(function(def) {
             var sel = document.createElement('select');
             sel.className = 'form-input';
-            sel.style.width = '150px';
             sel.setAttribute('data-cf-filter', def.name);
             sel.title = 'Filter by ' + def.name;
             var allOpt = document.createElement('option');
@@ -1813,6 +1828,72 @@
                 function(s) { return !!s.value; }
             ).length || 0;
         btn.textContent = count > 0 ? 'Filters (' + count + ')' : 'Filters';
+        renderFilterChips();
+    }
+    // Active filters as removable chips under the search box. Each chip
+    // clears its own filter; a "Clear all" chip appears when several are
+    // active. Built with DOM APIs so user-supplied values (folder paths,
+    // descriptions, custom-field values) are never interpolated as HTML.
+    function renderFilterChips() {
+        var container = document.getElementById('filter-chips');
+        if (!container) return;
+        var filters = activeFilters();
+        var chips = [];
+        if (filters.type) chips.push({ key: 'type', label: 'Type: ' + filters.type.toUpperCase() });
+        if (filters.folder) {
+            var parts = filters.folder.split('|');
+            var suffix = parts[0] === 'instance' ? ' (instance)' : (parts[0] === 'personal' ? ' (personal)' : '');
+            chips.push({ key: 'folder', label: 'Folder: ' + parts[1] + suffix });
+        }
+        if (filters.desc) chips.push({ key: 'desc', label: 'Description: ' + filters.desc });
+        for (var ck in filters.custom) chips.push({ key: 'custom:' + ck, label: ck + ': ' + filters.custom[ck] });
+        container.innerHTML = '';
+        if (chips.length === 0) {
+            container.classList.add('hidden');
+            return;
+        }
+        container.classList.remove('hidden');
+        chips.forEach(function(chip) {
+            var el = document.createElement('span');
+            el.className = 'filter-chip';
+            var label = document.createElement('span');
+            label.textContent = chip.label;
+            el.appendChild(label);
+            var rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'filter-chip-remove';
+            rm.textContent = '\u00D7';
+            rm.title = 'Clear this filter';
+            rm.setAttribute('aria-label', 'Clear filter ' + chip.label);
+            rm.addEventListener('click', function() { clearOneFilter(chip.key); });
+            el.appendChild(rm);
+            container.appendChild(el);
+        });
+        if (chips.length > 1) {
+            var clearAll = document.createElement('button');
+            clearAll.type = 'button';
+            clearAll.className = 'filter-chip filter-chip-clear-all';
+            clearAll.textContent = 'Clear all';
+            clearAll.addEventListener('click', clearFilters);
+            container.appendChild(clearAll);
+        }
+    }
+    function clearOneFilter(key) {
+        if (key === 'type') {
+            document.getElementById('filter-type').value = '';
+        } else if (key === 'folder') {
+            document.getElementById('filter-folder').value = '';
+        } else if (key === 'desc') {
+            document.getElementById('filter-desc').value = '';
+        } else if (key.indexOf('custom:') === 0) {
+            var name = key.slice(7);
+            var sels = document.querySelectorAll('#filter-custom-fields select[data-cf-filter]');
+            for (var i = 0; i < sels.length; i++) {
+                if (sels[i].getAttribute('data-cf-filter') === name) sels[i].value = '';
+            }
+        }
+        updateFiltersBadge();
+        runSearch();
     }
     function runSearch() {
         var input = document.getElementById('connections-search');
@@ -3609,8 +3690,16 @@
         updateEntryActionButtons();
         updateScopeUi();
     }
+    // The scope filter lives in the tree header; the empty state carries a
+    // mirror of it so scope switching stays possible when the tree is hidden.
+    function syncScopeSelects() {
+        var main = document.getElementById('scope-filter');
+        var empty = document.getElementById('empty-scope-filter');
+        if (main && empty) empty.value = main.value;
+    }
     function onScopeChange() {
         var sf = document.getElementById('scope-filter').value;
+        syncScopeSelects();
         updateScopeUi();
         if (selectedFolder && sf && selectedFolder.scope !== sf) {
             selectedFolder = null;
@@ -3629,6 +3718,7 @@
                 });
                 if (!still) ff.value = '';
             }
+            updateFiltersBadge();
             if (treeEmptyForScope(sf)) {
                 if (sf === 'personal' || isAdmin) {
                     document.getElementById('main-content').classList.add('hidden');
@@ -3675,9 +3765,10 @@
         document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
         openImportModal();
     });
-    document.getElementById('btn-filters').addEventListener('click', function() {
-        var bar = document.getElementById('filter-bar');
-        var open = bar.classList.toggle('hidden');
+    document.getElementById('btn-filters').addEventListener('click', function(e) {
+        e.stopPropagation();
+        var dd = document.getElementById('filters-dropdown');
+        var open = dd.classList.toggle('hidden');
         this.setAttribute('aria-expanded', String(!open));
     });
     document.getElementById('btn-overflow').addEventListener('click', function(e) {
@@ -3686,10 +3777,19 @@
         var open = menu.classList.toggle('hidden');
         this.setAttribute('aria-expanded', String(!open));
     });
-    document.addEventListener('click', function() {
-        var menu = document.getElementById('overflow-menu');
-        menu.classList.add('hidden');
-        document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
+    document.addEventListener('click', function(ev) {
+        var overflowWrap = document.getElementById('overflow-wrap');
+        if (!overflowWrap || !overflowWrap.contains(ev.target)) {
+            var menu = document.getElementById('overflow-menu');
+            menu.classList.add('hidden');
+            document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
+        }
+        var filtersWrap = document.getElementById('filters-wrap');
+        if (!filtersWrap || !filtersWrap.contains(ev.target)) {
+            var dd = document.getElementById('filters-dropdown');
+            dd.classList.add('hidden');
+            document.getElementById('btn-filters').setAttribute('aria-expanded', 'false');
+        }
     });
     document.getElementById('detail-rotate-cred').addEventListener('click', rotateCredential);
     document.getElementById('detail-add-to-folder').addEventListener('click', openAddToFolder);
@@ -3791,6 +3891,12 @@
             ['folder-modal', 'entry-modal', 'import-modal', 'prompt-modal', 'pf-modal', 'add-to-folder-modal'].forEach(function(id) {
                 document.getElementById(id).classList.add('hidden');
             });
+            var overflowMenu = document.getElementById('overflow-menu');
+            overflowMenu.classList.add('hidden');
+            document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
+            var filtersDropdown = document.getElementById('filters-dropdown');
+            filtersDropdown.classList.add('hidden');
+            document.getElementById('btn-filters').setAttribute('aria-expanded', 'false');
             var rotateToast = document.querySelector('.rotate-toast');
             if (rotateToast) rotateToast.remove();
         }
@@ -3806,6 +3912,13 @@
 
     document.getElementById('connections-search').addEventListener('input', debounce(runSearch, 250));
     document.getElementById('scope-filter').addEventListener('change', onScopeChange);
+    var emptyScope = document.getElementById('empty-scope-filter');
+    if (emptyScope) {
+        emptyScope.addEventListener('change', function() {
+            document.getElementById('scope-filter').value = this.value;
+            onScopeChange();
+        });
+    }
     document.getElementById('filter-type').addEventListener('change', runSearch);
     document.getElementById('filter-folder').addEventListener('change', runSearch);
     document.getElementById('filter-desc').addEventListener('input', debounce(runSearch, 250));
