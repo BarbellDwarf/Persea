@@ -7,7 +7,7 @@ use super::{AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultC
 use crate::auth::{AuthIdentity, WsTicketStore};
 use crate::db::Db;
 use crate::error::AppError;
-use axum::extract::{Query, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{Extension, Json};
