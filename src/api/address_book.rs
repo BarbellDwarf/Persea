@@ -158,7 +158,12 @@ fn guacd_error_status(msg: &str) -> Option<u32> {
     // The status is the last arg; status codes are plain numbers, so
     // splitting on the last comma is safe even when a message arg
     // contains commas.
-    args.rsplit(',').next()?.trim().trim_matches('"').parse().ok()
+    args.rsplit(',')
+        .next()?
+        .trim()
+        .trim_matches('"')
+        .parse()
+        .ok()
 }
 
 /// Check if a folder's allowed_groups grant access to the given user groups.
@@ -6172,7 +6177,8 @@ mod tests {
         assert!(!is_auth_failure(&upstream));
 
         // Validation failures are never auth failures.
-        let validation = crate::session::SessionError::ValidationError("hostname is required".into());
+        let validation =
+            crate::session::SessionError::ValidationError("hostname is required".into());
         assert!(!is_auth_failure(&validation));
     }
 
