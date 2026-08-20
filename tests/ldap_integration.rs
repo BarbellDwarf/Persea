@@ -238,17 +238,16 @@ async fn full_stack_login_via_http() {
     let db_path = tmp.join("admin.db").display().to_string();
     // The chain fallback in the login handler asks the LDAP provider to
     // resolve the DN subject to the entry's email; that lookup is a
-    // base-scope search on the subject DN with the configured filter, so
-    // the filter must match alice's entry at her own DN. `(uid=alice)`
-    // matches at any scope; the chain-level tests above cover `{}`
-    // username substitution separately.
+    // base-scope existence search on the subject DN (the provider is
+    // DN-aware, mirroring revalidate_account), so the username filter is
+    // not substituted with the DN. Keep the realistic `(uid={})` filter.
     let write_config = |port: u16| {
         format!(
             "listen_addr = \"127.0.0.1:{port}\"\ndb_path = \"{db_path}\"\n\
              [auth]\nmethods = [\"ldap\"]\n\
              [auth.ldap]\nurl = \"{url}\"\n\
              bind_dn = \"cn=admin,dc=example,dc=com\"\nbind_password = \"admin\"\n\
-             user_search_base = \"ou=users,dc=example,dc=com\"\nuser_search_filter = \"(uid=alice)\"\n\
+             user_search_base = \"ou=users,dc=example,dc=com\"\nuser_search_filter = \"(uid={{}})\"\n\
              group_search_base = \"ou=groups,dc=example,dc=com\"\ngroup_search_filter = \"(member={{}})\"\n\
              [storage]\nencryption_key = \"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"\n"
         )
@@ -378,7 +377,7 @@ async fn ldap_login_with_real_email_account_gets_session_redirect() {
              [auth]\nmethods = [\"ldap\"]\n\
              [auth.ldap]\nurl = \"{url}\"\n\
              bind_dn = \"cn=admin,dc=example,dc=com\"\nbind_password = \"admin\"\n\
-             user_search_base = \"ou=users,dc=example,dc=com\"\nuser_search_filter = \"(uid=alice)\"\n\
+             user_search_base = \"ou=users,dc=example,dc=com\"\nuser_search_filter = \"(uid={{}})\"\n\
              group_search_base = \"ou=groups,dc=example,dc=com\"\ngroup_search_filter = \"(member={{}})\"\n\
              [storage]\nencryption_key = \"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"\n"
         )
