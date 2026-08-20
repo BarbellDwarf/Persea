@@ -43,7 +43,12 @@ fn main() {
     let mut seen: HashMap<String, usize> = HashMap::new();
 
     writeln!(out, "#[allow(missing_docs)]").unwrap();
-    writeln!(out, "pub const DOCS: &[(&str, &str, &str, &[(&str, &str)])] = &[").unwrap();
+    writeln!(out, "#[allow(clippy::type_complexity)]").unwrap();
+    writeln!(
+        out,
+        "pub const DOCS: &[(&str, &str, &str, &[(&str, &str)])] = &["
+    )
+    .unwrap();
 
     for filename in DOC_FILES {
         let path = Path::new("docs").join(filename);
@@ -89,7 +94,11 @@ fn main() {
         let escaped = escape_str(&html_output);
         let title_escaped = escape_str(title);
 
-        writeln!(out, "    (\"{slug}\", \"{title_escaped}\", \"{escaped}\", &[").unwrap();
+        writeln!(
+            out,
+            "    (\"{slug}\", \"{title_escaped}\", \"{escaped}\", &["
+        )
+        .unwrap();
         for (h_slug, h_text) in &headings {
             let escaped_h = escape_str(h_slug);
             let escaped_t = escape_str(h_text);
@@ -173,7 +182,7 @@ fn slugify_headings(
     seen: &mut HashMap<String, usize>,
     nav: &mut Vec<(String, String)>,
 ) -> String {
-    let re = Regex::new(r"(?s)<h([234])>(.*?)</h\1>").unwrap();
+    let re = Regex::new(r"(?s)<h([234])>(.*?)</h[234]>").unwrap();
     re.replace_all(html, |caps: &regex::Captures| {
         let level: u8 = caps[1].parse().unwrap();
         let inner = caps.get(2).unwrap().as_str();

@@ -21,7 +21,7 @@ must authenticate one of three ways:
 
 1. **API key**: `Authorization: Bearer <key>` or `X-API-Key: <key>`
    header. Admin API keys are created in the admin UI; users can create
-   their own tokens (see [Tokens](#user-api-tokens-self-service)).
+   their own tokens (see [Tokens](#user-api-tokens)).
    Admins can disable API-key auth entirely via the `enable_api_keys`
    system setting.
 2. **User API token**: the same headers, with a personal token
@@ -190,7 +190,7 @@ Sessions are the heart of persea: a session is a connection to one
 target (SSH, RDP, VNC, SPICE, Proxmox, web browser, or VDI container).
 Creating a session only opens the connection to the target; a browser
 then attaches over a WebSocket to stream it (see
-[Connecting to a session](#connecting-to-a-session)).
+[Connecting to a session](#connecting-to-a-session-owner-vs-join)).
 
 ### `POST /api/sessions`: create a session
 
