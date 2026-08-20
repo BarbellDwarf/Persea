@@ -122,6 +122,45 @@ pub(crate) fn apply_session_credentials(
     true
 }
 
+/// The guacd protocol status code for a rejected credential attempt:
+/// `GUAC_PROTOCOL_STATUS_CLIENT_UNAUTHORIZED` (0x0301). guacd sends an
+/// `error` instruction with this status when the target rejected the
+/// presented credentials (SSH auth failure, RDP NLA/credential
+/// rejection, VNC auth failure). Every other status (upstream timeout,
+/// upstream error, server error, ...) means the target was unreachable
+/// or the protocol failed, not that the credentials were wrong.
+const GUACD_STATUS_CLIENT_UNAUTHORIZED: u32 = 0x0301;
+
+/// Classify a session-creation failure (persea#246): true when the
+/// target rejected the presented credentials (an auth failure), false
+/// for network / protocol / validation failures. The connect flows use
+/// this to decide whether to surface the interactive-credentials prompt:
+/// a rejected credential attempt means the user can retry with their own
+/// credentials, while an unreachable target or a protocol error would
+/// fail the same way no matter what credentials are presented.
+pub(crate) fn is_auth_failure(e: &crate::session::SessionError) -> bool {
+    let crate::session::SessionError::GuacdConnection(msg) = e else {
+        return false;
+    };
+    guacd_error_status(msg) == Some(GUACD_STATUS_CLIENT_UNAUTHORIZED)
+}
+
+/// Extract the guacd protocol status code from a flattened handshake
+/// error message. The handshake turns guacd's `error` instruction into
+/// `Expected 'ready' instruction, got 'error' (args: ["...", "769"])`;
+/// the last arg is the numeric status code.
+fn guacd_error_status(msg: &str) -> Option<u32> {
+    const MARKER: &str = "got 'error' (args: [";
+    let start = msg.find(MARKER)?;
+    let rest = &msg[start + MARKER.len()..];
+    let end = rest.rfind("])")?;
+    let args = &rest[..end];
+    // The status is the last arg; status codes are plain numbers, so
+    // splitting on the last comma is safe even when a message arg
+    // contains commas.
+    args.rsplit(',').next()?.trim().trim_matches('"').parse().ok()
+}
+
 /// Check if a folder's allowed_groups grant access to the given user groups.
 /// Groups of a folder row, as a cleaned list.
 fn folder_groups(folder: &db::AbFolder) -> Vec<String> {
@@ -1635,7 +1674,10 @@ pub async fn ssh_probe_host_key(
 /// DB or Vault and applying the request's overrides. Requires operator
 /// or higher, plus folder and entry ACLs and the RBAC Connect grant.
 /// Returns the session info, or `AppError::Session` when guacd rejects
-/// the connection.
+/// the connection. When the attempt used session-forwarded credentials
+/// and the target rejected them (an auth failure), returns the
+/// interactive-credentials signal (`credentials_required`) so the client
+/// can prompt and retry (persea#246).
 pub async fn ab_connect_entry(
     State(manager): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -1893,6 +1935,12 @@ pub async fn ab_connect_entry(
     };
 
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+    // Keep the resolved identity for the interactive-credentials signal
+    // (persea#246): the fields are moved into `create_req` below, and the
+    // signal must prefill the prompt with the identity the attempt used.
+    let prompt_username = ab_entry.username.clone();
+    let prompt_domain = ab_entry.domain.clone();
+    let prompt_display_name = ab_entry.display_name.clone();
     let create_req = CreateSessionRequest {
         session_type,
         hostname: ab_entry.hostname,
@@ -2013,6 +2061,20 @@ pub async fn ab_connect_entry(
         Err(e) => {
             let msg = e.to_string();
             tracing::error!(user = %admin_name, error = %msg, "Address book session creation failed");
+            // S6 (persea#246): when the attempt used session-forwarded
+            // credentials and the target rejected them (an auth failure),
+            // return the interactive-credentials signal so the client can
+            // prompt and retry without losing the session context. Any
+            // other failure (target unreachable, protocol error) surfaces
+            // directly.
+            if used_session_credentials && is_auth_failure(&e) {
+                return Ok(Json(json!({
+                    "credentials_required": true,
+                    "username": prompt_username,
+                    "domain": prompt_domain,
+                    "display_name": prompt_display_name,
+                })));
+            }
             Err(AppError::Session(msg))
         }
     }
@@ -2976,7 +3038,19 @@ document.getElementById('cred-form').addEventListener('submit', async function(e
     }});
     if (resp.ok) {{
       const data = await resp.json();
-      window.location.href = '/client/' + data.session_id;
+      if (data.session_id) {{
+        window.location.href = '/client/' + data.session_id;
+      }} else if (data.credentials_required) {{
+        // The target rejected the credentials (persea#246): keep the
+        // form open so the user can retry without losing the session
+        // context.
+        err.textContent = 'The credentials were rejected by the target. Try again.';
+        err.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Connect';
+      }} else {{
+        throw new Error(data.error || 'Connection failed.');
+      }}
     }} else {{
       const data = await resp.json().catch(() => ({{}}));
       throw new Error(data.error || ('HTTP ' + resp.status));
@@ -3284,6 +3358,13 @@ pub async fn quick_connect(
         };
 
         let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+        // Keep the resolved identity for the interactive-credentials
+        // signal (persea#246): the fields are moved into `create_req`
+        // below, and the signal must prefill the prompt with the identity
+        // the attempt used.
+        let prompt_username = ab_entry.username.clone();
+        let prompt_domain = ab_entry.domain.clone();
+        let prompt_display_name = ab_entry.display_name.clone();
         let create_req = CreateSessionRequest {
             session_type,
             hostname: ab_entry.hostname,
@@ -3381,7 +3462,26 @@ pub async fn quick_connect(
             Ok(info) => {
                 Redirect::temporary(&format!("/client/{}", info.session_id)).into_response()
             }
-            Err(e) => quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string()),
+            Err(e) => {
+                // S6 (persea#246): when the attempt used session-forwarded
+                // credentials and the target rejected them (an auth
+                // failure), return the existing interactive-credentials
+                // signal (the inline credential form) so the client can
+                // prompt and retry. Any other failure (target unreachable,
+                // protocol error) surfaces directly.
+                if used_session_credentials && is_auth_failure(&e) {
+                    return quick_connect_credential_form(
+                        scope,
+                        folder,
+                        entry,
+                        &ab_entry.session_type,
+                        prompt_username.as_deref(),
+                        prompt_domain.as_deref(),
+                        prompt_display_name.as_deref(),
+                    );
+                }
+                quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string())
+            }
         };
     }
 
@@ -6028,5 +6128,391 @@ mod tests {
             &mut ab_entry,
         ));
         assert!(ab_entry.password.is_none());
+    }
+
+    // ── Connect fallback ordering (persea#246) ────────────────────────────
+
+    #[test]
+    fn auth_failure_classification_recognizes_guacd_unauthorized() {
+        // guacd sends an `error` instruction with status 769
+        // (GUAC_PROTOCOL_STATUS_CLIENT_UNAUTHORIZED) when the target
+        // rejected the presented credentials. The handshake flattens it
+        // into the "Expected 'ready' ... got 'error'" message; the
+        // classifier must recover the status from the args.
+        let rejected = crate::session::SessionError::GuacdConnection(
+            "protocol error: Expected 'ready' instruction, got 'error' (args: [\"Aborted. See logs.\", \"769\"])"
+                .into(),
+        );
+        assert!(is_auth_failure(&rejected));
+    }
+
+    #[test]
+    fn auth_failure_classification_rejects_network_and_protocol_failures() {
+        // Target unreachable: not an auth failure, no matter the message.
+        let unreachable = crate::session::SessionError::GuacdConnection(
+            "connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused"
+                .into(),
+        );
+        assert!(!is_auth_failure(&unreachable));
+
+        // A protocol error that is not an `error` instruction: not an
+        // auth failure.
+        let protocol = crate::session::SessionError::GuacdConnection(
+            "protocol error: Expected 'ready' instruction, got 'size' (args: [\"800\", \"600\"])"
+                .into(),
+        );
+        assert!(!is_auth_failure(&protocol));
+
+        // An `error` instruction with a non-auth status (upstream error,
+        // 515): the target failed, but not because of the credentials.
+        let upstream = crate::session::SessionError::GuacdConnection(
+            "protocol error: Expected 'ready' instruction, got 'error' (args: [\"Upstream error.\", \"515\"])"
+                .into(),
+        );
+        assert!(!is_auth_failure(&upstream));
+
+        // Validation failures are never auth failures.
+        let validation = crate::session::SessionError::ValidationError("hostname is required".into());
+        assert!(!is_auth_failure(&validation));
+    }
+
+    /// Manager whose `[auth] forward_session_credentials` gate is ON and
+    /// whose guacd endpoint points at the given address (a mock guacd or
+    /// an unreachable port).
+    fn session_credentials_manager_with_guacd(gate_on: bool, guacd_addr: &str) -> AppState {
+        let mut config = crate::config::Config::default();
+        config.recording = Some(crate::config::RecordingConfig {
+            path: std::env::temp_dir().join(format!("persea-ab-{}", uuid::Uuid::new_v4())),
+            ..Default::default()
+        });
+        config.auth = Some(crate::config::AuthConfig {
+            forward_session_credentials: gate_on,
+            ..Default::default()
+        });
+        config.guacd_addr = guacd_addr.to_string();
+        Arc::new(crate::session::SessionManager::new(config, None))
+    }
+
+    /// Mock guacd that answers the handshake with an `error` instruction
+    /// carrying the given protocol status, like a real guacd does when the
+    /// target rejects the connection (auth failure: 769) or fails upstream.
+    fn mock_guacd_error(
+        listener: tokio::net::TcpListener,
+        status: u32,
+    ) -> tokio::task::JoinHandle<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut parser = crate::protocol::InstructionParser::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    return;
+                }
+                let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                for instr in parser.receive(&chunk).into_iter().flatten() {
+                    if instr.opcode == "select" {
+                        sock.write_all(
+                            crate::protocol::Instruction::new(
+                                "args",
+                                vec![
+                                    "hostname".into(),
+                                    "port".into(),
+                                    "username".into(),
+                                    "password".into(),
+                                ],
+                            )
+                            .encode()
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                    } else if instr.opcode == "connect" {
+                        sock.write_all(
+                            crate::protocol::Instruction::new(
+                                "error",
+                                vec!["Aborted. See logs.".into(), status.to_string()],
+                            )
+                            .encode()
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                        return;
+                    }
+                }
+            }
+        })
+    }
+
+    /// Router for `GET /api/connect` with a custom manager (gate + guacd
+    /// endpoint under test control) and the storage key the session
+    /// credential forwarding needs to decrypt the retained password.
+    fn build_quick_connect_router_with_manager(
+        db: Db,
+        vault: VaultState,
+        manager: AppState,
+    ) -> axum::Router {
+        use axum::routing::get;
+        axum::Router::new()
+            .route("/api/connect", get(super::quick_connect))
+            .with_state(manager)
+            .layer(axum::middleware::from_fn(crate::auth::optional_auth))
+            .layer(Extension(vault))
+            .layer(Extension(OidcEnabled(false)))
+            .layer(Extension(StorageKey(Some(TEST_ENC_KEY.into()))))
+            .layer(Extension(db))
+    }
+
+    /// Router for `POST .../entries/{entry}/connect` with a custom manager
+    /// and the storage key the session credential forwarding needs.
+    fn build_connect_router_with_manager(
+        db: Db,
+        vault: VaultState,
+        manager: AppState,
+    ) -> axum::Router {
+        use axum::routing::post;
+        axum::Router::new()
+            .route(
+                "/api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect",
+                post(super::ab_connect_entry),
+            )
+            .with_state(manager)
+            .layer(axum::middleware::from_fn(crate::auth::require_auth))
+            .layer(Extension(db))
+            .layer(Extension(vault))
+            .layer(Extension(StorageKey(Some(TEST_ENC_KEY.into()))))
+    }
+
+    /// Shared fixture: an operator with a session cookie, a credential-less
+    /// SSH entry on a loopback target, and the RBAC Connect grant.
+    fn connect_fixture(db: &Db) -> (i64, String) {
+        insert_test_user(db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(db, "alice@test.com");
+        db::create_ab_folder(db, "shared", "Clients", "", "", false).unwrap();
+        let folder = db::get_ab_folder(db, "shared", "Clients").unwrap();
+        db::create_ab_entry(
+            db,
+            folder.id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "127.0.0.1",
+            Some(22),
+            "",
+            "{}",
+            "",
+        )
+        .unwrap();
+        let user = db::get_user_by_email(db, "alice@test.com").unwrap();
+        rbac::grant_connection_permission(
+            db,
+            &format!("u:{}", user.id),
+            "shared/Clients/web1",
+            rbac::ObjectPermission::Connect,
+        )
+        .unwrap();
+        let session = db::create_auth_session(db, uid, 3600).unwrap();
+        (uid, session)
+    }
+
+    #[tokio::test]
+    async fn quick_connect_session_credentials_auth_failure_serves_prompt() {
+        // Gate on, session credentials retained, and a guacd that rejects
+        // the credentials (error instruction, status 769): the connect
+        // must return the existing interactive-credentials signal (the
+        // inline credential form) instead of surfacing the failure.
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = mock_guacd_error(listener, 0x0301);
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        let app = build_quick_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        server.abort();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains("cred-form"),
+            "an auth failure after the session-credential attempt must serve the credential form, got: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn quick_connect_session_credentials_network_failure_surfaces_directly() {
+        // Gate on, session credentials retained, but guacd is unreachable:
+        // the failure must surface directly, with no prompt.
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        // Bind and drop to get a free port that refuses connections.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        let app = build_quick_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            !html.contains("cred-form"),
+            "a network failure must not serve the credential form, got: {}",
+            html
+        );
+        assert!(
+            html.contains("Connection Error"),
+            "a network failure must surface the error page, got: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn quick_connect_gate_off_prompts_before_attempt() {
+        // Gate off: a credential-less entry prompts before any attempt
+        // (unchanged behavior).
+        let db = test_db();
+        let (_uid, session) = connect_fixture(&db);
+        let manager = session_credentials_manager_with_guacd(false, "127.0.0.1:1");
+        let app = build_quick_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains("cred-form"),
+            "gate off: a credential-less entry must prompt before the attempt, got: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn ab_connect_entry_session_credentials_auth_failure_serves_prompt() {
+        // Gate on, session credentials retained, and a guacd that rejects
+        // the credentials: the connect must return the
+        // interactive-credentials signal (credentials_required) so the
+        // client can prompt and retry.
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = mock_guacd_error(listener, 0x0301);
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        let app = build_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Clients/entries/web1/connect",
+                &session,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        server.abort();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(
+            body["credentials_required"],
+            json!(true),
+            "an auth failure after the session-credential attempt must signal credentials_required, got: {}",
+            body
+        );
+        assert_eq!(body["username"], json!("alice"));
+    }
+
+    #[tokio::test]
+    async fn ab_connect_entry_session_credentials_network_failure_surfaces_directly() {
+        // Gate on, session credentials retained, but guacd is unreachable:
+        // the failure must surface directly, with no prompt.
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        let app = build_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Clients/entries/web1/connect",
+                &session,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = body_json(response).await;
+        assert_ne!(
+            body["credentials_required"],
+            json!(true),
+            "a network failure must not signal credentials_required, got: {}",
+            body
+        );
     }
 }
