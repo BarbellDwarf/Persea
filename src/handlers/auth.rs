@@ -424,8 +424,8 @@ pub async fn login_submit(
             // DN subject, so the email lookup misses for LDAP accounts;
             // the chain lookup resolves the DN to the entry's email and
             // the lookup is retried with it (persea#236).
-            let Some(user) = resolve_user_for_subject(&database, &auth_chain_lookup, &subject)
-                .await
+            let Some(user) =
+                resolve_user_for_subject(&database, &auth_chain_lookup, &subject).await
             else {
                 return Redirect::to("/?error=user_lookup_failed").into_response();
             };
@@ -1222,8 +1222,8 @@ pub async fn saml_acs(
             // Look up the user by email/subject. A directory-backed
             // subject (LDAP DN) never matches an email, so the chain
             // lookup resolves it and the lookup is retried (persea#236).
-            let Some(user) = resolve_user_for_subject(&database, &auth_chain_lookup, &subject)
-                .await
+            let Some(user) =
+                resolve_user_for_subject(&database, &auth_chain_lookup, &subject).await
             else {
                 return Redirect::to("/?error=user_lookup_failed").into_response();
             };
