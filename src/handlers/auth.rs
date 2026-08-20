@@ -213,6 +213,40 @@ async fn resolve_user_for_subject(
     }
 }
 
+/// Persist the auth chain's resolved group memberships on the user record
+/// (`users.oidc_groups`), mirroring the OIDC callback's upsert so the
+/// session identity and every later ACL lookup carry the groups. The role
+/// argument only applies on INSERT (the ON CONFLICT clause never touches
+/// role), so passing the user's current role cannot override an admin-set
+/// one. Empty groups skip the write entirely: a login without claims must
+/// not clobber memberships recorded by a previous login. A failed write is
+/// logged, never fatal: the session still works and the groups are
+/// re-recorded on the next login.
+async fn record_user_groups(database: &Db, user: &db::User, groups: &[String]) {
+    if groups.is_empty() {
+        return;
+    }
+    let db_upsert = database.clone();
+    let email_upsert = user.email.clone();
+    let name_upsert = user.name.clone();
+    let subject_upsert = user.oidc_subject.clone();
+    let role_upsert = user.role.clone();
+    let groups_upsert = groups.to_vec();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Err(e) = db::upsert_user(
+            &db_upsert,
+            &email_upsert,
+            &name_upsert,
+            subject_upsert.as_deref(),
+            &role_upsert,
+            &groups_upsert,
+        ) {
+            tracing::warn!(error = %e, "failed to record group memberships on user record");
+        }
+    })
+    .await;
+}
+
 /// Query parameters for the login page.
 #[derive(serde::Deserialize)]
 pub struct LoginQueryParams {
@@ -429,6 +463,10 @@ pub async fn login_submit(
             else {
                 return Redirect::to("/?error=user_lookup_failed").into_response();
             };
+
+            // Record the resolved memberships before the session is minted
+            // so the session identity and all later lookups carry them.
+            record_user_groups(&database, &user, &groups).await;
 
             if user.disabled {
                 return Redirect::to("/?error=account_disabled").into_response();
@@ -1227,6 +1265,10 @@ pub async fn saml_acs(
             else {
                 return Redirect::to("/?error=user_lookup_failed").into_response();
             };
+
+            // Record the resolved memberships before the session is minted
+            // so the session identity and all later lookups carry them.
+            record_user_groups(&database, &user, &groups).await;
 
             if user.disabled {
                 return Redirect::to("/?error=account_disabled").into_response();
