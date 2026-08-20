@@ -167,6 +167,52 @@ async fn redirect_to_mfa(
         .into_response()
 }
 
+/// Resolve the local user record for an authenticated subject.
+///
+/// The database provider's subject is the account email, so the first
+/// lookup is by email. Directory providers authenticate with a
+/// DN-shaped subject (LDAP returns the user DN, a contract the S2
+/// re-validation machinery depends on) that can never match an email
+/// row. When the direct lookup misses, ask the auth chain to resolve
+/// the subject to a provider user (the LDAP provider reads the entry's
+/// configured email attribute) and retry the email lookup with the
+/// resolved address. Returns `None` only when both lookups miss or the
+/// database errors; callers redirect to `/?error=user_lookup_failed`.
+async fn resolve_user_for_subject(
+    database: &Db,
+    auth_chain: &Arc<AuthChain>,
+    subject: &str,
+) -> Option<db::User> {
+    let db_clone = database.clone();
+    let email = subject.to_string();
+    match tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &email)).await {
+        Ok(Ok(user)) => return Some(user),
+        Ok(Err(rusqlite::Error::QueryReturnedNoRows)) => {}
+        _ => return None, // DB error or task panic: fail closed
+    }
+
+    // The subject is not an email this database knows. Providers may do
+    // blocking I/O (the LDAP client creates its own tokio runtime
+    // internally), so run the chain lookup off the async runtime, the
+    // same way the authenticate calls in this file do.
+    let chain = auth_chain.clone();
+    let subject_owned = subject.to_string();
+    let lookup = tokio::task::spawn_blocking(move || {
+        futures::executor::block_on(chain.lookup_user(&subject_owned))
+    })
+    .await;
+    let resolved = match lookup {
+        Ok(Some(info)) => info.email.filter(|e| !e.is_empty()).unwrap_or(info.subject),
+        _ => return None,
+    };
+
+    let db_clone = database.clone();
+    match tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &resolved)).await {
+        Ok(Ok(user)) => Some(user),
+        _ => None, // second lookup missed or errored: both paths failed
+    }
+}
+
 /// Query parameters for the login page.
 #[derive(serde::Deserialize)]
 pub struct LoginQueryParams {
@@ -328,6 +374,10 @@ pub async fn login_submit(
     // internally), so run the chain off the async runtime: a sync client
     // started on a tokio worker thread panics with "Cannot start a runtime
     // from within a runtime" and kills the request.
+    // Keep a handle on the chain: the authenticate call below moves the
+    // Arc into the blocking task, but the success path still needs it to
+    // resolve a non-email subject (LDAP DN) to a local user.
+    let auth_chain_lookup = auth_chain.clone();
     let result = match tokio::task::spawn_blocking(move || {
         futures::executor::block_on(auth_chain.authenticate(&auth_request))
     })
@@ -370,18 +420,15 @@ pub async fn login_submit(
                 })
                 .await;
             }
-            // Look up the user to get their ID
-            let db_clone = database.clone();
-            let email = subject.clone();
-            let user =
-                match tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &email))
-                    .await
-                {
-                    Ok(Ok(user)) => user,
-                    _ => {
-                        return Redirect::to("/?error=user_lookup_failed").into_response();
-                    }
-                };
+            // Look up the user to get their ID. LDAP authenticates with a
+            // DN subject, so the email lookup misses for LDAP accounts;
+            // the chain lookup resolves the DN to the entry's email and
+            // the lookup is retried with it (persea#236).
+            let Some(user) = resolve_user_for_subject(&database, &auth_chain_lookup, &subject)
+                .await
+            else {
+                return Redirect::to("/?error=user_lookup_failed").into_response();
+            };
 
             if user.disabled {
                 return Redirect::to("/?error=account_disabled").into_response();
@@ -1128,6 +1175,9 @@ pub async fn saml_acs(
     // may do blocking I/O (the LDAP client creates its own tokio runtime
     // internally), so run the chain off the async runtime; a panic in the
     // chain is logged distinctly instead of masking as a rejection.
+    // Keep a handle on the chain for the success path's user resolution
+    // (a non-email subject, e.g. an LDAP DN, needs the chain lookup).
+    let auth_chain_lookup = auth_chain.clone();
     let result = match tokio::task::spawn_blocking(move || {
         futures::executor::block_on(auth_chain.authenticate(&auth_request))
     })
@@ -1169,18 +1219,14 @@ pub async fn saml_acs(
                 .await;
             }
 
-            // Look up the user by email/subject
-            let db_clone = database.clone();
-            let email = subject.clone();
-            let user =
-                match tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &email))
-                    .await
-                {
-                    Ok(Ok(user)) => user,
-                    _ => {
-                        return Redirect::to("/?error=user_lookup_failed").into_response();
-                    }
-                };
+            // Look up the user by email/subject. A directory-backed
+            // subject (LDAP DN) never matches an email, so the chain
+            // lookup resolves it and the lookup is retried (persea#236).
+            let Some(user) = resolve_user_for_subject(&database, &auth_chain_lookup, &subject)
+                .await
+            else {
+                return Redirect::to("/?error=user_lookup_failed").into_response();
+            };
 
             if user.disabled {
                 return Redirect::to("/?error=account_disabled").into_response();

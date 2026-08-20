@@ -214,7 +214,13 @@ fn lookup_user_returns_user_info() {
 }
 
 // ---------------------------------------------------------------------------
-// Full-stack test: real binary, real LDAP, real login form
+// Full-stack tests: real binary, real LDAP, real login form
+//
+// The local accounts for these tests are created with the REAL email
+// (alice@example.com), never the DN: the login handler resolves the
+// local user by email, and an LDAP subject is the user DN, so a
+// successful login proves the chain-lookup fallback resolves the DN to
+// the account (persea#236).
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -230,13 +236,19 @@ async fn full_stack_login_via_http() {
     let config_path = tmp.join("config.toml");
     let log_path = tmp.join("persea.log");
     let db_path = tmp.join("admin.db").display().to_string();
+    // The chain fallback in the login handler asks the LDAP provider to
+    // resolve the DN subject to the entry's email; that lookup is a
+    // base-scope search on the subject DN with the configured filter, so
+    // the filter must match alice's entry at her own DN. `(uid=alice)`
+    // matches at any scope; the chain-level tests above cover `{}`
+    // username substitution separately.
     let write_config = |port: u16| {
         format!(
             "listen_addr = \"127.0.0.1:{port}\"\ndb_path = \"{db_path}\"\n\
              [auth]\nmethods = [\"ldap\"]\n\
              [auth.ldap]\nurl = \"{url}\"\n\
              bind_dn = \"cn=admin,dc=example,dc=com\"\nbind_password = \"admin\"\n\
-             user_search_base = \"ou=users,dc=example,dc=com\"\nuser_search_filter = \"(uid={{}})\"\n\
+             user_search_base = \"ou=users,dc=example,dc=com\"\nuser_search_filter = \"(uid=alice)\"\n\
              group_search_base = \"ou=groups,dc=example,dc=com\"\ngroup_search_filter = \"(member={{}})\"\n\
              [storage]\nencryption_key = \"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"\n"
         )
@@ -264,8 +276,11 @@ async fn full_stack_login_via_http() {
         .build()
         .expect("build login client");
 
-    // The login handler looks the local user up by email, and the LDAP
-    // subject is the user DN, so the local account's email is the DN.
+    // The login handler resolves the local user by email; the LDAP
+    // subject is the user DN, so the local account is created with the
+    // REAL email, not the DN: the direct email lookup misses and the
+    // chain lookup must resolve the DN to this account, or the login
+    // redirects to user_lookup_failed (persea#236).
     let csrf = fetch_csrf_token(&client, &base).await;
     let (status, body) = send_json(
         &client,
@@ -273,7 +288,7 @@ async fn full_stack_login_via_http() {
         &format!("{base}/api/users"),
         &key,
         &json!({
-            "email": ALICE_DN,
+            "email": "alice@example.com",
             "name": "Alice Example",
             "role": "viewer",
             "password": "ldap-ci-password-2026",
@@ -334,6 +349,128 @@ async fn full_stack_login_via_http() {
     terminate(&mut app);
     std::fs::remove_dir_all(&tmp).ok();
     eprintln!("full-stack LDAP login: PASSED");
+}
+
+/// Regression for persea#236: with a local account whose email is the
+/// REAL email (not the DN), a successful LDAP login must answer with a
+/// session redirect, never a `user_lookup_failed` redirect. The login
+/// handler falls back to the chain lookup when the direct email lookup
+/// by the DN-shaped subject misses.
+#[tokio::test]
+async fn ldap_login_with_real_email_account_gets_session_redirect() {
+    let Some(url) = ldap_url() else {
+        skip_message("ldap_login_with_real_email_account_gets_session_redirect");
+        return;
+    };
+
+    let marker = format!("ldap-it-{}-lookup", std::process::id());
+    let tmp = std::env::temp_dir().join(&marker);
+    std::fs::create_dir_all(&tmp).expect("create scratch dir");
+    let config_path = tmp.join("config.toml");
+    let log_path = tmp.join("persea.log");
+    let db_path = tmp.join("admin.db").display().to_string();
+    // Same working filter rationale as full_stack_login_via_http: the
+    // chain fallback resolves the DN subject with a base-scope search,
+    // so the filter must match alice's entry at her own DN.
+    let write_config = |port: u16| {
+        format!(
+            "listen_addr = \"127.0.0.1:{port}\"\ndb_path = \"{db_path}\"\n\
+             [auth]\nmethods = [\"ldap\"]\n\
+             [auth.ldap]\nurl = \"{url}\"\n\
+             bind_dn = \"cn=admin,dc=example,dc=com\"\nbind_password = \"admin\"\n\
+             user_search_base = \"ou=users,dc=example,dc=com\"\nuser_search_filter = \"(uid=alice)\"\n\
+             group_search_base = \"ou=groups,dc=example,dc=com\"\ngroup_search_filter = \"(member={{}})\"\n\
+             [storage]\nencryption_key = \"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff\"\n"
+        )
+    };
+
+    let booted = support::boot_persea(
+        "ldap-ci-admin",
+        &config_path,
+        &log_path,
+        None,
+        HEALTH_TIMEOUT,
+        &write_config,
+    )
+    .await;
+    let client = booted.client;
+    let base = booted.base;
+    let key = booted.key;
+    let mut app = booted.app;
+
+    // Local account with the REAL email: the DN-shaped LDAP subject can
+    // never match it directly, so the login must resolve it through the
+    // chain lookup or fail with user_lookup_failed.
+    let csrf = fetch_csrf_token(&client, &base).await;
+    let (status, body) = send_json(
+        &client,
+        reqwest::Method::POST,
+        &format!("{base}/api/users"),
+        &key,
+        &json!({
+            "email": "alice@example.com",
+            "name": "Alice Example",
+            "role": "viewer",
+            "password": "ldap-ci-password-2026",
+        }),
+        Some(&csrf),
+    )
+    .await;
+    assert_eq!(status, 201, "POST /api/users failed: {body}");
+
+    // Non-following client so the raw 303 redirect target can be
+    // asserted: it must be the session redirect, not
+    // /?error=user_lookup_failed.
+    let no_follow = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build non-following client");
+    let resp = no_follow
+        .post(format!("{base}/auth/login"))
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .header(reqwest::header::COOKIE, format!("csrf_token={csrf}"))
+        .body(format!(
+            "username=alice&password={ALICE_PASSWORD}&csrf_token={csrf}"
+        ))
+        .send()
+        .await
+        .expect("POST /auth/login");
+
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::SEE_OTHER,
+        "LDAP login with a real-email local account must redirect (303)"
+    );
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .unwrap_or_default();
+    assert!(
+        !location.contains("user_lookup_failed"),
+        "login must not fail user lookup, got redirect to {location}"
+    );
+    assert_eq!(
+        location, "/connections.html",
+        "expected the session redirect to /connections.html"
+    );
+    let has_session_cookie = resp.headers().get_all("set-cookie").iter().any(|v| {
+        v.to_str()
+            .map(|c| c.starts_with("persea_session="))
+            .unwrap_or(false)
+    });
+    assert!(
+        has_session_cookie,
+        "login response must set the persea_session cookie"
+    );
+
+    terminate(&mut app);
+    std::fs::remove_dir_all(&tmp).ok();
+    eprintln!("LDAP real-email login (chain lookup): PASSED");
 }
 
 // ---------------------------------------------------------------------------
