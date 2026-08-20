@@ -5978,7 +5978,10 @@ mod tests {
             &user_identity("alice@test.com"),
             &mut ab_entry,
         );
-        assert!(applied, "credential-less entry takes the session credentials");
+        assert!(
+            applied,
+            "credential-less entry takes the session credentials"
+        );
         assert_eq!(ab_entry.username.as_deref(), Some("alice"));
         assert_eq!(ab_entry.password.as_deref(), Some("p@ssword-session"));
 

@@ -1298,7 +1298,7 @@ pub fn delete_auth_session(db: &Db, token: &str) -> rusqlite::Result<bool> {
 /// Whether an auth session row exists and has not expired. Used by the
 /// session-credential prune (persea#245) to drop retained credentials
 /// whose session ended through logout, revocation, or DB-side expiry.
-pub fn auth_session_is_live(db: &Db, token_hash: &str) -> bool {
+pub fn auth_session_is_live(db: &Db, token_hash: &str) -> rusqlite::Result<bool> {
     db_route!(db, auth_session_is_live_pool, token_hash.to_string());
     let conn = db.lock().unwrap();
     conn.query_row(
@@ -1307,7 +1307,6 @@ pub fn auth_session_is_live(db: &Db, token_hash: &str) -> bool {
         |row| row.get::<_, i64>(0),
     )
     .map(|n| n > 0)
-    .unwrap_or(false)
 }
 
 /// Clean up expired auth sessions.

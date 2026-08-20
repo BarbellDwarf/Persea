@@ -972,10 +972,11 @@ impl SessionManager {
             return;
         }
         let db_for_check = db.clone();
+        let hashes_for_check = hashes.clone();
         let live: HashSet<String> = tokio::task::spawn_blocking(move || {
-            hashes
+            hashes_for_check
                 .iter()
-                .filter(|h| crate::db::auth_session_is_live(&db_for_check, h))
+                .filter(|h| crate::db::auth_session_is_live(&db_for_check, h).unwrap_or(false))
                 .cloned()
                 .collect()
         })
@@ -2062,10 +2063,12 @@ mod tests {
     #[tokio::test]
     async fn session_credentials_roundtrip_owning_session_only() {
         let mgr = test_manager();
-        mgr.store_session_credentials("session-token", 7, "alice", "enc:v1:aaa", 3600);
+        mgr.store_session_credentials("session-token", 7, "alice", "enc:v1:aaa".to_string(), 3600);
 
         // Same token, same user: resolved.
-        let got = mgr.session_credentials("session-token", 7).expect("owning session");
+        let got = mgr
+            .session_credentials("session-token", 7)
+            .expect("owning session");
         assert_eq!(got.username, "alice");
         assert_eq!(got.password_enc, "enc:v1:aaa");
         // Different token or different user: fail closed.
@@ -2076,7 +2079,7 @@ mod tests {
     #[tokio::test]
     async fn session_credentials_clear_on_logout_and_expire() {
         let mgr = test_manager();
-        mgr.store_session_credentials("session-token", 7, "alice", "enc:v1:abc", 3600);
+        mgr.store_session_credentials("session-token", 7, "alice", "enc:v1:abc".to_string(), 3600);
         assert_eq!(mgr.session_credentials_len(), 1);
 
         // Logout clears the entry for that session.
@@ -2086,7 +2089,7 @@ mod tests {
 
         // A zero-TTL entry is already expired: retrieval fails closed and
         // the prune removes it.
-        mgr.store_session_credentials("expired-token", 7, "alice", "enc:v1:abc", 0);
+        mgr.store_session_credentials("expired-token", 7, "alice", "enc:v1:abc".to_string(), 0);
         assert!(mgr.session_credentials("expired-token", 7).is_none());
         mgr.prune_session_credentials().await;
         assert_eq!(mgr.session_credentials_len(), 0);
@@ -2114,7 +2117,7 @@ mod tests {
         let tmp = std::env::temp_dir().join(format!("persea-mgr-prune-{}", uuid::Uuid::new_v4()));
         config.recording_path = Some(tmp.clone());
         let mgr = SessionManager::new_with_db(config, None, db.clone());
-        mgr.store_session_credentials(&token, user.id, "alice", "enc:v1:abc", 3600);
+        mgr.store_session_credentials(&token, user.id, "alice", "enc:v1:abc".to_string(), 3600);
         assert_eq!(mgr.session_credentials_len(), 1);
 
         // Live session: the prune keeps the entry.

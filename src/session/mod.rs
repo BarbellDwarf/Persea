@@ -11,7 +11,6 @@ mod credentials;
 mod manager;
 mod types;
 
-pub use credentials::RetainedSessionCredential;
 pub use manager::SessionManager;
 pub use types::*;
 

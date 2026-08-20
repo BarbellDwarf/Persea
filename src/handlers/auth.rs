@@ -1755,7 +1755,9 @@ mod tests {
         );
         // Other sessions (and the same session under a different identity)
         // resolve nothing: owning-session only.
-        assert!(manager.session_credentials("some-other-session", user.id).is_none());
+        assert!(manager
+            .session_credentials("some-other-session", user.id)
+            .is_none());
     }
 
     #[tokio::test]

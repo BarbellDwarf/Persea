@@ -99,16 +99,17 @@ impl SessionCredentialStore {
         let now = Utc::now();
         entries.retain(|_, e| e.expires_at > now);
         let key = session_key(session_token);
-        entries
-            .get(&key)
-            .filter(|e| e.user_id == user_id)
-            .cloned()
+        entries.get(&key).filter(|e| e.user_id == user_id).cloned()
     }
 
     /// Remove the entry for a session (logout/revocation paths). Returns
     /// true when an entry was removed.
     pub(crate) fn remove(&self, session_token: &str) -> bool {
-        self.entries.lock().unwrap().remove(&session_key(session_token)).is_some()
+        self.entries
+            .lock()
+            .unwrap()
+            .remove(&session_key(session_token))
+            .is_some()
     }
 
     /// Remove entries that have passed their TTL. Returns how many were
@@ -132,6 +133,7 @@ impl SessionCredentialStore {
     }
 
     /// Drop every entry. Used by the login handler test path and by tests.
+    #[cfg(test)]
     pub(crate) fn clear_all(&self) {
         self.entries.lock().unwrap().clear();
     }
@@ -142,6 +144,7 @@ impl SessionCredentialStore {
     }
 
     /// Whether the store holds no entries.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.lock().unwrap().is_empty()
     }
@@ -166,7 +169,9 @@ mod tests {
         assert!(store.is_empty());
         store.store("session-token", cred(7, "alice", "enc:v1:aaa", 3600));
         assert_eq!(store.len(), 1);
-        let got = store.get("session-token", 7).expect("same token, same user");
+        let got = store
+            .get("session-token", 7)
+            .expect("same token, same user");
         assert_eq!(got.username, "alice");
         assert_eq!(got.password_enc, "enc:v1:aaa");
         assert_eq!(got.user_id, 7);
@@ -190,7 +195,10 @@ mod tests {
     fn expired_entry_fails_closed_and_is_pruned() {
         let store = SessionCredentialStore::new();
         store.store("token-a", cred(7, "alice", "enc:v1:aaa", -1));
-        assert!(store.get("token-a", 7).is_none(), "expired must fail closed");
+        assert!(
+            store.get("token-a", 7).is_none(),
+            "expired must fail closed"
+        );
         assert!(store.is_empty(), "get prunes expired entries");
     }
 
