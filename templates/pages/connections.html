@@ -2038,6 +2038,13 @@
                     }
                     return;
                 }
+                // The server tried the session credentials (LDAP/SSO) and
+                // the target rejected them — prompt for interactive
+                // credentials and retry with the resolved username filled in.
+                if (res.ok && res.data.credentials_required) {
+                    openConnectPrompt(scope, folder, entry, res.data);
+                    return;
+                }
                 if (err) {
                     // Stay on the Connections page — a failed or stale
                     // connect attempt must not bounce the user to the login
@@ -2052,9 +2059,9 @@
             });
     }
     var promptTarget = null;
-    function openConnectPrompt(scope, folder, entry) {
+    function openConnectPrompt(scope, folder, entry, prefill) {
         promptTarget = { scope: scope, folder: folder, entry: entry };
-        document.getElementById('pm-username').value = '';
+        document.getElementById('pm-username').value = (prefill && prefill.username) ? prefill.username : '';
         document.getElementById('pm-password').value = '';
         document.getElementById('pm-error').textContent = '';
         document.getElementById('pm-error').classList.add('hidden');
