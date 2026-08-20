@@ -10,7 +10,7 @@
 //! There is no admin bypass, and a request for another user's folder is
 //! indistinguishable from a missing one (404).
 use super::{AppState, StorageBackend, StorageKey, VaultState};
-use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
+use crate::auth::{client_ip, extract_cookie, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
 use crate::rbac;
@@ -48,6 +48,78 @@ pub(crate) fn resolve_encryption_key(storage_key: Option<&StorageKey>) -> String
                 .filter(|k| !k.is_empty())
         })
         .unwrap_or_default()
+}
+
+/// Session credential forwarding (persea#245): with
+/// `[auth] forward_session_credentials`, try the credentials retained at
+/// login for the request's own auth session against an entry that still
+/// carries no password (after the entry, preset, and login pass-through
+/// fallbacks missed). Gated on the per-instance setting (default off),
+/// the owning session (the request's `persea_session` cookie must key a
+/// retained entry for the same user), and the entry's continued lack of
+/// a password. The stored ciphertext is decrypted with the storage key,
+/// exactly like the preset and login pass-through fallbacks.
+///
+/// Returns true when the session credentials were applied. Callers keep
+/// that as the marker that this attempt's credentials came from the
+/// session, so the attempt path can classify auth failures and decide
+/// whether to prompt instead of erroring. Fail-closed: any missing,
+/// expired, or user-mismatched entry is simply skipped, as are API-key /
+/// token identities, which have no session.
+pub(crate) fn apply_session_credentials(
+    manager: &AppState,
+    database: &Db,
+    headers: &axum::http::HeaderMap,
+    storage_key: Option<&StorageKey>,
+    identity: &AuthIdentity,
+    ab_entry: &mut AddressBookEntry,
+) -> bool {
+    // Gate 1: the per-instance setting (default off).
+    if !manager
+        .config()
+        .auth
+        .as_ref()
+        .map(|a| a.forward_session_credentials)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    // Only credential-less entries: the chain stays entry → preset →
+    // login pass-through → session → prompt.
+    if !ab_entry.password.as_deref().is_none_or(|p| p.is_empty()) {
+        return false;
+    }
+    // Gate 2: owning session only. The request must present the auth
+    // session cookie that retained the credential, and the retained
+    // entry must belong to the authenticated user.
+    let Some(session_token) = extract_cookie(headers, "persea_session") else {
+        return false;
+    };
+    let AuthIdentity::User { email, .. } = identity else {
+        return false; // API key / user-token identities have no session
+    };
+    let Ok(user) = db::get_user_by_email(database, email) else {
+        return false;
+    };
+    let Some(retained) = manager.session_credentials(&session_token, user.id) else {
+        return false;
+    };
+    // Decrypt with the storage key, like the preset/login fallbacks.
+    let key_hex = resolve_encryption_key(storage_key);
+    if key_hex.is_empty() {
+        return false;
+    }
+    let Ok(key) = crate::crypto::EncryptionKey::from_hex(&key_hex) else {
+        return false;
+    };
+    let Ok(password) = crate::crypto::decrypt_value(&key, &retained.password_enc) else {
+        return false;
+    };
+    if ab_entry.username.as_deref().is_none_or(|u| u.is_empty()) && !retained.username.is_empty() {
+        ab_entry.username = Some(retained.username);
+    }
+    ab_entry.password = Some(password);
+    true
 }
 
 /// Check if a folder's allowed_groups grant access to the given user groups.
@@ -1750,6 +1822,29 @@ pub async fn ab_connect_entry(
         }
     }
 
+    // Session credential forwarding (persea#245): with
+    // [auth] forward_session_credentials, the login password retained for
+    // the owning auth session is tried before the prompt. The marker is
+    // kept so the attempt path can classify failures (S6) and decide
+    // whether to prompt instead of erroring.
+    let used_session_credentials = apply_session_credentials(
+        &manager,
+        &database,
+        &headers,
+        storage_key.as_ref().map(|Extension(k)| k),
+        &id,
+        &mut ab_entry,
+    );
+    if used_session_credentials {
+        tracing::debug!(
+            user = %id.display_name(),
+            scope = %scope,
+            folder = %folder,
+            entry = %entry,
+            "Connect uses session-forwarded credentials"
+        );
+    }
+
     let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
         let user_email = match &id {
             AuthIdentity::User { email, .. } => Some(email.clone()),
@@ -3101,6 +3196,29 @@ pub async fn quick_connect(
             }
         }
 
+        // Session credential forwarding (persea#245): with
+        // [auth] forward_session_credentials, the login password retained
+        // for the owning auth session is tried before the prompt. The
+        // marker is kept so the attempt path can classify failures (S6)
+        // and decide whether to prompt instead of erroring.
+        let used_session_credentials = apply_session_credentials(
+            &manager,
+            &database,
+            &headers,
+            storage_key.as_ref().map(|Extension(k)| k),
+            &id,
+            &mut ab_entry,
+        );
+        if used_session_credentials {
+            tracing::debug!(
+                user = %admin_name,
+                scope = %scope,
+                folder = %folder,
+                entry = %entry,
+                "Quick connect uses session-forwarded credentials"
+            );
+        }
+
         let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
             let user_email = match &id {
                 AuthIdentity::User { email, .. } => Some(email.clone()),
@@ -3718,7 +3836,7 @@ mod tests {
         VaultBackends, VaultCell, VaultConfigured, VaultState,
     };
     use axum::body::Body;
-    use axum::http::Request;
+    use axum::http::{HeaderMap, Request};
     use serde_json::{json, Value};
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -5652,5 +5770,260 @@ mod tests {
         let refs = db::list_user_folder_entries(&db, alice_user.id, folder).unwrap();
         assert_eq!(refs.len(), 1);
         let _ = entry_id;
+    }
+
+    // ── Session credential forwarding (persea#245) ──────────────────────────
+
+    /// Manager whose `[auth] forward_session_credentials` gate is ON and
+    /// whose recording dir lives in the system temp dir.
+    fn session_credentials_manager(gate_on: bool) -> AppState {
+        let mut config = crate::config::Config::default();
+        config.recording = Some(crate::config::RecordingConfig {
+            path: std::env::temp_dir().join(format!("persea-ab-{}", uuid::Uuid::new_v4())),
+            ..Default::default()
+        });
+        config.auth = Some(crate::config::AuthConfig {
+            forward_session_credentials: gate_on,
+            ..Default::default()
+        });
+        Arc::new(crate::session::SessionManager::new(config, None))
+    }
+
+    const TEST_ENC_KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn session_headers(token: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(t) = token {
+            headers.insert("cookie", format!("persea_session={}", t).parse().unwrap());
+        }
+        headers
+    }
+
+    fn user_identity(email: &str) -> AuthIdentity {
+        AuthIdentity::User {
+            email: email.to_string(),
+            name: email.to_string(),
+            role: "operator".into(),
+            groups: vec![],
+        }
+    }
+
+    fn user_id_of(db: &Db, email: &str) -> i64 {
+        db::get_user_by_email(db, email).unwrap().id
+    }
+
+    fn retained_enc(password: &str) -> String {
+        crate::crypto::encrypt_value(
+            &crate::crypto::EncryptionKey::from_hex(TEST_ENC_KEY).unwrap(),
+            password,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn session_credentials_gate_off_are_never_applied() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let manager = session_credentials_manager(false); // gate OFF
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        let applied = apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        );
+        assert!(!applied, "gate off: nothing is forwarded");
+        assert!(ab_entry.password.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credentials_require_the_owning_session_cookie() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+        manager.store_session_credentials(
+            "session-token",
+            uid,
+            "alice",
+            retained_enc("DCPScret-p@ss"),
+            3600,
+        );
+
+        // No cookie at all: nothing applied.
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(None),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        ));
+        assert!(ab_entry.password.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credentials_are_owned_by_their_session_and_user() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+        manager.store_session_credentials(
+            "session-token",
+            uid,
+            "alice",
+            retained_enc("p@ssword-1"),
+            3600,
+        );
+
+        // A different session token: fail closed.
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("other-session")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        ));
+
+        // The same cookie under a different user's identity: fail closed.
+        insert_test_user(&db, "mallory@test.com", "Mallory", "viewer");
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("mallory@test.com"),
+            &mut ab_entry,
+        ));
+        assert!(ab_entry.password.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credentials_expired_or_mismatched_never_apply() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+
+        // The retained entry belongs to a different user.
+        manager.store_session_credentials(
+            "session-token",
+            uid + 1,
+            "alice",
+            retained_enc("p@ssword-1"),
+            3600,
+        );
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        ));
+
+        // A zero-TTL entry is already expired: fail closed.
+        manager.store_session_credentials(
+            "expired-token",
+            uid,
+            "alice",
+            retained_enc("p@ssword-expired"),
+            0,
+        );
+        let mut ab = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("expired-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab,
+        ));
+        assert!(ab.password.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credentials_apply_after_entry_and_preset_miss() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+        manager.store_session_credentials(
+            "session-token",
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        // Credential-less entry: the session credentials fill username +
+        // password with the decrypted value.
+        let mut ab_entry = crate::vault::AddressBookEntry {
+            session_type: "ssh".into(),
+            hostname: Some("target.example.com".into()),
+            ..Default::default()
+        };
+        let applied = apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        );
+        assert!(applied, "credential-less entry takes the session credentials");
+        assert_eq!(ab_entry.username.as_deref(), Some("alice"));
+        assert_eq!(ab_entry.password.as_deref(), Some("p@ssword-session"));
+
+        // An entry that already resolved a password (entry or preset
+        // credentials) is left untouched: the chain keeps entry → preset →
+        // session ordering.
+        let mut ab_entry = crate::vault::AddressBookEntry {
+            session_type: "ssh".into(),
+            password: Some("preset-p@ss".into()),
+            ..Default::default()
+        };
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        ));
+        assert_eq!(ab_entry.password.as_deref(), Some("preset-p@ss"));
+    }
+
+    #[tokio::test]
+    async fn session_credentials_skip_api_key_identities() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+        manager.store_session_credentials(
+            "session-token",
+            uid,
+            "alice",
+            retained_enc("p@ssword-key"),
+            3600,
+        );
+        // API key identities have no session: fail closed.
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &AuthIdentity::ApiKey("admin".into()),
+            &mut ab_entry,
+        ));
+        assert!(ab_entry.password.is_none());
     }
 }
