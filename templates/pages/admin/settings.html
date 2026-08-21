@@ -46,93 +46,6 @@
     outline-offset: 2px;
 }
 
-/* ── Settings section tabs ─────────────────────────────── */
-.settings-tabs {
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 20px;
-    overflow-x: auto;
-    overflow-y: hidden;
-}
-.settings-tab {
-    appearance: none;
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    padding: 10px 14px;
-    font-size: var(--text-sm);
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: color 0.15s;
-}
-.settings-tab:hover {
-    color: var(--text-primary);
-}
-.settings-tab:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-}
-.settings-tab[aria-selected="true"] {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-}
-
-/* ── Settings left rail (1280px+ screens) ──────────────── */
-.settings-layout { display: block; }
-.settings-rail { display: none; }
-.settings-main { min-width: 0; }
-.settings-rail-tab {
-    appearance: none;
-    background: none;
-    border: none;
-    border-left: 3px solid transparent;
-    padding: 8px 12px;
-    font-size: var(--text-sm);
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    text-align: left;
-    transition: color 0.15s, border-color 0.15s, background-color 0.15s;
-}
-.settings-rail-tab:hover {
-    color: var(--text-primary);
-}
-.settings-rail-tab:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-}
-.settings-rail-tab[aria-selected="true"] {
-    color: var(--accent);
-    border-left-color: var(--accent);
-    background-color: rgba(16,185,129,0.08);
-}
-
-/* Wide screens: rail next to the content panel; the tab bar becomes the
-   narrow-screen control and is hidden here. The hide rule lives in this
-   page block (not app.css) so it overrides the .settings-tabs display rule
-   above it in the same cascade. */
-@media (min-width: 1280px) {
-    .settings-layout {
-        display: grid;
-        grid-template-columns: 200px minmax(0, 1fr);
-        gap: 32px;
-        align-items: start;
-    }
-    .settings-rail {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        position: sticky;
-        top: 24px;
-    }
-    .settings-tabs { display: none; }
-}
-
 /* ── Consistent card headers + collapsible groups ─────── */
 .settings-card-header {
     display: flex;
@@ -165,7 +78,7 @@
 .settings-search-hidden { display: none; }
 </style>
 
-<div class="max-w-5xl mx-auto">
+<div>
     <div class="mb-6">
         <h1 class="text-2xl font-bold text-[var(--text-primary)]">System Settings</h1>
         <p class="text-sm text-[var(--text-muted)] mt-1">Configure server, session, and feature settings</p>
@@ -175,12 +88,15 @@
         <!-- Left rail: the wide-screen (1280px+) section list. Shares the
              hash persistence, aria-selected state and roving tabindex of
              the tab bar; the script block drives both. -->
-        <nav class="settings-rail" role="tablist" aria-label="Settings sections">
-            <button type="button" role="tab" id="rail-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-rail-tab">Session</button>
-            <button type="button" role="tab" id="rail-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-rail-tab">Features</button>
-            <button type="button" role="tab" id="rail-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-rail-tab">Storage</button>
-            <button type="button" role="tab" id="rail-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-rail-tab">Updates</button>
-        </nav>
+        <div class="settings-rail-wrap">
+            <p class="settings-rail-label">Settings</p>
+            <nav class="settings-rail" role="tablist" aria-label="Settings sections">
+                <button type="button" role="tab" id="rail-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-rail-tab">Session</button>
+                <button type="button" role="tab" id="rail-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-rail-tab">Features</button>
+                <button type="button" role="tab" id="rail-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-rail-tab">Storage</button>
+                <button type="button" role="tab" id="rail-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-rail-tab">Updates</button>
+            </nav>
+        </div>
 
         <div class="settings-main">
             <!-- Settings search: a client-side filter over the sections and
@@ -482,6 +398,18 @@
                                 </div>
                             </label>
                             <input type="hidden" name="enable_api_keys" id="enable_api_keys-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Compliance Mode</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Disable direct API access: admin API keys and self-service tokens are rejected; only interactive sessions and scoped desktop tokens authenticate</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="compliance_mode">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="compliance_mode" id="compliance_mode-hidden" value="false">
 
                             <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
                                 <div>
@@ -799,7 +727,7 @@ function syncToggle(name) {
 
 // Feature toggle names shared by the load code and the change listeners.
 var toggleBoxes = [
-    'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
+    'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys', 'compliance_mode',
     'enable_recordings', 'enable_web_sessions', 'enable_spice',
     'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_powershell_ssh',
     'enable_file_transfer',
@@ -921,7 +849,15 @@ function showSettingsSection(name, opts) {
                 tab.setAttribute('aria-selected', 'true');
                 tab.setAttribute('tabindex', '0');
             });
-            if (focusPanel) panel.focus();
+            if (focusPanel) {
+                // Focus without scrolling: the panels are stacked in the DOM
+                // and carry tabindex="-1", so a plain focus() scrolls the
+                // activated panel into view, jumping the page to mid-scroll
+                // for sections below the tall Session panel. The view stays
+                // at the top of the page; the user scrolls down themselves.
+                panel.focus({ preventScroll: true });
+                window.scrollTo(0, 0);
+            }
         } else {
             panel.hidden = true;
             settingsNavs(s).forEach(function(tab) {
