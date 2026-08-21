@@ -185,6 +185,16 @@ out of the window.
 - **Kill switch:** an admin can disable API-key authentication entirely
   via the `enable_api_keys` system setting (Admin → Settings). With it
   off, a request presenting only an API key is rejected outright.
+- **Compliance mode:** the `compliance_mode` system setting (Admin →
+  Settings → Features) closes the direct API surface without locking
+  users out. Admin API keys and self-service user tokens are rejected
+  with `403`; login session cookies and scoped tokens (minted by the
+  interactive desktop login or device pairing) keep working, so the
+  desktop bridge stays available through the scoped token. The
+  anonymous `GET /api/auth/status` probe reports `"compliance_mode":
+  true`, which the desktop app uses to switch to its login-prompt flow.
+  This is the setting security teams enable when an instance must not
+  accept scripted key access at all.
 - **Rotate early:** expired tokens are purged hourly by a background
   task; revocation is immediate (the hash is deleted).
 
