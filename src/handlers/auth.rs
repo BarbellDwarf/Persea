@@ -89,8 +89,10 @@ async fn check_totp_enforcement(
 /// Create a pending MFA record and redirect to the given target with the
 /// pending-MFA cookie. Used by the MFA gate (target `/auth/mfa`) and the
 /// enrollment gate (target `/auth/enroll`); neither mints a session.
+/// `desktop` marks the record as a desktop login so the MFA completion
+/// handler mints the scoped token after the TOTP gate (persea#227).
 /// Returns the response with the MFA pending cookie set.
-// The 8 parameters mirror the caller's full request context; bundling them
+// The 9 parameters mirror the caller's full request context; bundling them
 // into a struct would add ceremony to both call sites for a style lint.
 #[allow(clippy::too_many_arguments)]
 async fn redirect_to_mfa(
@@ -98,6 +100,7 @@ async fn redirect_to_mfa(
     user: &db::User,
     ttl_secs: u64,
     target: &str,
+    desktop: bool,
     headers: &HeaderMap,
     tls_enabled: bool,
     trusted_proxies: Option<&TrustedProxies>,
@@ -111,15 +114,27 @@ async fn redirect_to_mfa(
     let oidc_subject = user.oidc_subject.clone();
 
     let pending_token = match tokio::task::spawn_blocking(move || {
-        db::create_pending_mfa(
-            &db_clone,
-            user_id,
-            &email,
-            &name,
-            &role,
-            oidc_subject.as_deref(),
-            ttl_secs,
-        )
+        if desktop {
+            db::create_pending_mfa_desktop(
+                &db_clone,
+                user_id,
+                &email,
+                &name,
+                &role,
+                oidc_subject.as_deref(),
+                ttl_secs,
+            )
+        } else {
+            db::create_pending_mfa(
+                &db_clone,
+                user_id,
+                &email,
+                &name,
+                &role,
+                oidc_subject.as_deref(),
+                ttl_secs,
+            )
+        }
     })
     .await
     {
@@ -150,6 +165,86 @@ async fn redirect_to_mfa(
         Redirect::to(target),
     )
         .into_response()
+}
+
+/// Resolve the local user record for an authenticated subject.
+///
+/// The database provider's subject is the account email, so the first
+/// lookup is by email. Directory providers authenticate with a
+/// DN-shaped subject (LDAP returns the user DN, a contract the S2
+/// re-validation machinery depends on) that can never match an email
+/// row. When the direct lookup misses, ask the auth chain to resolve
+/// the subject to a provider user (the LDAP provider reads the entry's
+/// configured email attribute) and retry the email lookup with the
+/// resolved address. Returns `None` only when both lookups miss or the
+/// database errors; callers redirect to `/?error=user_lookup_failed`.
+async fn resolve_user_for_subject(
+    database: &Db,
+    auth_chain: &Arc<AuthChain>,
+    subject: &str,
+) -> Option<db::User> {
+    let db_clone = database.clone();
+    let email = subject.to_string();
+    match tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &email)).await {
+        Ok(Ok(user)) => return Some(user),
+        Ok(Err(rusqlite::Error::QueryReturnedNoRows)) => {}
+        _ => return None, // DB error or task panic: fail closed
+    }
+
+    // The subject is not an email this database knows. Providers may do
+    // blocking I/O (the LDAP client creates its own tokio runtime
+    // internally), so run the chain lookup off the async runtime, the
+    // same way the authenticate calls in this file do.
+    let chain = auth_chain.clone();
+    let subject_owned = subject.to_string();
+    let lookup = tokio::task::spawn_blocking(move || {
+        futures::executor::block_on(chain.lookup_user(&subject_owned))
+    })
+    .await;
+    let resolved = match lookup {
+        Ok(Some(info)) => info.email.filter(|e| !e.is_empty()).unwrap_or(info.subject),
+        _ => return None,
+    };
+
+    let db_clone = database.clone();
+    match tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &resolved)).await {
+        Ok(Ok(user)) => Some(user),
+        _ => None, // second lookup missed or errored: both paths failed
+    }
+}
+
+/// Persist the auth chain's resolved group memberships on the user record
+/// (`users.oidc_groups`), mirroring the OIDC callback's upsert so the
+/// session identity and every later ACL lookup carry the groups. The role
+/// argument only applies on INSERT (the ON CONFLICT clause never touches
+/// role), so passing the user's current role cannot override an admin-set
+/// one. Empty groups skip the write entirely: a login without claims must
+/// not clobber memberships recorded by a previous login. A failed write is
+/// logged, never fatal: the session still works and the groups are
+/// re-recorded on the next login.
+async fn record_user_groups(database: &Db, user: &db::User, groups: &[String]) {
+    if groups.is_empty() {
+        return;
+    }
+    let db_upsert = database.clone();
+    let email_upsert = user.email.clone();
+    let name_upsert = user.name.clone();
+    let subject_upsert = user.oidc_subject.clone();
+    let role_upsert = user.role.clone();
+    let groups_upsert = groups.to_vec();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Err(e) = db::upsert_user(
+            &db_upsert,
+            &email_upsert,
+            &name_upsert,
+            subject_upsert.as_deref(),
+            &role_upsert,
+            &groups_upsert,
+        ) {
+            tracing::warn!(error = %e, "failed to record group memberships on user record");
+        }
+    })
+    .await;
 }
 
 /// Query parameters for the login page.
@@ -246,6 +341,7 @@ pub async fn login_submit(
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(tls_enabled): Extension<TlsEnabled>,
     Extension(auth_chain): Extension<Arc<AuthChain>>,
+    Extension(nonce): Extension<CspNonce>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<LoginFormData>,
 ) -> Response {
@@ -258,6 +354,9 @@ pub async fn login_submit(
     if form.saml {
         let auth_request = AuthRequest {
             client_ip,
+            // Desktop logins ride the SAML RelayState so the ACS handler
+            // knows to mint the scoped token after the IdP round trip.
+            relay_state: form.desktop.then(|| "desktop".to_string()),
             ..AuthRequest::default()
         };
         // Providers may do blocking I/O (the LDAP client creates its own
@@ -309,6 +408,10 @@ pub async fn login_submit(
     // internally), so run the chain off the async runtime: a sync client
     // started on a tokio worker thread panics with "Cannot start a runtime
     // from within a runtime" and kills the request.
+    // Keep a handle on the chain: the authenticate call below moves the
+    // Arc into the blocking task, but the success path still needs it to
+    // resolve a non-email subject (LDAP DN) to a local user.
+    let auth_chain_lookup = auth_chain.clone();
     let result = match tokio::task::spawn_blocking(move || {
         futures::executor::block_on(auth_chain.authenticate(&auth_request))
     })
@@ -351,18 +454,19 @@ pub async fn login_submit(
                 })
                 .await;
             }
-            // Look up the user to get their ID
-            let db_clone = database.clone();
-            let email = subject.clone();
-            let user =
-                match tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &email))
-                    .await
-                {
-                    Ok(Ok(user)) => user,
-                    _ => {
-                        return Redirect::to("/?error=user_lookup_failed").into_response();
-                    }
-                };
+            // Look up the user to get their ID. LDAP authenticates with a
+            // DN subject, so the email lookup misses for LDAP accounts;
+            // the chain lookup resolves the DN to the entry's email and
+            // the lookup is retried with it (persea#236).
+            let Some(user) =
+                resolve_user_for_subject(&database, &auth_chain_lookup, &subject).await
+            else {
+                return Redirect::to("/?error=user_lookup_failed").into_response();
+            };
+
+            // Record the resolved memberships before the session is minted
+            // so the session identity and all later lookups carry them.
+            record_user_groups(&database, &user, &groups).await;
 
             if user.disabled {
                 return Redirect::to("/?error=account_disabled").into_response();
@@ -390,6 +494,7 @@ pub async fn login_submit(
                     &user,
                     ttl_secs,
                     "/auth/mfa",
+                    form.desktop,
                     &headers,
                     tls_enabled.0,
                     Some(&trusted_proxies),
@@ -410,6 +515,7 @@ pub async fn login_submit(
                     &user,
                     ttl_secs,
                     "/auth/enroll",
+                    form.desktop,
                     &headers,
                     tls_enabled.0,
                     Some(&trusted_proxies),
@@ -504,6 +610,51 @@ pub async fn login_submit(
                 }
             }
 
+            // Transient session credential retention (persea#245): with
+            // [auth] forward_session_credentials, retain this login's
+            // password in memory for THIS session — encrypted with the
+            // storage key, keyed to the session token hash, TTL-bound to
+            // the session lifetime — so the connect flow can try it for
+            // credential-less entries before prompting. Only instances
+            // whose chain includes the password-bearing providers
+            // (ldap/database) retain: the providers that can succeed on
+            // this password form are exactly the ones that validate a
+            // password, and OIDC/SAML never reach this handler with one in
+            // scope. The ciphertext is never logged, never written to the
+            // database, and never returned by any API; the entry dies with
+            // the session (logout, expiry, revocation).
+            if state
+                .config()
+                .auth
+                .as_ref()
+                .map(|a| a.forward_session_credentials)
+                .unwrap_or(false)
+                && !form.password.is_empty()
+            {
+                let methods = state
+                    .config()
+                    .auth
+                    .as_ref()
+                    .map(|a| a.methods.clone())
+                    .unwrap_or_default();
+                if methods.iter().any(|m| m == "ldap" || m == "database") {
+                    let key_hex = state.config().storage_encryption_key().unwrap_or_default();
+                    if !key_hex.is_empty() {
+                        if let Ok(key) = crate::crypto::EncryptionKey::from_hex(&key_hex) {
+                            if let Ok(enc) = crate::crypto::encrypt_value(&key, &form.password) {
+                                state.store_session_credentials(
+                                    &session_token,
+                                    user.id,
+                                    &form.username,
+                                    enc,
+                                    ttl_secs,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
             // Both enforcement gates (MFA and enrollment) returned above,
             // so no factor is required and the session is safe to mint.
             let redirect_to = "/connections.html";
@@ -519,6 +670,34 @@ pub async fn login_submit(
                 ),
                 ttl_secs
             );
+
+            // Desktop login: mint the scoped token (12h TTL) and answer
+            // with the connected page instead of the redirect, so the
+            // client that asked for the token gets it in the response.
+            if form.desktop {
+                return match crate::api::pairing::mint_login_scoped_token(
+                    &database, user.id, &client_ip,
+                )
+                .await
+                {
+                    Ok((token_id, plaintext, _name, _max_role, _expires_db, expires_rfc)) => {
+                        tracing::info!(
+                            email = %display_name,
+                            token_id,
+                            "Desktop scoped token issued after interactive login"
+                        );
+                        (
+                            AppendHeaders([(header::SET_COOKIE, session_cookie)]),
+                            desktop_connected_page(&nonce.0, &plaintext, &expires_rfc),
+                        )
+                            .into_response()
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to mint desktop scoped token");
+                        Redirect::to("/?error=token_failed").into_response()
+                    }
+                };
+            }
 
             (
                 AppendHeaders([(header::SET_COOKIE, session_cookie)]),
@@ -683,12 +862,14 @@ pub struct MfaFormData {
 }
 
 /// POST /auth/mfa — verify TOTP code and complete login.
+#[allow(clippy::too_many_arguments)]
 pub async fn mfa_submit(
     State(_state): State<crate::api::AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Extension(database): Extension<Db>,
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(tls_enabled): Extension<TlsEnabled>,
+    Extension(nonce): Extension<CspNonce>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<MfaFormData>,
 ) -> Response {
@@ -818,6 +999,39 @@ pub async fn mfa_submit(
         if secure.is_empty() { "" } else { "Secure;" }
     );
 
+    // Desktop login: mint the scoped token (12h TTL) and answer with the
+    // connected page instead of the redirect, so the client that asked for
+    // the token gets it in the response.
+    if pending.desktop {
+        return match crate::api::pairing::mint_login_scoped_token(
+            &database,
+            pending.user_id,
+            &client_ip,
+        )
+        .await
+        {
+            Ok((token_id, plaintext, _name, _max_role, _expires_db, expires_rfc)) => {
+                tracing::info!(
+                    email = %pending.user_email,
+                    token_id,
+                    "Desktop scoped token issued after MFA login"
+                );
+                (
+                    AppendHeaders([
+                        (header::SET_COOKIE, session_cookie),
+                        (header::SET_COOKIE, clear_mfa_cookie),
+                    ]),
+                    desktop_connected_page(&nonce.0, &plaintext, &expires_rfc),
+                )
+                    .into_response()
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to mint desktop scoped token");
+                Redirect::to("/?error=token_failed").into_response()
+            }
+        };
+    }
+
     (
         AppendHeaders([
             (header::SET_COOKIE, session_cookie),
@@ -880,6 +1094,77 @@ pub async fn enroll_page(
     .into_response()
 }
 
+/// Render the desktop-connected page: the scoped token plaintext (handed
+/// out exactly once, in the login response that minted it), its expiry,
+/// and a copy button. The desktop shell reads the token from its webview's
+/// DOM; a plain browser user can copy it manually. No-store so the
+/// plaintext never lands in a cache. The token charset is
+/// `[a-zA-Z0-9_]` and the other interpolations are server-generated, so
+/// no HTML escaping is required. Shared with the OIDC callback
+/// (persea#227), which mints the same token after the IdP round trip.
+pub(crate) fn desktop_connected_page(nonce: &str, token: &str, expires_rfc: &str) -> Response {
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Desktop Connected</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0b1120; color: #e2e8f0; display: flex; justify-content: center; align-items: center; min-height: 100vh; }}
+        .card {{ background: #111827; border: 1px solid #1e3a5f; border-radius: 12px; padding: 2rem; width: 100%; max-width: 560px; }}
+        .title {{ text-align: center; margin-bottom: 0.5rem; font-size: 1.5rem; color: #e2e8f0; }}
+        .subtitle {{ text-align: center; color: #94a3b8; font-size: 0.875rem; margin-bottom: 1.5rem; }}
+        label {{ display: block; margin-bottom: 0.25rem; font-size: 0.875rem; color: #94a3b8; }}
+        input {{ width: 100%; padding: 0.625rem 0.75rem; background: #1e293b; border: 1px solid #1e3a5f; border-radius: 6px; color: #e2e8f0; font-size: 0.875rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-bottom: 1rem; outline: none; }}
+        .btn {{ width: 100%; padding: 0.625rem; background: #3b82f6; color: #fff; border: none; border-radius: 6px; font-size: 0.875rem; cursor: pointer; }}
+        .btn:hover {{ background: #2563eb; }}
+        .hint {{ font-size: 0.75rem; color: #64748b; text-align: center; margin-top: 1.25rem; line-height: 1.6; }}
+        a {{ color: #60a5fa; }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1 class="title">Desktop Connected</h1>
+        <p class="subtitle">Use this token in the desktop app. It expires in 12 hours.</p>
+        <label for="scoped-token">Scoped token</label>
+        <input type="text" id="scoped-token" value="{token}" readonly onclick="this.select()">
+        <p class="subtitle">Expires: {expires}</p>
+        <button type="button" class="btn" id="copy-btn">Copy Token</button>
+        <p class="hint">You can revoke this token any time from the API Keys tab in your <a href="/account/profile.html">account settings</a>.</p>
+    </div>
+    <script nonce="{nonce}">
+    (function() {{
+        var btn = document.getElementById('copy-btn');
+        var input = document.getElementById('scoped-token');
+        if (btn && input) {{
+            btn.addEventListener('click', function() {{
+                input.focus();
+                input.select();
+                try {{ document.execCommand('copy'); }} catch (e) {{}}
+                btn.textContent = 'Copied';
+            }});
+        }}
+    }})();
+    </script>
+</body>
+</html>"#,
+        token = token,
+        expires = expires_rfc,
+        nonce = nonce
+    );
+
+    (
+        AppendHeaders([(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        )]),
+        Html(html),
+    )
+        .into_response()
+}
+
 // ── Form data ──────────────────────────────────────────────────────────────
 
 /// Form body of the password login form (POST /auth/login).
@@ -896,9 +1181,34 @@ pub struct LoginFormData {
     pub password: String,
     /// Set by the login page's SAML button (hidden `saml=1` field): starts
     /// the SAML SSO flow instead of password auth. The form then carries no
-    /// username or password.
-    #[serde(default)]
+    /// username or password. The value may arrive as `1` (the template's
+    /// convention), which serde_urlencoded rejects for plain `bool`, hence
+    /// the tolerant flag deserializer.
+    #[serde(default, deserialize_with = "deserialize_flag")]
     pub saml: bool,
+    /// Desktop login flag (persea#227): when set, the login flow mints a
+    /// scoped desktop token (12h TTL) after all gates pass and answers
+    /// with the connected page carrying the token plaintext. The client
+    /// posts this alongside the normal credentials (and the SAML start
+    /// flag when SAML is used).
+    #[serde(default, deserialize_with = "deserialize_flag")]
+    pub desktop: bool,
+}
+
+/// Deserialize a form flag that may arrive as `1`/`0` (the HTML checkbox
+/// convention used by the login page and desktop client) or `true`/`false`.
+/// serde_urlencoded deserializes `bool` via `str::parse::<bool>()`, which
+/// rejects `1` and would 422 the whole form. Shared with the OIDC login
+/// query params (persea#227), which accept the same flag conventions.
+pub(crate) fn deserialize_flag<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+    Ok(matches!(
+        s.as_str(),
+        "1" | "true" | "on" | "yes" | "True" | "TRUE"
+    ))
 }
 
 // ── SAML handlers ──────────────────────────────────────────────────────────
@@ -917,6 +1227,7 @@ pub async fn saml_acs(
     Extension(trusted_proxies): Extension<TrustedProxies>,
     Extension(totp_enforcement): Extension<TotpEnforcement>,
     Extension(tls_enabled): Extension<TlsEnabled>,
+    Extension(nonce): Extension<CspNonce>,
     headers: HeaderMap,
     axum::extract::Form(form): axum::extract::Form<SamlAcsForm>,
 ) -> Response {
@@ -924,6 +1235,11 @@ pub async fn saml_acs(
     use std::collections::HashMap;
 
     let client_ip = client_ip(&headers, addr.ip(), &trusted_proxies.0);
+    // Desktop login intent, carried through the SAML RelayState we set in
+    // the AuthnRequest (see login_submit's SAML start). The IdP echoes it
+    // back on the ACS POST; a forged value cannot help because the
+    // assertion itself must still validate.
+    let desktop_login = form.RelayState.as_deref() == Some("desktop");
 
     if form.SAMLResponse.is_empty() {
         return Redirect::to("/?error=saml_missing_response").into_response();
@@ -942,6 +1258,9 @@ pub async fn saml_acs(
     // may do blocking I/O (the LDAP client creates its own tokio runtime
     // internally), so run the chain off the async runtime; a panic in the
     // chain is logged distinctly instead of masking as a rejection.
+    // Keep a handle on the chain for the success path's user resolution
+    // (a non-email subject, e.g. an LDAP DN, needs the chain lookup).
+    let auth_chain_lookup = auth_chain.clone();
     let result = match tokio::task::spawn_blocking(move || {
         futures::executor::block_on(auth_chain.authenticate(&auth_request))
     })
@@ -983,18 +1302,18 @@ pub async fn saml_acs(
                 .await;
             }
 
-            // Look up the user by email/subject
-            let db_clone = database.clone();
-            let email = subject.clone();
-            let user =
-                match tokio::task::spawn_blocking(move || db::get_user_by_email(&db_clone, &email))
-                    .await
-                {
-                    Ok(Ok(user)) => user,
-                    _ => {
-                        return Redirect::to("/?error=user_lookup_failed").into_response();
-                    }
-                };
+            // Look up the user by email/subject. A directory-backed
+            // subject (LDAP DN) never matches an email, so the chain
+            // lookup resolves it and the lookup is retried (persea#236).
+            let Some(user) =
+                resolve_user_for_subject(&database, &auth_chain_lookup, &subject).await
+            else {
+                return Redirect::to("/?error=user_lookup_failed").into_response();
+            };
+
+            // Record the resolved memberships before the session is minted
+            // so the session identity and all later lookups carry them.
+            record_user_groups(&database, &user, &groups).await;
 
             if user.disabled {
                 return Redirect::to("/?error=account_disabled").into_response();
@@ -1014,6 +1333,7 @@ pub async fn saml_acs(
                     &user,
                     ttl_secs,
                     "/auth/mfa",
+                    desktop_login,
                     &headers,
                     tls_enabled.0,
                     Some(&trusted_proxies),
@@ -1034,6 +1354,7 @@ pub async fn saml_acs(
                     &user,
                     ttl_secs,
                     "/auth/enroll",
+                    desktop_login,
                     &headers,
                     tls_enabled.0,
                     Some(&trusted_proxies),
@@ -1083,10 +1404,12 @@ pub async fn saml_acs(
             // Redirect to RelayState if present, otherwise /connections.html.
             // Both enforcement gates (MFA and enrollment) returned above,
             // so no factor is required and the session is safe to mint.
-            let redirect_to = form
-                .RelayState
-                .filter(|n| crate::oidc::is_safe_redirect_path(n))
-                .unwrap_or_else(|| "/connections.html".to_string());
+            let redirect_to = if desktop_login {
+                None
+            } else {
+                form.RelayState
+                    .filter(|n| crate::oidc::is_safe_redirect_path(n))
+            };
 
             let session_cookie = format!(
                 "persea_session={}; Path=/; HttpOnly;{} SameSite=Lax; Max-Age={}",
@@ -1100,9 +1423,37 @@ pub async fn saml_acs(
                 ttl_secs
             );
 
+            // Desktop login: mint the scoped token (12h TTL) and answer
+            // with the connected page instead of the redirect, so the
+            // client that asked for the token gets it in the response.
+            if desktop_login {
+                return match crate::api::pairing::mint_login_scoped_token(
+                    &database, user.id, &client_ip,
+                )
+                .await
+                {
+                    Ok((token_id, plaintext, _name, _max_role, _expires_db, expires_rfc)) => {
+                        tracing::info!(
+                            email = %display_name,
+                            token_id,
+                            "Desktop scoped token issued after SAML login"
+                        );
+                        (
+                            AppendHeaders([(header::SET_COOKIE, session_cookie)]),
+                            desktop_connected_page(&nonce.0, &plaintext, &expires_rfc),
+                        )
+                            .into_response()
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to mint desktop scoped token");
+                        Redirect::to("/?error=token_failed").into_response()
+                    }
+                };
+            }
+
             (
                 AppendHeaders([(header::SET_COOKIE, session_cookie)]),
-                Redirect::to(&redirect_to),
+                Redirect::to(redirect_to.as_deref().unwrap_or("/connections.html")),
             )
                 .into_response()
         }
@@ -1153,6 +1504,10 @@ pub async fn saml_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
 
     fn test_db() -> Db {
         db::init_db(std::path::Path::new(":memory:")).unwrap()
@@ -1162,6 +1517,363 @@ mod tests {
         let hash = crate::password::hash_password("s3cret-p@ss").unwrap();
         db::create_user_with_password(db, email, email, &hash, role, "database").unwrap();
         db::get_user_by_email(db, email).unwrap()
+    }
+
+    fn test_addr() -> std::net::SocketAddr {
+        "127.0.0.1:8080".parse().unwrap()
+    }
+
+    /// Auth provider stub: any request authenticates as the desktop test
+    /// user, so the handler exercises the real chain plumbing (lookup,
+    /// gates, session, mint) without a live LDAP server.
+    struct StubDesktopProvider;
+
+    #[async_trait]
+    impl crate::auth_provider::AuthProvider for StubDesktopProvider {
+        fn id(&self) -> &str {
+            "stub"
+        }
+
+        fn capabilities(&self) -> crate::auth_provider::Capabilities {
+            crate::auth_provider::Capabilities::AUTHENTICATE
+        }
+
+        async fn authenticate(&self, _request: &AuthRequest) -> crate::auth_provider::AuthResult {
+            crate::auth_provider::AuthResult::Success {
+                subject: "desktop@example.com".into(),
+                display_name: "Desktop User".into(),
+                groups: vec![],
+                role: None,
+            }
+        }
+    }
+
+    /// Router for the login handlers, mirroring the auth-pages wiring in
+    /// main.rs (minus CSRF and rate limiting).
+    fn login_router(db: Db) -> axum::Router {
+        login_router_with_manager(db, crate::config::Config::default()).0
+    }
+
+    /// Like [`login_router`], but with a caller-supplied config and the
+    /// manager returned so tests can inspect the session-credential store
+    /// (persea#245) after the login request.
+    fn login_router_with_manager(
+        db: Db,
+        config: crate::config::Config,
+    ) -> (axum::Router, crate::api::AppState) {
+        use axum::routing::post;
+        let manager: crate::api::AppState =
+            Arc::new(crate::session::SessionManager::new(config, None));
+        let chain = Arc::new(AuthChain::new(vec![Box::new(StubDesktopProvider)]));
+        let router = axum::Router::new()
+            .route("/auth/login", post(super::login_submit))
+            .route("/auth/mfa", post(super::mfa_submit))
+            .with_state(manager.clone())
+            .layer(Extension(db))
+            .layer(Extension(TrustedProxies(vec![])))
+            .layer(Extension(TlsEnabled(false)))
+            .layer(Extension(chain))
+            .layer(Extension(CspNonce("test-nonce".into())));
+        (router, manager)
+    }
+
+    fn form_post(uri: &str, body: &str, cookie: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("content-type", "application/x-www-form-urlencoded");
+        if let Some(c) = cookie {
+            builder = builder.header("cookie", c);
+        }
+        let mut req = builder.body(Body::from(body.to_string())).unwrap();
+        req.extensions_mut().insert(ConnectInfo(test_addr()));
+        req
+    }
+
+    async fn body_text(response: axum::response::Response) -> String {
+        String::from_utf8_lossy(
+            &axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap(),
+        )
+        .to_string()
+    }
+
+    /// Extract the `rgu_` token from the connected page's token input.
+    fn extract_token(body: &str) -> String {
+        let start = body
+            .find("value=\"rgu_")
+            .map(|i| i + "value=\"".len())
+            .expect("connected page must render the token input");
+        body[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn desktop_login_issues_scoped_token_in_response() {
+        let db = test_db();
+        create_user(&db, "desktop@example.com", "poweruser");
+        let app = login_router(db.clone());
+        let response = app
+            .oneshot(form_post(
+                "/auth/login",
+                "username=desktop%40example.com&password=s3cret-p%40ss&desktop=1",
+                None,
+            ))
+            .await
+            .unwrap();
+
+        // The connected page answers the login POST directly (no redirect)
+        // with the token plaintext and the session cookie.
+        assert_eq!(response.status(), StatusCode::OK);
+        let set_cookies: Vec<String> = response
+            .headers()
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok().map(str::to_string))
+            .collect();
+        assert!(
+            set_cookies.iter().any(|c| c.starts_with("persea_session=")),
+            "session cookie must be set: {set_cookies:?}"
+        );
+        let body = body_text(response).await;
+        assert!(
+            body.contains("Desktop Connected"),
+            "expected connected page"
+        );
+        assert!(body.contains("Expires:"), "expiry must be shown");
+        let token = extract_token(&body);
+        assert!(token.starts_with("rgu_"), "token plaintext: {token}");
+
+        // The token is a scoped user token with a server-side ~12h expiry.
+        let (user, meta) = db::validate_user_token(&db, &token).unwrap();
+        assert_eq!(user.email, "desktop@example.com");
+        assert_eq!(meta.token_type, "scoped");
+        assert_eq!(meta.name, "Persea Desktop (login)");
+        let exp = meta.expires_at.expect("scoped token must expire");
+        let exp_ndt = chrono::NaiveDateTime::parse_from_str(&exp, "%Y-%m-%d %H:%M:%S").unwrap();
+        let hours = (exp_ndt - chrono::Utc::now().naive_utc()).num_minutes() as f64 / 60.0;
+        assert!(
+            (11.0..13.0).contains(&hours),
+            "TTL should be about 12 hours, got {hours:.1}h"
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_login_does_not_mint_scoped_token() {
+        let db = test_db();
+        create_user(&db, "desktop@example.com", "poweruser");
+        let app = login_router(db.clone());
+        let response = app
+            .oneshot(form_post(
+                "/auth/login",
+                "username=desktop%40example.com&password=s3cret-p%40ss",
+                None,
+            ))
+            .await
+            .unwrap();
+
+        // Ordinary login keeps redirecting to the connections page and
+        // mints no token.
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            location.ends_with("/connections.html"),
+            "redirect: {location}"
+        );
+        let uid = db::get_user_by_email(&db, "desktop@example.com")
+            .unwrap()
+            .id;
+        assert!(
+            db::list_user_tokens(&db, uid).unwrap().is_empty(),
+            "a web login must not mint a scoped token"
+        );
+    }
+
+    // ── Transient session credential retention (persea#245) ────────────────
+
+    /// Extract the `persea_session` cookie value from a login response.
+    fn session_cookie_from(response: &axum::response::Response) -> Option<String> {
+        response
+            .headers()
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|c| {
+                c.strip_prefix("persea_session=")
+                    .map(|v| v.split(';').next().unwrap_or(v).to_string())
+            })
+    }
+
+    #[tokio::test]
+    async fn session_credential_retention_gate_on_retains_ciphertext_only() {
+        let db = test_db();
+        create_user(&db, "desktop@example.com", "poweruser");
+        let mut config = crate::config::Config::default();
+        config.storage = Some(crate::config::StorageConfig {
+            backend: "db".into(),
+            encryption_key: Some("a".repeat(64)),
+        });
+        config.auth = Some(crate::config::AuthConfig {
+            methods: vec!["ldap".into(), "database".into()],
+            forward_session_credentials: true,
+            ..Default::default()
+        });
+        let (app, manager) = login_router_with_manager(db.clone(), config);
+
+        let response = app
+            .oneshot(form_post(
+                "/auth/login",
+                "username=desktop%40example.com&password=s3cret-p%40ss",
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let session_token = session_cookie_from(&response).expect("login mints a session cookie");
+        let user = db::get_user_by_email(&db, "desktop@example.com").unwrap();
+
+        // The login retained the credential for ITS OWN session.
+        let retained = manager
+            .session_credentials(&session_token, user.id)
+            .expect("gate on: login retains the credential for the session");
+        assert_eq!(retained.username, "desktop@example.com");
+        // Ciphertext only, never the plaintext, never the raw token as a key.
+        assert_ne!(retained.password_enc, "s3cret-p@ss");
+        assert!(retained.password_enc.starts_with("enc:v1:"));
+        let key = crate::crypto::EncryptionKey::from_hex(&"a".repeat(64)).unwrap();
+        assert_eq!(
+            crate::crypto::decrypt_value(&key, &retained.password_enc).unwrap(),
+            "s3cret-p@ss"
+        );
+        // Other sessions (and the same session under a different identity)
+        // resolve nothing: owning-session only.
+        assert!(manager
+            .session_credentials("some-other-session", user.id)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credential_retention_gate_off_retains_nothing() {
+        let db = test_db();
+        create_user(&db, "desktop@example.com", "poweruser");
+        // Default config: [auth] forward_session_credentials is OFF.
+        let (app, manager) = login_router_with_manager(db, crate::config::Config::default());
+        let response = app
+            .oneshot(form_post(
+                "/auth/login",
+                "username=desktop%40example.com&password=s3cret-p%40ss",
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            manager.session_credentials_len(),
+            0,
+            "the gate defaults to off: nothing may be retained"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_credential_retention_requires_storage_key() {
+        let db = test_db();
+        create_user(&db, "desktop@example.com", "poweruser");
+        let mut config = crate::config::Config::default();
+        config.auth = Some(crate::config::AuthConfig {
+            methods: vec!["ldap".into(), "database".into()],
+            forward_session_credentials: true,
+            ..Default::default()
+        });
+        // No storage.encryption_key and no PERSEA_STORAGE_KEY: there is
+        // nothing to encrypt with, so nothing may be retained.
+        let _prev = std::env::var("PERSEA_STORAGE_KEY").ok();
+        std::env::remove_var("PERSEA_STORAGE_KEY");
+        let (app, manager) = login_router_with_manager(db, config);
+        let response = app
+            .oneshot(form_post(
+                "/auth/login",
+                "username=desktop%40example.com&password=s3cret-p%40ss",
+                None,
+            ))
+            .await
+            .unwrap();
+        // Restore the environment before asserting so a failure here can
+        // never leak the removed variable to the rest of the test run.
+        if let Some(prev) = _prev {
+            std::env::set_var("PERSEA_STORAGE_KEY", prev);
+        }
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(manager.session_credentials_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn desktop_mfa_login_issues_scoped_token() {
+        let db = test_db();
+        let user = create_user(&db, "desktop@example.com", "poweruser");
+        // Full-length generated secret: hardcoded short base32 values (e.g.
+        // JBSWY3DPEHPK3PXP, 80 bits) fail totp_rs's minimum secret check.
+        let secret = totp_rs::Secret::generate();
+        let secret_b32 = secret.to_base32();
+        db::store_totp_secret(&db, user.id, &secret_b32, "SHA1", 6, 30).unwrap();
+        // The login with TOTP enforcement would have redirected to the MFA
+        // page with a desktop-marked pending record; simulate that record.
+        let pending = db::create_pending_mfa_desktop(
+            &db,
+            user.id,
+            "desktop@example.com",
+            "Desktop User",
+            "poweruser",
+            None,
+            300,
+        )
+        .unwrap();
+
+        // Generate a valid code for the stored secret.
+        let secret_bytes = secret.as_bytes().to_vec();
+        let totp = totp_rs::Builder::new()
+            .with_algorithm(totp_rs::Algorithm::SHA1)
+            .with_digits(6)
+            .with_skew(1)
+            .with_step_duration(30)
+            .with_secret(secret_bytes)
+            .build()
+            .unwrap();
+        let code = totp.generate_current().to_string();
+
+        let app = login_router(db.clone());
+        let response = app
+            .oneshot(form_post(
+                "/auth/mfa",
+                &format!("code={code}"),
+                Some(&format!("persea_mfa_pending={pending}")),
+            ))
+            .await
+            .unwrap();
+
+        // The MFA completion answers with the connected page and the
+        // scoped token, not the /connections.html redirect.
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_text(response).await;
+        assert!(
+            body.contains("Desktop Connected"),
+            "expected connected page"
+        );
+        let token = extract_token(&body);
+        let (u, meta) = db::validate_user_token(&db, &token).unwrap();
+        assert_eq!(u.id, user.id);
+        assert_eq!(meta.token_type, "scoped");
+        assert!(
+            meta.expires_at.is_some(),
+            "MFA-issued scoped token must expire"
+        );
     }
 
     #[tokio::test]

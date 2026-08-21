@@ -37,6 +37,7 @@ const SETTING_KEYS: &[&str] = &[
     "enable_rdp",
     "enable_ssh_tunnels",
     "enable_api_keys",
+    "compliance_mode",
     "enable_recordings",
     "enable_web_sessions",
     "enable_spice",
@@ -122,6 +123,7 @@ const BOOL_KEYS: &[&str] = &[
     "enable_rdp",
     "enable_ssh_tunnels",
     "enable_api_keys",
+    "compliance_mode",
     "enable_recordings",
     "enable_web_sessions",
     "enable_spice",
@@ -177,6 +179,12 @@ fn default_value(key: &str) -> Value {
         "enable_rdp" => json!(true),
         "enable_ssh_tunnels" => json!(true),
         "enable_api_keys" => json!(true),
+        // Compliance mode (persea#228): off by default so existing
+        // deployments behave exactly as before. The auth middleware treats
+        // an unset toggle as off (settings_merge::toggle_enabled(..., false)),
+        // so the Settings API must report false too or the admin checkbox
+        // lies about the gate.
+        "compliance_mode" => json!(false),
         "enable_recordings" => json!(true),
         "enable_web_sessions" => json!(true),
         "enable_spice" => json!(true),
@@ -724,6 +732,28 @@ mod tests {
             &stored,
             "enable_powershell_ssh",
             true
+        ));
+    }
+
+    #[test]
+    fn compliance_mode_default_matches_runtime_gate() {
+        // The auth middleware treats an unset compliance_mode toggle as off
+        // (settings_merge::toggle_enabled(..., false)), so the Settings API
+        // default must agree or the admin Settings page would show "On" for
+        // a mode that is not enforced.
+        assert_eq!(default_value("compliance_mode"), json!(false));
+        assert!(!crate::settings_merge::toggle_enabled(
+            &[],
+            "compliance_mode",
+            false
+        ));
+        // An explicitly stored "true" still wins on both sides.
+        let stored = vec![("compliance_mode".to_string(), "true".to_string())];
+        assert_eq!(stored_to_value("compliance_mode", "true"), json!(true));
+        assert!(crate::settings_merge::toggle_enabled(
+            &stored,
+            "compliance_mode",
+            false
         ));
     }
 
