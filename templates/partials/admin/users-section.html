@@ -1,4 +1,4 @@
-<div class="max-w-7xl mx-auto">
+<div>
     <div class="flex items-center justify-between mb-6">
         <div>
             <h1 class="text-2xl font-bold text-[var(--text-primary)]">User Management</h1>
@@ -239,7 +239,7 @@ function toggleUserStatus(email, currentStatus) {
 
 function roleBadge(user) {
     var colors = {
-        admin: 'bg-red-900/50 text-red-300 border-red-800',
+        admin: 'bg-gray-700 text-gray-300 border-gray-600',
         poweruser: 'bg-amber-900/50 text-amber-300 border-amber-800',
         operator: 'bg-blue-900/50 text-blue-300 border-blue-800',
         viewer: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]'
@@ -271,10 +271,10 @@ function renderUserRow(user) {
         '<td class="px-4 py-3 text-sm ' + statusClass + '">' + statusText + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + safeLogin + '</td>' +
         '<td class="px-4 py-3 text-right text-sm">' +
-            '<button data-action="edit-user" data-email="' + safeEmail + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit</button>' +
-            '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + usersEsc(user.role || '') + '" data-custom-role="' + usersEsc((user.custom_role && user.custom_role.name) || '') + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit Role</button>' +
+            '<button data-action="edit-user" data-email="' + safeEmail + '" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] mr-3">Edit</button>' +
+            '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + usersEsc(user.role || '') + '" data-custom-role="' + usersEsc((user.custom_role && user.custom_role.name) || '') + '" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] mr-3">Edit Role</button>' +
             '<button data-action="toggle-status" data-email="' + safeEmail + '" data-status="' + statusLower + '" class="' + toggleClass + ' mr-3">' + toggleLabel + '</button>' +
-            '<button data-action="delete-user" data-email="' + safeEmail + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
+            '<button data-action="delete-user" data-email="' + safeEmail + '" class="text-red-400 hover:text-red-300">Delete</button>' +
         '</td></tr>';
 }
 

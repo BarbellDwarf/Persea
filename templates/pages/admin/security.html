@@ -4,42 +4,6 @@
 
 {% block content %}
 <style>
-/* ── Security section tabs ────────────────────────────────
-   Same hash-persistence pattern as the settings page section tabs;
-   the styles are page-scoped here so both pages coexist. */
-.security-tabs {
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 20px;
-    overflow-x: auto;
-    overflow-y: hidden;
-}
-.security-tab {
-    appearance: none;
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    padding: 10px 14px;
-    font-size: var(--text-sm);
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: color 0.15s;
-}
-.security-tab:hover {
-    color: var(--text-primary);
-}
-.security-tab:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-}
-.security-tab[aria-selected="true"] {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-}
 .security-card-header {
     display: flex;
     align-items: center;
@@ -51,71 +15,102 @@
 }
 </style>
 
-<div class="max-w-7xl mx-auto">
+<div>
     <div class="mb-6">
         <h1 class="text-2xl font-bold text-[var(--text-primary)]">Security</h1>
         <p class="text-sm text-[var(--text-muted)] mt-1">Users, groups, roles, authentication, audit, and TLS certificates</p>
     </div>
 
-    <div class="security-tabs" role="tablist" aria-label="Security sections">
-        <button type="button" role="tab" id="tab-users" aria-controls="panel-users" aria-selected="true" tabindex="0" class="security-tab">Users</button>
-        <button type="button" role="tab" id="tab-groups" aria-controls="panel-groups" aria-selected="false" tabindex="-1" class="security-tab">Groups</button>
-        <button type="button" role="tab" id="tab-roles" aria-controls="panel-roles" aria-selected="false" tabindex="-1" class="security-tab">Roles</button>
-        <button type="button" role="tab" id="tab-auth" aria-controls="panel-auth" aria-selected="false" tabindex="-1" class="security-tab">Auth Providers</button>
-        <button type="button" role="tab" id="tab-audit" aria-controls="panel-audit" aria-selected="false" tabindex="-1" class="security-tab">Audit Log</button>
-        <button type="button" role="tab" id="tab-tls" aria-controls="panel-tls" aria-selected="false" tabindex="-1" class="security-tab">TLS Certificates</button>
-    </div>
-
-    <!-- Section panels. Each hosts the matching #171 partial; the partials'
-         scripts initialize on page load (their element lookups succeed
-         because every panel exists in the DOM, hidden or not) and load their
-         data once, ready for when the tab is first shown. -->
-    <section role="tabpanel" id="panel-users" aria-labelledby="tab-users" tabindex="-1">
-        {% include "partials/admin/users-section.html" %}
-    </section>
-    <section role="tabpanel" id="panel-groups" aria-labelledby="tab-groups" tabindex="-1" hidden>
-        {% include "partials/admin/groups-section.html" %}
-    </section>
-    <section role="tabpanel" id="panel-roles" aria-labelledby="tab-roles" tabindex="-1" hidden>
-        {% include "partials/admin/roles-section.html" %}
-    </section>
-    <section role="tabpanel" id="panel-auth" aria-labelledby="tab-auth" tabindex="-1" hidden>
-        {% include "partials/admin/auth-section.html" %}
-    </section>
-    <section role="tabpanel" id="panel-audit" aria-labelledby="tab-audit" tabindex="-1" hidden>
-        {% include "partials/admin/audit-section.html" %}
-    </section>
-    <section role="tabpanel" id="panel-tls" aria-labelledby="tab-tls" tabindex="-1" hidden class="space-y-4">
-        <div class="card">
-            <h2 class="security-card-header">
-                TLS Certificate
-            </h2>
-            <p class="text-sm text-[var(--text-muted)] mb-4">
-                The certificate and key paths are configured in the
-                <a class="text-[var(--accent)] hover:underline" href="/admin/settings.html#session">Settings → Session</a>
-                section. Expiry, subject, and issuer are parsed from the PEM
-                certificate file; a warning appears when it expires within 30 days.
-            </p>
-            <div id="tls-summary" class="space-y-3">
-                <p class="text-sm text-[var(--text-muted)]">Loading certificate information...</p>
-            </div>
+    <div class="page-layout">
+        <!-- Left rail: the wide-screen (1280px+) section list. Shares the
+             hash persistence, aria-selected state and roving tabindex of
+             the tab bar; the script block drives both. -->
+        <div class="page-rail-wrap">
+            <p class="page-rail-label">Security</p>
+            <nav class="page-rail" role="tablist" aria-label="Security sections">
+                <button type="button" role="tab" id="rail-users" aria-controls="panel-users" aria-selected="true" tabindex="0" class="page-rail-tab">Users</button>
+                <button type="button" role="tab" id="rail-groups" aria-controls="panel-groups" aria-selected="false" tabindex="-1" class="page-rail-tab">Groups</button>
+                <button type="button" role="tab" id="rail-roles" aria-controls="panel-roles" aria-selected="false" tabindex="-1" class="page-rail-tab">Roles</button>
+                <button type="button" role="tab" id="rail-auth" aria-controls="panel-auth" aria-selected="false" tabindex="-1" class="page-rail-tab">Auth Providers</button>
+                <button type="button" role="tab" id="rail-audit" aria-controls="panel-audit" aria-selected="false" tabindex="-1" class="page-rail-tab">Audit Log</button>
+                <button type="button" role="tab" id="rail-tls" aria-controls="panel-tls" aria-selected="false" tabindex="-1" class="page-rail-tab">TLS Certificates</button>
+            </nav>
         </div>
-    </section>
+
+        <div class="page-main">
+            <!-- Submenu bar: the narrow-screen (below 1280px) control; one
+                 section at a time, hash preserves the active tab -->
+            <div class="page-tabs" role="tablist" aria-label="Security sections">
+                <button type="button" role="tab" id="tab-users" aria-controls="panel-users" aria-selected="true" tabindex="0" class="page-tab">Users</button>
+                <button type="button" role="tab" id="tab-groups" aria-controls="panel-groups" aria-selected="false" tabindex="-1" class="page-tab">Groups</button>
+                <button type="button" role="tab" id="tab-roles" aria-controls="panel-roles" aria-selected="false" tabindex="-1" class="page-tab">Roles</button>
+                <button type="button" role="tab" id="tab-auth" aria-controls="panel-auth" aria-selected="false" tabindex="-1" class="page-tab">Auth Providers</button>
+                <button type="button" role="tab" id="tab-audit" aria-controls="panel-audit" aria-selected="false" tabindex="-1" class="page-tab">Audit Log</button>
+                <button type="button" role="tab" id="tab-tls" aria-controls="panel-tls" aria-selected="false" tabindex="-1" class="page-tab">TLS Certificates</button>
+            </div>
+
+            <!-- Section panels. Each hosts the matching #171 partial; the partials'
+                 scripts initialize on page load (their element lookups succeed
+                 because every panel exists in the DOM, hidden or not) and load their
+                 data once, ready for when the tab is first shown. -->
+            <section role="tabpanel" id="panel-users" aria-labelledby="tab-users" tabindex="-1">
+                {% include "partials/admin/users-section.html" %}
+            </section>
+            <section role="tabpanel" id="panel-groups" aria-labelledby="tab-groups" tabindex="-1" hidden>
+                {% include "partials/admin/groups-section.html" %}
+            </section>
+            <section role="tabpanel" id="panel-roles" aria-labelledby="tab-roles" tabindex="-1" hidden>
+                {% include "partials/admin/roles-section.html" %}
+            </section>
+            <section role="tabpanel" id="panel-auth" aria-labelledby="tab-auth" tabindex="-1" hidden>
+                {% include "partials/admin/auth-section.html" %}
+            </section>
+            <section role="tabpanel" id="panel-audit" aria-labelledby="tab-audit" tabindex="-1" hidden>
+                {% include "partials/admin/audit-section.html" %}
+            </section>
+            <section role="tabpanel" id="panel-tls" aria-labelledby="tab-tls" tabindex="-1" hidden class="space-y-4">
+                <div class="card">
+                    <h2 class="security-card-header">
+                        TLS Certificate
+                    </h2>
+                    <p class="text-sm text-[var(--text-muted)] mb-4">
+                        The certificate and key paths are configured in the
+                        <a class="text-[var(--accent)] hover:underline" href="/admin/settings.html#session">Settings → Session</a>
+                        section. Expiry, subject, and issuer are parsed from the PEM
+                        certificate file; a warning appears when it expires within 30 days.
+                    </p>
+                    <div id="tls-summary" class="space-y-3">
+                        <p class="text-sm text-[var(--text-muted)]">Loading certificate information...</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
 </div>
 
 <script nonce="{{ csp_nonce }}">
 // ── Security section tabs ──
 // Plain-JS tab switch: no inline handlers (CSP), wired with
 // addEventListener. The active section survives a reload via the location
-// hash (#users, #groups, #roles, #auth, #audit, #tls).
+// hash (#users, #groups, #roles, #auth, #audit, #tls). Two controls exist —
+// the left rail on wide screens and the tab bar below 1280px — and both
+// carry the same aria-selected/tabindex state, so the hash and the roving
+// focus work identically whichever one is rendered.
 var securitySections = ['users', 'groups', 'roles', 'auth', 'audit', 'tls'];
 
 function securityPanel(name) {
     return document.getElementById('panel-' + name);
 }
 
-function securityTab(name) {
-    return document.getElementById('tab-' + name);
+// Both nav buttons for a section (rail + tab bar); the hidden one stays in
+// sync so a layout switch never leaves stale state behind.
+function securityNavs(name) {
+    var out = [];
+    ['tab', 'rail'].forEach(function(kind) {
+        var el = document.getElementById(kind + '-' + name);
+        if (el) out.push(el);
+    });
+    return out;
 }
 
 function showSecuritySection(name, opts) {
@@ -124,20 +119,27 @@ function showSecuritySection(name, opts) {
     securitySections.forEach(function(s) {
         var panel = securityPanel(s);
         if (!panel) return;
-        var tab = securityTab(s);
         if (s === name) {
             panel.hidden = false;
-            if (tab) {
+            securityNavs(s).forEach(function(tab) {
                 tab.setAttribute('aria-selected', 'true');
                 tab.setAttribute('tabindex', '0');
+            });
+            if (focusPanel) {
+                // Focus without scrolling: the panels are stacked in the DOM
+                // and carry tabindex="-1", so a plain focus() scrolls the
+                // activated panel into view, jumping the page to mid-scroll
+                // for sections below the tall Session panel. The view stays
+                // at the top of the page; the user scrolls down themselves.
+                panel.focus({ preventScroll: true });
+                window.scrollTo(0, 0);
             }
-            if (focusPanel) panel.focus();
         } else {
             panel.hidden = true;
-            if (tab) {
+            securityNavs(s).forEach(function(tab) {
                 tab.setAttribute('aria-selected', 'false');
                 tab.setAttribute('tabindex', '-1');
-            }
+            });
         }
     });
     if (location.hash !== '#' + name) {
@@ -146,32 +148,38 @@ function showSecuritySection(name, opts) {
 }
 
 var securityTabButtons = Array.prototype.slice.call(
-    document.querySelectorAll('.security-tab'));
+    document.querySelectorAll('.page-tab, .page-rail-tab'));
 securityTabButtons.forEach(function(tab) {
     tab.addEventListener('click', function() {
         showSecuritySection(tab.getAttribute('aria-controls').replace(/^panel-/, ''));
     });
 });
 
-// Arrow/Home/End roving between the tab buttons; activating a button
-// (Enter/Space/click) moves focus into the section.
-var securityTablist = document.querySelector('.security-tabs');
-securityTablist.addEventListener('keydown', function(evt) {
-    var buttons = Array.prototype.slice.call(
-        securityTablist.querySelectorAll('[role="tab"]'));
-    var idx = buttons.indexOf(document.activeElement);
-    if (idx === -1) return;
-    var key = evt.key;
-    if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'Home' && key !== 'End') return;
-    evt.preventDefault();
-    if (key === 'Home') idx = 0;
-    else if (key === 'End') idx = buttons.length - 1;
-    else if (key === 'ArrowLeft') idx = (idx - 1 + buttons.length) % buttons.length;
-    else idx = (idx + 1) % buttons.length;
-    var target = buttons[idx];
-    showSecuritySection(target.getAttribute('aria-controls').replace(/^panel-/, ''), { focus: false });
-    target.focus();
-});
+// Arrow/Home/End roving between nav buttons; activating a button
+// (Enter/Space/click) moves focus into the section, handled by
+// showSecuritySection. The bar reads left/right arrows, the rail also
+// reads up/down.
+function wireSecurityNav(tablist) {
+    var buttons = Array.prototype.slice.call(tablist.querySelectorAll('[role="tab"]'));
+    tablist.addEventListener('keydown', function(evt) {
+        var idx = buttons.indexOf(document.activeElement);
+        if (idx === -1) return;
+        var key = evt.key;
+        var horizontal = key === 'ArrowLeft' || key === 'ArrowRight';
+        var vertical = key === 'ArrowUp' || key === 'ArrowDown';
+        if (!horizontal && !vertical && key !== 'Home' && key !== 'End') return;
+        evt.preventDefault();
+        if (key === 'Home') idx = 0;
+        else if (key === 'End') idx = buttons.length - 1;
+        else if (key === 'ArrowLeft' || key === 'ArrowUp') idx = (idx - 1 + buttons.length) % buttons.length;
+        else idx = (idx + 1) % buttons.length;
+        var target = buttons[idx];
+        showSecuritySection(target.getAttribute('aria-controls').replace(/^panel-/, ''), { focus: false });
+        target.focus();
+    });
+}
+var securityNavLists = document.querySelectorAll('.page-tabs, .page-rail');
+for (var i = 0; i < securityNavLists.length; i++) wireSecurityNav(securityNavLists[i]);
 
 window.addEventListener('hashchange', function() {
     showSecuritySection((location.hash || '').replace(/^#/, ''), { focus: false });
@@ -187,11 +195,10 @@ window.addEventListener('hashchange', function() {
         if (!panel) return;
         var active = s === initial;
         panel.hidden = !active;
-        var tab = securityTab(s);
-        if (tab) {
+        securityNavs(s).forEach(function(tab) {
             tab.setAttribute('aria-selected', active ? 'true' : 'false');
             tab.setAttribute('tabindex', active ? '0' : '-1');
-        }
+        });
     });
 })();
 

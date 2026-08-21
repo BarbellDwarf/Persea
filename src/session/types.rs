@@ -606,7 +606,12 @@ pub enum SessionError {
     NotActive,
     /// The per-session concurrent viewer cap is reached; carries the
     /// current viewer count and the configured cap.
-    ViewerLimit { viewers: u32, max: u32 },
+    ViewerLimit {
+        /// Current number of viewers attached to the session.
+        viewers: u32,
+        /// The configured per-session viewer cap.
+        max: u32,
+    },
     /// The request parameters failed validation; carries the reason.
     ValidationError(String),
     /// Xvnc or Chromium failed to start; carries the underlying message.
