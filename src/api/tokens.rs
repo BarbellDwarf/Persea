@@ -1134,4 +1134,58 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
+
+    #[tokio::test]
+    async fn revoking_a_token_leaves_session_rows_untouched() {
+        use crate::db::{self, Db};
+        let db: Db = db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user = db::upsert_user(&db, "alice@test.com", "Alice", None, "operator", &[]).unwrap();
+
+        // A live session history row: ended_at NULL is the "still running"
+        // signal the teardown guards on, the record every open
+        // /client/<id> viewer session holds.
+        let sid = "550e8400-e29b-41d4-a716-446655440000";
+        db::insert_session_history(
+            &db,
+            sid,
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "alice",
+            "alice@test.com",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // A scoped desktop token, the same row type the bridge mints.
+        let (token_id, plaintext) =
+            db::create_scoped_user_token(&db, user.id, "Persea Desktop (login)", None, None)
+                .unwrap();
+        assert!(db::validate_user_token(&db, &plaintext).is_ok());
+
+        // Revoke it through the exact statement path behind
+        // DELETE /api/tokens/{id}: the token must stop authenticating.
+        assert!(db::revoke_user_token(&db, user.id, token_id).unwrap());
+        assert!(db::list_user_tokens(&db, user.id).unwrap().is_empty());
+        assert!(db::validate_user_token(&db, &plaintext).is_err());
+
+        // Independence invariant: the revocation cascades nowhere. The
+        // session row is still open (no token-side teardown).
+        let conn = db.lock().unwrap();
+        let (status, ended): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at FROM session_history WHERE session_id = ?1",
+                [sid],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "active");
+        assert!(
+            ended.is_none(),
+            "revoking a token must not close session rows"
+        );
+    }
 }

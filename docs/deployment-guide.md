@@ -557,6 +557,7 @@ Versioning: the deb embeds the build's short commit sha (`X.Y.Z+g<sha>`), so eve
 - [ ] Network allowlists configured per protocol (sessions can't reach unintended hosts)
 - [ ] Sign-in via OIDC/SAML/LDAP with group-to-role mappings
 - [ ] Bootstrap API key deleted once sign-in works
+- [ ] Compliance Mode enabled on instances that must not accept scripted key access (Admin → Settings → Features): admin API keys and self-service tokens are rejected; only interactive sessions and scoped desktop tokens authenticate
 - [ ] Knocknoc gating the login page (optional but strongly recommended)
 - [ ] File-transfer storage encrypted if used in regulated environments
 - [ ] Session recording enabled for audit compliance
@@ -567,7 +568,7 @@ The security-relevant toggles (protocol lockdown, desktop shell, file transfer, 
 
 ![Admin settings page](screenshots/admin-settings.png)
 
-The settings page is organized into five sections: **Session** (server, session limits, and the per-protocol session defaults above), **Features** (protocol and feature toggles), **Storage** (storage backends and connection custom fields), **Security** (a navigation card linking to the Auth Providers, Roles & Permissions, and Audit Log pages), and **Updates** (software update checks). On wide screens (1280px and up) the sections render as a left rail next to the content panel; below that width a horizontal tab bar takes over. Both controls share the same section state, so the page remembers where you were. A **Search settings** box filters the sections and cards client-side as you type. The TLS certificate and key fields live in the Session section; everything else security-related has its own page, linked from the Security section.
+The settings page is organized into five sections: **Session** (server, session limits, and the per-protocol session defaults above), **Features** (protocol and feature toggles, including Compliance Mode), **Storage** (storage backends and connection custom fields), **Security** (a navigation card linking to the Auth Providers, Roles & Permissions, and Audit Log pages), and **Updates** (software update checks). On wide screens (1280px and up) the sections render as a left rail next to the content panel; below that width a horizontal tab bar takes over. Both controls share the same section state, so the page remembers where you were. A **Search settings** box filters the sections and cards client-side as you type. The TLS certificate and key fields live in the Session section; everything else security-related has its own page, linked from the Security section.
 
 ### Per-protocol session defaults
 
