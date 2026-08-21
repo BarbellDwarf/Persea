@@ -21,7 +21,7 @@ must authenticate one of three ways:
 
 1. **API key**: `Authorization: Bearer <key>` or `X-API-Key: <key>`
    header. Admin API keys are created in the admin UI; users can create
-   their own tokens (see [Tokens](#user-api-tokens-self-service)).
+   their own tokens (see [Tokens](#user-api-tokens)).
    Admins can disable API-key auth entirely via the `enable_api_keys`
    system setting.
 2. **User API token**: the same headers, with a personal token
@@ -190,7 +190,7 @@ Sessions are the heart of persea: a session is a connection to one
 target (SSH, RDP, VNC, SPICE, Proxmox, web browser, or VDI container).
 Creating a session only opens the connection to the target; a browser
 then attaches over a WebSocket to stream it (see
-[Connecting to a session](#connecting-to-a-session)).
+[Connecting to a session](#connecting-to-a-session-owner-vs-join)).
 
 ### `POST /api/sessions`: create a session
 
@@ -338,6 +338,33 @@ This is the same endpoint the built-in client uses. WebSocket upgrades
 are validated against a strict Origin check (cross-origin requests are
 rejected) and rate-limited unconditionally.
 
+### Session continuity and token lifecycle
+
+A session authenticates its viewers **once, at connect**. The WebSocket
+upgrade checks the caller's credentials (cookie, ticket, or token), the
+connection joins the session, and the stream is then proxied straight to
+guacd: the token store is never consulted again for the life of that
+connection. The session lifecycle and the token lifecycle are therefore
+independent in both directions:
+
+- **Revoking, expiring, or invalidating a token never tears down an
+  open session.** Rotating an AD/LDAP password, hitting the 12-hour
+  scoped-token TTL, self-revoking a token in the account page, or
+  failing the server-side account re-validation only affects *future*
+  authentication attempts. Viewers already attached to `/ws/{id}` keep
+  streaming; the session pages keep working.
+- **Ending a session never revokes a token.** Deleting or terminating a
+  session touches the session only, and the tokens that authenticated
+  the caller keep working.
+
+A client whose token was invalidated reconnects by signing in again
+through the normal interactive login flow (`/auth/login`, the MFA page,
+or the SSO button), exactly as it did the first time. The login flow
+issues a fresh scoped token (`Persea Desktop (login)`, 12-hour TTL) and
+revokes the previous login-issued token; that revocation only stops the
+old token from authenticating future API calls. Signing in again never
+affects sessions that are still open.
+
 ## Address book (connections)
 
 The address book stores named, reusable connections in folders. Entries
@@ -389,6 +416,20 @@ useful for entries with `prompt_credentials` enabled:
 Prompted credentials are used for that session only and are never
 stored. Jump-host credentials always come from the stored entry and
 cannot be overridden at connect time.
+
+When the connect attempt used session-forwarded credentials (the
+`[auth] forward_session_credentials` setting, see the deployment guide)
+and the target rejected them, the endpoint returns the
+interactive-credentials signal instead of an error: a `200` JSON body
+with `"credentials_required": true` plus the resolved `username`,
+`domain`, and `display_name` for the prompt. The client shows its
+credential prompt and re-POSTs with the user's input; the session
+context (entry, auth session) is preserved across the retry. This is
+the JSON form of the inline credential form the quick-connect endpoint
+serves; clients that expect only `session_id` on success must treat
+`credentials_required` as a prompt, not a failure. A non-auth failure
+(target unreachable, protocol error) is surfaced directly as an error
+and never triggers the prompt.
 
 ### Managing folders and entries (admin)
 
@@ -443,7 +484,11 @@ Ad-hoc parameters: `protocol` (`ssh`, `rdp`, `vnc`, `web`; default
 ad-hoc mode; if the target requires authentication, the user sees
 guacd's login prompt. If the entry has `prompt_credentials` or no
 stored password, the endpoint returns an inline credential form instead
-; the user's input is POSTed back and used for that session only.
+; the user's input is POSTed back and used for that session only. When
+session-forwarded credentials were tried first and the target rejected
+them, the endpoint returns the same inline credential form so the user
+can retry; a non-auth failure (target unreachable, protocol error) is
+surfaced as an error page instead, with no prompt.
 
 ## Users and roles (admin)
 
@@ -479,6 +524,11 @@ sharing their login session or an admin API key.
 | `GET /api/admin/user-tokens` | admin | List all tokens across all users |
 | `DELETE /api/admin/user-tokens/{id}` | admin | Revoke any token |
 | `GET /api/admin/token-audit` | admin | Token audit log (`limit`, `email` query params) |
+
+Revoking a token takes effect immediately and only affects future
+requests made with that token: sessions already open stay open, and
+reconnecting means signing in again (see
+[Session continuity and token lifecycle](#session-continuity-and-token-lifecycle)).
 
 ## Recordings and typescripts
 

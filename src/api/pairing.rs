@@ -1101,4 +1101,35 @@ mod tests {
         assert!(db::revoke_user_token(&db, user.id, token_id2).unwrap());
         assert!(db::list_user_tokens(&db, user.id).unwrap().is_empty());
     }
+
+    #[tokio::test]
+    async fn reconnect_after_token_invalidation_mints_working_token() {
+        use crate::db::{self, Db};
+        let db: Db = db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user =
+            db::upsert_user(&db, "desktop@example.com", "Desktop", None, "operator", &[]).unwrap();
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
+        let (token_id, t1, _n1, _r1, _e1, _e2) =
+            mint_login_scoped_token(&db, user.id, &ip).await.unwrap();
+        assert!(db::validate_user_token(&db, &t1).is_ok());
+
+        // Invalidation (rotation, lockout, or expiry all funnel into the
+        // same row delete): the old token stops authenticating.
+        assert!(db::revoke_user_token(&db, user.id, token_id).unwrap());
+        assert!(db::validate_user_token(&db, &t1).is_err());
+
+        // Reconnect: the client signs in again through the normal
+        // interactive login flow, which mints a fresh working scoped
+        // token. Sessions already open are untouched (covered by the
+        // session/token independence tests).
+        let (token_id2, t2, name2, _r2, _e3, _e4) =
+            mint_login_scoped_token(&db, user.id, &ip).await.unwrap();
+        assert_ne!(token_id2, token_id);
+        assert_eq!(name2, LOGIN_TOKEN_NAME);
+        let (u, meta) = db::validate_user_token(&db, &t2).unwrap();
+        assert_eq!(u.id, user.id);
+        assert_eq!(meta.token_type, "scoped");
+        assert_eq!(meta.max_role.as_deref(), Some("operator"));
+    }
 }

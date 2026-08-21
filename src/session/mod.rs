@@ -3,9 +3,11 @@
 //! `SessionManager` owns the in-memory session map and drives state
 //! transitions (pending, active, disconnected, terminal). `types` defines
 //! the session model and the JSON request shape, `create` builds sessions
-//! and performs the guacd handshake.
+//! and performs the guacd handshake, `credentials` holds the transient
+//! session-scoped login credentials (persea#245).
 
 mod create;
+mod credentials;
 mod manager;
 mod types;
 
