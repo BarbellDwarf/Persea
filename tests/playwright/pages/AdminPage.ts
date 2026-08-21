@@ -45,7 +45,9 @@ export class AdminPage {
     this.navConnections = page.locator('nav a[href="/connections.html"]');
     this.navSessions = page.locator('nav a[href="/sessions.html"]');
     this.navRecordings = page.locator('nav a[href="/recordings.html"]');
-    this.navAdmin = page.locator('nav a[href="/admin/users.html"]');
+    // The consolidated Security page hosts the admin sections since #172;
+    // deep links to the old pages highlight it.
+    this.navAdmin = page.locator('nav a[href="/admin/security.html"]');
 
     this.usersBody = page.locator('#user-table-body');
     this.userSearch = page.locator('#user-search');
