@@ -3,14 +3,32 @@
 {% block title %}{{ site_title }} — Documentation{% endblock %}
 
 {% block content %}
-<div class="flex gap-8 max-w-7xl mx-auto">
-    <!-- Documentation section nav -->
-    <aside class="w-56 shrink-0 hidden lg:block">
-        <div class="sticky top-6">
+<div class="flex gap-8">
+    <!-- Mobile contents drawer: toggle button (visible below lg), backdrop,
+         and the panel, which doubles as the desktop sidebar at lg+. -->
+    <button type="button" id="toc-toggle" class="toc-toggle" aria-controls="toc-panel" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        Contents
+    </button>
+    <div id="toc-backdrop" class="toc-backdrop" aria-hidden="true"></div>
+    <aside id="toc-panel" class="toc-panel" aria-label="Documentation">
+        <div class="toc-panel-inner">
             <h3 class="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider mb-3">Documentation</h3>
             <nav id="toc" class="space-y-1" role="navigation" aria-label="Documentation sections">
                 {% for doc in docs %}
-                <a href="#{{ doc.slug }}" class="toc-link">{{ doc.title }}</a>
+                <details class="toc-group">
+                    <summary class="toc-summary">
+                        <a href="#{{ doc.slug }}" class="toc-link toc-doc-link">{{ doc.title }}</a>
+                        <span class="toc-chevron" aria-hidden="true"></span>
+                    </summary>
+                    {% if doc.headings %}
+                    <ul class="toc-sub-list">
+                        {% for h in doc.headings %}
+                        <li><a href="#{{ h.slug }}" class="toc-link toc-sub-link">{{ h.text }}</a></li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </details>
                 {% endfor %}
             </nav>
         </div>
@@ -109,27 +127,69 @@
 
 <script nonce="{{ csp_nonce }}">
     (function() {
-        // TOC active state on scroll
-        var links = Array.prototype.slice.call(document.querySelectorAll('.toc-link'));
-        var sections = links.map(function(link) {
-            return link.getAttribute('href').slice(1);
+        var panel = document.getElementById('toc-panel');
+        var toggle = document.getElementById('toc-toggle');
+        var backdrop = document.getElementById('toc-backdrop');
+        var open = false;
+
+        function isDesktop() { return window.innerWidth >= 1024; }
+
+        function setDrawer(show) {
+            open = show;
+            panel.classList.toggle('open', show);
+            backdrop.classList.toggle('visible', show);
+            if (toggle) toggle.setAttribute('aria-expanded', show ? 'true' : 'false');
+            document.body.style.overflow = show ? 'hidden' : '';
+            if (isDesktop()) {
+                panel.removeAttribute('aria-hidden');
+            } else {
+                panel.setAttribute('aria-hidden', show ? 'false' : 'true');
+            }
+        }
+
+        if (toggle) {
+            toggle.addEventListener('click', function() { setDrawer(!open); });
+        }
+        if (backdrop) {
+            backdrop.addEventListener('click', function() { setDrawer(false); });
+        }
+
+        // TOC active state on scroll: highlights the doc and heading link
+        // for the deepest section currently in view, and expands the doc
+        // group that contains it.
+        var links = Array.prototype.slice.call(document.querySelectorAll('#toc .toc-link'));
+        var targets = links.map(function(link) {
+            return { link: link, id: link.getAttribute('href').slice(1) };
         });
         function updateToc() {
             var scrollY = window.scrollY + 100;
-            var active = sections[0];
-            for (var i = sections.length - 1; i >= 0; i--) {
-                var el = document.getElementById(sections[i]);
+            var activeId = targets.length ? targets[0].id : null;
+            for (var i = targets.length - 1; i >= 0; i--) {
+                var el = document.getElementById(targets[i].id);
                 if (el && el.offsetTop <= scrollY) {
-                    active = sections[i];
+                    activeId = targets[i].id;
                     break;
                 }
             }
-            links.forEach(function(link) {
-                link.classList.toggle('active', link.getAttribute('href') === '#' + active);
+            var activeGroup = null;
+            targets.forEach(function(t) {
+                var isActive = t.id === activeId;
+                t.link.classList.toggle('active', isActive);
+                if (isActive) { activeGroup = t.link.closest('.toc-group'); }
             });
+            if (activeGroup && !activeGroup.open) { activeGroup.open = true; }
         }
-        window.addEventListener('scroll', updateToc);
+        window.addEventListener('scroll', updateToc, { passive: true });
+        window.addEventListener('resize', function() {
+            if (isDesktop()) { setDrawer(false); }
+        });
+        setDrawer(false);
         updateToc();
+
+        // Close the mobile drawer once a nav link is chosen.
+        document.getElementById('toc').addEventListener('click', function(evt) {
+            if (evt.target.closest('a')) { setDrawer(false); }
+        });
     })();
 </script>
 {% endblock %}

@@ -636,6 +636,17 @@ the ad-hoc connect request) overrides the same field.
 default_auth_pkg = "ntlm"
 ```
 
+The auth package is resolved per session in this order: the address-book
+entry's own value wins, then the stored global default
+(`default_rdp_auth_pkg`, set on Admin → Settings → Session → Session
+defaults), then this `[rdp] default_auth_pkg` config value, then NTLM.
+The settings-page default is empty by default, so the config value (and
+then NTLM) applies until an admin sets one. The RDP security layer
+(`default_rdp_security`) and the per-protocol auto-size defaults
+(`default_rdp_auto_size` / `default_ssh_auto_size`) are settings-page
+keys only; see the [Deployment Guide](deployment-guide.md#per-protocol-session-defaults)
+for the full table.
+
 ## Browser session settings
 
 Web browser sessions run a headless Chromium on a per-session Xvnc
