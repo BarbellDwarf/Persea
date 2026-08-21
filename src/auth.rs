@@ -49,6 +49,36 @@ async fn api_keys_enabled(db: &Db) -> bool {
     .unwrap_or(true)
 }
 
+/// Whether compliance mode is on (persea#228). Reads the `compliance_mode`
+/// lockdown toggle from the DB; unset or unreadable → off, so existing
+/// deployments behave exactly as before. When on, the direct API surface is
+/// closed: admin API keys and self-service user tokens stop authenticating
+/// while interactive sessions and scoped tokens (minted by the desktop
+/// login/pairing flow) keep working.
+async fn compliance_mode_enabled(db: &Db) -> bool {
+    let db = db.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::settings_merge::read_toggle(&db, "compliance_mode", false)
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Whether a validated admin API key may authenticate. False in compliance
+/// mode: the admin-key surface is the direct API access the mode closes
+/// (persea#228).
+fn admin_api_key_allowed(compliance_mode: bool) -> bool {
+    !compliance_mode
+}
+
+/// Whether a validated user token may authenticate. Scoped tokens (minted
+/// by the interactive desktop login/pairing flow) always pass; regular
+/// self-service tokens are part of the direct API surface compliance mode
+/// closes (persea#228).
+fn user_token_allowed(compliance_mode: bool, token_type: &str) -> bool {
+    !compliance_mode || token_type == "scoped"
+}
+
 /// Marker extension: the request's identity was derived from a consumed
 /// WebSocket ticket (not a cookie/API key). Lets the WS handler trust the
 /// ticket as the anti-CSWSh credential and skip the Origin/Host match for
@@ -381,6 +411,12 @@ pub async fn require_auth(
             );
         }
 
+        // Compliance mode (persea#228): a per-instance setting that closes
+        // the direct API surface. Admin API keys and self-service user
+        // tokens stop authenticating; interactive sessions and scoped
+        // tokens (minted by the desktop login/pairing flow) keep working.
+        let compliance = compliance_mode_enabled(&db).await;
+
         let validate_ip = Some(ip);
         let db_clone = db.clone();
         let key_clone = key.clone();
@@ -392,6 +428,16 @@ pub async fn require_auth(
 
         match result {
             Ok(admin) => {
+                if !admin_api_key_allowed(compliance) {
+                    tracing::warn!(
+                        client_ip = %ip,
+                        "API key rejected: compliance mode disables direct API access"
+                    );
+                    return crate::error::AppError::error_response(
+                        StatusCode::FORBIDDEN,
+                        "API key authentication is disabled in compliance mode",
+                    );
+                }
                 tracing::debug!(admin = %admin.name, "API key authenticated");
                 let mut request = request;
                 request
@@ -409,6 +455,17 @@ pub async fn require_auth(
 
                 match token_result {
                     Ok((user, token_meta)) => {
+                        if !user_token_allowed(compliance, &token_meta.token_type) {
+                            tracing::warn!(
+                                client_ip = %ip,
+                                token = %token_meta.name,
+                                "User token rejected: compliance mode disables direct API tokens"
+                            );
+                            return crate::error::AppError::error_response(
+                                StatusCode::FORBIDDEN,
+                                "user token authentication is disabled in compliance mode; sign in interactively or use a scoped desktop token",
+                            );
+                        }
                         let effective_role =
                             compute_effective_role(&user.role, &token_meta.max_role);
                         tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "User token authenticated");
@@ -543,6 +600,11 @@ pub async fn optional_auth(
         if !api_keys_enabled(&db).await {
             tracing::debug!(client_ip = %ip, "Optional auth: API key ignored — enable_api_keys is disabled by an administrator");
         } else {
+            // Compliance mode (persea#228): a valid admin key or
+            // self-service user token is ignored here too, mirroring the
+            // enable_api_keys lockdown — the request keeps whatever cookie
+            // or ticket it also carries.
+            let compliance = compliance_mode_enabled(&db).await;
             let db_clone = db.clone();
             let key_clone = key.clone();
             let result = tokio::task::spawn_blocking(move || {
@@ -553,12 +615,22 @@ pub async fn optional_auth(
 
             match result {
                 Ok(admin) => {
-                    tracing::debug!(admin = %admin.name, "Optional auth: API key authenticated");
-                    let mut request = request;
-                    request
-                        .extensions_mut()
-                        .insert(AuthIdentity::ApiKey(admin.name));
-                    return next.run(request).await;
+                    if !admin_api_key_allowed(compliance) {
+                        tracing::debug!(
+                            client_ip = %ip,
+                            "Optional auth: admin API key ignored — compliance mode disables direct API access"
+                        );
+                    } else {
+                        tracing::debug!(
+                            admin = %admin.name,
+                            "Optional auth: API key authenticated"
+                        );
+                        let mut request = request;
+                        request
+                            .extensions_mut()
+                            .insert(AuthIdentity::ApiKey(admin.name));
+                        return next.run(request).await;
+                    }
                 }
                 Err(_) => {
                     // Not an admin key — try user API tokens before giving up.
@@ -570,20 +642,37 @@ pub async fn optional_auth(
                     .unwrap_or(Err(AuthError::InvalidKey));
 
                     if let Ok((user, token_meta)) = token_result {
-                        let effective_role =
-                            compute_effective_role(&user.role, &token_meta.max_role);
-                        tracing::debug!(email = %user.email, role = %effective_role, token = %token_meta.name, "Optional auth: user token authenticated");
-                        let groups = user.groups_vec();
-                        let mut request = request;
-                        request.extensions_mut().insert(AuthIdentity::User {
-                            email: user.email,
-                            name: user.name,
-                            role: effective_role,
-                            groups,
-                        });
-                        return next.run(request).await;
+                        if !user_token_allowed(compliance, &token_meta.token_type) {
+                            tracing::debug!(
+                                client_ip = %ip,
+                                token = %token_meta.name,
+                                "Optional auth: user token ignored — compliance mode disables direct API tokens"
+                            );
+                        } else {
+                            let effective_role =
+                                compute_effective_role(&user.role, &token_meta.max_role);
+                            tracing::debug!(
+                                email = %user.email,
+                                role = %effective_role,
+                                token = %token_meta.name,
+                                "Optional auth: user token authenticated"
+                            );
+                            let groups = user.groups_vec();
+                            let mut request = request;
+                            request.extensions_mut().insert(AuthIdentity::User {
+                                email: user.email,
+                                name: user.name,
+                                role: effective_role,
+                                groups,
+                            });
+                            return next.run(request).await;
+                        }
+                    } else {
+                        tracing::warn!(
+                            client_ip = %ip,
+                            "Optional auth: invalid API key/token, continuing unauthenticated"
+                        );
                     }
-                    tracing::warn!(client_ip = %ip, "Optional auth: invalid API key/token, continuing unauthenticated");
                     // Fall through to the other auth paths below rather than
                     // returning — a bad key shouldn't block a cookie/ticket
                     // that might still be present.
@@ -783,5 +872,58 @@ mod tests {
             .unwrap();
         }
         assert!(api_keys_enabled(&db).await);
+    }
+
+    #[tokio::test]
+    async fn compliance_mode_defaults_off_and_reads_db() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        // Unset toggle → off (existing deployments unaffected). The first
+        // read created the system_settings table via load_db_settings.
+        assert!(!compliance_mode_enabled(&db).await);
+
+        // Stored "true" → compliance mode on.
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO system_settings (key, value) VALUES ('compliance_mode', 'true')",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(compliance_mode_enabled(&db).await);
+
+        // Flipped back to "false" → off again.
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "UPDATE system_settings SET value = 'false' WHERE key = 'compliance_mode'",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(!compliance_mode_enabled(&db).await);
+    }
+
+    #[test]
+    fn compliance_gate_rejects_admin_api_keys() {
+        // Off: admin API keys authenticate exactly as today.
+        assert!(admin_api_key_allowed(false));
+        // On: the admin-key surface is the direct API access the mode closes.
+        assert!(!admin_api_key_allowed(true));
+    }
+
+    #[test]
+    fn compliance_gate_keeps_scoped_tokens_and_sessions() {
+        // Off: every token authenticates.
+        assert!(user_token_allowed(false, "user"));
+        assert!(user_token_allowed(false, "scoped"));
+        // On: scoped tokens (minted by the interactive desktop login or
+        // device pairing) pass; self-service tokens are part of the closed
+        // direct API surface.
+        assert!(user_token_allowed(true, "scoped"));
+        assert!(!user_token_allowed(true, "user"));
+        // Unknown token types fail closed rather than slipping through.
+        assert!(!user_token_allowed(true, ""));
+        assert!(!user_token_allowed(true, "admin"));
     }
 }

@@ -5,51 +5,52 @@
 <div style="margin:0">
 
     <!-- Top bar -->
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
+    <div class="connections-topbar" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;flex-wrap:wrap;gap:12px">
         <div>
             <h1 style="font-size:22px;font-weight:600;color:var(--text-primary);margin:0">Connections</h1>
             <p style="font-size:13px;color:var(--text-muted);margin-top:4px">Manage your server address book</p>
         </div>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-            <select id="scope-filter" class="form-input" style="width:150px">
-                <option value="">All Scopes</option>
-                <option value="shared">Shared</option>
-                <option value="instance">Instance</option>
-                <option value="personal">Personal</option>
-            </select>
-            <input type="search" id="connections-search" placeholder="Search connections..."
-                   class="form-input" style="width:260px" autocomplete="off">
-            <button id="btn-filters" class="btn btn-secondary btn-sm" style="width:auto" aria-expanded="false">Filters</button>
             <button id="btn-new-folder" class="btn btn-primary btn-sm admin-only" style="width:auto">+ New Folder</button>
             <button id="btn-new-personal-folder" class="btn btn-primary btn-sm personal-scope-only" style="width:auto">+ New Folder</button>
-            <div style="position:relative">
+            <div class="connections-dropdown-wrap" id="overflow-wrap">
                 <button id="btn-overflow" class="btn btn-secondary btn-sm" style="width:auto" aria-label="More actions" aria-expanded="false">...</button>
-                <div id="overflow-menu" class="hidden" style="position:absolute;right:0;top:calc(100% + 4px);background:var(--bg-card);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.25);z-index:40;min-width:180px;padding:4px">
+                <div id="overflow-menu" class="hidden connections-dropdown">
                     <button id="btn-import" class="btn btn-secondary btn-sm admin-only" style="width:100%;justify-content:flex-start;background:transparent;border:none;padding:8px 10px">Import CSV</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- Filter bar (hidden until folders exist) -->
-    <div id="filter-bar" class="hidden" style="display:flex;align-items:center;gap:10px;margin-bottom:20px;flex-wrap:wrap">
-        <select id="filter-type" class="form-input" style="width:150px" title="Filter by session type">
-            <option value="">All types</option>
-            <option value="ssh">SSH</option>
-            {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
-            <option value="vnc">VNC</option>
-            {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
-            {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
-            {% if features.vdi %}<option value="vdi">VDI</option>{% endif %}
-            {% if features.powershell_ssh %}<option value="powershell">PowerShell (SSH)</option>{% endif %}
-            {% if features.proxmox %}<option value="proxmox">Proxmox</option>{% endif %}
-        </select>
-        <select id="filter-folder" class="form-input" style="width:200px" title="Filter by folder">
-            <option value="">All folders</option>
-        </select>
-        <input type="text" id="filter-desc" class="form-input" style="width:200px" placeholder="Filter by description..." autocomplete="off">
-        <div id="filter-custom-fields" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap"></div>
-        <button id="filter-clear" class="btn btn-secondary btn-sm" style="width:auto">Clear filters</button>
+    <!-- Search + filters: one search input spanning the content width; all
+         filter fields live in the Filters dropdown; active filters render
+         as removable chips below the search. -->
+    <div class="connections-search-row">
+        <div class="connections-search-wrap" id="filters-wrap">
+            <input type="search" id="connections-search" placeholder="Search connections..."
+                   class="form-input" autocomplete="off">
+            <button id="btn-filters" class="btn btn-secondary btn-sm" style="width:auto" aria-expanded="false">Filters</button>
+            <div id="filters-dropdown" class="hidden connections-dropdown">
+                <select id="filter-type" class="form-input" title="Filter by session type">
+                    <option value="">All types</option>
+                    <option value="ssh">SSH</option>
+                    {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
+                    <option value="vnc">VNC</option>
+                    {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
+                    {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
+                    {% if features.vdi %}<option value="vdi">VDI</option>{% endif %}
+                    {% if features.powershell_ssh %}<option value="powershell">PowerShell (SSH)</option>{% endif %}
+                    {% if features.proxmox %}<option value="proxmox">Proxmox</option>{% endif %}
+                </select>
+                <select id="filter-folder" class="form-input" title="Filter by folder">
+                    <option value="">All folders</option>
+                </select>
+                <input type="text" id="filter-desc" class="form-input" placeholder="Filter by description..." autocomplete="off">
+                <div id="filter-custom-fields"></div>
+                <button id="filter-clear" class="btn btn-secondary btn-sm" style="width:100%">Clear filters</button>
+            </div>
+        </div>
+        <div id="filter-chips" class="connections-filter-chips hidden"></div>
     </div>
 
     <!-- Vault unavailable warning (hidden by default) -->
@@ -64,7 +65,15 @@
         </svg>
         <h3 style="font-size:16px;font-weight:500;color:var(--text-secondary);margin-top:16px">No connections configured</h3>
         <p style="font-size:13px;color:var(--text-muted);margin-top:8px">Create a folder to start organizing connection entries.</p>
-        <button id="btn-empty-create-folder" class="btn btn-primary" style="margin-top:16px;width:auto">Create First Folder</button>
+        <div style="display:flex;justify-content:center;align-items:center;gap:10px;margin-top:16px;flex-wrap:wrap">
+            <select id="empty-scope-filter" class="form-input" style="width:150px" title="Filter the tree by scope">
+                <option value="">All Scopes</option>
+                <option value="shared">Shared</option>
+                <option value="instance">Instance</option>
+                <option value="personal">Personal</option>
+            </select>
+            <button id="btn-empty-create-folder" class="btn btn-primary" style="width:auto">Create First Folder</button>
+        </div>
     </div>
 
     <!-- Main content (hidden by default) -->
@@ -96,7 +105,15 @@
 
             <!-- Left: Folder tree -->
             <div class="conn-sidebar">
-                <p id="folder-tree-label" style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Folders</p>
+                <div class="conn-sidebar-header">
+                    <p id="folder-tree-label" style="font-size:12px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin:0">Folders</p>
+                    <select id="scope-filter" class="form-input" style="width:130px" title="Filter the tree by scope">
+                        <option value="">All Scopes</option>
+                        <option value="shared">Shared</option>
+                        <option value="instance">Instance</option>
+                        <option value="personal">Personal</option>
+                    </select>
+                </div>
                 <div id="folder-tree" class="conn-panel"></div>
             </div>
 
@@ -133,9 +150,12 @@
                     <button id="detail-connect" class="btn btn-primary" style="width:100%;margin-bottom:16px">Connect</button>
                     <button id="detail-add-to-folder" class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:16px">Add to personal folder</button>
                     <div id="detail-pf-note" class="hidden" role="alert" aria-live="polite" style="padding:10px 14px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:8px;color:#fbbf24;font-size:13px;margin-bottom:16px"></div>
-                    <div id="detail-reason-row" style="margin-bottom:16px">
-                        <label class="form-label" for="detail-reason">Reason <span style="color:var(--text-muted);font-weight:400">— why are you connecting?</span></label>
-                        <select id="detail-reason-preset" class="form-input" style="margin-bottom:8px">
+                    <!-- Reason is secondary to Connect: smaller label, muted
+                         color and tighter spacing so it reads as an optional
+                         annotation rather than a fifth stacked zone. -->
+                    <div id="detail-reason-row" style="margin-bottom:12px">
+                        <label for="detail-reason" style="display:block;font-size:12px;font-weight:500;color:var(--text-muted);margin-bottom:6px">Reason <span style="color:var(--text-muted);font-weight:400">— why are you connecting?</span></label>
+                        <select id="detail-reason-preset" class="form-input" style="margin-bottom:6px;padding:8px 12px">
                             <option value="">Select a reason…</option>
                             <option>Maintenance</option>
                             <option>Password rotation</option>
@@ -147,7 +167,7 @@
                             <option>Security audit</option>
                             <option>Other</option>
                         </select>
-                        <input type="text" id="detail-reason" class="form-input" placeholder="Free text (optional)" maxlength="500" autocomplete="off">
+                        <input type="text" id="detail-reason" class="form-input" style="padding:8px 12px" placeholder="Free text (optional)" maxlength="500" autocomplete="off">
                     </div>
                     <button id="detail-rotate-cred" class="btn btn-sm admin-only" style="width:100%;margin-bottom:16px;background:rgba(245,158,11,0.12);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);display:none">
                         <svg style="width:14px;height:14px;vertical-align:middle;margin-right:4px" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 01-9.201 2.466l-.312-.311h2.433a.75.75 0 000-1.5H4.598a.75.75 0 00-.75.75v3.634a.75.75 0 001.5 0v-2.033l.312.311a7 7 0 0011.712-3.138.75.75 0 00-1.449-.39zm1.23-8.243a.75.75 0 00.219-.53V3.253a.75.75 0 00-1.5 0V5.23l-.312-.312A7 7 0 003.398 8.073a.75.75 0 101.449.39A5.5 5.5 0 0114.5 5.648l.312.311h-2.433a.75.75 0 000 1.5h3.634a.75.75 0 00.53-.219z" clip-rule="evenodd"/></svg>
@@ -283,242 +303,313 @@
 
 <!-- Entry create/edit modal -->
 <div id="entry-modal" class="modal-overlay hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="entry-modal-title">
-    <div class="card w-full max-w-md" style="max-height:90vh;overflow-y:auto">
-        <h2 id="entry-modal-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">New Entry</h2>
-        <div class="space-y-4">
-            <div>
-                <label class="form-label" for="em-name">Name</label>
-                <input type="text" id="em-name" class="form-input" placeholder="e.g. Web Server 01" maxlength="64" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1"><span id="em-identifier-label">Identifier:</span> <span id="em-identifier-preview" style="font-family:var(--font-mono)"></span></p>
+    <div class="card w-full max-w-3xl entry-modal-card">
+        <div class="entry-modal-header">
+            <div style="min-width:0">
+                <h2 id="entry-modal-title" class="text-lg font-bold text-[var(--text-primary)]">New Entry</h2>
+                <p id="entry-modal-subtitle" class="text-xs text-[var(--text-muted)] mt-1"></p>
             </div>
-            <div>
-                <label class="form-label" for="em-description">Description</label>
-                <textarea id="em-description" class="form-input" rows="2" style="resize:vertical" placeholder="e.g. Production web server behind the load balancer" autocomplete="off"></textarea>
-            </div>
-            <div>
-                <label class="form-label" for="em-type">Type</label>
-                <select id="em-type" class="form-input">
-                    <option value="ssh">SSH</option>
-                    {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
-                    <option value="vnc">VNC</option>
-                    {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
-                    {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
-                    {% if features.vdi %}<option value="vdi">VDI (Docker)</option>{% endif %}
-                    {% if features.powershell_ssh %}<option value="powershell">PowerShell (SSH)</option>{% endif %}
-                    {% if features.proxmox %}<option value="proxmox">Proxmox VE console</option>{% endif %}
-                </select>
-                <div id="em-type-help" class="text-xs text-[var(--text-muted)] mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
-            </div>
-            <div id="em-custom-fields"></div>
-            <div>
-                <label class="form-label" for="em-hostname">Hostname</label>
-                <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">The server's IP or hostname — no http:// and no port here (port has its own field). Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
-            </div>
-            <div id="em-url-field" style="display:none">
-                <label class="form-label" for="em-url">URL</label>
-                <input type="text" id="em-url" class="form-input" placeholder="https://10.0.1.5:8080" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Required for Web entries — the browser session opens this URL.</p>
-            </div>
-            <div id="em-container-field" style="display:none">
-                <label class="form-label" for="em-container-image">Container image</label>
-                <input type="text" id="em-container-image" class="form-input" placeholder="registry.example.com/desktop:latest" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Required for VDI entries — the Docker image to run.</p>
-            </div>
-            <div id="em-powershell-field" style="display:none">
-                <label class="form-label" for="em-powershell-binary">PowerShell binary</label>
-                <input type="text" id="em-powershell-binary" class="form-input" placeholder="pwsh.exe" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">The PowerShell executable to launch on the Windows host (default pwsh.exe). Requires Windows OpenSSH on the target. WinRM support is coming in v1.3.0.</p>
-            </div>
-            {% if features.proxmox %}
-            <div id="em-proxmox-fields" style="display:none">
-                <div>
-                    <label class="form-label" for="em-proxmox-url">Proxmox API URL</label>
-                    <input type="text" id="em-proxmox-url" class="form-input" placeholder="https://pve.example.com:8006" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">The address of your Proxmox web interface (the API is the same server, port 8006).</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-proxmox-vmid">VM ID</label>
-                    <input type="number" id="em-proxmox-vmid" class="form-input" min="100" max="999999" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">The numeric VM ID — shown in the PVE web UI next to the VM name (e.g. 105).</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-proxmox-node">Node</label>
-                    <input type="text" id="em-proxmox-node" class="form-input" placeholder="pve1" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Optional — leave blank to auto-detect which node the VM runs on.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-proxmox-token-id">API token ID</label>
-                    <input type="text" id="em-proxmox-token-id" class="form-input" placeholder="root@pam!persea" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Format: user@realm!tokenname (e.g. root@pam!persea). Create it in PVE under Datacenter → Permissions → API Tokens.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-proxmox-token-secret">API token secret</label>
-                    <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">The UUID shown once when you created the token. The token needs Sys.Audit on / and VM.Audit + VM.Console on the VM (Datacenter → Permissions → Add).</p>
-                </div>
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="margin-top:8px">
-                    <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Verify TLS certificate
-                </label>
-                <p class="text-xs text-[var(--text-muted)]" style="margin-top:6px">Leave unchecked if PVE uses its default self-signed certificate.</p>
-            </div>
-            {% endif %}
-            <div>
-                <label class="form-label" for="em-port">Port</label>
-                <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Defaults are filled in for you: SSH 22, RDP 3389, VNC/SPICE 5900. Leave as-is unless the server listens elsewhere.</p>
-            </div>
-            <div>
-                <label class="form-label" for="em-username">Username</label>
-                <input type="text" id="em-username" class="form-input" autocomplete="off">
-                <p class="text-xs text-[var(--text-muted)] mt-1">The account on the target server (e.g. root, Administrator, or DOMAIN\user for RDP). Leave blank to fall back to your preset (My Profile → My Credentials) or to be asked at connect time.</p>
-            </div>
-            <div>
-                <div style="display:flex;justify-content:space-between;align-items:center">
-                    <label class="form-label" for="em-password" style="margin:0">Password</label>
-                    <div style="display:flex;gap:8px">
-                        <button type="button" id="em-password-generate" class="btn btn-secondary btn-sm" title="Generate a strong random password">Generate</button>
-                        <button type="button" id="em-password-clear" class="btn btn-secondary btn-sm hidden" title="Remove the stored password on save">Clear stored</button>
-                    </div>
-                </div>
-                <input type="password" id="em-password" class="form-input" autocomplete="new-password">
-                <p class="text-xs text-[var(--text-muted)] mt-1" id="em-password-hint">Saving with an empty password field keeps the stored value.</p>
-            </div>
-            <div>
-                <label class="form-label" for="em-private-key">Private key (PEM)</label>
-                <textarea id="em-private-key" class="form-input" rows="3" style="resize:vertical;font-family:var(--font-mono);font-size:13px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
-                <p class="text-xs text-[var(--text-muted)] mt-1">SSH only. Alternative to a password — paste the full key including the BEGIN/END lines. If both are set, the key is used.</p>
-            </div>
-            <div id="em-ignore-cert-field" style="display:none">
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                    <input type="checkbox" id="em-ignore-cert" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Ignore TLS certificate errors
-                </label>
-                <p class="text-xs text-[var(--text-muted)] mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
-            </div>
-            <div id="em-clipboard-field" style="display:none">
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                    <input type="checkbox" id="em-disable-copy" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Disable copy from remote
-                </label>
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer;margin-top:8px">
-                    <input type="checkbox" id="em-disable-paste" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Disable paste to remote
-                </label>
-                <p class="text-xs text-[var(--text-muted)] mt-1">Restrict clipboard transfer for this entry's sessions (SSH, RDP, VNC, SPICE). Leave both unchecked for normal clipboard use.</p>
-            </div>
-            <div id="em-enable-drive-field" style="display:none">
-                <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                    <input type="checkbox" id="em-enable-drive" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                    Enable file transfer
-                </label>
-                <p class="text-xs text-[var(--text-muted)] mt-1">Turn on file transfer for this entry — SFTP for SSH (browse and download remote files), a shared drive for RDP (upload files to the remote).</p>
-            </div>
-            <div id="em-rdp-security-field" style="display:none">
-                <div>
-                    <label class="form-label" for="em-rdp-domain">Domain</label>
-                    <input type="text" id="em-rdp-domain" class="form-input" placeholder="DOMAIN" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">The Windows/AD domain for NLA authentication. Leave blank if your username already includes it as <strong>DOMAIN\user</strong> — but for CredSSP/NLA an explicit domain is more reliable.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-rdp-security">Security mode</label>
-                    <select id="em-rdp-security" class="form-input">
-                        <option value="">Any (negotiate)</option>
-                        <option value="nla">NLA (Network Level Authentication)</option>
-                        <option value="tls">TLS (SSL encryption)</option>
-                        <option value="rdp">RDP (standard encryption)</option>
-                    </select>
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Corporate Windows servers usually require <strong>NLA</strong>. If the server refuses the connection ("wrong security type?"), try NLA first, then TLS. Any is the default.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-rdp-auth-pkg">Authentication package</label>
-                    <select id="em-rdp-auth-pkg" class="form-input">
-                        <option value="">Negotiate (default)</option>
-                        <option value="kerberos">Kerberos</option>
-                        <option value="ntlm">NTLM</option>
-                    </select>
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Use <strong>Kerberos</strong> when the domain restricts NTLM (common in hardened AD environments). NTLM is the fallback default.</p>
-                </div>
-                <div id="em-rdp-kdc-field" style="display:none">
-                    <label class="form-label" for="em-rdp-kdc-url">KDC URL</label>
-                    <input type="text" id="em-rdp-kdc-url" class="form-input" placeholder="kdc.example.com" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Your AD Kerberos KDC hostname — required when using the Kerberos authentication package.</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-enable-gfx">GFX pipeline (H.264)</label>
-                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                        <input type="checkbox" id="em-enable-gfx" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                        Enable GFX pipeline for smoother video on modern RDP servers
-                    </label>
-                </div>
-                <div>
-                    <label class="form-label" for="em-color-depth">Color depth</label>
-                    <select id="em-color-depth" class="form-input">
-                        <option value="">Default</option>
-                        <option value="8">8 bits</option>
-                        <option value="16">16 bits</option>
-                        <option value="24">24 bits</option>
-                        <option value="32">32 bits</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="form-label" for="em-remote-app">RemoteApp program</label>
-                    <input type="text" id="em-remote-app" class="form-input" placeholder="mstsc.exe" autocomplete="off">
-                    <p class="text-xs text-[var(--text-muted)] mt-1">Launch a single remote program instead of the full desktop (RemoteApp).</p>
-                </div>
-                <div>
-                    <label class="form-label" for="em-prompt-creds">Prompt for credentials</label>
-                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
-                        <input type="checkbox" id="em-prompt-creds" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
-                        Ask the user for credentials at connect time instead of using stored ones
-                    </label>
-                </div>
-            </div>
-            {% if features.proxmox %}
-            <div id="em-proxmox-secret-field" style="display:none">
-                <label class="form-label" for="em-proxmox-token-secret">Proxmox token secret</label>
-                <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
-            </div>
-            {% endif %}
-            <div id="em-container-password-field" style="display:none">
-                <label class="form-label" for="em-container-password">Container password</label>
-                <input type="password" id="em-container-password" class="form-input" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
-                <p class="text-xs text-[var(--text-muted)] mt-1">Only for VDI images with a baked-in account. Leave blank to keep the stored value when editing.</p>
-            </div>
-            <div>
-                <label class="form-label">Allowed groups</label>
-                <div class="chip-picker">
-                    <div class="chip-list" id="em-groups-chips"></div>
-                    <div class="chip-input-wrap">
-                        <div class="combo" id="em-groups-combo">
-                            <input type="text" id="em-groups-input" placeholder="Type or pick a group..." autocomplete="off" spellcheck="false">
-                            <div class="combo-menu" id="em-groups-menu" role="listbox"></div>
-                        </div>
-                        <button type="button" class="btn btn-secondary btn-sm" id="em-groups-add" style="width:auto">Add</button>
-                    </div>
-                </div>
-                <p class="text-xs text-[var(--text-muted)] mt-1">Which groups may <em>see</em> this entry in the address book. Leave empty for admin-only. Connect permission is separate — grant it under "Connect permissions" below.</p>
-            </div>
-            <div id="em-rbac-field" style="display:none">
-                <label class="form-label">Connect permissions (RBAC)</label>
-                <p class="text-xs text-[var(--text-muted)]" style="margin:4px 0 8px">Who may connect to this entry. Denied by default unless granted here or inherited via connection groups (Admin → Groups).</p>
-                <div class="chip-picker">
-                    <div class="chip-list" id="em-rbac-chips"></div>
-                    <div class="chip-input-wrap">
-                        <div class="combo" id="em-rbac-combo">
-                            <input type="text" id="em-rbac-input" placeholder="Type or pick a group or user..." autocomplete="off" spellcheck="false">
-                            <div class="combo-menu" id="em-rbac-menu" role="listbox"></div>
-                        </div>
-                        <button type="button" class="btn btn-secondary btn-sm" id="em-rbac-add" style="width:auto">Add</button>
-                    </div>
-                </div>
-            </div>
-            <div id="em-error" class="hidden" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <span id="entry-modal-badge" class="entry-modal-state-badge entry-modal-state-create">Create</span>
         </div>
-        <div class="flex justify-end gap-3 mt-6">
-            <button type="button" id="em-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
-            <button type="button" id="em-save" class="btn btn-primary btn-sm" style="width:auto">Save</button>
+
+        <div class="entry-modal-body">
+            <!-- Identity -->
+            <section class="entry-section" aria-labelledby="em-section-identity-title">
+                <h3 id="em-section-identity-title" class="entry-section-title">Identity</h3>
+                <div class="entry-section-fields">
+                    <div>
+                        <label class="form-label" for="em-name" id="em-name-label">Name</label>
+                        <input type="text" id="em-name" class="form-input" placeholder="e.g. Web Server 01" maxlength="64" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1"><span id="em-identifier-label">Identifier:</span> <span id="em-identifier-preview" style="font-family:var(--font-mono)"></span></p>
+                    </div>
+                    <div class="span-2">
+                        <label class="form-label" for="em-description">Description</label>
+                        <textarea id="em-description" class="form-input" rows="2" style="resize:vertical" placeholder="e.g. Production web server behind the load balancer" autocomplete="off"></textarea>
+                    </div>
+                    <div class="span-2">
+                        <label class="form-label" for="em-type">Type</label>
+                        <select id="em-type" class="form-input">
+                            <option value="ssh">SSH</option>
+                            {% if features.rdp %}<option value="rdp">RDP</option>{% endif %}
+                            <option value="vnc">VNC</option>
+                            {% if features.spice %}<option value="spice">SPICE</option>{% endif %}
+                            {% if features.web_sessions %}<option value="web">Web</option>{% endif %}
+                            {% if features.vdi %}<option value="vdi">VDI (Docker)</option>{% endif %}
+                            {% if features.powershell_ssh %}<option value="powershell">PowerShell (SSH)</option>{% endif %}
+                            {% if features.proxmox %}<option value="proxmox">Proxmox VE console</option>{% endif %}
+                        </select>
+                        <div id="em-type-help" class="text-xs text-[var(--text-muted)] mt-2" style="background:var(--bg-input);border:1px solid var(--border);border-radius:8px;padding:10px 12px;line-height:1.55"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Custom fields -->
+            <section id="em-custom-fields-section" class="entry-section" aria-labelledby="em-custom-fields-title">
+                <h3 id="em-custom-fields-title" class="entry-section-title">Custom Fields</h3>
+                <div class="entry-section-fields">
+                    <div class="span-2" id="em-custom-fields"></div>
+                </div>
+            </section>
+
+            <!-- Connection -->
+            <section class="entry-section" aria-labelledby="em-section-connection-title">
+                <h3 id="em-section-connection-title" class="entry-section-title">Connection</h3>
+                <div class="entry-section-fields">
+                    <div class="span-2">
+                        <label class="form-label" for="em-folder">Folder</label>
+                        <select id="em-folder" class="form-input"></select>
+                        <p id="em-folder-hint" class="text-xs text-[var(--text-muted)] mt-1">Pick the folder this entry is created in. The scope (shared or instance) follows the folder.</p>
+                    </div>
+                    <div>
+                        <label class="form-label" for="em-hostname">Hostname</label>
+                        <input type="text" id="em-hostname" class="form-input" placeholder="10.0.1.5" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">The server's IP or hostname — no http:// and no port here (port has its own field). Not required for Web (URL), VDI (container image) or Proxmox (API URL) entries.</p>
+                    </div>
+                    <div>
+                        <label class="form-label" for="em-port">Port</label>
+                        <input type="number" id="em-port" class="form-input" min="1" max="65535" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Defaults are filled in for you: SSH 22, RDP 3389, VNC/SPICE 5900. Leave as-is unless the server listens elsewhere.</p>
+                    </div>
+                    <div id="em-url-field" class="span-2" style="display:none">
+                        <label class="form-label" for="em-url">URL</label>
+                        <input type="text" id="em-url" class="form-input" placeholder="https://10.0.1.5:8080" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Required for Web entries — the browser session opens this URL.</p>
+                    </div>
+                    <div id="em-container-field" class="span-2" style="display:none">
+                        <label class="form-label" for="em-container-image">Container image</label>
+                        <input type="text" id="em-container-image" class="form-input" placeholder="registry.example.com/desktop:latest" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Required for VDI entries — the Docker image to run.</p>
+                    </div>
+                    <div id="em-powershell-field" class="span-2" style="display:none">
+                        <label class="form-label" for="em-powershell-binary">PowerShell binary</label>
+                        <input type="text" id="em-powershell-binary" class="form-input" placeholder="pwsh.exe" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">The PowerShell executable to launch on the Windows host (default pwsh.exe). Requires Windows OpenSSH on the target. WinRM support is coming in v1.3.0.</p>
+                    </div>
+                    {% if features.proxmox %}
+                    <div id="em-proxmox-fields" class="span-2" style="display:none">
+                        <details class="proto-block-details" open>
+                            <summary class="proto-block-summary">
+                                <span class="proto-block-chevron">▸</span>
+                                Proxmox console settings
+                            </summary>
+                            <div class="proto-block-body entry-section-fields">
+                                <div class="span-2">
+                                    <label class="form-label" for="em-proxmox-url">Proxmox API URL</label>
+                                    <input type="text" id="em-proxmox-url" class="form-input" placeholder="https://pve.example.com:8006" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">The address of your Proxmox web interface (the API is the same server, port 8006).</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-proxmox-vmid">VM ID</label>
+                                    <input type="number" id="em-proxmox-vmid" class="form-input" min="100" max="999999" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">The numeric VM ID — shown in the PVE web UI next to the VM name (e.g. 105).</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-proxmox-node">Node</label>
+                                    <input type="text" id="em-proxmox-node" class="form-input" placeholder="pve1" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Optional — leave blank to auto-detect which node the VM runs on.</p>
+                                </div>
+                                <div class="span-2">
+                                    <label class="form-label" for="em-proxmox-token-id">API token ID</label>
+                                    <input type="text" id="em-proxmox-token-id" class="form-input" placeholder="root@pam!persea" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Format: user@realm!tokenname (e.g. root@pam!persea). Create it in PVE under Datacenter → Permissions → API Tokens.</p>
+                                </div>
+                                <div class="span-2">
+                                    <label class="form-label" for="em-proxmox-token-secret">API token secret</label>
+                                    <input type="password" id="em-proxmox-token-secret" class="form-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" autocomplete="new-password">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">The UUID shown once when you created the token. The token needs Sys.Audit on / and VM.Audit + VM.Console on the VM (Datacenter → Permissions → Add).</p>
+                                </div>
+                                <div class="span-2">
+                                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                                        <input type="checkbox" id="em-proxmox-verify-tls" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                                        Verify TLS certificate
+                                    </label>
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Leave unchecked if PVE uses its default self-signed certificate.</p>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                    {% endif %}
+                </div>
+            </section>
+
+            <!-- Credentials -->
+            <section class="entry-section" aria-labelledby="em-section-credentials-title">
+                <h3 id="em-section-credentials-title" class="entry-section-title">Credentials</h3>
+                <div class="entry-section-fields">
+                    <div>
+                        <label class="form-label" for="em-username">Username</label>
+                        <input type="text" id="em-username" class="form-input" autocomplete="off">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">The account on the target server (e.g. root, Administrator, or DOMAIN\user for RDP). Leave blank to fall back to your preset (My Profile → My Credentials) or to be asked at connect time.</p>
+                    </div>
+                    <div>
+                        <div style="display:flex;justify-content:space-between;align-items:center">
+                            <label class="form-label" for="em-password" style="margin:0">Password</label>
+                            <div style="display:flex;gap:8px">
+                                <button type="button" id="em-password-generate" class="btn btn-secondary btn-sm" title="Generate a strong random password">Generate</button>
+                                <button type="button" id="em-password-clear" class="btn btn-secondary btn-sm hidden" title="Remove the stored password on save">Clear stored</button>
+                            </div>
+                        </div>
+                        <input type="password" id="em-password" class="form-input" autocomplete="new-password">
+                        <p class="text-xs text-[var(--text-muted)] mt-1" id="em-password-hint">Leave blank to be asked for credentials at connect time.</p>
+                    </div>
+                    <div class="span-2">
+                        <label class="form-label" for="em-private-key">Private key (PEM)</label>
+                        <textarea id="em-private-key" class="form-input" rows="3" style="resize:vertical;font-family:var(--font-mono);font-size:13px" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">SSH only. Alternative to a password — paste the full key including the BEGIN/END lines. If both are set, the key is used.</p>
+                    </div>
+                    <div id="em-container-password-field" class="span-2" style="display:none">
+                        <label class="form-label" for="em-container-password">Container password</label>
+                        <input type="password" id="em-container-password" class="form-input" placeholder="Leave blank to generate per-connect" autocomplete="new-password">
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Only for VDI images with a baked-in account. Leave blank to keep the stored value when editing.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Protocol Options -->
+            <section class="entry-section" aria-labelledby="em-section-protocol-title">
+                <h3 id="em-section-protocol-title" class="entry-section-title">Protocol Options</h3>
+                <div class="entry-section-fields">
+                    <div id="em-ignore-cert-field" class="span-2" style="display:none">
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                            <input type="checkbox" id="em-ignore-cert" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                            Ignore TLS certificate errors
+                        </label>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Turn this on for servers with self-signed or untrusted certificates (common with Windows NLA and xrdp). Without it, RDP refuses to connect if the certificate is not trusted.</p>
+                    </div>
+                    <div id="em-clipboard-field" class="span-2" style="display:none">
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                            <input type="checkbox" id="em-disable-copy" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                            Disable copy from remote
+                        </label>
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer;margin-top:8px">
+                            <input type="checkbox" id="em-disable-paste" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                            Disable paste to remote
+                        </label>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Restrict clipboard transfer for this entry's sessions (SSH, RDP, VNC, SPICE). Leave both unchecked for normal clipboard use.</p>
+                    </div>
+                    <div id="em-enable-drive-field" class="span-2" style="display:none">
+                        <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                            <input type="checkbox" id="em-enable-drive" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                            Enable file transfer
+                        </label>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Turn on file transfer for this entry — SFTP for SSH (browse and download remote files), a shared drive for RDP (upload files to the remote).</p>
+                    </div>
+                    <div id="em-rdp-security-field" class="span-2" style="display:none">
+                        <details class="proto-block-details" open>
+                            <summary class="proto-block-summary">
+                                <span class="proto-block-chevron">▸</span>
+                                RDP connection options
+                            </summary>
+                            <div class="proto-block-body entry-section-fields">
+                                <div>
+                                    <label class="form-label" for="em-rdp-domain">Domain</label>
+                                    <input type="text" id="em-rdp-domain" class="form-input" placeholder="DOMAIN" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">The Windows/AD domain for NLA authentication. Leave blank if your username already includes it as <strong>DOMAIN\user</strong> — but for CredSSP/NLA an explicit domain is more reliable.</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-color-depth">Color depth</label>
+                                    <select id="em-color-depth" class="form-input">
+                                        <option value="">Default</option>
+                                        <option value="8">8 bits</option>
+                                        <option value="16">16 bits</option>
+                                        <option value="24">24 bits</option>
+                                        <option value="32">32 bits</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-rdp-security">Security mode</label>
+                                    <select id="em-rdp-security" class="form-input">
+                                        <option value="">Any (negotiate)</option>
+                                        <option value="nla">NLA (Network Level Authentication)</option>
+                                        <option value="tls">TLS (SSL encryption)</option>
+                                        <option value="rdp">RDP (standard encryption)</option>
+                                    </select>
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Corporate Windows servers usually require <strong>NLA</strong>. If the server refuses the connection ("wrong security type?"), try NLA first, then TLS. Any is the default.</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-rdp-auth-pkg">Authentication package</label>
+                                    <select id="em-rdp-auth-pkg" class="form-input">
+                                        <option value="">Negotiate (default)</option>
+                                        <option value="kerberos">Kerberos</option>
+                                        <option value="ntlm">NTLM</option>
+                                    </select>
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Use <strong>Kerberos</strong> when the domain restricts NTLM (common in hardened AD environments). NTLM is the fallback default.</p>
+                                </div>
+                                <div id="em-rdp-kdc-field" style="display:none">
+                                    <label class="form-label" for="em-rdp-kdc-url">KDC URL</label>
+                                    <input type="text" id="em-rdp-kdc-url" class="form-input" placeholder="kdc.example.com" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Your AD Kerberos KDC hostname — required when using the Kerberos authentication package.</p>
+                                </div>
+                                <div>
+                                    <label class="form-label" for="em-enable-gfx">GFX pipeline (H.264)</label>
+                                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                                        <input type="checkbox" id="em-enable-gfx" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                                        Enable GFX pipeline for smoother video on modern RDP servers
+                                    </label>
+                                </div>
+                                <div class="span-2">
+                                    <label class="form-label" for="em-remote-app">RemoteApp program</label>
+                                    <input type="text" id="em-remote-app" class="form-input" placeholder="mstsc.exe" autocomplete="off">
+                                    <p class="text-xs text-[var(--text-muted)] mt-1">Launch a single remote program instead of the full desktop (RemoteApp).</p>
+                                </div>
+                                <div class="span-2">
+                                    <label class="form-label" for="em-prompt-creds">Prompt for credentials</label>
+                                    <label class="flex items-center gap-2 text-sm text-[var(--text-secondary)]" style="cursor:pointer">
+                                        <input type="checkbox" id="em-prompt-creds" class="rounded bg-[var(--bg-card)] border-[var(--border)] text-emerald-500">
+                                        Ask the user for credentials at connect time instead of using stored ones
+                                    </label>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Access & Permissions -->
+            <section class="entry-section" aria-labelledby="em-section-access-title">
+                <h3 id="em-section-access-title" class="entry-section-title">Access &amp; Permissions</h3>
+                <div class="entry-section-fields">
+                    <div class="span-2">
+                        <label class="form-label">Allowed groups</label>
+                        <div class="chip-picker">
+                            <div class="chip-list" id="em-groups-chips"></div>
+                            <div class="chip-input-wrap">
+                                <div class="combo" id="em-groups-combo">
+                                    <input type="text" id="em-groups-input" placeholder="Type or pick a group..." autocomplete="off" spellcheck="false">
+                                    <div class="combo-menu" id="em-groups-menu" role="listbox"></div>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm" id="em-groups-add" style="width:auto">Add</button>
+                            </div>
+                        </div>
+                        <p class="text-xs text-[var(--text-muted)] mt-1">Which groups may <em>see</em> this entry in the address book. Leave empty for admin-only. Connect permission is separate — grant it under "Connect permissions" below.</p>
+                    </div>
+                    <div id="em-rbac-field" class="span-2" style="display:none">
+                        <label class="form-label">Connect permissions (RBAC)</label>
+                        <p class="text-xs text-[var(--text-muted)]" style="margin:4px 0 8px">Who may connect to this entry. Denied by default unless granted here or inherited via connection groups (Admin → Groups).</p>
+                        <div class="chip-picker">
+                            <div class="chip-list" id="em-rbac-chips"></div>
+                            <div class="chip-input-wrap">
+                                <div class="combo" id="em-rbac-combo">
+                                    <input type="text" id="em-rbac-input" placeholder="Type or pick a group or user..." autocomplete="off" spellcheck="false">
+                                    <div class="combo-menu" id="em-rbac-menu" role="listbox"></div>
+                                </div>
+                                <button type="button" class="btn btn-secondary btn-sm" id="em-rbac-add" style="width:auto">Add</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="em-access-note" class="span-2 hidden">
+                        <p class="text-xs text-[var(--text-muted)]" style="padding:10px 12px;background:var(--bg-input);border:1px solid var(--border);border-radius:8px">Only administrators can create or edit connections. Ask an administrator to make changes.</p>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <div class="entry-modal-footer">
+            <div id="em-error" class="hidden entry-modal-error" role="alert" aria-live="polite" style="color:#f87171;font-size:13px"></div>
+            <div class="flex justify-end gap-3" style="flex-shrink:0">
+                <button type="button" id="em-cancel" class="btn btn-secondary btn-sm" style="width:auto">Cancel</button>
+                <button type="button" id="em-save" class="btn btn-primary btn-sm" style="width:auto">Create Entry</button>
+            </div>
         </div>
     </div>
 </div>
@@ -765,11 +856,14 @@
     function updateIdentifierPreview() {
         var preview = document.getElementById('em-identifier-preview');
         var label = document.getElementById('em-identifier-label');
+        var nameLabel = document.getElementById('em-name-label');
         if (!preview || !label) return;
         if (entryEditMode) {
+            if (nameLabel) nameLabel.textContent = 'Display name';
             label.textContent = 'Identifier (read-only):';
             preview.textContent = entryEditMode.name;
         } else {
+            if (nameLabel) nameLabel.textContent = 'Name';
             label.textContent = 'Identifier:';
             preview.textContent = slugify(document.getElementById('em-name').value);
         }
@@ -1271,7 +1365,6 @@
                 return loadPersonalFolders().then(function() {
                     populateFilterFolders();
                     var sf = document.getElementById('scope-filter').value;
-                    document.getElementById('filter-bar').classList.toggle('hidden', folders.length === 0);
                     document.getElementById('btn-filters').classList.toggle('hidden', folders.length === 0);
                     if (treeEmptyForScope(sf)) {
                         if (sf === 'personal' || isAdmin) {
@@ -1622,6 +1715,8 @@
         });
         container.innerHTML = html.join('');
         container.style.display = customFieldDefs.length ? '' : 'none';
+        var section = document.getElementById('em-custom-fields-section');
+        if (section) section.style.display = customFieldDefs.length ? '' : 'none';
     }
     function distinctCustomFieldValues(name) {
         var seen = [];
@@ -1642,7 +1737,6 @@
         customFieldDefs.forEach(function(def) {
             var sel = document.createElement('select');
             sel.className = 'form-input';
-            sel.style.width = '150px';
             sel.setAttribute('data-cf-filter', def.name);
             sel.title = 'Filter by ' + def.name;
             var allOpt = document.createElement('option');
@@ -1734,6 +1828,72 @@
                 function(s) { return !!s.value; }
             ).length || 0;
         btn.textContent = count > 0 ? 'Filters (' + count + ')' : 'Filters';
+        renderFilterChips();
+    }
+    // Active filters as removable chips under the search box. Each chip
+    // clears its own filter; a "Clear all" chip appears when several are
+    // active. Built with DOM APIs so user-supplied values (folder paths,
+    // descriptions, custom-field values) are never interpolated as HTML.
+    function renderFilterChips() {
+        var container = document.getElementById('filter-chips');
+        if (!container) return;
+        var filters = activeFilters();
+        var chips = [];
+        if (filters.type) chips.push({ key: 'type', label: 'Type: ' + filters.type.toUpperCase() });
+        if (filters.folder) {
+            var parts = filters.folder.split('|');
+            var suffix = parts[0] === 'instance' ? ' (instance)' : (parts[0] === 'personal' ? ' (personal)' : '');
+            chips.push({ key: 'folder', label: 'Folder: ' + parts[1] + suffix });
+        }
+        if (filters.desc) chips.push({ key: 'desc', label: 'Description: ' + filters.desc });
+        for (var ck in filters.custom) chips.push({ key: 'custom:' + ck, label: ck + ': ' + filters.custom[ck] });
+        container.innerHTML = '';
+        if (chips.length === 0) {
+            container.classList.add('hidden');
+            return;
+        }
+        container.classList.remove('hidden');
+        chips.forEach(function(chip) {
+            var el = document.createElement('span');
+            el.className = 'filter-chip';
+            var label = document.createElement('span');
+            label.textContent = chip.label;
+            el.appendChild(label);
+            var rm = document.createElement('button');
+            rm.type = 'button';
+            rm.className = 'filter-chip-remove';
+            rm.textContent = '\u00D7';
+            rm.title = 'Clear this filter';
+            rm.setAttribute('aria-label', 'Clear filter ' + chip.label);
+            rm.addEventListener('click', function() { clearOneFilter(chip.key); });
+            el.appendChild(rm);
+            container.appendChild(el);
+        });
+        if (chips.length > 1) {
+            var clearAll = document.createElement('button');
+            clearAll.type = 'button';
+            clearAll.className = 'filter-chip filter-chip-clear-all';
+            clearAll.textContent = 'Clear all';
+            clearAll.addEventListener('click', clearFilters);
+            container.appendChild(clearAll);
+        }
+    }
+    function clearOneFilter(key) {
+        if (key === 'type') {
+            document.getElementById('filter-type').value = '';
+        } else if (key === 'folder') {
+            document.getElementById('filter-folder').value = '';
+        } else if (key === 'desc') {
+            document.getElementById('filter-desc').value = '';
+        } else if (key.indexOf('custom:') === 0) {
+            var name = key.slice(7);
+            var sels = document.querySelectorAll('#filter-custom-fields select[data-cf-filter]');
+            for (var i = 0; i < sels.length; i++) {
+                if (sels[i].getAttribute('data-cf-filter') === name) sels[i].value = '';
+            }
+        }
+        updateFiltersBadge();
+        runSearch();
     }
     function runSearch() {
         var input = document.getElementById('connections-search');
@@ -1878,6 +2038,13 @@
                     }
                     return;
                 }
+                // The server tried the session credentials (LDAP/SSO) and
+                // the target rejected them — prompt for interactive
+                // credentials and retry with the resolved username filled in.
+                if (res.ok && res.data.credentials_required) {
+                    openConnectPrompt(scope, folder, entry, res.data);
+                    return;
+                }
                 if (err) {
                     // Stay on the Connections page — a failed or stale
                     // connect attempt must not bounce the user to the login
@@ -1892,9 +2059,9 @@
             });
     }
     var promptTarget = null;
-    function openConnectPrompt(scope, folder, entry) {
+    function openConnectPrompt(scope, folder, entry, prefill) {
         promptTarget = { scope: scope, folder: folder, entry: entry };
-        document.getElementById('pm-username').value = '';
+        document.getElementById('pm-username').value = (prefill && prefill.username) ? prefill.username : '';
         document.getElementById('pm-password').value = '';
         document.getElementById('pm-error').textContent = '';
         document.getElementById('pm-error').classList.add('hidden');
@@ -2506,7 +2673,6 @@
     function updateEntryTypeFields() {
         var type = document.getElementById('em-type').value;
         function show(id, on) { var el = document.getElementById(id); if (el) el.style.display = on ? '' : 'none'; }
-        show('em-proxmox-secret-field', type === 'proxmox');
         show('em-container-password-field', type === 'vdi');
         show('em-url-field', type === 'web');
         show('em-container-field', type === 'vdi');
@@ -2558,10 +2724,104 @@
         }
         updateEntryTypeFields();
     }
+    // Entry modal helpers: folder picker, create/edit state, credential
+    // keep/change/clear semantics, and consistent non-admin disabled state.
+    function populateEntryFolders(selectValue) {
+        var sel = document.getElementById('em-folder');
+        if (!sel) return;
+        sel.innerHTML = '';
+        var found = false;
+        folders.forEach(function(f) {
+            if (f.scope === 'personal') return;
+            var opt = document.createElement('option');
+            opt.value = f.scope + '|' + f.path;
+            opt.textContent = f.path + (f.scope === 'instance' ? ' (instance)' : '');
+            sel.appendChild(opt);
+            if (opt.value === selectValue) { sel.value = opt.value; found = true; }
+        });
+        if (!found && selectValue) {
+            var fallback = document.createElement('option');
+            fallback.value = selectValue;
+            fallback.textContent = selectValue.split('|')[1];
+            sel.appendChild(fallback);
+            sel.value = selectValue;
+        }
+    }
+    function entryTargetFolder() {
+        if (entryEditMode) return { scope: entryEditMode.scope, folder: entryEditMode.folder };
+        var sel = document.getElementById('em-folder');
+        if (sel && sel.value) {
+            var parts = sel.value.split('|');
+            return { scope: parts[0], folder: parts[1] };
+        }
+        return selectedFolder
+            ? { scope: selectedFolder.scope, folder: selectedFolder.path }
+            : { scope: 'shared', folder: '' };
+    }
+    function entrySaveLabel() {
+        return entryEditMode ? 'Save Changes' : 'Create Entry';
+    }
+    function updateEntryModalSubtitle() {
+        var sub = document.getElementById('entry-modal-subtitle');
+        if (!sub) return;
+        var t = entryTargetFolder();
+        if (entryEditMode) {
+            sub.textContent = 'Editing "' + entryEditMode.name + '" in ' + t.scope + '/' + t.folder;
+        } else {
+            sub.textContent = 'Will be created in ' + t.scope + '/' + (t.folder || '(root)');
+        }
+    }
+    function updatePasswordHint() {
+        var hint = document.getElementById('em-password-hint');
+        if (!hint) return;
+        if (passwordClearArmed) {
+            hint.textContent = 'The stored password WILL BE REMOVED when you save.';
+            return;
+        }
+        if (!entryEditMode) {
+            hint.textContent = 'Leave blank to be asked for credentials at connect time.';
+        } else if (selectedEntry && selectedEntry.has_credentials) {
+            hint.textContent = 'Keep: leave blank. Change: type a new password. Remove: press "Clear stored".';
+        } else {
+            hint.textContent = 'No stored password yet. Type one to store it with this entry.';
+        }
+    }
+    function applyEntryModalPermissions() {
+        var admin = isAdmin;
+        var rbacField = document.getElementById('em-rbac-field');
+        if (rbacField) rbacField.style.display = admin ? '' : 'none';
+        var note = document.getElementById('em-access-note');
+        if (note) note.classList.toggle('hidden', admin);
+        if (admin) return;
+        // Non-admins never reach the modal through the UI (the create/edit
+        // buttons are admin-only), but if it opens anyway every field and
+        // the save button render disabled with a read-only note.
+        var ids = ['em-name', 'em-description', 'em-type', 'em-folder', 'em-hostname', 'em-port',
+            'em-username', 'em-password', 'em-private-key', 'em-url', 'em-container-image',
+            'em-powershell-binary', 'em-proxmox-url', 'em-proxmox-vmid', 'em-proxmox-node',
+            'em-proxmox-token-id', 'em-proxmox-token-secret', 'em-container-password',
+            'em-rdp-kdc-url', 'em-rdp-domain', 'em-remote-app', 'em-rdp-security',
+            'em-rdp-auth-pkg', 'em-color-depth', 'em-ignore-cert', 'em-disable-copy',
+            'em-disable-paste', 'em-enable-drive', 'em-enable-gfx', 'em-prompt-creds',
+            'em-proxmox-verify-tls', 'em-password-generate', 'em-password-clear',
+            'em-groups-input', 'em-groups-add', 'em-rbac-input', 'em-rbac-add', 'em-save'];
+        ids.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.disabled = true;
+        });
+    }
     function openNewEntry() {
         if (!selectedFolder) return;
         entryEditMode = null;
-        document.getElementById('entry-modal-title').textContent = 'New Entry in ' + selectedFolder.path;
+        document.getElementById('entry-modal-title').textContent = 'New Entry';
+        document.getElementById('entry-modal-badge').textContent = 'Create';
+        document.getElementById('entry-modal-badge').className = 'entry-modal-state-badge entry-modal-state-create';
+        var nonPersonal = folders.filter(function(f) { return f.scope !== 'personal'; });
+        var target = selectedFolder.scope !== 'personal' ? selectedFolder : (nonPersonal[0] || null);
+        populateEntryFolders(target ? target.scope + '|' + target.path : '');
+        document.getElementById('em-folder').disabled = false;
+        var fh = document.getElementById('em-folder-hint');
+        if (fh) fh.textContent = 'Pick the folder this entry is created in. The scope (shared or instance) follows the folder.';
         document.getElementById('em-name').value = '';
         document.getElementById('em-name').disabled = false;
         document.getElementById('em-type').value = 'ssh';
@@ -2577,14 +2837,23 @@
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
-        document.getElementById('em-rbac-field').style.display = isAdmin ? '' : 'none';
         resetEntryRbac();
+        applyEntryModalPermissions();
+        document.getElementById('em-save').textContent = entrySaveLabel();
+        updateEntryModalSubtitle();
+        updatePasswordHint();
         openModal('entry-modal');
     }
     function openEditEntry() {
         if (!selectedFolder || !selectedEntry) return;
         entryEditMode = { scope: selectedFolder.scope, folder: selectedFolder.path, name: selectedEntry.name };
-        document.getElementById('entry-modal-title').textContent = 'Edit: ' + selectedEntry.name;
+        document.getElementById('entry-modal-title').textContent = 'Edit Entry';
+        document.getElementById('entry-modal-badge').textContent = 'Edit';
+        document.getElementById('entry-modal-badge').className = 'entry-modal-state-badge entry-modal-state-edit';
+        populateEntryFolders(entryEditMode.scope + '|' + entryEditMode.folder);
+        document.getElementById('em-folder').disabled = true;
+        var fh = document.getElementById('em-folder-hint');
+        if (fh) fh.textContent = 'Editing keeps the entry in its current folder.';
         document.getElementById('em-name').value = selectedEntry.display_name || selectedEntry.name;
         document.getElementById('em-name').disabled = false;
         document.getElementById('em-type').value = selectedEntry.session_type || 'ssh';
@@ -2649,11 +2918,14 @@
         emGroups = [];
         renderGroupChips('em-groups-chips', emGroups);
         loadKnownGroups(function() { populateGroupOptions('em'); });
-        document.getElementById('em-rbac-field').style.display = isAdmin ? '' : 'none';
         resetEntryRbac();
         loadRbacRefs(function() {
             loadEntryRbac();
         });
+        applyEntryModalPermissions();
+        document.getElementById('em-save').textContent = entrySaveLabel();
+        updateEntryModalSubtitle();
+        updatePasswordHint();
         openModal('entry-modal');
     }
     var passwordClearArmed = false;
@@ -2672,8 +2944,7 @@
     function markPasswordCleared() {
         passwordClearArmed = true;
         document.getElementById('em-password').value = '';
-        var hint = document.getElementById('em-password-hint');
-        if (hint) hint.textContent = 'The stored password WILL BE REMOVED when you save.';
+        updatePasswordHint();
     }
     function updatePasswordButtons() {
         var clearBtn = document.getElementById('em-password-clear');
@@ -2681,9 +2952,8 @@
         clearBtn.classList.toggle('hidden', !entryEditMode || !(selectedEntry && selectedEntry.has_credentials));
         if (clearBtn.classList.contains('hidden')) {
             passwordClearArmed = false;
-            var hint = document.getElementById('em-password-hint');
-            if (hint) hint.textContent = 'Saving with an empty password field keeps the stored value.';
         }
+        updatePasswordHint();
     }
 
     function saveEntry() {
@@ -2866,7 +3136,8 @@
         } else {
             var payload = { name: name };
             for (var k in entry) payload[k] = entry[k];
-            req = fetch('/api/addressbook/folders/' + encodeURIComponent(selectedFolder.scope) + '/' + encodeURIComponent(selectedFolder.path) + '/entries', {
+            var target = entryTargetFolder();
+            req = fetch('/api/addressbook/folders/' + encodeURIComponent(target.scope) + '/' + encodeURIComponent(target.folder) + '/entries', {
                 method: 'POST',
                 headers: apiHeaders(),
                 credentials: 'same-origin',
@@ -2897,7 +3168,7 @@
             errEl.classList.remove('hidden');
         }).then(function() {
             saveBtn.disabled = false;
-            saveBtn.textContent = 'Save';
+            saveBtn.textContent = entrySaveLabel();
         });
     }
     function deleteEntry() {
@@ -3164,8 +3435,9 @@
 
     // ── RBAC connect permissions (entry modal) ───────────────────────
     function rbacConnId() {
-        var scope = entryEditMode ? entryEditMode.scope : selectedFolder.scope;
-        var folder = entryEditMode ? entryEditMode.folder : selectedFolder.path;
+        var target = entryTargetFolder();
+        var scope = target.scope;
+        var folder = target.folder;
         // RBAC ids use the SLUG identifier; in create mode the server derives
         // it from the friendly name, so mirror that here.
         var name = entryEditMode ? entryEditMode.name : slugify(document.getElementById('em-name').value.trim());
@@ -3425,8 +3697,16 @@
         updateEntryActionButtons();
         updateScopeUi();
     }
+    // The scope filter lives in the tree header; the empty state carries a
+    // mirror of it so scope switching stays possible when the tree is hidden.
+    function syncScopeSelects() {
+        var main = document.getElementById('scope-filter');
+        var empty = document.getElementById('empty-scope-filter');
+        if (main && empty) empty.value = main.value;
+    }
     function onScopeChange() {
         var sf = document.getElementById('scope-filter').value;
+        syncScopeSelects();
         updateScopeUi();
         if (selectedFolder && sf && selectedFolder.scope !== sf) {
             selectedFolder = null;
@@ -3445,6 +3725,7 @@
                 });
                 if (!still) ff.value = '';
             }
+            updateFiltersBadge();
             if (treeEmptyForScope(sf)) {
                 if (sf === 'personal' || isAdmin) {
                     document.getElementById('main-content').classList.add('hidden');
@@ -3491,9 +3772,10 @@
         document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
         openImportModal();
     });
-    document.getElementById('btn-filters').addEventListener('click', function() {
-        var bar = document.getElementById('filter-bar');
-        var open = bar.classList.toggle('hidden');
+    document.getElementById('btn-filters').addEventListener('click', function(e) {
+        e.stopPropagation();
+        var dd = document.getElementById('filters-dropdown');
+        var open = dd.classList.toggle('hidden');
         this.setAttribute('aria-expanded', String(!open));
     });
     document.getElementById('btn-overflow').addEventListener('click', function(e) {
@@ -3502,10 +3784,19 @@
         var open = menu.classList.toggle('hidden');
         this.setAttribute('aria-expanded', String(!open));
     });
-    document.addEventListener('click', function() {
-        var menu = document.getElementById('overflow-menu');
-        menu.classList.add('hidden');
-        document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
+    document.addEventListener('click', function(ev) {
+        var overflowWrap = document.getElementById('overflow-wrap');
+        if (!overflowWrap || !overflowWrap.contains(ev.target)) {
+            var menu = document.getElementById('overflow-menu');
+            menu.classList.add('hidden');
+            document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
+        }
+        var filtersWrap = document.getElementById('filters-wrap');
+        if (!filtersWrap || !filtersWrap.contains(ev.target)) {
+            var dd = document.getElementById('filters-dropdown');
+            dd.classList.add('hidden');
+            document.getElementById('btn-filters').setAttribute('aria-expanded', 'false');
+        }
     });
     document.getElementById('detail-rotate-cred').addEventListener('click', rotateCredential);
     document.getElementById('detail-add-to-folder').addEventListener('click', openAddToFolder);
@@ -3535,6 +3826,7 @@
     wireGroupCombo('em');
     document.getElementById('em-type').addEventListener('change', updateEntryTypeFields);
     document.getElementById('em-port').addEventListener('input', function() { portAutoSet = false; });
+    document.getElementById('em-folder').addEventListener('change', updateEntryModalSubtitle);
     document.getElementById('em-rdp-auth-pkg').addEventListener('change', updateKdcField);
 
     var rbacComboEl = document.getElementById('em-rbac-combo');
@@ -3606,6 +3898,12 @@
             ['folder-modal', 'entry-modal', 'import-modal', 'prompt-modal', 'pf-modal', 'add-to-folder-modal'].forEach(function(id) {
                 document.getElementById(id).classList.add('hidden');
             });
+            var overflowMenu = document.getElementById('overflow-menu');
+            overflowMenu.classList.add('hidden');
+            document.getElementById('btn-overflow').setAttribute('aria-expanded', 'false');
+            var filtersDropdown = document.getElementById('filters-dropdown');
+            filtersDropdown.classList.add('hidden');
+            document.getElementById('btn-filters').setAttribute('aria-expanded', 'false');
             var rotateToast = document.querySelector('.rotate-toast');
             if (rotateToast) rotateToast.remove();
         }
@@ -3621,6 +3919,13 @@
 
     document.getElementById('connections-search').addEventListener('input', debounce(runSearch, 250));
     document.getElementById('scope-filter').addEventListener('change', onScopeChange);
+    var emptyScope = document.getElementById('empty-scope-filter');
+    if (emptyScope) {
+        emptyScope.addEventListener('change', function() {
+            document.getElementById('scope-filter').value = this.value;
+            onScopeChange();
+        });
+    }
     document.getElementById('filter-type').addEventListener('change', runSearch);
     document.getElementById('filter-folder').addEventListener('change', runSearch);
     document.getElementById('filter-desc').addEventListener('input', debounce(runSearch, 250));
