@@ -1,0 +1,42 @@
+# LDAP seed data for the integration test harness (persea#154).
+#
+# Synthetic data only: example.com domain, test users. Loaded by
+# docker-compose.ldap.yml through the osixia bootstrap custom directory, and
+# by the CI ldap-integration job via ldapadd after checkout (GitHub Actions
+# starts service containers before the checkout step, so the bootstrap mount
+# cannot see repo files there).
+#
+# Users: alice (member of the engineers group) and bob (no groups).
+# Passwords are plaintext; slapd hashes them on add and simple bind verifies.
+
+dn: ou=users,dc=example,dc=com
+objectClass: organizationalUnit
+ou: users
+
+dn: ou=groups,dc=example,dc=com
+objectClass: organizationalUnit
+ou: groups
+
+dn: uid=alice,ou=users,dc=example,dc=com
+objectClass: top
+objectClass: inetOrgPerson
+uid: alice
+cn: Alice Example
+sn: Example
+mail: alice@example.com
+userPassword: alice-ldap-password-2026
+
+dn: uid=bob,ou=users,dc=example,dc=com
+objectClass: top
+objectClass: inetOrgPerson
+uid: bob
+cn: Bob Example
+sn: Example
+mail: bob@example.com
+userPassword: bob-ldap-password-2026
+
+dn: cn=engineers,ou=groups,dc=example,dc=com
+objectClass: top
+objectClass: groupOfNames
+cn: engineers
+member: uid=alice,ou=users,dc=example,dc=com

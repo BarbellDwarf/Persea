@@ -1,0 +1,66 @@
+name: CodeQL
+
+# Advanced setup, replacing GitHub default setup (which cannot scan Rust on
+# this instance). The rust job builds with a clean, non-incremental, full-
+# target cargo build so the extractor sees all of the codebase (lib, bin,
+# tests); caching or incremental artifacts would skip the compiler and drop
+# extraction coverage. All third-party actions are SHA-pinned per the CI
+# governance batch (#114).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze-default:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, c-cpp, javascript-typescript]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          languages: ${{ matrix.language }}
+          # Standalone extraction: this repo has no buildable C/C++ tree
+          # (fuzz-guacd expects the guacamole-server source beside it) and
+          # JS/TS/actions need no build. Avoids the cpp autobuild failure.
+          build-mode: none
+      - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  analyze-rust:
+    name: Analyze (rust)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          components: clippy, rustfmt
+          rustflags: ""
+      - name: Install rust-src
+        run: rustup component add rust-src
+      - uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          languages: rust
+          # CodeQL 2.26.3's Rust support only offers standalone extraction
+          # ("build-mode: none"; manual and autobuild are rejected). There is
+          # no build trace, so call-target resolution is capped and the
+          # analysis-quality notice from GitHub is expected until a bundle
+          # with Rust build support ships.
+          build-mode: none
+      - uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
+        with:
+          category: "/language:rust"

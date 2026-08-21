@@ -287,6 +287,7 @@ fn feature_flags_default_all_on_when_settings_absent() {
         ("api_keys", f.api_keys),
         ("ssh_tunnels", f.ssh_tunnels),
         ("recordings", f.recordings),
+        ("powershell_ssh", f.powershell_ssh),
     ] {
         assert!(v, "flag {label} must default on");
     }
@@ -300,6 +301,7 @@ fn feature_flags_flip_with_stored_toggles() {
         ("enable_api_keys".to_string(), "false".to_string()),
         ("enable_ssh_tunnels".to_string(), "false".to_string()),
         ("enable_recordings".to_string(), "false".to_string()),
+        ("enable_powershell_ssh".to_string(), "false".to_string()),
     ];
     let f = FeatureFlags::from_settings(&stored);
     assert!(!f.rdp);
@@ -307,6 +309,7 @@ fn feature_flags_flip_with_stored_toggles() {
     assert!(!f.api_keys);
     assert!(!f.ssh_tunnels);
     assert!(!f.recordings);
+    assert!(!f.powershell_ssh);
     // Untouched flags stay on.
     assert!(f.spice);
     assert!(f.proxmox);
@@ -519,48 +522,62 @@ async fn render_settings_page() -> String {
 }
 
 #[tokio::test]
-async fn settings_page_renders_five_section_tabs() {
+async fn settings_page_renders_four_section_tabs() {
     let html = render_settings_page().await;
-    assert!(html.contains("role=\"tablist\""), "tablist must render");
-    assert_eq!(html.matches("role=\"tab\"").count(), 5, "exactly five tabs");
-    for tab in ["Session", "Features", "Storage", "Security", "Updates"] {
-        assert!(
-            html.contains(&format!(">{tab}</button>")),
-            "tab {tab} must render"
+    // Two tablists since #160: the left rail (wide screens) and the tab
+    // bar (narrow screens), each with the same four sections (the Security
+    // tab moved to the dedicated page in #172).
+    assert_eq!(
+        html.matches("role=\"tablist\"").count(),
+        2,
+        "two tablists must render"
+    );
+    // Count the button classes: a JS querySelectorAll string also contains
+    // the literal `role="tab"`, so raw matches overcount by one.
+    let rail_tabs = html.matches("class=\"settings-rail-tab\"").count();
+    let bar_tabs = html.matches("class=\"settings-tab\"").count();
+    assert_eq!(rail_tabs + bar_tabs, 8, "eight tabs (rail + bar)");
+    for tab in ["Session", "Features", "Storage", "Updates"] {
+        assert_eq!(
+            html.matches(&format!(">{tab}</button>")).count(),
+            2,
+            "tab {tab} must render in both the rail and the bar"
         );
     }
-    // Exactly one tab is selected: the default Session tab. (The style
-    // block also contains `[aria-selected="true"]`, so assert the false
-    // count and the session tab markup directly.)
+    // Exactly one tab per tablist is selected: the default Session tab.
     assert_eq!(
         html.matches("aria-selected=\"false\"").count(),
-        4,
-        "the other four tabs must be unselected"
+        6,
+        "the other six tabs must be unselected"
     );
     assert!(
         html.contains("id=\"tab-session\" aria-controls=\"panel-session\" aria-selected=\"true\""),
-        "session tab must be the selected one"
+        "session tab must be the selected one in the bar"
+    );
+    assert!(
+        html.contains("id=\"rail-session\" aria-controls=\"panel-session\" aria-selected=\"true\""),
+        "session tab must be the selected one in the rail"
     );
 }
 
 #[tokio::test]
 async fn settings_page_defaults_to_session_panel_and_hides_the_rest() {
     let html = render_settings_page().await;
-    for panel in ["session", "features", "storage", "security", "updates"] {
+    for panel in ["session", "features", "storage", "updates"] {
         assert!(
             html.contains(&format!("id=\"panel-{panel}\"")),
             "panel {panel} must render"
         );
     }
-    // Only the Session panel is visible on load; the other four start hidden.
+    // Only the Session panel is visible on load; the other three start hidden.
     assert!(
         !html.contains("id=\"panel-session\" hidden"),
         "session panel must be visible by default"
     );
     assert_eq!(
         html.matches("tabindex=\"-1\" hidden").count(),
-        4,
-        "the four non-default panels must start hidden"
+        3,
+        "the three non-default panels must start hidden"
     );
 }
 
@@ -577,6 +594,7 @@ async fn settings_page_keeps_every_toggle_and_field() {
         "enable_proxmox",
         "enable_vmware",
         "enable_vdi",
+        "enable_powershell_ssh",
         "enable_file_transfer",
         "desktop_kiosk",
         "desktop_transfers",

@@ -212,6 +212,11 @@ async fn list_users_with_data() {
     let json = body_json(resp).await;
     let users = json.as_array().unwrap();
     assert_eq!(users.len(), 2);
+    // Every row carries its real auth source (persea#140): API-created
+    // users are database accounts, never the OIDC fallback.
+    for user in users {
+        assert_eq!(user["auth_source"].as_str(), Some("database"));
+    }
 }
 
 #[tokio::test]

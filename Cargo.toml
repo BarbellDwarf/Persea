@@ -27,6 +27,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Streaming
 futures-util = "0.3"
+# futures-executor's block_on drives a future without a tokio runtime
+# context on the thread, which the ldap3 sync client needs (it creates its
+# own runtime internally). Used by the login handlers and the LDAP tests.
+futures = "0.3"
 bytes = "1"
 multer = "3"
 
@@ -79,6 +83,9 @@ rcgen = "0.14"
 tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"
+# Pure-Rust X.509 parsing for the Security page's TLS certificate tab
+# (subject/issuer/expiry metadata from the PEM cert file).
+x509-parser = "0.18"
 
 # OIDC
 openidconnect = "4"
@@ -95,7 +102,7 @@ tower_governor = "0.8"
 base64 = "0.23.1"
 
 # HTTP client (Vault API)
-reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots", "cookies"], default-features = false }
 webpki-roots = "1"
 
 # SSH tunneling (jump host / bastion)

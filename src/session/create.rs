@@ -82,9 +82,19 @@ struct ProtocolDefaults {
     height: u32,
     dpi: u32,
     rdp_security: Option<String>,
+    /// Stored global NLA auth package default (`default_rdp_auth_pkg`);
+    /// `None` when unset, so the create path falls back to the `[rdp]`
+    /// config value, then NTLM.
+    rdp_auth_pkg: Option<String>,
     rdp_h264: bool,
     rdp_gfx: bool,
     rdp_drive: Option<bool>,
+    /// Auto-size the session to the browser window (persea#142). Resolved
+    /// from the per-protocol global default (`default_rdp_auto_size` /
+    /// `default_ssh_auto_size`); unset falls back to true, the behaviour
+    /// of the pre-feature client. The per-entry `protocol_config.auto_size`
+    /// override is applied on top of this in `create_session`.
+    auto_size: bool,
     vnc_color_depth: Option<u8>,
     vnc_disable_copy: bool,
     vnc_disable_paste: bool,
@@ -136,9 +146,16 @@ impl ProtocolDefaults {
             },
             rdp_security: stored_str("default_rdp_security")
                 .filter(|s| matches!(s.as_str(), "any" | "rdp" | "tls" | "nla")),
+            rdp_auth_pkg: stored_str("default_rdp_auth_pkg")
+                .filter(|s| matches!(s.as_str(), "ntlm" | "kerberos" | "negotiate")),
             rdp_h264: stored_bool("default_rdp_h264").unwrap_or(true),
             rdp_gfx: stored_bool("default_rdp_gfx").unwrap_or(true),
             rdp_drive: stored_bool("default_rdp_drive"),
+            auto_size: match session_type {
+                SessionType::Ssh => stored_bool("default_ssh_auto_size").unwrap_or(true),
+                SessionType::Rdp => stored_bool("default_rdp_auto_size").unwrap_or(true),
+                _ => true,
+            },
             vnc_color_depth: settings
                 .iter()
                 .find(|(k, _)| k == "default_vnc_color_depth")
@@ -304,6 +321,22 @@ impl SessionManager {
         let toggle = |key: &str| crate::settings_merge::toggle_enabled(&settings, key, true);
         check_session_type_enabled(&req.session_type, req.address_book_entry.as_deref(), toggle)?;
 
+        // PowerShell remoting entries are SSH sessions with a per-entry
+        // command (the PowerShell binary, default pwsh.exe). Resolve the
+        // entry's binary once so the lockdown gate and the guacd `command`
+        // arg both see it. Only SSH sessions with an address-book entry can
+        // be PowerShell sessions; everything else skips the lookup.
+        let powershell_binary = if req.session_type == SessionType::Ssh {
+            let db = self.db.clone();
+            let key = req.address_book_entry.clone();
+            tokio::task::spawn_blocking(move || entry_powershell_binary(&db, key.as_deref()))
+                .await
+                .unwrap_or(None)
+        } else {
+            None
+        };
+        powershell_gate(powershell_binary.as_deref(), toggle)?;
+
         // Effective per-protocol global defaults (admin Settings → Session
         // → Session defaults). Precedence: the request/entry value wins,
         // then the stored global default, then the code defaults inside
@@ -312,6 +345,32 @@ impl SessionManager {
         let defaults = ProtocolDefaults::from_settings(&req.session_type, &settings);
 
         let session_id = Uuid::new_v4();
+
+        // Auto-size flag (persea#142): the per-entry
+        // `protocol_config.auto_size` wins, then an explicit request value
+        // (ad-hoc API clients), then the per-protocol global default
+        // (`default_rdp_auto_size` / `default_ssh_auto_size`, which itself
+        // falls back to true), then true, the behaviour of the pre-feature
+        // client. Only rdp and ssh sessions are affected; the entry is read
+        // here because only its DB row carries the flag. The resolved value
+        // is surfaced to the client via SessionInfo.
+        let auto_size = if matches!(&req.session_type, SessionType::Ssh | SessionType::Rdp) {
+            let db = self.db.clone();
+            let key = req.address_book_entry.clone();
+            let entry_value =
+                tokio::task::spawn_blocking(move || entry_auto_size(&db, key.as_deref()))
+                    .await
+                    .unwrap_or(None);
+            resolve_auto_size(entry_value, req.auto_size, defaults.auto_size)
+        } else {
+            defaults.auto_size
+        };
+        tracing::debug!(
+            session_id = %session_id,
+            session_type = ?req.session_type,
+            auto_size,
+            "Resolved session auto-size flag"
+        );
         // V09: connection reason, trimmed and normalized before any of
         // `req`'s fields are moved into the session literal below.
         let reason = req
@@ -513,10 +572,11 @@ impl SessionManager {
                         .as_ref()
                         .map(|(_, _, c)| *c)
                         .unwrap_or(false),
-                    command: self
-                        .config
-                        .ssh_tmux_detach
-                        .then(|| TMUX_DETACH_WRAPPER.to_string()),
+                    command: powershell_binary.or_else(|| {
+                        self.config
+                            .ssh_tmux_detach
+                            .then(|| TMUX_DETACH_WRAPPER.to_string())
+                    }),
                 });
                 (
                     params, hostname, username, None, None, ssh_banner, None, None, None,
@@ -640,6 +700,7 @@ impl SessionManager {
                     disable_upload: !drive_cfg.allow_upload,
                     auth_pkg: super::resolve_rdp_auth_pkg(
                         rdp.and_then(|s| s.auth_pkg.as_deref()),
+                        defaults.rdp_auth_pkg.as_deref(),
                         &self.config,
                     ),
                     kdc_url: rdp.and_then(|s| s.kdc_url.clone()),
@@ -1507,6 +1568,7 @@ impl SessionManager {
             share_allowed,
             fullscreen_on_connect: req.fullscreen_on_connect.unwrap_or(false),
             autohide_side_tabs: req.autohide_side_tabs.unwrap_or(false),
+            auto_size,
             last_activity: std::sync::atomic::AtomicI64::new(Utc::now().timestamp()),
             source_ip: client_ip.clone(),
             user_id: Some(created_by),
@@ -1889,6 +1951,98 @@ async fn check_allowed_network(
     )))
 }
 
+/// Resolve the PowerShell binary for an address-book entry, if the entry is
+/// a PowerShell remoting entry. The binary is stored in the entry's
+/// `protocol_config` JSON (`powershell_binary`); the entry type is the
+/// `protocol` column. PowerShell entries without a stored binary fall back
+/// to the `pwsh.exe` default (the entry form's default). Returns `None` for
+/// non-PowerShell entries, missing entries, or any read failure — plain SSH
+/// sessions are unaffected.
+/// Reject PowerShell sessions when the feature toggle is off. The
+/// binary presence marks the entry as a PowerShell session; the toggle
+/// defaults to enabled, matching the other `enable_*` gates.
+fn powershell_gate(
+    powershell_binary: Option<&str>,
+    toggle: impl Fn(&str) -> bool,
+) -> Result<(), SessionError> {
+    if powershell_binary.is_some() && !toggle("enable_powershell_ssh") {
+        return Err(SessionError::ValidationError(
+            "PowerShell sessions are disabled by an administrator".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn entry_powershell_binary(
+    db: &Option<crate::db::Db>,
+    address_book_entry: Option<&str>,
+) -> Option<String> {
+    let db = db.as_ref()?;
+    let key = address_book_entry?;
+    // The key is `scope/folder/entry`; folder paths may themselves contain
+    // slashes (nested folders), so scope is up to the first slash and the
+    // entry is after the last one (mirrors the frontend's key parsing).
+    let first = key.find('/')?;
+    let last = key.rfind('/')?;
+    if last <= first {
+        return None;
+    }
+    let scope = &key[..first];
+    let folder = &key[first + 1..last];
+    let entry = &key[last + 1..];
+    let folder_rec = crate::db::get_ab_folder(db, scope, folder).ok()?;
+    let entry_rec = crate::db::get_ab_entry(db, folder_rec.id, entry).ok()?;
+    if entry_rec.protocol != "powershell" {
+        return None;
+    }
+    let config: serde_json::Value = serde_json::from_str(&entry_rec.protocol_config).ok()?;
+    Some(
+        config
+            .get("powershell_binary")
+            .and_then(|v| v.as_str())
+            .filter(|b| !b.is_empty())
+            .unwrap_or("pwsh.exe")
+            .to_string(),
+    )
+}
+
+/// Resolve the per-entry auto-size flag for an address-book entry, if the
+/// session is entry-derived. The flag lives in the entry's `protocol_config`
+/// JSON (`auto_size`); the entry type is the `protocol` column. Only rdp,
+/// ssh, and powershell (SSH-based) entries carry the flag, everything else
+/// returns `None` and the caller falls back to the global default.
+fn entry_auto_size(db: &Option<crate::db::Db>, address_book_entry: Option<&str>) -> Option<bool> {
+    let db = db.as_ref()?;
+    let key = address_book_entry?;
+    // The key is `scope/folder/entry`; folder paths may themselves contain
+    // slashes (nested folders), so scope is up to the first slash and the
+    // entry is after the last one (mirrors the frontend's key parsing).
+    let first = key.find('/')?;
+    let last = key.rfind('/')?;
+    if last <= first {
+        return None;
+    }
+    let scope = &key[..first];
+    let folder = &key[first + 1..last];
+    let entry = &key[last + 1..];
+    let folder_rec = crate::db::get_ab_folder(db, scope, folder).ok()?;
+    let entry_rec = crate::db::get_ab_entry(db, folder_rec.id, entry).ok()?;
+    if !matches!(entry_rec.protocol.as_str(), "rdp" | "ssh" | "powershell") {
+        return None;
+    }
+    let config: serde_json::Value = serde_json::from_str(&entry_rec.protocol_config).ok()?;
+    config.get("auto_size").and_then(|v| v.as_bool())
+}
+
+/// Resolve the session auto-size flag (persea#142) from its precedence
+/// chain: the per-entry `protocol_config.auto_size`, then an explicit
+/// request value (ad-hoc API clients), then the per-protocol global
+/// default, then true (the pre-feature behaviour). Pure so the chain is
+/// unit-testable without a manager or guacd.
+fn resolve_auto_size(entry_value: Option<bool>, request: Option<bool>, default: bool) -> bool {
+    entry_value.or(request).unwrap_or(default)
+}
+
 /// Which `enable_*` lockdown toggle gates a session type. `Vnc` and `Ssh`
 /// have no toggles (the settings page offers none) and are never blocked
 /// here — SSH is always allowed like VNC; `enable_ssh_tunnels` only gates
@@ -1960,40 +2114,68 @@ mod auth_pkg_tests {
     }
 
     #[test]
-    fn entry_value_wins_over_server_default() {
+    fn entry_value_wins_over_stored_default_and_server_default() {
         let c = cfg(Some("ntlm"));
         assert_eq!(
-            resolve_rdp_auth_pkg(Some("kerberos"), &c),
+            resolve_rdp_auth_pkg(Some("kerberos"), Some("negotiate"), &c),
             Some("kerberos".into())
         );
     }
 
     #[test]
-    fn empty_entry_value_falls_through_to_server_default() {
-        let c = cfg(Some("kerberos"));
-        assert_eq!(resolve_rdp_auth_pkg(Some(""), &c), Some("kerberos".into()));
+    fn empty_entry_value_falls_through_to_stored_default() {
+        let c = cfg(Some("ntlm"));
         assert_eq!(
-            resolve_rdp_auth_pkg(Some("   "), &c),
+            resolve_rdp_auth_pkg(Some(""), Some("kerberos"), &c),
+            Some("kerberos".into())
+        );
+        assert_eq!(
+            resolve_rdp_auth_pkg(Some("   "), Some("kerberos"), &c),
             Some("kerberos".into())
         );
     }
 
     #[test]
-    fn no_entry_no_config_defaults_to_ntlm() {
+    fn stored_default_wins_over_server_default() {
+        let c = cfg(Some("ntlm"));
+        assert_eq!(
+            resolve_rdp_auth_pkg(None, Some("kerberos"), &c),
+            Some("kerberos".into())
+        );
+    }
+
+    #[test]
+    fn empty_stored_default_falls_through_to_server_default() {
+        let c = cfg(Some("negotiate"));
+        assert_eq!(
+            resolve_rdp_auth_pkg(None, Some(""), &c),
+            Some("negotiate".into())
+        );
+        assert_eq!(
+            resolve_rdp_auth_pkg(None, Some("   "), &c),
+            Some("negotiate".into())
+        );
+    }
+
+    #[test]
+    fn no_entry_no_stored_no_config_defaults_to_ntlm() {
         let c = Config::default();
-        assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("ntlm".into()));
+        assert_eq!(resolve_rdp_auth_pkg(None, None, &c), Some("ntlm".into()));
     }
 
     #[test]
     fn empty_config_default_falls_through_to_ntlm() {
         let c = cfg(Some(""));
-        assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("ntlm".into()));
+        assert_eq!(resolve_rdp_auth_pkg(None, None, &c), Some("ntlm".into()));
     }
 
     #[test]
-    fn server_default_applies_when_entry_none() {
+    fn server_default_applies_when_entry_and_stored_none() {
         let c = cfg(Some("negotiate"));
-        assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("negotiate".into()));
+        assert_eq!(
+            resolve_rdp_auth_pkg(None, None, &c),
+            Some("negotiate".into())
+        );
     }
 }
 
@@ -2142,9 +2324,17 @@ mod tests {
         let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &[]);
         assert_eq!((d.width, d.height, d.dpi), (1920, 1080, 96));
         assert_eq!(d.rdp_security, None);
+        assert_eq!(
+            d.rdp_auth_pkg, None,
+            "unset auth package default stays None so the config fallback applies"
+        );
         assert!(d.rdp_h264, "H.264 must default on");
         assert!(d.rdp_gfx, "GFX must default on");
         assert_eq!(d.rdp_drive, None);
+        assert!(
+            d.auto_size,
+            "auto-size must default on (pre-feature behaviour)"
+        );
         assert_eq!(d.vnc_color_depth, None);
         assert!(!d.vnc_disable_copy);
         assert!(!d.vnc_disable_paste);
@@ -2157,11 +2347,14 @@ mod tests {
             ("default_rdp_height", "800"),
             ("default_rdp_dpi", "120"),
             ("default_rdp_security", "nla"),
+            ("default_rdp_auth_pkg", "kerberos"),
             ("default_rdp_h264", "false"),
             ("default_rdp_gfx", "false"),
             ("default_rdp_drive", "true"),
+            ("default_rdp_auto_size", "false"),
             ("default_ssh_width", "200"),
             ("default_ssh_height", "60"),
+            ("default_ssh_auto_size", "true"),
             ("default_vnc_color_depth", "16"),
             ("default_vnc_disable_copy", "true"),
             ("default_vnc_disable_paste", "true"),
@@ -2169,9 +2362,14 @@ mod tests {
         let rdp = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
         assert_eq!((rdp.width, rdp.height, rdp.dpi), (1280, 800, 120));
         assert_eq!(rdp.rdp_security.as_deref(), Some("nla"));
+        assert_eq!(rdp.rdp_auth_pkg.as_deref(), Some("kerberos"));
         assert!(!rdp.rdp_h264);
         assert!(!rdp.rdp_gfx);
         assert_eq!(rdp.rdp_drive, Some(true));
+        assert!(
+            !rdp.auto_size,
+            "the RDP auto-size default must come from default_rdp_auto_size"
+        );
         assert_eq!(
             rdp.vnc_color_depth,
             Some(16),
@@ -2188,6 +2386,10 @@ mod tests {
         assert!(
             !ssh.rdp_h264,
             "the RDP H.264 default still populates the struct; only the RDP branch reads it"
+        );
+        assert!(
+            ssh.auto_size,
+            "SSH auto-size must come from default_ssh_auto_size, not default_rdp_auto_size"
         );
 
         let vnc = ProtocolDefaults::from_settings(&SessionType::Vnc, &settings);
@@ -2208,11 +2410,13 @@ mod tests {
             SessionType::Spice,
             SessionType::Vdi,
             SessionType::Proxmox,
+            SessionType::Vnc,
         ] {
             let d = ProtocolDefaults::from_settings(&st, &[]);
             assert_eq!((d.width, d.height, d.dpi), (1920, 1080, 96));
             assert!(d.rdp_h264);
             assert!(d.rdp_gfx);
+            assert!(d.auto_size, "non-rdp/ssh types keep auto-size on");
         }
     }
 
@@ -2222,15 +2426,34 @@ mod tests {
             ("default_rdp_width", "wide"),
             ("default_rdp_h264", "maybe"),
             ("default_rdp_security", ""),
+            ("default_rdp_auth_pkg", "pam"),
             ("default_rdp_drive", "yes"),
+            ("default_rdp_auto_size", "maybe"),
             ("default_vnc_color_depth", "deep"),
         ]);
         let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
         assert_eq!(d.width, 1920);
         assert!(d.rdp_h264);
         assert_eq!(d.rdp_security, None);
+        assert_eq!(
+            d.rdp_auth_pkg, None,
+            "an unknown auth package must not reach guacd"
+        );
         assert_eq!(d.rdp_drive, None);
+        assert!(d.auto_size, "garbage auto-size falls back to true");
         assert_eq!(d.vnc_color_depth, None);
+    }
+
+    #[test]
+    fn protocol_defaults_unknown_auth_package_falls_back() {
+        // A manually-edited DB value outside the accepted packages must not
+        // reach guacd: fall back to the config value, then NTLM.
+        let settings = stored(&[("default_rdp_auth_pkg", "pam")]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.rdp_auth_pkg, None);
+        let settings = stored(&[("default_rdp_auth_pkg", "negotiate")]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.rdp_auth_pkg.as_deref(), Some("negotiate"));
     }
 
     #[test]
@@ -2243,6 +2466,95 @@ mod tests {
         let settings = stored(&[("default_rdp_security", "tls")]);
         let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
         assert_eq!(d.rdp_security.as_deref(), Some("tls"));
+    }
+
+    #[test]
+    fn entry_auto_size_reads_entry_protocol_config() {
+        use std::path::Path;
+        let db = crate::db::init_db(Path::new(":memory:")).expect("test db");
+        let folder_id = crate::db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+        let mut cfg = serde_json::Map::new();
+        cfg.insert("auto_size".into(), serde_json::json!(false));
+        let config = serde_json::to_string(&serde_json::Value::Object(cfg)).unwrap();
+        crate::db::create_ab_entry(
+            &db,
+            folder_id,
+            "win1",
+            "Win 1",
+            "rdp",
+            "10.0.0.5",
+            Some(3389),
+            "user",
+            &config,
+            "",
+        )
+        .unwrap();
+
+        let some_db = Some(db);
+        // The stored per-entry flag wins over the global default.
+        assert_eq!(
+            entry_auto_size(&some_db, Some("shared/IT/win1")),
+            Some(false)
+        );
+        // Missing entries and key-less calls return None.
+        assert_eq!(entry_auto_size(&some_db, Some("shared/IT/nope")), None);
+        assert_eq!(entry_auto_size(&some_db, None), None);
+        assert_eq!(entry_auto_size(&None, Some("shared/IT/win1")), None);
+        // Non-rdp/ssh protocols never carry the flag.
+        crate::db::create_ab_entry(
+            some_db.as_ref().unwrap(),
+            folder_id,
+            "web1",
+            "Web 1",
+            "web",
+            "10.0.0.6",
+            Some(80),
+            "user",
+            &config,
+            "",
+        )
+        .unwrap();
+        assert_eq!(entry_auto_size(&some_db, Some("shared/IT/web1")), None);
+        // An entry without an auto_size key returns None (global default).
+        crate::db::create_ab_entry(
+            some_db.as_ref().unwrap(),
+            folder_id,
+            "ssh1",
+            "Ssh 1",
+            "ssh",
+            "10.0.0.7",
+            Some(22),
+            "user",
+            "{}",
+            "",
+        )
+        .unwrap();
+        assert_eq!(entry_auto_size(&some_db, Some("shared/IT/ssh1")), None);
+    }
+
+    #[test]
+    fn resolve_auto_size_entry_flag_wins_over_request() {
+        // The per-entry flag is the most specific input: a stored false
+        // must not be overridden by a client-supplied true (the entry was
+        // bulk-applied by an admin and is authoritative).
+        assert!(!resolve_auto_size(Some(false), Some(true), true));
+        assert!(resolve_auto_size(Some(true), Some(false), false));
+    }
+
+    #[test]
+    fn resolve_auto_size_request_fills_entries_without_a_flag() {
+        // No entry flag (ad-hoc session, or an entry never touched by the
+        // bulk apply): the explicit request value applies.
+        assert!(!resolve_auto_size(None, Some(false), true));
+        assert!(resolve_auto_size(None, Some(true), false));
+    }
+
+    #[test]
+    fn resolve_auto_size_global_default_then_true() {
+        // Nothing explicit: the per-protocol global default applies, and an
+        // unset global default falls back to true (pre-feature behaviour).
+        assert!(!resolve_auto_size(None, None, false));
+        assert!(resolve_auto_size(None, None, true));
     }
 
     #[tokio::test]
@@ -2359,6 +2671,25 @@ mod tests {
         let creds = parse_autofill_credentials(Some(json), None, None).unwrap();
         assert_eq!(creds.len(), 1);
         assert_eq!(creds[0].0, "https://ok.com");
+    }
+
+    // ── PowerShell feature gate ──
+
+    #[test]
+    fn powershell_gate_blocks_when_toggle_off() {
+        let err = powershell_gate(Some("pwsh.exe"), |k| k != "enable_powershell_ssh");
+        assert!(matches!(err, Err(SessionError::ValidationError(_))));
+    }
+
+    #[test]
+    fn powershell_gate_allows_when_toggle_on_or_unset() {
+        assert!(powershell_gate(Some("pwsh.exe"), |_| true).is_ok());
+        assert!(powershell_gate(Some("pwsh.exe"), |_| false).is_err());
+    }
+
+    #[test]
+    fn powershell_gate_ignores_plain_ssh() {
+        assert!(powershell_gate(None, |_| false).is_ok());
     }
 
     // ── Protocol lockdown toggles ──
@@ -2479,6 +2810,22 @@ mod tests {
         );
     }
 
+    // ── PowerShell remoting entry resolution ──
+
+    #[test]
+    fn powershell_entry_key_parses_scope_folder_entry() {
+        // No DB: the lookup must fail soft (None) rather than error, and the
+        // key parsing must handle nested folder paths (folder = everything
+        // between the first and last slash).
+        assert_eq!(entry_powershell_binary(&None, None), None);
+        assert_eq!(
+            entry_powershell_binary(&None, Some("shared/infra/web/entry")),
+            None
+        );
+        assert_eq!(entry_powershell_binary(&None, Some("shared/folder")), None);
+        assert_eq!(entry_powershell_binary(&None, Some("vsphere/vm-01")), None);
+    }
+
     // ── VDI container username sanitization ──
 
     #[test]
@@ -2575,6 +2922,7 @@ mod tests {
             share_allowed: true,
             fullscreen_on_connect: false,
             autohide_side_tabs: false,
+            auto_size: true,
             last_activity: std::sync::atomic::AtomicI64::new(chrono::Utc::now().timestamp()),
             source_ip: None,
             user_id: Some("alice".into()),

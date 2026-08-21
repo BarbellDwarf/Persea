@@ -1,0 +1,30 @@
+# Local LDAP test harness for tests/ldap_integration.rs (persea#154).
+#
+# Start it with:
+#   docker compose -f docker-compose.ldap.yml up -d --wait
+# then seed the test data (the osixia bootstrap cannot take bind mounts,
+# so the seed is copied in after startup, mirroring the CI job):
+#   docker cp tests/fixtures/ldap-seed.ldif persea-ldap-test:/tmp/ldap-seed.ldif
+#   docker exec persea-ldap-test ldapadd -x -H ldap://localhost:389 \
+#       -D cn=admin,dc=example,dc=com -w admin -f /tmp/ldap-seed.ldif
+# then run the integration tests against it:
+#   TEST_LDAP_URL=ldap://127.0.0.1:3389 cargo test --test ldap_integration
+services:
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: persea-ldap-test
+    environment:
+      LDAP_ORGANISATION: Example
+      LDAP_DOMAIN: example.com
+      LDAP_ADMIN_PASSWORD: admin
+    ports:
+      - "3389:389"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "ldapsearch -x -H ldap://localhost:389 -b dc=example,dc=com -D cn=admin,dc=example,dc=com -w admin '(objectClass=*)'",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20

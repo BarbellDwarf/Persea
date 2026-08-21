@@ -80,7 +80,8 @@ For Active Directory, the search filter is usually `(sAMAccountName={})`.
 **Groups.** When `group_search_base` and `group_search_filter` are both set,
 persea resolves the user's group memberships. Groups are used for two things:
 folder access (see [Roles and Access Control](roles-and-access-control.md))
-and automatic role assignment (group-to-role mappings on the Admin page).
+and automatic role assignment (group-to-role mappings on the Admin → Groups
+page).
 
 ### Verify
 
@@ -286,7 +287,7 @@ sudo systemctl restart persea
 
 **6. (Optional) Group-to-role mappings:** create groups in Authentik (e.g.
 `persea-admins`, `persea-operators`), assign users, then map the groups to
-roles on the persea Admin page. See
+roles on the Admin → Groups page. See
 [Roles and Access Control](roles-and-access-control.md).
 
 ### Microsoft Entra ID (Azure AD) setup guide
@@ -341,8 +342,8 @@ Use the `v2.0` issuer URL: the v1 endpoint won't return the claims persea
 expects.
 
 **5. (Optional) Group-to-role mappings:** after a first successful login your
-groups appear in the **seen groups** list on the Admin page; map them to roles
-from there.
+groups appear in the **seen groups** list on the Admin → Groups page; map
+them to roles from there.
 
 ### Outbound HTTP proxy (egress)
 
@@ -1129,6 +1130,79 @@ xfreerdp3 /v:server.example.com /u:user@EXAMPLE.COM /d:EXAMPLE.COM \
 | "Clock skew too great" | Time off by > 5 minutes | `timedatectl set-ntp true` |
 | Kerberos fails, no NTLM fallback | `kerberos` auth package disables NTLM | Fix Kerberos, or use default (negotiate) for fallback |
 | "Cannot resolve host"/SPN failure | Hostname is an IP or short name | Use the FQDN matching the AD computer object |
+
+---
+
+## PowerShell remoting over SSH
+
+**What it is.** A connection entry type that opens a PowerShell session on a
+Windows host over SSH. persea connects to the host's OpenSSH server and
+launches the configured PowerShell binary (default `pwsh.exe`), giving the
+user an interactive PowerShell prompt in the terminal client.
+
+**When to use it.** You manage Windows servers from the command line and the
+hosts run Windows OpenSSH. WinRM-based remoting is on the roadmap (persea
+v1.3.0, tracked in persea-guacamole-server#16); this entry type is the SSH
+transport only.
+
+### Windows host setup
+
+**1. Install OpenSSH Server** on the Windows host (PowerShell as
+Administrator):
+
+```powershell
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Start-Service sshd
+Set-Service -Name sshd -StartupType Automatic
+```
+
+**2. Make sure the firewall allows port 22:**
+
+```powershell
+New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' `
+  -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+```
+
+**3. Set the default shell to PowerShell** (optional but recommended, so
+plain SSH logins also land in PowerShell):
+
+```powershell
+New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell `
+  -Value "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" `
+  -PropertyType String -Force
+```
+
+The entry type launches the configured binary explicitly, so this step is
+only needed for plain SSH sessions to the host.
+
+### Using the entry type in persea
+
+1. Open **Connections** → select a folder → **+ Add Entry**.
+2. Choose **PowerShell (SSH)** as the type. Hostname and port (22) are
+   filled in like an SSH entry; the **PowerShell binary** field defaults to
+   `pwsh.exe` and can point at any executable on the host (for example
+   `C:\Program Files\PowerShell\7\pwsh.exe`).
+3. Enter the Windows account credentials (or leave blank to use your preset
+   credentials / be asked at connect time).
+4. **Connect** opens a terminal session: persea connects over SSH and runs
+   the configured binary as the session command.
+
+The entry behaves like an SSH entry for everything else: private keys,
+jump hosts, SFTP file transfer, clipboard controls, and typescript
+recording all work the same way.
+
+### Feature toggle
+
+PowerShell (SSH) entries are gated by the **PowerShell (SSH)** toggle under
+**Settings → Features** (setting key `enable_powershell_ssh`, default on).
+When disabled, the type disappears from the entry form, and both entry
+creation and session creation reject the type.
+
+### WinRM roadmap
+
+WinRM-based PowerShell remoting (the `winrm` transport) is planned for
+persea v1.3.0. It needs a guacd patch (persea-guacamole-server#16) to speak
+the WinRM protocol; this entry type covers the SSH transport until then.
 
 ---
 

@@ -3,264 +3,193 @@
 {% block title %}{{ site_title }} — Documentation{% endblock %}
 
 {% block content %}
-<div class="flex gap-8 max-w-7xl mx-auto">
-    <!-- Table of Contents Sidebar -->
-    <aside class="w-56 shrink-0 hidden lg:block">
-        <div class="sticky top-6">
-            <h3 class="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider mb-3">On this page</h3>
-            <nav id="toc" class="space-y-1" role="navigation" aria-label="Table of contents">
-                <a href="#getting-started" class="toc-link active">Getting Started</a>
-                <a href="#configuration" class="toc-link">Configuration</a>
-                <a href="#auth-methods" class="toc-link">Auth Methods</a>
-                <a href="#api-reference" class="toc-link">API Reference</a>
+<div class="flex gap-8">
+    <!-- Mobile contents drawer: toggle button (visible below lg), backdrop,
+         and the panel, which doubles as the desktop sidebar at lg+. -->
+    <button type="button" id="toc-toggle" class="toc-toggle" aria-controls="toc-panel" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        Contents
+    </button>
+    <div id="toc-backdrop" class="toc-backdrop" aria-hidden="true"></div>
+    <aside id="toc-panel" class="toc-panel" aria-label="Documentation">
+        <div class="toc-panel-inner">
+            <h3 class="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wider mb-3">Documentation</h3>
+            <nav id="toc" class="space-y-1" role="navigation" aria-label="Documentation sections">
+                {% for doc in docs %}
+                <details class="toc-group">
+                    <summary class="toc-summary">
+                        <a href="#{{ doc.slug }}" class="toc-link toc-doc-link">{{ doc.title }}</a>
+                        <span class="toc-chevron" aria-hidden="true"></span>
+                    </summary>
+                    {% if doc.headings %}
+                    <ul class="toc-sub-list">
+                        {% for h in doc.headings %}
+                        <li><a href="#{{ h.slug }}" class="toc-link toc-sub-link">{{ h.text }}</a></li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </details>
+                {% endfor %}
             </nav>
         </div>
     </aside>
 
     <!-- Main Content -->
-    <div class="flex-1 min-w-0 prose prose-invert max-w-none">
-        <!-- Getting Started -->
-        <section id="getting-started" class="mb-12">
-            <h1 class="text-2xl font-bold text-[var(--text-primary)] mb-4">Getting Started</h1>
-            <p class="text-[var(--text-muted)] mb-4">Persea is a lightweight Rust replacement for the Apache Guacamole Java webapp. It proxies the Guacamole protocol over WebSockets between web browsers and guacd.</p>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Quick Start</h2>
-            <div class="card mb-4">
-                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code># Clone and build
-git clone https://github.com/your-org/persea.git
-cd persea
-cargo build --release
-
-# Run with config
-./target/release/persea --config config.toml serve</code></pre>
-            </div>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Requirements</h2>
-            <ul class="text-[var(--text-muted)] space-y-2 text-sm">
-                <li>Rust 1.75+ (for building)</li>
-                <li>guacd (Apache guacamole-server) running on port 4822</li>
-                <li>SQLite database (auto-created)</li>
-                <li>Optional: Vault/OpenBao for connection storage</li>
-                <li>Optional: OIDC provider for SSO authentication</li>
-            </ul>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Docker</h2>
-            <div class="card">
-                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>docker build -t persea .
-docker run -p 8089:8089 persea</code></pre>
-            </div>
+    <div class="flex-1 min-w-0 max-w-none">
+        {% for doc in docs %}
+        <section id="{{ doc.slug }}" class="docs-content mb-12">
+            {{ doc.html | safe }}
         </section>
-
-        <!-- Configuration -->
-        <section id="configuration" class="mb-12">
-            <h1 class="text-2xl font-bold text-[var(--text-primary)] mb-4">Configuration</h1>
-            <p class="text-[var(--text-muted)] mb-4">Persea uses a TOML configuration file. Key settings:</p>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Core Settings</h2>
-            <div class="card mb-4">
-                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[server]
-listen_addr = "0.0.0.0:8089"
-guacd_addr = "127.0.0.1:4822"
-
-[database]
-db_path = "/opt/persea/data/persea.db"
-
-[session]
-max_duration_secs = 14400   # 4 hours
-cleanup_delay_secs = 60
-
-[recording]
-path = "/opt/persea/recordings"
-max_disk_percent = 80
-max_recordings = 1000</code></pre>
-            </div>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">TLS</h2>
-            <div class="card mb-4">
-                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[tls]
-cert_path = "/etc/persea/cert.pem"
-key_path = "/etc/persea/key.pem"
-guacd_cert_path = "/etc/guacd/ca.pem"  # Optional</code></pre>
-            </div>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Vault Integration</h2>
-            <div class="card mb-4">
-                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[vault]
-addr = "https://vault.example.com:8200"
-mount = "secret"
-base_path = "persea"
-role_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-# VAULT_SECRET_ID env var provides the secret ID</code></pre>
-            </div>
-
-            <p class="text-[var(--text-muted)] text-sm">For multi-Vault DR deployments, see <code>[vault_shared]</code> and <code>[vault_local]</code> sections in the full config reference.</p>
-        </section>
-
-        <!-- Auth Methods -->
-        <section id="auth-methods" class="mb-12">
-            <h1 class="text-2xl font-bold text-[var(--text-primary)] mb-4">Authentication Methods</h1>
-            <p class="text-[var(--text-muted)] mb-4">Persea supports multiple authentication backends.</p>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">OIDC (OpenID Connect)</h2>
-            <div class="card mb-4">
-                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[oidc]
-issuer_url = "https://auth.example.com"
-client_id = "persea"
-client_secret = "..."
-redirect_uri = "https://persea.example.com/auth/callback"
-groups_claim = "groups"</code></pre>
-            </div>
-            <p class="text-[var(--text-muted)] text-sm mb-4">OIDC provides SSO with group-based role mapping via <code>[admin.group_mappings]</code>.</p>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Database (Password)</h2>
-            <p class="text-[var(--text-muted)] text-sm mb-4">Local password authentication. Users are managed via the admin UI or CLI commands.</p>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">LDAP / RADIUS</h2>
-            <p class="text-[var(--text-muted)] text-sm mb-4">External directory authentication. Configured via auth provider chain in <code>[auth]</code> section.</p>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">API Keys</h2>
-            <p class="text-[var(--text-muted)] text-sm mb-4">API key authentication for programmatic access. Create via CLI: <code>persea add-admin --name mykey</code>.</p>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">TOTP (Two-Factor)</h2>
-            <p class="text-[var(--text-muted)] text-sm">Optional TOTP 2FA. Users can enroll from the account settings page. Configure enforcement in <code>[totp]</code>:</p>
-            <div class="card mt-3">
-                <pre class="text-sm text-[var(--text-secondary)] font-mono overflow-x-auto"><code>[totp]
-enabled = true
-issuer = "persea"
-enforcement = "All"   # Off | AdminsOnly | All</code></pre>
-            </div>
-        </section>
-
-        <!-- API Reference -->
-        <section id="api-reference" class="mb-12">
-            <h1 class="text-2xl font-bold text-[var(--text-primary)] mb-4">API Reference</h1>
-            <p class="text-[var(--text-muted)] mb-4">All API endpoints require authentication unless noted. Responses are JSON.</p>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Sessions</h2>
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-[var(--border)] text-left">
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
-                        </tr>
-                    </thead>
-                    <tbody class="text-[var(--text-secondary)]">
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/sessions</td><td class="px-3 py-2">Create a new session</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/sessions</td><td class="px-3 py-2">List active sessions</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/sessions/{id}</td><td class="px-3 py-2">Get session details</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-red-400">DELETE</code></td><td class="px-3 py-2">/api/sessions/{id}</td><td class="px-3 py-2">Terminate session</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-amber-400">PUT</code></td><td class="px-3 py-2">/api/sessions/{id}/thumbnail</td><td class="px-3 py-2">Upload session thumbnail</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/sessions/{id}/thumbnail</td><td class="px-3 py-2">Get session thumbnail</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Address Book</h2>
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-[var(--border)] text-left">
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
-                        </tr>
-                    </thead>
-                    <tbody class="text-[var(--text-secondary)]">
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/addressbook/folders</td><td class="px-3 py-2">List all folders</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/addressbook/folders</td><td class="px-3 py-2">Create folder</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/addressbook/folders/{scope}/{folder}/entries</td><td class="px-3 py-2">List entries in folder</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/addressbook/folders/{scope}/{folder}/entries</td><td class="px-3 py-2">Create entry</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect</td><td class="px-3 py-2">Connect to entry</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">Recordings</h2>
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-[var(--border)] text-left">
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
-                        </tr>
-                    </thead>
-                    <tbody class="text-[var(--text-secondary)]">
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/recordings</td><td class="px-3 py-2">List recordings</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/recordings/{name}</td><td class="px-3 py-2">Download recording</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-red-400">DELETE</code></td><td class="px-3 py-2">/api/recordings/{name}</td><td class="px-3 py-2">Delete recording</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">User Tokens (Self-Service)</h2>
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-[var(--border)] text-left">
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
-                        </tr>
-                    </thead>
-                    <tbody class="text-[var(--text-secondary)]">
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/me/tokens</td><td class="px-3 py-2">List your tokens</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-emerald-400">POST</code></td><td class="px-3 py-2">/api/me/tokens</td><td class="px-3 py-2">Create a new token</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-red-400">DELETE</code></td><td class="px-3 py-2">/api/me/tokens/{id}</td><td class="px-3 py-2">Revoke a token</td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <h2 class="text-lg font-semibold text-[var(--text-primary)] mt-6 mb-3">System</h2>
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="border-b border-[var(--border)] text-left">
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Method</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Path</th>
-                            <th class="px-3 py-2 text-[var(--text-muted)] font-medium">Description</th>
-                        </tr>
-                    </thead>
-                    <tbody class="text-[var(--text-secondary)]">
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/health</td><td class="px-3 py-2">Health check (deep when authenticated)</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/system/status</td><td class="px-3 py-2">System status (admin only)</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/api/auth/status</td><td class="px-3 py-2">Auth status check</td></tr>
-                        <tr class="border-b border-[var(--border)]/50"><td class="px-3 py-2"><code class="text-blue-400">GET</code></td><td class="px-3 py-2">/metrics</td><td class="px-3 py-2">Prometheus metrics</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
+        {% endfor %}
     </div>
 </div>
 
 <style>
-    /* Prose-like styling for docs sections */
-    section h1 { scroll-margin-top: 2rem; }
-    section h2 { scroll-margin-top: 2rem; }
+    /* Markdown-rendered documentation content */
+    .docs-content h1,
+    .docs-content h2,
+    .docs-content h3,
+    .docs-content h4 {
+        scroll-margin-top: 2rem;
+        color: var(--text-primary);
+        font-weight: 600;
+        line-height: 1.3;
+    }
+    .docs-content h1 { font-size: 1.5rem; margin: 0 0 1rem; }
+    .docs-content h2 { font-size: 1.125rem; margin: 1.5rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+    .docs-content h3 { font-size: 1rem; margin: 1.25rem 0 0.5rem; }
+    .docs-content h4 { font-size: 0.9rem; margin: 1rem 0 0.5rem; }
+    .docs-content p { color: var(--text-secondary); margin: 0 0 1rem; line-height: 1.6; }
+    .docs-content a { color: var(--accent); text-decoration: none; }
+    .docs-content a:hover { text-decoration: underline; }
+    .docs-content ul,
+    .docs-content ol { color: var(--text-secondary); margin: 0 0 1rem; padding-left: 1.5rem; line-height: 1.6; }
+    .docs-content li { margin: 0.25rem 0; }
+    .docs-content li > ul,
+    .docs-content li > ol { margin-bottom: 0; }
+    .docs-content strong { color: var(--text-primary); }
+    .docs-content code {
+        font-family: var(--font-mono);
+        font-size: 0.85em;
+        background: var(--bg-input);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 0.1em 0.35em;
+        color: var(--text-primary);
+    }
+    .docs-content pre {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px;
+        margin: 0 0 1rem;
+        overflow-x: auto;
+    }
+    .docs-content pre code {
+        background: none;
+        border: none;
+        padding: 0;
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        line-height: 1.6;
+    }
+    .docs-content table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 0 0 1rem;
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+    }
+    .docs-content th {
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-muted);
+        font-weight: 500;
+    }
+    .docs-content td {
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--border);
+    }
+    .docs-content tr:last-child td { border-bottom: none; }
+    .docs-content blockquote {
+        margin: 0 0 1rem;
+        padding: 0.5rem 1rem;
+        border-left: 3px solid var(--accent);
+        background: var(--bg-card);
+        border-radius: 0 8px 8px 0;
+        color: var(--text-secondary);
+    }
+    .docs-content blockquote p { margin-bottom: 0; }
+    .docs-content img { max-width: 100%; height: auto; border-radius: 8px; margin: 0 0 1rem; }
+    .docs-content hr { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
 </style>
 
 <script nonce="{{ csp_nonce }}">
     (function() {
-        // TOC active state on scroll
-        var sections = ['getting-started', 'configuration', 'auth-methods', 'api-reference'];
+        var panel = document.getElementById('toc-panel');
+        var toggle = document.getElementById('toc-toggle');
+        var backdrop = document.getElementById('toc-backdrop');
+        var open = false;
+
+        function isDesktop() { return window.innerWidth >= 1024; }
+
+        function setDrawer(show) {
+            open = show;
+            panel.classList.toggle('open', show);
+            backdrop.classList.toggle('visible', show);
+            if (toggle) toggle.setAttribute('aria-expanded', show ? 'true' : 'false');
+            document.body.style.overflow = show ? 'hidden' : '';
+            if (isDesktop()) {
+                panel.removeAttribute('aria-hidden');
+            } else {
+                panel.setAttribute('aria-hidden', show ? 'false' : 'true');
+            }
+        }
+
+        if (toggle) {
+            toggle.addEventListener('click', function() { setDrawer(!open); });
+        }
+        if (backdrop) {
+            backdrop.addEventListener('click', function() { setDrawer(false); });
+        }
+
+        // TOC active state on scroll: highlights the doc and heading link
+        // for the deepest section currently in view, and expands the doc
+        // group that contains it.
+        var links = Array.prototype.slice.call(document.querySelectorAll('#toc .toc-link'));
+        var targets = links.map(function(link) {
+            return { link: link, id: link.getAttribute('href').slice(1) };
+        });
         function updateToc() {
             var scrollY = window.scrollY + 100;
-            var active = sections[0];
-            for (var i = sections.length - 1; i >= 0; i--) {
-                var el = document.getElementById(sections[i]);
+            var activeId = targets.length ? targets[0].id : null;
+            for (var i = targets.length - 1; i >= 0; i--) {
+                var el = document.getElementById(targets[i].id);
                 if (el && el.offsetTop <= scrollY) {
-                    active = sections[i];
+                    activeId = targets[i].id;
                     break;
                 }
             }
-            document.querySelectorAll('.toc-link').forEach(function(link) {
-                link.classList.toggle('active', link.getAttribute('href') === '#' + active);
+            var activeGroup = null;
+            targets.forEach(function(t) {
+                var isActive = t.id === activeId;
+                t.link.classList.toggle('active', isActive);
+                if (isActive) { activeGroup = t.link.closest('.toc-group'); }
             });
+            if (activeGroup && !activeGroup.open) { activeGroup.open = true; }
         }
-        window.addEventListener('scroll', updateToc);
+        window.addEventListener('scroll', updateToc, { passive: true });
+        window.addEventListener('resize', function() {
+            if (isDesktop()) { setDrawer(false); }
+        });
+        setDrawer(false);
         updateToc();
+
+        // Close the mobile drawer once a nav link is chosen.
+        document.getElementById('toc').addEventListener('click', function(evt) {
+            if (evt.target.closest('a')) { setDrawer(false); }
+        });
     })();
 </script>
 {% endblock %}
