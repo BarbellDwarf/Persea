@@ -213,6 +213,40 @@ async fn resolve_user_for_subject(
     }
 }
 
+/// Persist the auth chain's resolved group memberships on the user record
+/// (`users.oidc_groups`), mirroring the OIDC callback's upsert so the
+/// session identity and every later ACL lookup carry the groups. The role
+/// argument only applies on INSERT (the ON CONFLICT clause never touches
+/// role), so passing the user's current role cannot override an admin-set
+/// one. Empty groups skip the write entirely: a login without claims must
+/// not clobber memberships recorded by a previous login. A failed write is
+/// logged, never fatal: the session still works and the groups are
+/// re-recorded on the next login.
+async fn record_user_groups(database: &Db, user: &db::User, groups: &[String]) {
+    if groups.is_empty() {
+        return;
+    }
+    let db_upsert = database.clone();
+    let email_upsert = user.email.clone();
+    let name_upsert = user.name.clone();
+    let subject_upsert = user.oidc_subject.clone();
+    let role_upsert = user.role.clone();
+    let groups_upsert = groups.to_vec();
+    let _ = tokio::task::spawn_blocking(move || {
+        if let Err(e) = db::upsert_user(
+            &db_upsert,
+            &email_upsert,
+            &name_upsert,
+            subject_upsert.as_deref(),
+            &role_upsert,
+            &groups_upsert,
+        ) {
+            tracing::warn!(error = %e, "failed to record group memberships on user record");
+        }
+    })
+    .await;
+}
+
 /// Query parameters for the login page.
 #[derive(serde::Deserialize)]
 pub struct LoginQueryParams {
@@ -430,6 +464,10 @@ pub async fn login_submit(
                 return Redirect::to("/?error=user_lookup_failed").into_response();
             };
 
+            // Record the resolved memberships before the session is minted
+            // so the session identity and all later lookups carry them.
+            record_user_groups(&database, &user, &groups).await;
+
             if user.disabled {
                 return Redirect::to("/?error=account_disabled").into_response();
             }
@@ -566,6 +604,51 @@ pub async fn login_submit(
                                     );
                                 })
                                 .await;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Transient session credential retention (persea#245): with
+            // [auth] forward_session_credentials, retain this login's
+            // password in memory for THIS session — encrypted with the
+            // storage key, keyed to the session token hash, TTL-bound to
+            // the session lifetime — so the connect flow can try it for
+            // credential-less entries before prompting. Only instances
+            // whose chain includes the password-bearing providers
+            // (ldap/database) retain: the providers that can succeed on
+            // this password form are exactly the ones that validate a
+            // password, and OIDC/SAML never reach this handler with one in
+            // scope. The ciphertext is never logged, never written to the
+            // database, and never returned by any API; the entry dies with
+            // the session (logout, expiry, revocation).
+            if state
+                .config()
+                .auth
+                .as_ref()
+                .map(|a| a.forward_session_credentials)
+                .unwrap_or(false)
+                && !form.password.is_empty()
+            {
+                let methods = state
+                    .config()
+                    .auth
+                    .as_ref()
+                    .map(|a| a.methods.clone())
+                    .unwrap_or_default();
+                if methods.iter().any(|m| m == "ldap" || m == "database") {
+                    let key_hex = state.config().storage_encryption_key().unwrap_or_default();
+                    if !key_hex.is_empty() {
+                        if let Ok(key) = crate::crypto::EncryptionKey::from_hex(&key_hex) {
+                            if let Ok(enc) = crate::crypto::encrypt_value(&key, &form.password) {
+                                state.store_session_credentials(
+                                    &session_token,
+                                    user.id,
+                                    &form.username,
+                                    enc,
+                                    ttl_secs,
+                                );
                             }
                         }
                     }
@@ -1228,6 +1311,10 @@ pub async fn saml_acs(
                 return Redirect::to("/?error=user_lookup_failed").into_response();
             };
 
+            // Record the resolved memberships before the session is minted
+            // so the session identity and all later lookups carry them.
+            record_user_groups(&database, &user, &groups).await;
+
             if user.disabled {
                 return Redirect::to("/?error=account_disabled").into_response();
             }
@@ -1464,21 +1551,30 @@ mod tests {
     /// Router for the login handlers, mirroring the auth-pages wiring in
     /// main.rs (minus CSRF and rate limiting).
     fn login_router(db: Db) -> axum::Router {
+        login_router_with_manager(db, crate::config::Config::default()).0
+    }
+
+    /// Like [`login_router`], but with a caller-supplied config and the
+    /// manager returned so tests can inspect the session-credential store
+    /// (persea#245) after the login request.
+    fn login_router_with_manager(
+        db: Db,
+        config: crate::config::Config,
+    ) -> (axum::Router, crate::api::AppState) {
         use axum::routing::post;
-        let manager: crate::api::AppState = Arc::new(crate::session::SessionManager::new(
-            crate::config::Config::default(),
-            None,
-        ));
+        let manager: crate::api::AppState =
+            Arc::new(crate::session::SessionManager::new(config, None));
         let chain = Arc::new(AuthChain::new(vec![Box::new(StubDesktopProvider)]));
-        axum::Router::new()
+        let router = axum::Router::new()
             .route("/auth/login", post(super::login_submit))
             .route("/auth/mfa", post(super::mfa_submit))
-            .with_state(manager)
+            .with_state(manager.clone())
             .layer(Extension(db))
             .layer(Extension(TrustedProxies(vec![])))
             .layer(Extension(TlsEnabled(false)))
             .layer(Extension(chain))
-            .layer(Extension(CspNonce("test-nonce".into())))
+            .layer(Extension(CspNonce("test-nonce".into())));
+        (router, manager)
     }
 
     fn form_post(uri: &str, body: &str, cookie: Option<&str>) -> Request<Body> {
@@ -1599,6 +1695,123 @@ mod tests {
             db::list_user_tokens(&db, uid).unwrap().is_empty(),
             "a web login must not mint a scoped token"
         );
+    }
+
+    // ── Transient session credential retention (persea#245) ────────────────
+
+    /// Extract the `persea_session` cookie value from a login response.
+    fn session_cookie_from(response: &axum::response::Response) -> Option<String> {
+        response
+            .headers()
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .find_map(|c| {
+                c.strip_prefix("persea_session=")
+                    .map(|v| v.split(';').next().unwrap_or(v).to_string())
+            })
+    }
+
+    #[tokio::test]
+    async fn session_credential_retention_gate_on_retains_ciphertext_only() {
+        let db = test_db();
+        create_user(&db, "desktop@example.com", "poweruser");
+        let mut config = crate::config::Config::default();
+        config.storage = Some(crate::config::StorageConfig {
+            backend: "db".into(),
+            encryption_key: Some("a".repeat(64)),
+        });
+        config.auth = Some(crate::config::AuthConfig {
+            methods: vec!["ldap".into(), "database".into()],
+            forward_session_credentials: true,
+            ..Default::default()
+        });
+        let (app, manager) = login_router_with_manager(db.clone(), config);
+
+        let response = app
+            .oneshot(form_post(
+                "/auth/login",
+                "username=desktop%40example.com&password=s3cret-p%40ss",
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let session_token = session_cookie_from(&response).expect("login mints a session cookie");
+        let user = db::get_user_by_email(&db, "desktop@example.com").unwrap();
+
+        // The login retained the credential for ITS OWN session.
+        let retained = manager
+            .session_credentials(&session_token, user.id)
+            .expect("gate on: login retains the credential for the session");
+        assert_eq!(retained.username, "desktop@example.com");
+        // Ciphertext only, never the plaintext, never the raw token as a key.
+        assert_ne!(retained.password_enc, "s3cret-p@ss");
+        assert!(retained.password_enc.starts_with("enc:v1:"));
+        let key = crate::crypto::EncryptionKey::from_hex(&"a".repeat(64)).unwrap();
+        assert_eq!(
+            crate::crypto::decrypt_value(&key, &retained.password_enc).unwrap(),
+            "s3cret-p@ss"
+        );
+        // Other sessions (and the same session under a different identity)
+        // resolve nothing: owning-session only.
+        assert!(manager
+            .session_credentials("some-other-session", user.id)
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credential_retention_gate_off_retains_nothing() {
+        let db = test_db();
+        create_user(&db, "desktop@example.com", "poweruser");
+        // Default config: [auth] forward_session_credentials is OFF.
+        let (app, manager) = login_router_with_manager(db, crate::config::Config::default());
+        let response = app
+            .oneshot(form_post(
+                "/auth/login",
+                "username=desktop%40example.com&password=s3cret-p%40ss",
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            manager.session_credentials_len(),
+            0,
+            "the gate defaults to off: nothing may be retained"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_credential_retention_requires_storage_key() {
+        let db = test_db();
+        create_user(&db, "desktop@example.com", "poweruser");
+        let mut config = crate::config::Config::default();
+        config.auth = Some(crate::config::AuthConfig {
+            methods: vec!["ldap".into(), "database".into()],
+            forward_session_credentials: true,
+            ..Default::default()
+        });
+        // No storage.encryption_key and no PERSEA_STORAGE_KEY: there is
+        // nothing to encrypt with, so nothing may be retained.
+        let _prev = std::env::var("PERSEA_STORAGE_KEY").ok();
+        std::env::remove_var("PERSEA_STORAGE_KEY");
+        let (app, manager) = login_router_with_manager(db, config);
+        let response = app
+            .oneshot(form_post(
+                "/auth/login",
+                "username=desktop%40example.com&password=s3cret-p%40ss",
+                None,
+            ))
+            .await
+            .unwrap();
+        // Restore the environment before asserting so a failure here can
+        // never leak the removed variable to the rest of the test run.
+        if let Some(prev) = _prev {
+            std::env::set_var("PERSEA_STORAGE_KEY", prev);
+        }
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(manager.session_credentials_len(), 0);
     }
 
     #[tokio::test]

@@ -279,7 +279,9 @@ async fn full_stack_login_via_http() {
     // subject is the user DN, so the local account is created with the
     // REAL email, not the DN: the direct email lookup misses and the
     // chain lookup must resolve the DN to this account, or the login
-    // redirects to user_lookup_failed (persea#236).
+    // redirects to user_lookup_failed (persea#236). The role is operator
+    // (not viewer) because the address book folder API below requires
+    // operator or higher to list folders.
     let csrf = fetch_csrf_token(&client, &base).await;
     let (status, body) = send_json(
         &client,
@@ -289,7 +291,7 @@ async fn full_stack_login_via_http() {
         &json!({
             "email": "alice@example.com",
             "name": "Alice Example",
-            "role": "viewer",
+            "role": "operator",
             "password": "ldap-ci-password-2026",
         }),
         Some(&csrf),
@@ -320,8 +322,15 @@ async fn full_stack_login_via_http() {
         "expected invalid_credentials redirect, got {final_url}"
     );
 
-    // Valid LDAP credentials: session cookie + redirect to connections.
-    let resp = http
+    // Valid LDAP credentials: the login answers with a 303 to
+    // /connections.html and sets the session cookie. A non-following
+    // client keeps the raw redirect so the session token can be captured
+    // for the group-gated address book assertions below.
+    let no_follow = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("build non-following client");
+    let resp = no_follow
         .post(format!("{base}/auth/login"))
         .header(
             reqwest::header::CONTENT_TYPE,
@@ -334,15 +343,94 @@ async fn full_stack_login_via_http() {
         .send()
         .await
         .expect("POST /auth/login");
-    // The client follows the 303 to /connections.html with the session
-    // cookie (cookies feature enabled), so the final URL is the
-    // connections page.
-    let final_url = resp.url().as_str().to_string();
-    // Landing on /connections.html proves the session cookie was set and
-    // sent on the follow (the page requires an authenticated session).
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::SEE_OTHER,
+        "LDAP login must redirect (303)"
+    );
+    let location = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .unwrap_or_default();
+    assert_eq!(
+        location, "/connections.html",
+        "expected the session redirect to /connections.html, got {location}"
+    );
+    let session = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .find_map(|c| c.strip_prefix("persea_session=").map(str::to_string))
+        .unwrap_or_else(|| panic!("login response must set the persea_session cookie"))
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!session.is_empty(), "session token must not be empty");
+
+    // The login must have recorded the resolved LDAP memberships on the
+    // user record (users.oidc_groups), mirroring the OIDC callback, so
+    // the session identity and every later ACL lookup carry the groups.
+    let users = get_json(&client, &base, "/api/users", Some(&key)).await;
+    let alice = users
+        .as_array()
+        .and_then(|arr| arr.iter().find(|u| u["email"] == "alice@example.com"))
+        .unwrap_or_else(|| panic!("alice missing from /api/users: {users}"));
+    let stored_groups = alice["oidc_groups"].as_str().unwrap_or_default();
     assert!(
-        final_url.ends_with("/connections.html"),
-        "expected to land on /connections.html, got {final_url}"
+        stored_groups.split(',').any(|g| g == "engineers"),
+        "LDAP login must record the engineers membership, got oidc_groups={stored_groups:?}"
+    );
+
+    // A folder gated on the resolved group must be visible to alice
+    // through the address book API, and a folder gated on a group she
+    // does not have must stay hidden: the folder ACL reads the identity
+    // groups recorded by the login.
+    let (status, body) = send_json(
+        &client,
+        reqwest::Method::POST,
+        &format!("{base}/api/addressbook/folders"),
+        &key,
+        &json!({"name": "engineers-only", "allowed_groups": ["engineers"]}),
+        Some(&csrf),
+    )
+    .await;
+    assert!(status.is_success(), "POST folder failed: {status} {body}");
+    let (status, body) = send_json(
+        &client,
+        reqwest::Method::POST,
+        &format!("{base}/api/addressbook/folders"),
+        &key,
+        &json!({"name": "admins-only", "allowed_groups": ["admins"]}),
+        Some(&csrf),
+    )
+    .await;
+    assert!(status.is_success(), "POST folder failed: {status} {body}");
+
+    let resp = http
+        .get(format!("{base}/api/addressbook/folders"))
+        .header(reqwest::header::COOKIE, format!("persea_session={session}"))
+        .send()
+        .await
+        .expect("GET /api/addressbook/folders as alice");
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    assert!(
+        status.is_success(),
+        "GET /api/addressbook/folders as alice returned {status}: {text}"
+    );
+    let folders: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("invalid JSON from folders: {e}: {text}"));
+    assert!(
+        folders.to_string().contains("engineers-only"),
+        "group-gated folder must be visible to alice after the LDAP login: {folders}"
+    );
+    assert!(
+        !folders.to_string().contains("admins-only"),
+        "folder gated on a group alice lacks must stay hidden: {folders}"
     );
 
     terminate(&mut app);
@@ -475,6 +563,26 @@ async fn ldap_login_with_real_email_account_gets_session_redirect() {
 // ---------------------------------------------------------------------------
 // HTTP helpers (mirror tests/backend_tests.rs)
 // ---------------------------------------------------------------------------
+
+async fn get_json(
+    client: &reqwest::Client,
+    base: &str,
+    path: &str,
+    key: Option<&str>,
+) -> serde_json::Value {
+    let mut request = client.get(format!("{base}{path}"));
+    if let Some(k) = key {
+        request = request.bearer_auth(k);
+    }
+    let resp = request
+        .send()
+        .await
+        .unwrap_or_else(|e| panic!("GET {path} failed: {e}"));
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+    assert!(status.is_success(), "GET {path} returned {status}: {text}");
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("invalid JSON from {path}: {e}: {text}"))
+}
 
 async fn send_json(
     client: &reqwest::Client,
