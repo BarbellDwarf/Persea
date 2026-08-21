@@ -1,11 +1,16 @@
 //! Address book API: folder and entry management, connection start, SSH
-//! host-key probing, and quick connect.
+//! host-key probing, quick connect, and per-user personal folders.
 //!
 //! Handlers enforce role gates (operator or higher for reads and connects,
 //! admin for writes) plus folder and entry ACLs, and report failures as
 //! `AppError` (403 for denied access, 404 for missing folders or entries).
+//!
+//! Personal folders (`pf_*`) are owner-only: every authenticated user gets
+//! their own private folder tree referencing shared address book entries.
+//! There is no admin bypass, and a request for another user's folder is
+//! indistinguishable from a missing one (404).
 use super::{AppState, StorageBackend, StorageKey, VaultState};
-use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
+use crate::auth::{client_ip, extract_cookie, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
 use crate::rbac;
@@ -43,6 +48,122 @@ pub(crate) fn resolve_encryption_key(storage_key: Option<&StorageKey>) -> String
                 .filter(|k| !k.is_empty())
         })
         .unwrap_or_default()
+}
+
+/// Session credential forwarding (persea#245): with
+/// `[auth] forward_session_credentials`, try the credentials retained at
+/// login for the request's own auth session against an entry that still
+/// carries no password (after the entry, preset, and login pass-through
+/// fallbacks missed). Gated on the per-instance setting (default off),
+/// the owning session (the request's `persea_session` cookie must key a
+/// retained entry for the same user), and the entry's continued lack of
+/// a password. The stored ciphertext is decrypted with the storage key,
+/// exactly like the preset and login pass-through fallbacks.
+///
+/// Returns true when the session credentials were applied. Callers keep
+/// that as the marker that this attempt's credentials came from the
+/// session, so the attempt path can classify auth failures and decide
+/// whether to prompt instead of erroring. Fail-closed: any missing,
+/// expired, or user-mismatched entry is simply skipped, as are API-key /
+/// token identities, which have no session.
+pub(crate) fn apply_session_credentials(
+    manager: &AppState,
+    database: &Db,
+    headers: &axum::http::HeaderMap,
+    storage_key: Option<&StorageKey>,
+    identity: &AuthIdentity,
+    ab_entry: &mut AddressBookEntry,
+) -> bool {
+    // Gate 1: the per-instance setting (default off).
+    if !manager
+        .config()
+        .auth
+        .as_ref()
+        .map(|a| a.forward_session_credentials)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    // Only credential-less entries: the chain stays entry → preset →
+    // login pass-through → session → prompt.
+    if !ab_entry.password.as_deref().is_none_or(|p| p.is_empty()) {
+        return false;
+    }
+    // Gate 2: owning session only. The request must present the auth
+    // session cookie that retained the credential, and the retained
+    // entry must belong to the authenticated user.
+    let Some(session_token) = extract_cookie(headers, "persea_session") else {
+        return false;
+    };
+    let AuthIdentity::User { email, .. } = identity else {
+        return false; // API key / user-token identities have no session
+    };
+    let Ok(user) = db::get_user_by_email(database, email) else {
+        return false;
+    };
+    let Some(retained) = manager.session_credentials(&session_token, user.id) else {
+        return false;
+    };
+    // Decrypt with the storage key, like the preset/login fallbacks.
+    let key_hex = resolve_encryption_key(storage_key);
+    if key_hex.is_empty() {
+        return false;
+    }
+    let Ok(key) = crate::crypto::EncryptionKey::from_hex(&key_hex) else {
+        return false;
+    };
+    let Ok(password) = crate::crypto::decrypt_value(&key, &retained.password_enc) else {
+        return false;
+    };
+    if ab_entry.username.as_deref().is_none_or(|u| u.is_empty()) && !retained.username.is_empty() {
+        ab_entry.username = Some(retained.username);
+    }
+    ab_entry.password = Some(password);
+    true
+}
+
+/// The guacd protocol status code for a rejected credential attempt:
+/// `GUAC_PROTOCOL_STATUS_CLIENT_UNAUTHORIZED` (0x0301). guacd sends an
+/// `error` instruction with this status when the target rejected the
+/// presented credentials (SSH auth failure, RDP NLA/credential
+/// rejection, VNC auth failure). Every other status (upstream timeout,
+/// upstream error, server error, ...) means the target was unreachable
+/// or the protocol failed, not that the credentials were wrong.
+const GUACD_STATUS_CLIENT_UNAUTHORIZED: u32 = 0x0301;
+
+/// Classify a session-creation failure (persea#246): true when the
+/// target rejected the presented credentials (an auth failure), false
+/// for network / protocol / validation failures. The connect flows use
+/// this to decide whether to surface the interactive-credentials prompt:
+/// a rejected credential attempt means the user can retry with their own
+/// credentials, while an unreachable target or a protocol error would
+/// fail the same way no matter what credentials are presented.
+pub(crate) fn is_auth_failure(e: &crate::session::SessionError) -> bool {
+    let crate::session::SessionError::GuacdConnection(msg) = e else {
+        return false;
+    };
+    guacd_error_status(msg) == Some(GUACD_STATUS_CLIENT_UNAUTHORIZED)
+}
+
+/// Extract the guacd protocol status code from a flattened handshake
+/// error message. The handshake turns guacd's `error` instruction into
+/// `Expected 'ready' instruction, got 'error' (args: ["...", "769"])`;
+/// the last arg is the numeric status code.
+fn guacd_error_status(msg: &str) -> Option<u32> {
+    const MARKER: &str = "got 'error' (args: [";
+    let start = msg.find(MARKER)?;
+    let rest = &msg[start + MARKER.len()..];
+    let end = rest.rfind("])")?;
+    let args = &rest[..end];
+    // The status is the last arg; status codes are plain numbers, so
+    // splitting on the last comma is safe even when a message arg
+    // contains commas.
+    args.rsplit(',')
+        .next()?
+        .trim()
+        .trim_matches('"')
+        .parse()
+        .ok()
 }
 
 /// Check if a folder's allowed_groups grant access to the given user groups.
@@ -583,6 +704,15 @@ fn powershell_ssh_enabled(database: &Db) -> bool {
     crate::settings_merge::load_db_settings(database)
         .map(|s| crate::settings_merge::toggle_enabled(&s, "enable_powershell_ssh", true))
         .unwrap_or(true)
+}
+
+/// Whether a DB error is a unique-constraint violation. SQLite reports
+/// "UNIQUE constraint failed", Postgres/MySQL "duplicate key value
+/// violates unique constraint": match case-insensitively so duplicates
+/// map to 409 on every backend.
+fn is_unique_violation(e: &rusqlite::Error) -> bool {
+    let msg = e.to_string().to_lowercase();
+    msg.contains("unique constraint") || msg.contains("duplicate key")
 }
 
 /// Overlay decrypted DB credential rows onto an entry (db mode).
@@ -1289,27 +1419,30 @@ pub async fn ab_get_custom_fields(
 
 /// Request body for `PUT /api/addressbook/defaults/apply`.
 #[derive(Debug, Deserialize)]
-pub struct ApplyAutoSizeDefaultsRequest {
-    /// Protocols whose entries get the current global auto-size default
-    /// written into their `protocol_config`: `"rdp"` and/or `"ssh"`.
-    /// Missing or empty applies both. Anything else is rejected.
+pub struct ApplyDefaultsRequest {
+    /// Protocols whose entries get the current global defaults written into
+    /// their `protocol_config`: `"rdp"` and/or `"ssh"`. Missing or empty
+    /// applies both. Anything else is rejected.
     #[serde(default)]
     pub protocols: Option<Vec<String>>,
 }
 
 /// `PUT /api/addressbook/defaults/apply`: apply the current global
-/// auto-size defaults (`default_rdp_auto_size` / `default_ssh_auto_size`)
-/// to every rdp and/or ssh entry's `protocol_config.auto_size`. Admin-only,
-/// idempotent (a second run changes nothing and counts 0), audited on the
-/// admin hash chain. Returns the number of entries updated, the protocols
-/// touched, and the defaults that were applied.
-pub async fn ab_apply_auto_size_defaults(
+/// per-protocol defaults to every saved entry. RDP entries get the
+/// auto-size, security, and auth-package defaults
+/// (`default_rdp_auto_size` / `default_rdp_security` /
+/// `default_rdp_auth_pkg`); SSH (and PowerShell) entries get the auto-size
+/// default (`default_ssh_auto_size`). Admin-only, idempotent (a second run
+/// changes nothing and counts 0), audited on the admin hash chain. Returns
+/// the number of entries updated, the protocols touched, and the defaults
+/// that were applied.
+pub async fn ab_apply_defaults(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: axum::http::HeaderMap,
     identity: Option<Extension<AuthIdentity>>,
     trusted: Option<Extension<TrustedProxies>>,
     Extension(database): Extension<Db>,
-    Json(req): Json<ApplyAutoSizeDefaultsRequest>,
+    Json(req): Json<ApplyDefaultsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let admin_email = match identity.as_ref() {
         Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
@@ -1346,8 +1479,10 @@ pub async fn ab_apply_auto_size_defaults(
         want_ssh = true;
     }
 
-    // The current global defaults drive the bulk write. An unset key falls
-    // back to true, the pre-feature client behaviour.
+    // The current global defaults drive the bulk write. Only keys with a
+    // STORED default are written: an unset security or auth-package key
+    // means "no global default", so per-entry values are left untouched
+    // (matching the create-path precedence where the entry wins).
     let db_clone = database.clone();
     let settings =
         tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db_clone))
@@ -1358,6 +1493,21 @@ pub async fn ab_apply_auto_size_defaults(
         crate::settings_merge::toggle_enabled(&settings, "default_rdp_auto_size", true);
     let ssh_auto_size =
         crate::settings_merge::toggle_enabled(&settings, "default_ssh_auto_size", true);
+    let rdp_security = settings
+        .iter()
+        .find(|(k, _)| k == "default_rdp_security")
+        .map(|(_, v)| v.as_str())
+        .filter(|v| matches!(*v, "any" | "rdp" | "tls" | "nla"))
+        .map(str::to_string);
+    // An empty stored auth package means "no global default": entries keep
+    // their per-entry value (or none), so the create path falls back to
+    // the `[rdp]` config value, then NTLM.
+    let rdp_auth_pkg = settings
+        .iter()
+        .find(|(k, _)| k == "default_rdp_auth_pkg")
+        .map(|(_, v)| v.as_str())
+        .filter(|v| !v.is_empty() && matches!(*v, "ntlm" | "kerberos" | "negotiate"))
+        .map(str::to_string);
 
     // PowerShell entries are SSH sessions (session creation maps them to
     // SessionType::Ssh), so the SSH default applies to them too.
@@ -1380,40 +1530,75 @@ pub async fn ab_apply_auto_size_defaults(
     .map_err(|e| AppError::Internal(e.to_string()))?
     .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    // Write auto_size where the stored value differs from the default. The
-    // update runs in one spawn_blocking so the loop holds the lock once.
+    // Write the defaults where the stored value differs. RDP entries get
+    // auto_size + security + auth_pkg; SSH/PowerShell entries get
+    // auto_size only. The update runs in one spawn_blocking so the loop
+    // holds the lock once.
     let db_clone = database.clone();
+    let rdp_security_for_write = rdp_security.clone();
+    let rdp_auth_pkg_for_write = rdp_auth_pkg.clone();
     let applied = tokio::task::spawn_blocking(move || {
         let mut applied = 0u64;
+        let mut failures = 0u64;
         for entry in &entries {
-            let default = if entry.protocol == "rdp" {
-                rdp_auto_size
-            } else {
-                ssh_auto_size
-            };
-            let mut config: serde_json::Map<String, serde_json::Value> =
+            // A non-object protocol_config (valid JSON that is not a map)
+            // is left untouched rather than replaced: only object configs
+            // are updated.
+            let mut config: Option<serde_json::Map<String, serde_json::Value>> =
                 serde_json::from_str(&entry.protocol_config)
-                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()))
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default();
-            let current = config.get("auto_size").and_then(|v| v.as_bool());
-            if current == Some(default) {
+                    .ok()
+                    .and_then(|v: serde_json::Value| v.as_object().cloned());
+            let Some(config) = config.as_mut() else {
+                failures += 1;
+                continue;
+            };
+            let mut changed = false;
+            if entry.protocol == "rdp" {
+                let current = config.get("auto_size").and_then(|v| v.as_bool());
+                if current != Some(rdp_auto_size) {
+                    config.insert("auto_size".into(), json!(rdp_auto_size));
+                    changed = true;
+                }
+                if let Some(security) = &rdp_security_for_write {
+                    let current = config.get("security").and_then(|v| v.as_str());
+                    if current != Some(security.as_str()) {
+                        config.insert("security".into(), json!(security));
+                        changed = true;
+                    }
+                }
+                if let Some(pkg) = &rdp_auth_pkg_for_write {
+                    let current = config.get("auth_pkg").and_then(|v| v.as_str());
+                    if current != Some(pkg.as_str()) {
+                        config.insert("auth_pkg".into(), json!(pkg));
+                        changed = true;
+                    }
+                }
+            } else {
+                let current = config.get("auto_size").and_then(|v| v.as_bool());
+                if current != Some(ssh_auto_size) {
+                    config.insert("auto_size".into(), json!(ssh_auto_size));
+                    changed = true;
+                }
+            }
+            if !changed {
                 continue;
             }
-            config.insert("auto_size".into(), json!(default));
             let serialized = serde_json::to_string(&config).unwrap_or_else(|_| "{}".into());
-            let changed =
-                db::set_ab_entry_protocol_config(&db_clone, entry.id, &serialized).unwrap_or(false);
-            if changed {
-                applied += 1;
+            match db::set_ab_entry_protocol_config(&db_clone, entry.id, &serialized) {
+                Ok(true) => applied += 1,
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::error!(error = %e, entry = entry.name, "bulk defaults write failed");
+                    failures += 1;
+                }
             }
         }
-        Ok::<u64, rusqlite::Error>(applied)
+        Ok::<(u64, u64), rusqlite::Error>((applied, failures))
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))?
     .map_err(|e| AppError::Internal(e.to_string()))?;
+    let (applied, failures) = applied;
 
     // Audit the admin mutation on the hash chain (same pattern as the other
     // admin mutations in users.rs / groups.rs).
@@ -1422,10 +1607,13 @@ pub async fn ab_apply_auto_size_defaults(
         let admin_name = admin_email.clone();
         let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
         let details = json!({
-            "action": "apply_auto_size_defaults",
+            "action": "apply_defaults",
             "protocols": protocols.clone(),
             "applied": applied,
+            "failures": failures,
             "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
+            "security": {"rdp": rdp_security},
+            "auth_pkg": {"rdp": rdp_auth_pkg},
         });
         if let Err(e) = tokio::task::spawn_blocking(move || {
             let _ = crate::audit::log_event(
@@ -1445,8 +1633,11 @@ pub async fn ab_apply_auto_size_defaults(
 
     Ok(Json(json!({
         "applied": applied,
+        "failures": failures,
         "protocols": protocols,
         "auto_size": {"rdp": rdp_auto_size, "ssh": ssh_auto_size},
+        "security": {"rdp": rdp_security},
+        "auth_pkg": {"rdp": rdp_auth_pkg},
     })))
 }
 
@@ -1488,7 +1679,10 @@ pub async fn ssh_probe_host_key(
 /// DB or Vault and applying the request's overrides. Requires operator
 /// or higher, plus folder and entry ACLs and the RBAC Connect grant.
 /// Returns the session info, or `AppError::Session` when guacd rejects
-/// the connection.
+/// the connection. When the attempt used session-forwarded credentials
+/// and the target rejected them (an auth failure), returns the
+/// interactive-credentials signal (`credentials_required`) so the client
+/// can prompt and retry (persea#246).
 pub async fn ab_connect_entry(
     State(manager): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -1675,6 +1869,29 @@ pub async fn ab_connect_entry(
         }
     }
 
+    // Session credential forwarding (persea#245): with
+    // [auth] forward_session_credentials, the login password retained for
+    // the owning auth session is tried before the prompt. The marker is
+    // kept so the attempt path can classify failures (S6) and decide
+    // whether to prompt instead of erroring.
+    let used_session_credentials = apply_session_credentials(
+        &manager,
+        &database,
+        &headers,
+        storage_key.as_ref().map(|Extension(k)| k),
+        &id,
+        &mut ab_entry,
+    );
+    if used_session_credentials {
+        tracing::debug!(
+            user = %id.display_name(),
+            scope = %scope,
+            folder = %folder,
+            entry = %entry,
+            "Connect uses session-forwarded credentials"
+        );
+    }
+
     let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
         let user_email = match &id {
             AuthIdentity::User { email, .. } => Some(email.clone()),
@@ -1723,6 +1940,12 @@ pub async fn ab_connect_entry(
     };
 
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+    // Keep the resolved identity for the interactive-credentials signal
+    // (persea#246): the fields are moved into `create_req` below, and the
+    // signal must prefill the prompt with the identity the attempt used.
+    let prompt_username = ab_entry.username.clone();
+    let prompt_domain = ab_entry.domain.clone();
+    let prompt_display_name = ab_entry.display_name.clone();
     let create_req = CreateSessionRequest {
         session_type,
         hostname: ab_entry.hostname,
@@ -1740,6 +1963,7 @@ pub async fn ab_connect_entry(
         width: req.width,
         height: req.height,
         dpi: req.dpi,
+        auto_size: ab_entry.auto_size,
         banner: req.banner.or(ab_entry.banner),
         reason: req.reason,
         enable_drive: ab_entry.enable_drive,
@@ -1842,6 +2066,20 @@ pub async fn ab_connect_entry(
         Err(e) => {
             let msg = e.to_string();
             tracing::error!(user = %admin_name, error = %msg, "Address book session creation failed");
+            // S6 (persea#246): when the attempt used session-forwarded
+            // credentials and the target rejected them (an auth failure),
+            // return the interactive-credentials signal so the client can
+            // prompt and retry without losing the session context. Any
+            // other failure (target unreachable, protocol error) surfaces
+            // directly.
+            if used_session_credentials && is_auth_failure(&e) {
+                return Ok(Json(json!({
+                    "credentials_required": true,
+                    "username": prompt_username,
+                    "domain": prompt_domain,
+                    "display_name": prompt_display_name,
+                })));
+            }
             Err(AppError::Session(msg))
         }
     }
@@ -1915,7 +2153,7 @@ pub async fn ab_create_folder(
             Ok(StatusCode::CREATED)
         }
         Err(e) => {
-            if e.to_string().contains("UNIQUE constraint") {
+            if is_unique_violation(&e) {
                 Err(AppError::Conflict("folder already exists".into()))
             } else {
                 tracing::error!(error = %e, scope = %folder_scope, folder = %folder_name, "Failed to create folder in DB");
@@ -2805,7 +3043,19 @@ document.getElementById('cred-form').addEventListener('submit', async function(e
     }});
     if (resp.ok) {{
       const data = await resp.json();
-      window.location.href = '/client/' + data.session_id;
+      if (data.session_id) {{
+        window.location.href = '/client/' + data.session_id;
+      }} else if (data.credentials_required) {{
+        // The target rejected the credentials (persea#246): keep the
+        // form open so the user can retry without losing the session
+        // context.
+        err.textContent = 'The credentials were rejected by the target. Try again.';
+        err.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Connect';
+      }} else {{
+        throw new Error(data.error || 'Connection failed.');
+      }}
     }} else {{
       const data = await resp.json().catch(() => ({{}}));
       throw new Error(data.error || ('HTTP ' + resp.status));
@@ -3025,6 +3275,29 @@ pub async fn quick_connect(
             }
         }
 
+        // Session credential forwarding (persea#245): with
+        // [auth] forward_session_credentials, the login password retained
+        // for the owning auth session is tried before the prompt. The
+        // marker is kept so the attempt path can classify failures (S6)
+        // and decide whether to prompt instead of erroring.
+        let used_session_credentials = apply_session_credentials(
+            &manager,
+            &database,
+            &headers,
+            storage_key.as_ref().map(|Extension(k)| k),
+            &id,
+            &mut ab_entry,
+        );
+        if used_session_credentials {
+            tracing::debug!(
+                user = %admin_name,
+                scope = %scope,
+                folder = %folder,
+                entry = %entry,
+                "Quick connect uses session-forwarded credentials"
+            );
+        }
+
         let ab_entry = if !crate::vault::entry_credential_variables(&ab_entry).is_empty() {
             let user_email = match &id {
                 AuthIdentity::User { email, .. } => Some(email.clone()),
@@ -3090,6 +3363,13 @@ pub async fn quick_connect(
         };
 
         let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
+        // Keep the resolved identity for the interactive-credentials
+        // signal (persea#246): the fields are moved into `create_req`
+        // below, and the signal must prefill the prompt with the identity
+        // the attempt used.
+        let prompt_username = ab_entry.username.clone();
+        let prompt_domain = ab_entry.domain.clone();
+        let prompt_display_name = ab_entry.display_name.clone();
         let create_req = CreateSessionRequest {
             session_type,
             hostname: ab_entry.hostname,
@@ -3107,6 +3387,7 @@ pub async fn quick_connect(
             width: query.width,
             height: query.height,
             dpi: query.dpi,
+            auto_size: None,
             banner: ab_entry.banner,
             reason: None,
             enable_drive: ab_entry.enable_drive,
@@ -3186,7 +3467,26 @@ pub async fn quick_connect(
             Ok(info) => {
                 Redirect::temporary(&format!("/client/{}", info.session_id)).into_response()
             }
-            Err(e) => quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string()),
+            Err(e) => {
+                // S6 (persea#246): when the attempt used session-forwarded
+                // credentials and the target rejected them (an auth
+                // failure), return the existing interactive-credentials
+                // signal (the inline credential form) so the client can
+                // prompt and retry. Any other failure (target unreachable,
+                // protocol error) surfaces directly.
+                if used_session_credentials && is_auth_failure(&e) {
+                    return quick_connect_credential_form(
+                        scope,
+                        folder,
+                        entry,
+                        &ab_entry.session_type,
+                        prompt_username.as_deref(),
+                        prompt_domain.as_deref(),
+                        prompt_display_name.as_deref(),
+                    );
+                }
+                quick_connect_error(StatusCode::BAD_GATEWAY, &e.to_string())
+            }
         };
     }
 
@@ -3242,6 +3542,397 @@ pub async fn quick_connect(
     }
 }
 
+// ── Personal folders (persea#138 / persea#166) ─────────────────────────
+//
+// Every authenticated user owns a private folder tree. Folders nest via
+// slash paths and reference shared address book entries without copying
+// them. All endpoints are owner-only: the authenticated user's own folders
+// only, no admin bypass, and foreign or missing folders are both 404 so
+// nothing can be enumerated.
+
+/// Body for `POST /api/personal/folders`.
+#[derive(Deserialize)]
+pub struct CreatePersonalFolderRequest {
+    /// Folder name; slash-separated paths nest folders.
+    pub name: String,
+    /// Free-text description.
+    #[serde(default)]
+    pub description: String,
+}
+
+/// Body for `PUT /api/personal/folders/{id}`.
+#[derive(Deserialize)]
+pub struct RenamePersonalFolderRequest {
+    /// New folder name; slash-separated paths nest folders.
+    pub name: String,
+}
+
+/// Body for `POST /api/personal/folders/{id}/entries`: the shared address
+/// book key of the entry to reference.
+#[derive(Deserialize)]
+pub struct AddPersonalFolderEntryRequest {
+    /// Address book scope of the shared entry (`shared` or `instance`).
+    pub scope: String,
+    /// Address book folder path holding the entry.
+    pub folder: String,
+    /// Entry name inside that folder.
+    pub entry: String,
+}
+
+/// Resolve the authenticated caller to (user id, identity). Personal
+/// folders are per-user, so an API key identity (which has no user row) or
+/// a missing identity is rejected with 403: fail closed, no admin bypass.
+fn personal_caller<'a>(
+    database: &Db,
+    identity: Option<&'a Extension<AuthIdentity>>,
+) -> Result<(i64, &'a AuthIdentity), AppError> {
+    match identity {
+        Some(ext) => match &ext.0 {
+            AuthIdentity::User { email, .. } => {
+                let user = db::get_user_by_email(database, email).map_err(|_| {
+                    AppError::Forbidden("authenticated user session required".into())
+                })?;
+                Ok((user.id, &ext.0))
+            }
+            AuthIdentity::ApiKey(_) => Err(AppError::Forbidden("user session required".into())),
+        },
+        None => Err(AppError::Forbidden("user session required".into())),
+    }
+}
+
+/// Validate a personal folder slash-path name: non-empty, no leading or
+/// trailing slash, no empty path segments (rejects `//` and whitespace-only
+/// segments). The stored name is the trimmed input.
+fn validate_personal_folder_name(name: &str) -> Result<String, AppError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::Validation("folder name must not be empty".into()));
+    }
+    if trimmed.starts_with('/') || trimmed.ends_with('/') {
+        return Err(AppError::Validation(
+            "folder name must not start or end with a slash".into(),
+        ));
+    }
+    if trimmed.split('/').any(|seg| seg.trim().is_empty()) {
+        return Err(AppError::Validation(
+            "folder name must not contain empty path segments".into(),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Fail-closed owner check: 404 when the folder does not exist or belongs
+/// to another user, so foreign folders are indistinguishable from missing
+/// ones (no enumeration).
+fn require_owned_personal_folder(
+    database: &Db,
+    user_id: i64,
+    folder_id: i64,
+) -> Result<(), AppError> {
+    let owned = db::list_user_folders(database, user_id)
+        .map_err(|e| AppError::Internal(e.to_string()))?
+        .iter()
+        .any(|f| f.id == folder_id);
+    if owned {
+        Ok(())
+    } else {
+        Err(AppError::NotFound("folder not found".into()))
+    }
+}
+
+/// Resolve a shared entry reference (scope, folder, entry) to its DB id.
+/// The folder and entry must exist and the caller must be able to read
+/// them; missing and unreadable both map to 404 so the API never reveals
+/// which shared entries exist to callers without access.
+fn resolve_readable_shared_entry(
+    database: &Db,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    identity: &AuthIdentity,
+) -> Result<i64, AppError> {
+    let folder_rec = db::get_ab_folder(database, scope, folder)
+        .map_err(|_| AppError::NotFound("folder not found".into()))?;
+    let entry_rec = db::get_ab_entry(database, folder_rec.id, entry)
+        .map_err(|_| AppError::NotFound("entry not found".into()))?;
+    if identity.has_role("admin")
+        || rbac::identity_has_custom_permission(database, identity, "read")
+    {
+        return Ok(entry_rec.id);
+    }
+    check_folder_access_db(database, scope, folder, identity)
+        .map_err(|_| AppError::NotFound("folder not found".into()))?;
+    check_entry_access_db(database, folder_rec.id, entry, identity)
+        .map_err(|_| AppError::NotFound("entry not found".into()))?;
+    Ok(entry_rec.id)
+}
+
+/// `GET /api/personal/folders`: list the caller's personal folders, flat
+/// with slash paths (`Work/Acme` nests under `Work`). Any authenticated
+/// user; no admin gate. API key identities are rejected (no user row).
+pub async fn pf_list_folders(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    let folders =
+        db::list_user_folders(&database, user_id).map_err(|e| AppError::Internal(e.to_string()))?;
+    let mut result = Vec::new();
+    for folder in &folders {
+        result.push(json!({
+            "id": folder.id,
+            "name": folder.name,
+            "path": folder.name,
+            "description": folder.description,
+            "created_at": folder.created_at,
+            "has_children": folders
+                .iter()
+                .any(|g| g.name.starts_with(&format!("{}/", folder.name))),
+        }));
+    }
+    Ok(Json(json!(result)))
+}
+
+/// `POST /api/personal/folders`: create a personal folder. The name is a
+/// slash path (`Work/Acme` nests under `Work`), validated non-empty with
+/// no leading/trailing slash and no empty segments; duplicate names per
+/// user conflict with 409.
+pub async fn pf_create_folder(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Json(req): Json<CreatePersonalFolderRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    let name = validate_personal_folder_name(&req.name)?;
+    match db::create_user_folder(&database, user_id, &name, &req.description) {
+        Ok(id) => Ok((StatusCode::CREATED, Json(json!({"id": id, "name": name})))),
+        Err(e) if is_unique_violation(&e) => Err(AppError::Conflict(
+            "a folder with this name already exists".into(),
+        )),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = %name,
+                "Failed to create personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `PUT /api/personal/folders/{id}`: rename one of the caller's folders.
+/// The new name follows the same validation as create and must stay unique
+/// per user; foreign folders return 404.
+pub async fn pf_rename_folder(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(folder_id): Path<i64>,
+    Json(req): Json<RenamePersonalFolderRequest>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    let name = validate_personal_folder_name(&req.name)?;
+    match db::rename_user_folder(&database, user_id, folder_id, &name) {
+        Ok(true) => Ok(Json(json!({"id": folder_id, "name": name}))),
+        Ok(false) => Err(AppError::NotFound("folder not found".into())),
+        Err(e) if is_unique_violation(&e) => Err(AppError::Conflict(
+            "a folder with this name already exists".into(),
+        )),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = folder_id,
+                "Failed to rename personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `DELETE /api/personal/folders/{id}`: delete one of the caller's
+/// folders. Removes only the folder's entry references; shared address
+/// book entries are never touched. Foreign folders return 404.
+pub async fn pf_delete_folder(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(folder_id): Path<i64>,
+) -> Result<StatusCode, AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    match db::delete_user_folder(&database, user_id, folder_id) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(AppError::NotFound("folder not found".into())),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = folder_id,
+                "Failed to delete personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `POST /api/personal/folders/{id}/entries`: reference a shared address
+/// book entry from one of the caller's folders. The body carries the
+/// shared entry key (scope/folder/entry); the entry must exist and be
+/// readable by the caller, else 404 (no enumeration). Duplicate references
+/// conflict with 409.
+pub async fn pf_add_folder_entry(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(folder_id): Path<i64>,
+    Json(req): Json<AddPersonalFolderEntryRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
+    let (user_id, id) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    let entry_id =
+        resolve_readable_shared_entry(&database, &req.scope, &req.folder, &req.entry, id)?;
+    match db::add_user_folder_entry(&database, user_id, folder_id, entry_id) {
+        Ok(reference_id) => Ok((
+            StatusCode::CREATED,
+            Json(json!({"id": reference_id, "entry_id": entry_id})),
+        )),
+        // The schema layer fails this way when the folder is missing or
+        // owned by someone else: 404, same as a missing folder.
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            Err(AppError::NotFound("folder not found".into()))
+        }
+        Err(e) if is_unique_violation(&e) => Err(AppError::Conflict(
+            "this entry is already in the folder".into(),
+        )),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = folder_id,
+                "Failed to add entry reference to personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `DELETE /api/personal/folders/{id}/entries/{entry_id}`: remove an
+/// entry reference from one of the caller's folders. `entry_id` is the
+/// shared entry id used when the reference was added. Foreign folders and
+/// unknown references return 404.
+pub async fn pf_remove_entry(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path((folder_id, entry_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, AppError> {
+    let (user_id, _) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    match db::remove_user_folder_entry(&database, user_id, folder_id, entry_id) {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(AppError::NotFound("folder entry not found".into())),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                folder = folder_id,
+                "Failed to remove entry reference from personal folder"
+            );
+            Err(AppError::Internal(e.to_string()))
+        }
+    }
+}
+
+/// `GET /api/personal/folders/{id}/entries`: list the shared entries
+/// referenced from one of the caller's folders, resolved to their real
+/// rows with the same serialization as the address-book entry lists.
+///
+/// Reference integrity: deleting a shared entry removes its references
+/// (the schema cascades them away), and the join here additionally skips
+/// any reference whose entry no longer resolves, so a deleted entry simply
+/// stops appearing. Entry ACLs gate the listing the same way they gate the
+/// shared entry lists: entries restricted away are skipped, not rejected.
+pub async fn pf_list_entries(
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(database): Extension<Db>,
+    Path(folder_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let (user_id, id) = personal_caller(&database, identity.as_ref())?;
+
+    if !is_db_storage_available(&database) {
+        return Err(AppError::Vault(
+            "address book unavailable: no storage backend configured".into(),
+        ));
+    }
+
+    require_owned_personal_folder(&database, user_id, folder_id)?;
+
+    let db_entries = db::list_user_folder_entries(&database, user_id, folder_id)
+        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let user_groups = id.groups();
+    let mut visible = Vec::new();
+    for entry in &db_entries {
+        // The containing folder's ACL gates the reference the same way it
+        // gates the shared tree: a tightened folder hides its entries
+        // everywhere, including personal references. A vanished folder
+        // also hides the reference.
+        let folder_path = match db::get_ab_folder_by_id(&database, entry.folder_id) {
+            Ok(folder) => folder.name,
+            Err(_) => continue,
+        };
+        if check_folder_access_db(&database, "shared", &folder_path, id).is_err() {
+            continue;
+        }
+        if !id.has_role("admin")
+            && !rbac::identity_has_custom_permission(&database, id, "read")
+            && !entry_groups_match(entry, user_groups)
+        {
+            continue;
+        }
+        // The shared location rides along so the client can connect to the
+        // real entry without a client-side location map.
+        let mut value = json!(entry_info_from_db_row(&database, entry));
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("shared_scope".into(), json!("shared"));
+            obj.insert("shared_folder".into(), json!(folder_path));
+        }
+        visible.push(inject_powershell_binary(entry, value));
+    }
+    Ok(Json(json!(visible)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3250,7 +3941,7 @@ mod tests {
         VaultBackends, VaultCell, VaultConfigured, VaultState,
     };
     use axum::body::Body;
-    use axum::http::Request;
+    use axum::http::{HeaderMap, Request};
     use serde_json::{json, Value};
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -3317,9 +4008,10 @@ mod tests {
     }
 
     /// Minimal router for the entry create/update/list + custom-fields
-    /// handlers, mirroring the route shapes in `src/main.rs`.
+    /// handlers plus the personal folders API, mirroring the route shapes
+    /// in `src/main.rs`.
     fn build_router(db: Db, vault: VaultState, backend: Option<&str>) -> axum::Router {
-        use axum::routing::{get, post, put};
+        use axum::routing::{delete, get, post, put};
         let api_routes = axum::Router::new()
             .route(
                 "/api/addressbook/custom-fields",
@@ -3327,7 +4019,7 @@ mod tests {
             )
             .route(
                 "/api/addressbook/defaults/apply",
-                put(super::ab_apply_auto_size_defaults),
+                put(super::ab_apply_defaults),
             )
             .route(
                 "/api/addressbook/folders/{scope}/{folder}/entries",
@@ -3340,6 +4032,25 @@ mod tests {
             .route(
                 "/api/addressbook/folders/{scope}/{folder}/entries/{entry}",
                 put(super::ab_update_entry),
+            )
+            .route("/api/personal/folders", get(super::pf_list_folders))
+            .route("/api/personal/folders", post(super::pf_create_folder))
+            .route("/api/personal/folders/{id}", put(super::pf_rename_folder))
+            .route(
+                "/api/personal/folders/{id}",
+                delete(super::pf_delete_folder),
+            )
+            .route(
+                "/api/personal/folders/{id}/entries",
+                get(super::pf_list_entries),
+            )
+            .route(
+                "/api/personal/folders/{id}/entries",
+                post(super::pf_add_folder_entry),
+            )
+            .route(
+                "/api/personal/folders/{id}/entries/{entry_id}",
+                delete(super::pf_remove_entry),
             )
             .with_state(());
         let mut api_routes = api_routes
@@ -4034,6 +4745,147 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_apply_defaults_writes_security_and_auth_pkg_to_rdp_only() {
+        let db = test_db();
+        let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "win1",
+            "Win 1",
+            "rdp",
+            "10.0.0.5",
+            Some(3389),
+            "user",
+            r#"{"auto_size":false,"security":"rdp","auth_pkg":"ntlm"}"#,
+            "",
+        )
+        .unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "ssh1",
+            "Ssh 1",
+            "ssh",
+            "10.0.0.7",
+            Some(22),
+            "user",
+            r#"{}"#,
+            "",
+        )
+        .unwrap();
+        // Stored global defaults: security nla, auth package kerberos,
+        // auto-size off for both protocols.
+        {
+            let conn = db.lock().unwrap();
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                [],
+            )
+            .unwrap();
+            for (key, value) in [
+                ("default_rdp_auto_size", "false"),
+                ("default_ssh_auto_size", "false"),
+                ("default_rdp_security", "nla"),
+                ("default_rdp_auth_pkg", "kerberos"),
+            ] {
+                conn.execute(
+                    "INSERT INTO system_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    rusqlite::params![key, value],
+                )
+                .unwrap();
+            }
+        }
+
+        let key = insert_test_admin(&db, "admin");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/defaults/apply",
+                &key,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["applied"], json!(2));
+        assert_eq!(body["security"]["rdp"], json!("nla"));
+        assert_eq!(body["auth_pkg"]["rdp"], json!("kerberos"));
+
+        let entries = db::list_ab_entries(&db, folder).unwrap();
+        for e in &entries {
+            let cfg: Value = serde_json::from_str(&e.protocol_config).unwrap();
+            match e.protocol.as_str() {
+                "rdp" => {
+                    assert_eq!(cfg["auto_size"], json!(false), "entry {}", e.name);
+                    assert_eq!(cfg["security"], json!("nla"), "entry {}", e.name);
+                    assert_eq!(cfg["auth_pkg"], json!("kerberos"), "entry {}", e.name);
+                }
+                "ssh" => {
+                    assert_eq!(cfg["auto_size"], json!(false), "entry {}", e.name);
+                    assert!(
+                        cfg.get("security").is_none(),
+                        "ssh entries must not get the RDP security default"
+                    );
+                    assert!(
+                        cfg.get("auth_pkg").is_none(),
+                        "ssh entries must not get the RDP auth package default"
+                    );
+                }
+                _ => panic!("unexpected protocol {}", e.protocol),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_defaults_unset_keys_leave_entry_values_untouched() {
+        let db = test_db();
+        let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
+        db::create_ab_entry(
+            &db,
+            folder,
+            "win1",
+            "Win 1",
+            "rdp",
+            "10.0.0.5",
+            Some(3389),
+            "user",
+            r#"{"auth_pkg":"kerberos","security":"nla"}"#,
+            "",
+        )
+        .unwrap();
+        // No stored defaults at all: only auto-size falls back to true; the
+        // unset security and auth-package keys must leave the per-entry
+        // values untouched (matching the create-path precedence).
+        let key = insert_test_admin(&db, "admin");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let response = app
+            .oneshot(json_req(
+                "PUT",
+                "/api/addressbook/defaults/apply",
+                &key,
+                json!({"protocols": ["rdp"]}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["applied"], json!(1));
+
+        let entries = db::list_ab_entries(&db, folder).unwrap();
+        let cfg: Value = serde_json::from_str(&entries[0].protocol_config).unwrap();
+        assert_eq!(
+            cfg["auth_pkg"],
+            json!("kerberos"),
+            "per-entry auth package kept"
+        );
+        assert_eq!(cfg["security"], json!("nla"), "per-entry security kept");
+        assert_eq!(cfg["auto_size"], json!(true));
+    }
+
+    #[tokio::test]
     async fn test_apply_auto_size_defaults_admin_gated_and_validates_protocols() {
         let db = test_db();
         let folder = db::create_ab_folder(&db, "shared", "IT", "", "", false).unwrap();
@@ -4412,6 +5264,1261 @@ mod tests {
             allowed.status(),
             StatusCode::OK,
             "with the Connect grant the credential prompt is served"
+        );
+    }
+
+    // ── Personal folders API (persea#138 / persea#166) ──────────────────
+
+    fn make_session(db: &Db, email: &str, role: &str) -> String {
+        insert_test_user(db, email, email, role);
+        let user = db::get_user_by_email(db, email).unwrap();
+        db::create_auth_session(db, user.id, 3600).unwrap()
+    }
+
+    fn session_json_req(method: &str, uri: &str, session: &str, body: Value) -> Request<Body> {
+        let mut req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("cookie", format!("persea_session={}", session))
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(test_addr()));
+        req
+    }
+
+    /// Reusable shared folder plus a fresh entry; returns the entry id.
+    fn make_shared_entry(db: &Db, name: &str) -> i64 {
+        let folder_id = match db::get_ab_folder(db, "shared", "Shared") {
+            Ok(f) => f.id,
+            Err(_) => db::create_ab_folder(db, "shared", "Shared", "", "", false).unwrap(),
+        };
+        db::create_ab_entry(
+            db,
+            folder_id,
+            name,
+            "",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "root",
+            "{}",
+            "",
+        )
+        .unwrap()
+    }
+
+    /// Create a personal folder via the API; returns its id.
+    async fn make_personal_folder(app: &axum::Router, session: &str, name: &str) -> i64 {
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                "/api/personal/folders",
+                session,
+                json!({"name": name}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        body_json(response).await["id"].as_i64().unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_create_list_and_validate() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+
+        let a = make_personal_folder(&app, &alice, "Work").await;
+        let b = make_personal_folder(&app, &alice, "Work/Acme").await;
+        let c = make_personal_folder(&app, &alice, "Personal").await;
+        assert!(a > 0 && b > 0 && c > 0);
+
+        // Flat list with slash paths, ordered by name.
+        let response = app
+            .clone()
+            .oneshot(session_req("GET", "/api/personal/folders", &alice))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["Personal", "Work", "Work/Acme"]);
+        assert_eq!(body[1]["path"], "Work");
+        assert_eq!(body[1]["has_children"], json!(true));
+        assert_eq!(body[2]["has_children"], json!(false));
+        assert_eq!(body[0]["description"], "");
+
+        // Name validation: empty, slashes at either end, empty segments.
+        for bad in ["", "   ", "/x", "x/", "/x/", "a//b", "a/ /b"] {
+            let response = app
+                .clone()
+                .oneshot(session_json_req(
+                    "POST",
+                    "/api/personal/folders",
+                    &alice,
+                    json!({"name": bad}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "name {:?} must be rejected",
+                bad
+            );
+        }
+
+        // Duplicate name per user conflicts.
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                "/api/personal/folders",
+                &alice,
+                json!({"name": "Work"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        // Another user may reuse the same name.
+        let bob = make_session(&db, "bob@test.com", "viewer");
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                "/api/personal/folders",
+                &bob,
+                json!({"name": "Work"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_owner_isolation() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let bob = make_session(&db, "bob@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+
+        let alice_folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry = make_shared_entry(&db, "srv1");
+
+        // Bob sees only his own (empty) list.
+        let response = app
+            .clone()
+            .oneshot(session_req("GET", "/api/personal/folders", &bob))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await, json!([]));
+
+        // Every operation on Alice's folder is a 404 for Bob.
+        let uri = format!("/api/personal/folders/{}", alice_folder);
+        let rename = app
+            .clone()
+            .oneshot(session_json_req(
+                "PUT",
+                &uri,
+                &bob,
+                json!({"name": "Hijacked"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rename.status(), StatusCode::NOT_FOUND);
+        let delete = app
+            .clone()
+            .oneshot(session_req("DELETE", &uri, &bob))
+            .await
+            .unwrap();
+        assert_eq!(delete.status(), StatusCode::NOT_FOUND);
+
+        let list_entries = app
+            .clone()
+            .oneshot(session_req("GET", &format!("{}/entries", uri), &bob))
+            .await
+            .unwrap();
+        assert_eq!(list_entries.status(), StatusCode::NOT_FOUND);
+        let add_entry = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                &format!("{}/entries", uri),
+                &bob,
+                json!({"scope": "shared", "folder": "Shared", "entry": "srv1"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(add_entry.status(), StatusCode::NOT_FOUND);
+        let remove_entry = app
+            .clone()
+            .oneshot(session_req(
+                "DELETE",
+                &format!("{}/entries/{}", uri, entry),
+                &bob,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(remove_entry.status(), StatusCode::NOT_FOUND);
+
+        // Alice's folder is untouched.
+        let response = app
+            .clone()
+            .oneshot(session_req("GET", "/api/personal/folders", &alice))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        assert_eq!(body.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_api_key_and_anonymous_denied() {
+        let db = test_db();
+        let app = build_router(db.clone(), test_vault_state(), None);
+
+        // API key identities have no user row: fail closed with 403.
+        let key = insert_test_admin(&db, "admin");
+        let response = app
+            .clone()
+            .oneshot(auth_req("GET", "/api/personal/folders", &key))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        let response = app
+            .clone()
+            .oneshot(json_req(
+                "POST",
+                "/api/personal/folders",
+                &key,
+                json!({"name": "Work"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+        // No session cookie at all.
+        let response = app
+            .clone()
+            .oneshot(session_req("GET", "/api/personal/folders", "nope"))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_rename() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+
+        // Rename into a deeper slash path.
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "PUT",
+                &format!("/api/personal/folders/{}", folder),
+                &alice,
+                json!({"name": "Career/Lead"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(body["name"], "Career/Lead");
+
+        // Invalid names are rejected on rename too.
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "PUT",
+                &format!("/api/personal/folders/{}", folder),
+                &alice,
+                json!({"name": "/bad"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        // Renaming onto an existing per-user name conflicts.
+        make_personal_folder(&app, &alice, "Work").await;
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "PUT",
+                &format!("/api/personal/folders/{}", folder),
+                &alice,
+                json!({"name": "Work"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        // A missing folder is a 404, not a 500.
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "PUT",
+                "/api/personal/folders/999999",
+                &alice,
+                json!({"name": "Nope"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_entries_add_list_remove() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry_a = make_shared_entry(&db, "srv-a");
+        let entry_b = make_shared_entry(&db, "srv-b");
+
+        let add = |uri: String, entry: String| {
+            let app = app.clone();
+            let session = alice.clone();
+            async move {
+                app.oneshot(session_json_req(
+                    "POST",
+                    &uri,
+                    &session,
+                    json!({"scope": "shared", "folder": "Shared", "entry": entry}),
+                ))
+                .await
+                .unwrap()
+            }
+        };
+
+        let response = add(
+            format!("/api/personal/folders/{}/entries", folder),
+            "srv-a".to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body = body_json(response).await;
+        assert_eq!(body["entry_id"], json!(entry_a));
+
+        // Duplicate references conflict.
+        let response = add(
+            format!("/api/personal/folders/{}/entries", folder),
+            "srv-a".to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+
+        // A missing shared entry is a 404.
+        let response = add(
+            format!("/api/personal/folders/{}/entries", folder),
+            "nope".to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // An entry the caller cannot read is a 404 (no enumeration). The
+        // restricted entry lives in its own folder so the open folder's
+        // entry fallback stays open.
+        db::create_ab_folder(&db, "shared", "Restricted", "", "", false).unwrap();
+        db::create_ab_entry(
+            &db,
+            db::get_ab_folder(&db, "shared", "Restricted").unwrap().id,
+            "secret",
+            "",
+            "ssh",
+            "10.0.0.9",
+            Some(22),
+            "root",
+            "{}",
+            "admins",
+        )
+        .unwrap();
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+                json!({"scope": "shared", "folder": "Restricted", "entry": "secret"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        // The referenced entries resolve to their real rows with the same
+        // serialization as the address-book entry lists.
+        let response = add(
+            format!("/api/personal/folders/{}/entries", folder),
+            "srv-b".to_string(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["srv-a", "srv-b"]);
+        assert_eq!(body[0]["session_type"], "ssh");
+        assert_eq!(body[0]["hostname"], "10.0.0.1");
+        assert_eq!(body[0]["port"], json!(22));
+        assert!(body[0].get("password").is_none(), "no credentials leak");
+
+        // Remove one reference, then the other; a second remove is 404.
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "DELETE",
+                &format!("/api/personal/folders/{}/entries/{}", folder, entry_a),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "DELETE",
+                &format!("/api/personal/folders/{}/entries/{}", folder, entry_a),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["srv-b"]);
+        let _ = entry_b;
+    }
+
+    #[tokio::test]
+    async fn test_personal_folders_cascade_and_reference_integrity() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry_a = make_shared_entry(&db, "srv-a");
+        let entry_b = make_shared_entry(&db, "srv-b");
+        for (_, entry_name) in [(entry_a, "srv-a"), (entry_b, "srv-b")] {
+            let response = app
+                .clone()
+                .oneshot(session_json_req(
+                    "POST",
+                    &format!("/api/personal/folders/{}/entries", folder),
+                    &alice,
+                    json!({"scope": "shared", "folder": "Shared", "entry": entry_name}),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::CREATED);
+        }
+
+        // Deleting the shared entry removes its references: the folder
+        // survives and the read path skips the gone entry.
+        assert!(db::delete_ab_entry(&db, entry_a).unwrap());
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        let names: Vec<&str> = body
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, vec!["srv-b"], "deleted entry is skipped");
+
+        // The shared entry itself is really gone; the folder survives.
+        let shared_folder = db::get_ab_folder(&db, "shared", "Shared").unwrap();
+        let remaining: Vec<String> = db::list_ab_entries(&db, shared_folder.id)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(remaining, vec!["srv-b".to_string()]);
+
+        // Deleting the personal folder cascades to references only: the
+        // shared folder and its remaining entry survive.
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "DELETE",
+                &format!("/api/personal/folders/{}", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+
+        // The folder is gone, so its entry listing is a 404.
+        let response = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        let remaining: Vec<String> = db::list_ab_entries(&db, shared_folder.id)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(remaining, vec!["srv-b".to_string()]);
+        let folders = db::list_user_folders(
+            &db,
+            db::get_user_by_email(&db, "alice@test.com").unwrap().id,
+        )
+        .unwrap();
+        assert!(folders.is_empty(), "personal folders are gone");
+    }
+    #[tokio::test]
+    async fn test_personal_folders_folder_acl_gates_references() {
+        let db = test_db();
+        let alice = make_session(&db, "alice@test.com", "viewer");
+        let app = build_router(db.clone(), test_vault_state(), None);
+        let folder = make_personal_folder(&app, &alice, "Work").await;
+        let entry_id = make_shared_entry(&db, "srv-a");
+        let response = app
+            .clone()
+            .oneshot(session_json_req(
+                "POST",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+                json!({"scope": "shared", "folder": "Shared", "entry": "srv-a"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Visible while the folder is open.
+        let list = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(body_json(list).await.as_array().unwrap().len(), 1);
+
+        // Tighten the folder ACL to a group Alice is not in: the reference
+        // must disappear from the personal view (same rule as the shared
+        // tree) while the reference row survives.
+        let shared_folder = db::get_ab_folder(&db, "shared", "Shared").unwrap();
+        db::update_ab_folder(&db, "shared", "Shared", "", "admins", false).unwrap();
+        let list = app
+            .clone()
+            .oneshot(session_req(
+                "GET",
+                &format!("/api/personal/folders/{}/entries", folder),
+                &alice,
+            ))
+            .await
+            .unwrap();
+        let body = body_json(list).await;
+        assert_eq!(
+            body.as_array().unwrap().len(),
+            0,
+            "a tightened folder hides its references"
+        );
+        // The reference row itself still exists (folder + entry intact).
+        let alice_user = db::get_user_by_email(&db, "alice@test.com").unwrap();
+        let refs = db::list_user_folder_entries(&db, alice_user.id, folder).unwrap();
+        assert_eq!(refs.len(), 1);
+        let _ = entry_id;
+    }
+
+    // ── Session credential forwarding (persea#245) ──────────────────────────
+
+    /// Manager whose `[auth] forward_session_credentials` gate is ON and
+    /// whose recording dir lives in the system temp dir.
+    fn session_credentials_manager(gate_on: bool) -> AppState {
+        let mut config = crate::config::Config::default();
+        config.recording = Some(crate::config::RecordingConfig {
+            path: std::env::temp_dir().join(format!("persea-ab-{}", uuid::Uuid::new_v4())),
+            ..Default::default()
+        });
+        config.auth = Some(crate::config::AuthConfig {
+            forward_session_credentials: gate_on,
+            ..Default::default()
+        });
+        Arc::new(crate::session::SessionManager::new(config, None))
+    }
+
+    const TEST_ENC_KEY: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    fn session_headers(token: Option<&str>) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        if let Some(t) = token {
+            headers.insert("cookie", format!("persea_session={}", t).parse().unwrap());
+        }
+        headers
+    }
+
+    fn user_identity(email: &str) -> AuthIdentity {
+        AuthIdentity::User {
+            email: email.to_string(),
+            name: email.to_string(),
+            role: "operator".into(),
+            groups: vec![],
+        }
+    }
+
+    fn user_id_of(db: &Db, email: &str) -> i64 {
+        db::get_user_by_email(db, email).unwrap().id
+    }
+
+    fn retained_enc(password: &str) -> String {
+        crate::crypto::encrypt_value(
+            &crate::crypto::EncryptionKey::from_hex(TEST_ENC_KEY).unwrap(),
+            password,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn session_credentials_gate_off_are_never_applied() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let manager = session_credentials_manager(false); // gate OFF
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        let applied = apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        );
+        assert!(!applied, "gate off: nothing is forwarded");
+        assert!(ab_entry.password.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credentials_require_the_owning_session_cookie() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+        manager.store_session_credentials(
+            "session-token",
+            uid,
+            "alice",
+            retained_enc("DCPScret-p@ss"),
+            3600,
+        );
+
+        // No cookie at all: nothing applied.
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(None),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        ));
+        assert!(ab_entry.password.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credentials_are_owned_by_their_session_and_user() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+        manager.store_session_credentials(
+            "session-token",
+            uid,
+            "alice",
+            retained_enc("p@ssword-1"),
+            3600,
+        );
+
+        // A different session token: fail closed.
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("other-session")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        ));
+
+        // The same cookie under a different user's identity: fail closed.
+        insert_test_user(&db, "mallory@test.com", "Mallory", "viewer");
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("mallory@test.com"),
+            &mut ab_entry,
+        ));
+        assert!(ab_entry.password.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credentials_expired_or_mismatched_never_apply() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+
+        // The retained entry belongs to a different user.
+        manager.store_session_credentials(
+            "session-token",
+            uid + 1,
+            "alice",
+            retained_enc("p@ssword-1"),
+            3600,
+        );
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        ));
+
+        // A zero-TTL entry is already expired: fail closed.
+        manager.store_session_credentials(
+            "expired-token",
+            uid,
+            "alice",
+            retained_enc("p@ssword-expired"),
+            0,
+        );
+        let mut ab = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("expired-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab,
+        ));
+        assert!(ab.password.is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credentials_apply_after_entry_and_preset_miss() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+        manager.store_session_credentials(
+            "session-token",
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        // Credential-less entry: the session credentials fill username +
+        // password with the decrypted value.
+        let mut ab_entry = crate::vault::AddressBookEntry {
+            session_type: "ssh".into(),
+            hostname: Some("target.example.com".into()),
+            ..Default::default()
+        };
+        let applied = apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        );
+        assert!(
+            applied,
+            "credential-less entry takes the session credentials"
+        );
+        assert_eq!(ab_entry.username.as_deref(), Some("alice"));
+        assert_eq!(ab_entry.password.as_deref(), Some("p@ssword-session"));
+
+        // An entry that already resolved a password (entry or preset
+        // credentials) is left untouched: the chain keeps entry → preset →
+        // session ordering.
+        let mut ab_entry = crate::vault::AddressBookEntry {
+            session_type: "ssh".into(),
+            password: Some("preset-p@ss".into()),
+            ..Default::default()
+        };
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &user_identity("alice@test.com"),
+            &mut ab_entry,
+        ));
+        assert_eq!(ab_entry.password.as_deref(), Some("preset-p@ss"));
+    }
+
+    #[tokio::test]
+    async fn session_credentials_skip_api_key_identities() {
+        let db = test_db();
+        insert_test_user(&db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(&db, "alice@test.com");
+        let manager = session_credentials_manager(true);
+        manager.store_session_credentials(
+            "session-token",
+            uid,
+            "alice",
+            retained_enc("p@ssword-key"),
+            3600,
+        );
+        // API key identities have no session: fail closed.
+        let mut ab_entry = crate::vault::AddressBookEntry::default();
+        assert!(!apply_session_credentials(
+            &manager,
+            &db,
+            &session_headers(Some("session-token")),
+            Some(&StorageKey(Some(TEST_ENC_KEY.into()))),
+            &AuthIdentity::ApiKey("admin".into()),
+            &mut ab_entry,
+        ));
+        assert!(ab_entry.password.is_none());
+    }
+
+    // ── Connect fallback ordering (persea#246) ────────────────────────────
+
+    #[test]
+    fn auth_failure_classification_recognizes_guacd_unauthorized() {
+        // guacd sends an `error` instruction with status 769
+        // (GUAC_PROTOCOL_STATUS_CLIENT_UNAUTHORIZED) when the target
+        // rejected the presented credentials. The handshake flattens it
+        // into the "Expected 'ready' ... got 'error'" message; the
+        // classifier must recover the status from the args.
+        let rejected = crate::session::SessionError::GuacdConnection(
+            "protocol error: Expected 'ready' instruction, got 'error' (args: [\"Aborted. See logs.\", \"769\"])"
+                .into(),
+        );
+        assert!(is_auth_failure(&rejected));
+    }
+
+    #[test]
+    fn auth_failure_classification_rejects_network_and_protocol_failures() {
+        // Target unreachable: not an auth failure, no matter the message.
+        let unreachable = crate::session::SessionError::GuacdConnection(
+            "connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused"
+                .into(),
+        );
+        assert!(!is_auth_failure(&unreachable));
+
+        // A protocol error that is not an `error` instruction: not an
+        // auth failure.
+        let protocol = crate::session::SessionError::GuacdConnection(
+            "protocol error: Expected 'ready' instruction, got 'size' (args: [\"800\", \"600\"])"
+                .into(),
+        );
+        assert!(!is_auth_failure(&protocol));
+
+        // An `error` instruction with a non-auth status (upstream error,
+        // 515): the target failed, but not because of the credentials.
+        let upstream = crate::session::SessionError::GuacdConnection(
+            "protocol error: Expected 'ready' instruction, got 'error' (args: [\"Upstream error.\", \"515\"])"
+                .into(),
+        );
+        assert!(!is_auth_failure(&upstream));
+
+        // Validation failures are never auth failures.
+        let validation =
+            crate::session::SessionError::ValidationError("hostname is required".into());
+        assert!(!is_auth_failure(&validation));
+    }
+
+    /// Manager whose `[auth] forward_session_credentials` gate is ON and
+    /// whose guacd endpoint points at the given address (a mock guacd or
+    /// an unreachable port).
+    fn session_credentials_manager_with_guacd(gate_on: bool, guacd_addr: &str) -> AppState {
+        let mut config = crate::config::Config::default();
+        config.recording = Some(crate::config::RecordingConfig {
+            path: std::env::temp_dir().join(format!("persea-ab-{}", uuid::Uuid::new_v4())),
+            ..Default::default()
+        });
+        config.auth = Some(crate::config::AuthConfig {
+            forward_session_credentials: gate_on,
+            ..Default::default()
+        });
+        config.guacd_addr = guacd_addr.to_string();
+        Arc::new(crate::session::SessionManager::new(config, None))
+    }
+
+    /// Mock guacd that answers the handshake with an `error` instruction
+    /// carrying the given protocol status, like a real guacd does when the
+    /// target rejects the connection (auth failure: 769) or fails upstream.
+    fn mock_guacd_error(
+        listener: tokio::net::TcpListener,
+        status: u32,
+    ) -> tokio::task::JoinHandle<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut parser = crate::protocol::InstructionParser::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = sock.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    return;
+                }
+                let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                for instr in parser.receive(&chunk).into_iter().flatten() {
+                    if instr.opcode == "select" {
+                        sock.write_all(
+                            crate::protocol::Instruction::new(
+                                "args",
+                                vec![
+                                    "hostname".into(),
+                                    "port".into(),
+                                    "username".into(),
+                                    "password".into(),
+                                ],
+                            )
+                            .encode()
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                    } else if instr.opcode == "connect" {
+                        sock.write_all(
+                            crate::protocol::Instruction::new(
+                                "error",
+                                vec!["Aborted. See logs.".into(), status.to_string()],
+                            )
+                            .encode()
+                            .as_bytes(),
+                        )
+                        .await
+                        .unwrap();
+                        return;
+                    }
+                }
+            }
+        })
+    }
+
+    /// Router for `GET /api/connect` with a custom manager (gate + guacd
+    /// endpoint under test control) and the storage key the session
+    /// credential forwarding needs to decrypt the retained password.
+    fn build_quick_connect_router_with_manager(
+        db: Db,
+        vault: VaultState,
+        manager: AppState,
+    ) -> axum::Router {
+        use axum::routing::get;
+        axum::Router::new()
+            .route("/api/connect", get(super::quick_connect))
+            .with_state(manager)
+            .layer(axum::middleware::from_fn(crate::auth::optional_auth))
+            .layer(Extension(vault))
+            .layer(Extension(OidcEnabled(false)))
+            .layer(Extension(StorageKey(Some(TEST_ENC_KEY.into()))))
+            .layer(Extension(db))
+    }
+
+    /// Router for `POST .../entries/{entry}/connect` with a custom manager
+    /// and the storage key the session credential forwarding needs.
+    fn build_connect_router_with_manager(
+        db: Db,
+        vault: VaultState,
+        manager: AppState,
+    ) -> axum::Router {
+        use axum::routing::post;
+        axum::Router::new()
+            .route(
+                "/api/addressbook/folders/{scope}/{folder}/entries/{entry}/connect",
+                post(super::ab_connect_entry),
+            )
+            .with_state(manager)
+            .layer(axum::middleware::from_fn(crate::auth::require_auth))
+            .layer(Extension(db))
+            .layer(Extension(vault))
+            .layer(Extension(StorageKey(Some(TEST_ENC_KEY.into()))))
+    }
+
+    /// Shared fixture: an operator with a session cookie, a credential-less
+    /// SSH entry on a loopback target, and the RBAC Connect grant.
+    fn connect_fixture(db: &Db) -> (i64, String) {
+        insert_test_user(db, "alice@test.com", "Alice", "operator");
+        let uid = user_id_of(db, "alice@test.com");
+        db::create_ab_folder(db, "shared", "Clients", "", "", false).unwrap();
+        let folder = db::get_ab_folder(db, "shared", "Clients").unwrap();
+        db::create_ab_entry(
+            db,
+            folder.id,
+            "web1",
+            "Web 1",
+            "ssh",
+            "127.0.0.1",
+            Some(22),
+            "",
+            "{}",
+            "",
+        )
+        .unwrap();
+        let user = db::get_user_by_email(db, "alice@test.com").unwrap();
+        rbac::grant_connection_permission(
+            db,
+            &format!("u:{}", user.id),
+            "shared/Clients/web1",
+            rbac::ObjectPermission::Connect,
+        )
+        .unwrap();
+        let session = db::create_auth_session(db, uid, 3600).unwrap();
+        (uid, session)
+    }
+
+    #[tokio::test]
+    async fn quick_connect_session_credentials_auth_failure_serves_prompt() {
+        // Gate on, session credentials retained, and a guacd that rejects
+        // the credentials (error instruction, status 769): the connect
+        // must return the existing interactive-credentials signal (the
+        // inline credential form) instead of surfacing the failure.
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = mock_guacd_error(listener, 0x0301);
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        let app = build_quick_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        server.abort();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains("cred-form"),
+            "an auth failure after the session-credential attempt must serve the credential form, got: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn quick_connect_session_credentials_network_failure_surfaces_directly() {
+        // Gate on, session credentials retained, but guacd is unreachable:
+        // the failure must surface directly, with no prompt.
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        // Bind and drop to get a free port that refuses connections.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        let app = build_quick_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            !html.contains("cred-form"),
+            "a network failure must not serve the credential form, got: {}",
+            html
+        );
+        assert!(
+            html.contains("Connection Error"),
+            "a network failure must surface the error page, got: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn quick_connect_gate_off_prompts_before_attempt() {
+        // Gate off: a credential-less entry prompts before any attempt
+        // (unchanged behavior).
+        let db = test_db();
+        let (_uid, session) = connect_fixture(&db);
+        let manager = session_credentials_manager_with_guacd(false, "127.0.0.1:1");
+        let app = build_quick_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_req(
+                "GET",
+                "/api/connect?scope=shared&folder=Clients&entry=web1",
+                &session,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let html = String::from_utf8_lossy(&body);
+        assert!(
+            html.contains("cred-form"),
+            "gate off: a credential-less entry must prompt before the attempt, got: {}",
+            html
+        );
+    }
+
+    #[tokio::test]
+    async fn ab_connect_entry_session_credentials_auth_failure_serves_prompt() {
+        // Gate on, session credentials retained, and a guacd that rejects
+        // the credentials: the connect must return the
+        // interactive-credentials signal (credentials_required) so the
+        // client can prompt and retry.
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = mock_guacd_error(listener, 0x0301);
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        let app = build_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Clients/entries/web1/connect",
+                &session,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        server.abort();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(
+            body["credentials_required"],
+            json!(true),
+            "an auth failure after the session-credential attempt must signal credentials_required, got: {}",
+            body
+        );
+        assert_eq!(body["username"], json!("alice"));
+    }
+
+    #[tokio::test]
+    async fn ab_connect_entry_session_credentials_network_failure_surfaces_directly() {
+        // Gate on, session credentials retained, but guacd is unreachable:
+        // the failure must surface directly, with no prompt.
+        let db = test_db();
+        let (uid, session) = connect_fixture(&db);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        let manager = session_credentials_manager_with_guacd(true, &addr.to_string());
+        manager.store_session_credentials(
+            &session,
+            uid,
+            "alice",
+            retained_enc("p@ssword-session"),
+            3600,
+        );
+
+        let app = build_connect_router_with_manager(db.clone(), test_vault_state(), manager);
+        let response = app
+            .oneshot(session_json_req(
+                "POST",
+                "/api/addressbook/folders/shared/Clients/entries/web1/connect",
+                &session,
+                json!({}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let body = body_json(response).await;
+        assert_ne!(
+            body["credentials_required"],
+            json!(true),
+            "a network failure must not signal credentials_required, got: {}",
+            body
         );
     }
 }

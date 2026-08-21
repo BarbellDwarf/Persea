@@ -511,6 +511,12 @@
         var exitInProgress = false;
         var wantFullscreen = false;
         var wantAutohideTabs = false;
+        // Auto-size flag (persea#142): resolved server-side (entry → request
+        // → global default → true) and read from SessionInfo (owner path) or
+        // the banner endpoint (share path). When false the client never sends
+        // `size` instructions, so the session stays at the protocol defaults
+        // and the display only scales to fit.
+        var sessionAutoSize = true;
         var protocol = '';
         var targetHost = '';
         var driveEnabled = false;
@@ -1149,6 +1155,7 @@
             .then(function(r) { return r.ok ? r.json() : null; })
             .then(function(d) {
                 sessionReconnectable = !!(d && d.banner);
+                if (d && d.auto_size === false) sessionAutoSize = false;
                 updateReconnectVisibility();
                 return showBanner(d && d.banner);
             })
@@ -1188,6 +1195,7 @@
                 updateReconnectVisibility();
                 if (session && session.fullscreen_on_connect) wantFullscreen = true;
                 if (session && session.autohide_side_tabs) wantAutohideTabs = true;
+                if (session && session.auto_size === false) sessionAutoSize = false;
                 if (session && session.drive_enabled) { driveEnabled = true; document.getElementById('btn-file-transfer').style.display = ''; }
                 // The file browser is offered for SSH sessions (guacd SFTP
                 // filesystem object) and RDP sessions with drive redirection
@@ -1721,7 +1729,15 @@
                         setLiveState('live');
                         updateDuration();
                         (function() {
-                            var fitToWindow = function() { scaleDisplay(); client.sendSize(window.innerWidth, window.innerHeight); };
+                            // Auto-size (persea#142): with the flag off the
+                            // session keeps the protocol-default dimensions.
+                            // The display scales to fit, but the session is
+                            // never resized, so no `size` instruction goes
+                            // out on connect (or later, on window resize).
+                            var fitToWindow = function() {
+                                scaleDisplay();
+                                if (sessionAutoSize) client.sendSize(window.innerWidth, window.innerHeight);
+                            };
                             setTimeout(fitToWindow, 800);
                             setTimeout(fitToWindow, 2000);
                             setTimeout(fitToWindow, 4000);
@@ -1959,9 +1975,13 @@
             client.getDisplay().onresize = function() { if (_scaleDisplay) _scaleDisplay(); };
             var resizeTimer = null;
             window.addEventListener('resize', function() {
+                // The display always rescales to fit; the session itself is
+                // only resized when auto-size is on (persea#142).
                 if (_scaleDisplay) _scaleDisplay();
                 clearTimeout(resizeTimer);
-                resizeTimer = setTimeout(function() { client.sendSize(window.innerWidth, window.innerHeight); }, 250);
+                resizeTimer = setTimeout(function() {
+                    if (sessionAutoSize) client.sendSize(window.innerWidth, window.innerHeight);
+                }, 250);
             });
             // Re-scale when toolbar hides/shows
             var toolbarObs = new MutationObserver(function() { if (_scaleDisplay) _scaleDisplay(); });

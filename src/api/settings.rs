@@ -37,6 +37,7 @@ const SETTING_KEYS: &[&str] = &[
     "enable_rdp",
     "enable_ssh_tunnels",
     "enable_api_keys",
+    "compliance_mode",
     "enable_recordings",
     "enable_web_sessions",
     "enable_spice",
@@ -61,6 +62,7 @@ const SETTING_KEYS: &[&str] = &[
     "default_rdp_height",
     "default_rdp_dpi",
     "default_rdp_security",
+    "default_rdp_auth_pkg",
     "default_rdp_h264",
     "default_rdp_gfx",
     "default_rdp_drive",
@@ -91,6 +93,12 @@ const PROTOCOL_NUM_KEYS: &[(&str, u64)] = &[
 const RDP_SECURITY_KEYS: &[&str] = &["default_rdp_security"];
 const RDP_SECURITY_VALUES: &[&str] = &["any", "rdp", "tls", "nla"];
 
+/// RDP NLA auth packages accepted as a global default. The empty string
+/// means "no global default": the create path falls back to the `[rdp]`
+/// config value, then NTLM.
+const RDP_AUTH_PKG_KEYS: &[&str] = &["default_rdp_auth_pkg"];
+const RDP_AUTH_PKG_VALUES: &[&str] = &["", "ntlm", "kerberos", "negotiate"];
+
 /// Keys whose stored value is a JSON document (serialized as a string in the
 /// `system_settings` table).
 const JSON_KEYS: &[&str] = &["custom_fields"];
@@ -115,6 +123,7 @@ const BOOL_KEYS: &[&str] = &[
     "enable_rdp",
     "enable_ssh_tunnels",
     "enable_api_keys",
+    "compliance_mode",
     "enable_recordings",
     "enable_web_sessions",
     "enable_spice",
@@ -170,6 +179,12 @@ fn default_value(key: &str) -> Value {
         "enable_rdp" => json!(true),
         "enable_ssh_tunnels" => json!(true),
         "enable_api_keys" => json!(true),
+        // Compliance mode (persea#228): off by default so existing
+        // deployments behave exactly as before. The auth middleware treats
+        // an unset toggle as off (settings_merge::toggle_enabled(..., false)),
+        // so the Settings API must report false too or the admin checkbox
+        // lies about the gate.
+        "compliance_mode" => json!(false),
         "enable_recordings" => json!(true),
         "enable_web_sessions" => json!(true),
         "enable_spice" => json!(true),
@@ -206,6 +221,7 @@ fn default_value(key: &str) -> Value {
         "default_rdp_height" => json!(1080u64),
         "default_rdp_dpi" => json!(96u64),
         "default_rdp_security" => json!("any"),
+        "default_rdp_auth_pkg" => json!(""),
         "default_rdp_h264" => json!(true),
         "default_rdp_gfx" => json!(true),
         "default_rdp_drive" => json!(false),
@@ -248,6 +264,14 @@ fn stored_to_value(key: &str, stored: &str) -> Value {
         // Only the accepted modes pass through; anything else (manual DB
         // edits) falls back so guacd never receives an unknown mode.
         if RDP_SECURITY_VALUES.contains(&stored) {
+            json!(stored)
+        } else {
+            default_value(key)
+        }
+    } else if RDP_AUTH_PKG_KEYS.contains(&key) {
+        // Only the accepted packages pass through (the empty string is a
+        // valid "no global default" value); anything else falls back.
+        if RDP_AUTH_PKG_VALUES.contains(&stored) {
             json!(stored)
         } else {
             default_value(key)
@@ -426,6 +450,21 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
             return Err(AppError::Validation(format!(
                 "{key} must be one of: {}",
                 RDP_SECURITY_VALUES.join(", ")
+            )));
+        }
+        Ok(s.to_string())
+    } else if RDP_AUTH_PKG_KEYS.contains(&key) {
+        let s = value
+            .as_str()
+            .ok_or_else(|| AppError::Validation(format!("{key} must be a string")))?;
+        if !RDP_AUTH_PKG_VALUES.contains(&s) {
+            return Err(AppError::Validation(format!(
+                "{key} must be one of: {}",
+                RDP_AUTH_PKG_VALUES
+                    .iter()
+                    .map(|v| if v.is_empty() { "empty" } else { *v })
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )));
         }
         Ok(s.to_string())
@@ -697,6 +736,28 @@ mod tests {
     }
 
     #[test]
+    fn compliance_mode_default_matches_runtime_gate() {
+        // The auth middleware treats an unset compliance_mode toggle as off
+        // (settings_merge::toggle_enabled(..., false)), so the Settings API
+        // default must agree or the admin Settings page would show "On" for
+        // a mode that is not enforced.
+        assert_eq!(default_value("compliance_mode"), json!(false));
+        assert!(!crate::settings_merge::toggle_enabled(
+            &[],
+            "compliance_mode",
+            false
+        ));
+        // An explicitly stored "true" still wins on both sides.
+        let stored = vec![("compliance_mode".to_string(), "true".to_string())];
+        assert_eq!(stored_to_value("compliance_mode", "true"), json!(true));
+        assert!(crate::settings_merge::toggle_enabled(
+            &stored,
+            "compliance_mode",
+            false
+        ));
+    }
+
+    #[test]
     fn enable_file_transfer_default_matches_runtime_gate() {
         // The runtime treats an unset enable_file_transfer toggle as
         // enabled (settings_merge::toggle_enabled(..., true) at
@@ -825,6 +886,7 @@ mod tests {
         assert_eq!(default_value("default_rdp_height"), json!(1080u64));
         assert_eq!(default_value("default_rdp_dpi"), json!(96u64));
         assert_eq!(default_value("default_rdp_security"), json!("any"));
+        assert_eq!(default_value("default_rdp_auth_pkg"), json!(""));
         assert_eq!(default_value("default_rdp_h264"), json!(true));
         assert_eq!(default_value("default_rdp_gfx"), json!(true));
         assert_eq!(default_value("default_rdp_drive"), json!(false));
@@ -843,6 +905,15 @@ mod tests {
         assert_eq!(stored_to_value("default_rdp_h264", "false"), json!(false));
         assert_eq!(stored_to_value("default_rdp_security", "nla"), json!("nla"));
         assert_eq!(
+            stored_to_value("default_rdp_auth_pkg", "kerberos"),
+            json!("kerberos")
+        );
+        assert_eq!(
+            stored_to_value("default_rdp_auth_pkg", ""),
+            json!(""),
+            "the empty package is a valid stored value (no global default)"
+        );
+        assert_eq!(
             stored_to_value("default_rdp_auto_size", "false"),
             json!(false)
         );
@@ -860,6 +931,8 @@ mod tests {
         // Unknown security modes fall back too (guacd must never receive
         // one from a manual DB edit).
         assert_eq!(stored_to_value("default_rdp_security", "psk"), json!("any"));
+        // Unknown auth packages fall back to the empty default.
+        assert_eq!(stored_to_value("default_rdp_auth_pkg", "pam"), json!(""));
     }
 
     #[test]
@@ -871,6 +944,19 @@ mod tests {
         assert_eq!(
             canonicalize("default_rdp_security", &json!("nla")).unwrap(),
             "nla"
+        );
+        assert_eq!(
+            canonicalize("default_rdp_auth_pkg", &json!("kerberos")).unwrap(),
+            "kerberos"
+        );
+        assert_eq!(
+            canonicalize("default_rdp_auth_pkg", &json!("")).unwrap(),
+            "",
+            "the empty package is accepted (no global default)"
+        );
+        assert_eq!(
+            canonicalize("default_rdp_auth_pkg", &json!("negotiate")).unwrap(),
+            "negotiate"
         );
         assert_eq!(
             canonicalize("default_vnc_disable_copy", &json!(false)).unwrap(),
@@ -894,5 +980,9 @@ mod tests {
         let err = canonicalize("default_rdp_security", &json!("tls-psk")).unwrap_err();
         assert!(err.to_string().contains("any"), "got: {err}");
         assert!(err.to_string().contains("nla"), "got: {err}");
+        // Unknown auth packages are rejected.
+        let err = canonicalize("default_rdp_auth_pkg", &json!("pam")).unwrap_err();
+        assert!(err.to_string().contains("ntlm"), "got: {err}");
+        assert!(err.to_string().contains("kerberos"), "got: {err}");
     }
 }
