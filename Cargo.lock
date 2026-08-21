@@ -3199,6 +3199,7 @@ dependencies = [
  "webpki-roots",
  "windows-service",
  "windows-sys 0.61.2",
+ "x509-parser",
  "zeroize",
 ]
 

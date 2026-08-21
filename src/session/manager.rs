@@ -70,6 +70,12 @@ pub struct SessionManager {
     /// creation: otherwise any session older than the cleanup delay is
     /// removed the moment it disconnects, with no reconnect window at all.
     disconnected_at: std::sync::Mutex<HashMap<Uuid, DateTime<Utc>>>,
+    /// Transient session-scoped login credentials (persea#245): encrypted
+    /// login passwords retained per auth session when
+    /// `[auth] forward_session_credentials` is enabled. In-memory only,
+    /// keyed by the auth-session token hash, TTL-bound to the session,
+    /// cleared by logout/expiry/revocation (see `credentials.rs`).
+    session_credentials: super::credentials::SessionCredentialStore,
 }
 
 /// Bounded retained log + watch broadcast backing the session event feed.
@@ -222,6 +228,7 @@ impl SessionManager {
             ended_at: std::sync::Mutex::new(HashMap::new()),
             owner_connected: std::sync::Mutex::new(HashSet::new()),
             disconnected_at: std::sync::Mutex::new(HashMap::new()),
+            session_credentials: super::credentials::SessionCredentialStore::new(),
         }
     }
 
@@ -899,6 +906,94 @@ impl SessionManager {
         }
     }
 
+    // ── Transient session credentials (persea#245) ─────────────────────────────
+    //
+    // Retained login passwords live in memory on the manager, keyed by the
+    // auth-session token hash, and are handed back only to the owning
+    // session. See `credentials.rs` for the storage and security notes.
+
+    /// Store an encrypted login credential for an auth session. Called by
+    /// the password login handler when `[auth] forward_session_credentials`
+    /// is enabled; `password_enc` must already be encrypted with the
+    /// storage encryption key. `session_token` is the raw `persea_session`
+    /// cookie value — only its SHA-256 hash is kept as the map key.
+    /// `ttl_secs` bounds the entry to the session lifetime. Replaces any
+    /// previous entry for the session.
+    pub fn store_session_credentials(
+        &self,
+        session_token: &str,
+        user_id: i64,
+        username: &str,
+        password_enc: String,
+        ttl_secs: u64,
+    ) {
+        self.session_credentials.prune_expired();
+        self.session_credentials.store(
+            session_token,
+            super::credentials::RetainedSessionCredential {
+                user_id,
+                username: username.to_string(),
+                password_enc,
+                expires_at: Utc::now() + chrono::Duration::seconds(ttl_secs as i64),
+            },
+        );
+    }
+
+    /// Owning-session lookup: the retained credential for `session_token`,
+    /// only when it exists, is unexpired, and belongs to `user_id`. Any
+    /// other outcome is `None` (fail closed). Returns ciphertext only; the
+    /// connect flow decrypts it with the storage key.
+    pub fn session_credentials(
+        &self,
+        session_token: &str,
+        user_id: i64,
+    ) -> Option<super::credentials::RetainedSessionCredential> {
+        self.session_credentials.get(session_token, user_id)
+    }
+
+    /// Remove the retained credential for a session (logout/revocation
+    /// paths). Returns true when an entry was removed.
+    pub fn clear_session_credentials(&self, session_token: &str) -> bool {
+        self.session_credentials.remove(session_token)
+    }
+
+    /// Drop retained credentials that can no longer be used: entries past
+    /// their TTL, and entries whose `auth_sessions` row is gone (logout,
+    /// admin revocation, or DB-side session expiry). Runs from the
+    /// periodic cleanup reaper, so dead ciphertext leaves memory within
+    /// one cleanup cycle. The connect-time lookup is separately fail-closed
+    /// through the auth middleware: a logged-out or revoked session cookie
+    /// never authenticates, so a stale entry can never be retrieved.
+    pub async fn prune_session_credentials(&self) {
+        self.session_credentials.prune_expired();
+        let Some(db) = self.db.clone() else { return };
+        let hashes = self.session_credentials.keys();
+        if hashes.is_empty() {
+            return;
+        }
+        let db_for_check = db.clone();
+        let hashes_for_check = hashes.clone();
+        let live: HashSet<String> = tokio::task::spawn_blocking(move || {
+            hashes_for_check
+                .iter()
+                .filter(|h| crate::db::auth_session_is_live(&db_for_check, h).unwrap_or(false))
+                .cloned()
+                .collect()
+        })
+        .await
+        .unwrap_or_default();
+        for key in &hashes {
+            if !live.contains(key) {
+                self.session_credentials.remove_key(key);
+            }
+        }
+    }
+
+    /// Number of retained session credentials (test/diagnostic helper).
+    pub fn session_credentials_len(&self) -> usize {
+        self.session_credentials.len()
+    }
+
     /// Mint a new short-lived (10 min) shadow token for a session.
     /// Returns the raw token (hand to admin once) and its expiry.
     /// Expired tokens on the session are pruned on mint.
@@ -1399,6 +1494,12 @@ impl SessionManager {
             }
         }
 
+        // Periodic housekeeping: drop retained session credentials whose
+        // auth session has ended (logout, revocation, DB-side expiry) so
+        // dead ciphertext leaves memory within one cleanup cycle
+        // (persea#245).
+        self.prune_session_credentials().await;
+
         to_remove.len()
     }
 
@@ -1740,6 +1841,7 @@ mod tests {
             username: "alice".into(),
             url: None,
             banner: None,
+            auto_size: true,
             guacd_stream: None,
             connection_id: "conn-test".into(),
             share_token: "owner-secret".into(),
@@ -1954,5 +2056,80 @@ mod tests {
 
         let connect_args = server.await.unwrap().expect("mock guacd saw the connect");
         assert_eq!(connect_args, vec!["false".to_string(), String::new()]);
+    }
+
+    // ── Transient session credentials (persea#245) ─────────────────────────
+
+    #[tokio::test]
+    async fn session_credentials_roundtrip_owning_session_only() {
+        let mgr = test_manager();
+        mgr.store_session_credentials("session-token", 7, "alice", "enc:v1:aaa".to_string(), 3600);
+
+        // Same token, same user: resolved.
+        let got = mgr
+            .session_credentials("session-token", 7)
+            .expect("owning session");
+        assert_eq!(got.username, "alice");
+        assert_eq!(got.password_enc, "enc:v1:aaa");
+        // Different token or different user: fail closed.
+        assert!(mgr.session_credentials("other-token", 7).is_none());
+        assert!(mgr.session_credentials("session-token", 8).is_none());
+    }
+
+    #[tokio::test]
+    async fn session_credentials_clear_on_logout_and_expire() {
+        let mgr = test_manager();
+        mgr.store_session_credentials("session-token", 7, "alice", "enc:v1:abc".to_string(), 3600);
+        assert_eq!(mgr.session_credentials_len(), 1);
+
+        // Logout clears the entry for that session.
+        assert!(mgr.clear_session_credentials("session-token"));
+        assert!(mgr.session_credentials("session-token", 7).is_none());
+        assert_eq!(mgr.session_credentials_len(), 0);
+
+        // A zero-TTL entry is already expired: retrieval fails closed and
+        // the prune removes it.
+        mgr.store_session_credentials("expired-token", 7, "alice", "enc:v1:abc".to_string(), 0);
+        assert!(mgr.session_credentials("expired-token", 7).is_none());
+        mgr.prune_session_credentials().await;
+        assert_eq!(mgr.session_credentials_len(), 0);
+    }
+
+    #[tokio::test]
+    async fn prune_drops_credentials_whose_session_was_revoked() {
+        let db = crate::db::init_db(std::path::Path::new(":memory:")).unwrap();
+        // A user + live auth session row, exactly as a password login leaves
+        // behind.
+        let hash = crate::password::hash_password("s3cret-p@ssword-long").unwrap();
+        crate::db::create_user_with_password(
+            &db,
+            "alice@example.com",
+            "Alice",
+            &hash,
+            "poweruser",
+            "database",
+        )
+        .unwrap();
+        let user = crate::db::get_user_by_email(&db, "alice@example.com").unwrap();
+        let token = crate::db::create_auth_session(&db, user.id, 3600).unwrap();
+
+        let mut config = Config::default();
+        let tmp = std::env::temp_dir().join(format!("persea-mgr-prune-{}", uuid::Uuid::new_v4()));
+        config.recording_path = Some(tmp.clone());
+        let mgr = SessionManager::new_with_db(config, None, db.clone());
+        mgr.store_session_credentials(&token, user.id, "alice", "enc:v1:abc".to_string(), 3600);
+        assert_eq!(mgr.session_credentials_len(), 1);
+
+        // Live session: the prune keeps the entry.
+        mgr.prune_session_credentials().await;
+        assert_eq!(mgr.session_credentials_len(), 1);
+        assert!(mgr.session_credentials(&token, user.id).is_some());
+
+        // Revocation (force logout): the auth session row is deleted, so
+        // the next prune drops the retained credential.
+        crate::db::delete_auth_session(&db, &token).unwrap();
+        mgr.prune_session_credentials().await;
+        assert_eq!(mgr.session_credentials_len(), 0);
+        assert!(mgr.session_credentials(&token, user.id).is_none());
     }
 }
