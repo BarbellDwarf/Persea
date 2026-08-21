@@ -82,6 +82,10 @@ struct ProtocolDefaults {
     height: u32,
     dpi: u32,
     rdp_security: Option<String>,
+    /// Stored global NLA auth package default (`default_rdp_auth_pkg`);
+    /// `None` when unset, so the create path falls back to the `[rdp]`
+    /// config value, then NTLM.
+    rdp_auth_pkg: Option<String>,
     rdp_h264: bool,
     rdp_gfx: bool,
     rdp_drive: Option<bool>,
@@ -142,6 +146,8 @@ impl ProtocolDefaults {
             },
             rdp_security: stored_str("default_rdp_security")
                 .filter(|s| matches!(s.as_str(), "any" | "rdp" | "tls" | "nla")),
+            rdp_auth_pkg: stored_str("default_rdp_auth_pkg")
+                .filter(|s| matches!(s.as_str(), "ntlm" | "kerberos" | "negotiate")),
             rdp_h264: stored_bool("default_rdp_h264").unwrap_or(true),
             rdp_gfx: stored_bool("default_rdp_gfx").unwrap_or(true),
             rdp_drive: stored_bool("default_rdp_drive"),
@@ -694,6 +700,7 @@ impl SessionManager {
                     disable_upload: !drive_cfg.allow_upload,
                     auth_pkg: super::resolve_rdp_auth_pkg(
                         rdp.and_then(|s| s.auth_pkg.as_deref()),
+                        defaults.rdp_auth_pkg.as_deref(),
                         &self.config,
                     ),
                     kdc_url: rdp.and_then(|s| s.kdc_url.clone()),
@@ -2107,40 +2114,68 @@ mod auth_pkg_tests {
     }
 
     #[test]
-    fn entry_value_wins_over_server_default() {
+    fn entry_value_wins_over_stored_default_and_server_default() {
         let c = cfg(Some("ntlm"));
         assert_eq!(
-            resolve_rdp_auth_pkg(Some("kerberos"), &c),
+            resolve_rdp_auth_pkg(Some("kerberos"), Some("negotiate"), &c),
             Some("kerberos".into())
         );
     }
 
     #[test]
-    fn empty_entry_value_falls_through_to_server_default() {
-        let c = cfg(Some("kerberos"));
-        assert_eq!(resolve_rdp_auth_pkg(Some(""), &c), Some("kerberos".into()));
+    fn empty_entry_value_falls_through_to_stored_default() {
+        let c = cfg(Some("ntlm"));
         assert_eq!(
-            resolve_rdp_auth_pkg(Some("   "), &c),
+            resolve_rdp_auth_pkg(Some(""), Some("kerberos"), &c),
+            Some("kerberos".into())
+        );
+        assert_eq!(
+            resolve_rdp_auth_pkg(Some("   "), Some("kerberos"), &c),
             Some("kerberos".into())
         );
     }
 
     #[test]
-    fn no_entry_no_config_defaults_to_ntlm() {
+    fn stored_default_wins_over_server_default() {
+        let c = cfg(Some("ntlm"));
+        assert_eq!(
+            resolve_rdp_auth_pkg(None, Some("kerberos"), &c),
+            Some("kerberos".into())
+        );
+    }
+
+    #[test]
+    fn empty_stored_default_falls_through_to_server_default() {
+        let c = cfg(Some("negotiate"));
+        assert_eq!(
+            resolve_rdp_auth_pkg(None, Some(""), &c),
+            Some("negotiate".into())
+        );
+        assert_eq!(
+            resolve_rdp_auth_pkg(None, Some("   "), &c),
+            Some("negotiate".into())
+        );
+    }
+
+    #[test]
+    fn no_entry_no_stored_no_config_defaults_to_ntlm() {
         let c = Config::default();
-        assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("ntlm".into()));
+        assert_eq!(resolve_rdp_auth_pkg(None, None, &c), Some("ntlm".into()));
     }
 
     #[test]
     fn empty_config_default_falls_through_to_ntlm() {
         let c = cfg(Some(""));
-        assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("ntlm".into()));
+        assert_eq!(resolve_rdp_auth_pkg(None, None, &c), Some("ntlm".into()));
     }
 
     #[test]
-    fn server_default_applies_when_entry_none() {
+    fn server_default_applies_when_entry_and_stored_none() {
         let c = cfg(Some("negotiate"));
-        assert_eq!(resolve_rdp_auth_pkg(None, &c), Some("negotiate".into()));
+        assert_eq!(
+            resolve_rdp_auth_pkg(None, None, &c),
+            Some("negotiate".into())
+        );
     }
 }
 
@@ -2289,6 +2324,10 @@ mod tests {
         let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &[]);
         assert_eq!((d.width, d.height, d.dpi), (1920, 1080, 96));
         assert_eq!(d.rdp_security, None);
+        assert_eq!(
+            d.rdp_auth_pkg, None,
+            "unset auth package default stays None so the config fallback applies"
+        );
         assert!(d.rdp_h264, "H.264 must default on");
         assert!(d.rdp_gfx, "GFX must default on");
         assert_eq!(d.rdp_drive, None);
@@ -2308,6 +2347,7 @@ mod tests {
             ("default_rdp_height", "800"),
             ("default_rdp_dpi", "120"),
             ("default_rdp_security", "nla"),
+            ("default_rdp_auth_pkg", "kerberos"),
             ("default_rdp_h264", "false"),
             ("default_rdp_gfx", "false"),
             ("default_rdp_drive", "true"),
@@ -2322,6 +2362,7 @@ mod tests {
         let rdp = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
         assert_eq!((rdp.width, rdp.height, rdp.dpi), (1280, 800, 120));
         assert_eq!(rdp.rdp_security.as_deref(), Some("nla"));
+        assert_eq!(rdp.rdp_auth_pkg.as_deref(), Some("kerberos"));
         assert!(!rdp.rdp_h264);
         assert!(!rdp.rdp_gfx);
         assert_eq!(rdp.rdp_drive, Some(true));
@@ -2385,6 +2426,7 @@ mod tests {
             ("default_rdp_width", "wide"),
             ("default_rdp_h264", "maybe"),
             ("default_rdp_security", ""),
+            ("default_rdp_auth_pkg", "pam"),
             ("default_rdp_drive", "yes"),
             ("default_rdp_auto_size", "maybe"),
             ("default_vnc_color_depth", "deep"),
@@ -2393,9 +2435,25 @@ mod tests {
         assert_eq!(d.width, 1920);
         assert!(d.rdp_h264);
         assert_eq!(d.rdp_security, None);
+        assert_eq!(
+            d.rdp_auth_pkg, None,
+            "an unknown auth package must not reach guacd"
+        );
         assert_eq!(d.rdp_drive, None);
         assert!(d.auto_size, "garbage auto-size falls back to true");
         assert_eq!(d.vnc_color_depth, None);
+    }
+
+    #[test]
+    fn protocol_defaults_unknown_auth_package_falls_back() {
+        // A manually-edited DB value outside the accepted packages must not
+        // reach guacd: fall back to the config value, then NTLM.
+        let settings = stored(&[("default_rdp_auth_pkg", "pam")]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.rdp_auth_pkg, None);
+        let settings = stored(&[("default_rdp_auth_pkg", "negotiate")]);
+        let d = ProtocolDefaults::from_settings(&SessionType::Rdp, &settings);
+        assert_eq!(d.rdp_auth_pkg.as_deref(), Some("negotiate"));
     }
 
     #[test]
