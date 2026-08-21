@@ -962,6 +962,94 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .toc-link:hover { color: var(--text-primary); border-left-color: var(--border); }
 .toc-link.active { color: var(--accent); border-left-color: var(--accent); }
 
+/* Two-level docs nav: each doc is a collapsible group (details/summary)
+   whose summary carries the doc link and whose body lists its h2/h3
+   headings. Below the lg breakpoint the whole panel becomes a slide-in
+   drawer opened by the page-level "Contents" button. */
+.toc-toggle {
+    display: none;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.toc-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+.toc-toggle svg { width: 16px; height: 16px; }
+
+.toc-panel { transition: transform 0.2s ease; }
+.toc-panel-inner { position: sticky; top: 1.5rem; }
+
+.toc-backdrop { display: none; }
+
+.toc-group { border-bottom: 1px solid var(--border); }
+.toc-group:last-child { border-bottom: none; }
+.toc-summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+}
+.toc-summary::-webkit-details-marker { display: none; }
+.toc-chevron {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    margin-left: auto;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    color: var(--text-muted);
+    transform: rotate(45deg);
+    transition: transform 0.15s;
+}
+.toc-group[open] .toc-chevron { transform: rotate(135deg); }
+.toc-sub-list { list-style: none; margin: 0; padding: 0 0 4px; }
+.toc-sub-link { padding-left: 24px; font-size: var(--text-sm); }
+
+@media (max-width: 1023.98px) {
+    .toc-toggle { display: inline-flex; }
+    .toc-panel {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 280px;
+        max-width: 85vw;
+        padding: 16px;
+        background: var(--bg-card);
+        border-right: 1px solid var(--border);
+        overflow-y: auto;
+        z-index: 60;
+        transform: translateX(-100%);
+    }
+    .toc-panel.open { transform: translateX(0); }
+    .toc-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 55;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+    }
+    .toc-backdrop.visible { opacity: 1; pointer-events: auto; }
+}
+
+@media (min-width: 1024px) {
+    .toc-toggle { display: none; }
+    .toc-panel { position: static; transform: none; width: 14rem; flex-shrink: 0; }
+}
+
 /* ── Color preset menu ──────────────────────────────────── */
 .um-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: var(--text-base); color: var(--text-secondary); transition: background 0.15s; }
 .um-item:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -1220,3 +1308,87 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     }
     .page-tabs, .settings-tabs { display: none; }
 }
+/* ── Connections: consolidated top bar (persea#215) ───────── */
+/* One search input spanning the content width, a Filters dropdown
+   holding every filter field, and active filters as removable chips.
+   The scope filter lives in the tree header. */
+.connections-search-row {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+.connections-search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.connections-search-wrap #connections-search { flex: 1; min-width: 0; }
+.connections-dropdown-wrap { position: relative; }
+.connections-dropdown {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+    z-index: 40;
+    min-width: 240px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+#filters-dropdown { min-width: 260px; }
+#filters-dropdown .form-input { width: 100%; }
+#filters-dropdown #filter-custom-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.conn-sidebar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.connections-filter-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: default;
+}
+.filter-chip-remove {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 14px;
+    line-height: 1;
+}
+.filter-chip-remove:hover { color: var(--accent); }
+.filter-chip-clear-all {
+    background: transparent;
+    border-color: var(--accent);
+    color: var(--accent);
+    cursor: pointer;
+    font-family: var(--font-sans);
+    font-weight: 500;
+}
+.filter-chip-clear-all:hover { background: rgba(16,185,129,0.1); } (feat: consolidate connections page top bar (persea#215))

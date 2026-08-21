@@ -15,7 +15,7 @@
 }
 </style>
 
-<div class="max-w-7xl mx-auto">
+<div>
     <div class="mb-6">
         <h1 class="text-2xl font-bold text-[var(--text-primary)]">Security</h1>
         <p class="text-sm text-[var(--text-muted)] mt-1">Users, groups, roles, authentication, audit, and TLS certificates</p>
@@ -125,7 +125,15 @@ function showSecuritySection(name, opts) {
                 tab.setAttribute('aria-selected', 'true');
                 tab.setAttribute('tabindex', '0');
             });
-            if (focusPanel) panel.focus();
+            if (focusPanel) {
+                // Focus without scrolling: the panels are stacked in the DOM
+                // and carry tabindex="-1", so a plain focus() scrolls the
+                // activated panel into view, jumping the page to mid-scroll
+                // for sections below the tall Session panel. The view stays
+                // at the top of the page; the user scrolls down themselves.
+                panel.focus({ preventScroll: true });
+                window.scrollTo(0, 0);
+            }
         } else {
             panel.hidden = true;
             securityNavs(s).forEach(function(tab) {
