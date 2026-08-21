@@ -46,93 +46,6 @@
     outline-offset: 2px;
 }
 
-/* ── Settings section tabs ─────────────────────────────── */
-.settings-tabs {
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 20px;
-    overflow-x: auto;
-    overflow-y: hidden;
-}
-.settings-tab {
-    appearance: none;
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    padding: 10px 14px;
-    font-size: var(--text-sm);
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: color 0.15s;
-}
-.settings-tab:hover {
-    color: var(--text-primary);
-}
-.settings-tab:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-}
-.settings-tab[aria-selected="true"] {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-}
-
-/* ── Settings left rail (1280px+ screens) ──────────────── */
-.settings-layout { display: block; }
-.settings-rail { display: none; }
-.settings-main { min-width: 0; }
-.settings-rail-tab {
-    appearance: none;
-    background: none;
-    border: none;
-    border-left: 3px solid transparent;
-    padding: 8px 12px;
-    font-size: var(--text-sm);
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    text-align: left;
-    transition: color 0.15s, border-color 0.15s, background-color 0.15s;
-}
-.settings-rail-tab:hover {
-    color: var(--text-primary);
-}
-.settings-rail-tab:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-}
-.settings-rail-tab[aria-selected="true"] {
-    color: var(--accent);
-    border-left-color: var(--accent);
-    background-color: rgba(16,185,129,0.08);
-}
-
-/* Wide screens: rail next to the content panel; the tab bar becomes the
-   narrow-screen control and is hidden here. The hide rule lives in this
-   page block (not app.css) so it overrides the .settings-tabs display rule
-   above it in the same cascade. */
-@media (min-width: 1280px) {
-    .settings-layout {
-        display: grid;
-        grid-template-columns: 200px minmax(0, 1fr);
-        gap: 32px;
-        align-items: start;
-    }
-    .settings-rail {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        position: sticky;
-        top: 24px;
-    }
-    .settings-tabs { display: none; }
-}
-
 /* ── Consistent card headers + collapsible groups ─────── */
 .settings-card-header {
     display: flex;
@@ -159,9 +72,13 @@
 .settings-group-toggle[aria-expanded="true"] .settings-chevron {
     transform: rotate(180deg);
 }
+
+/* Settings search: cards and sections the query does not match are
+   hidden; clearing the search restores tab-driven visibility. */
+.settings-search-hidden { display: none; }
 </style>
 
-<div class="max-w-5xl mx-auto">
+<div>
     <div class="mb-6">
         <h1 class="text-2xl font-bold text-[var(--text-primary)]">System Settings</h1>
         <p class="text-sm text-[var(--text-muted)] mt-1">Configure server, session, and feature settings</p>
@@ -171,22 +88,33 @@
         <!-- Left rail: the wide-screen (1280px+) section list. Shares the
              hash persistence, aria-selected state and roving tabindex of
              the tab bar; the script block drives both. -->
-        <nav class="settings-rail" role="tablist" aria-label="Settings sections">
-            <button type="button" role="tab" id="rail-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-rail-tab">Session</button>
-            <button type="button" role="tab" id="rail-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-rail-tab">Features</button>
-            <button type="button" role="tab" id="rail-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-rail-tab">Storage</button>
-            <button type="button" role="tab" id="rail-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="settings-rail-tab">Security</button>
-            <button type="button" role="tab" id="rail-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-rail-tab">Updates</button>
-        </nav>
+        <div class="settings-rail-wrap">
+            <p class="settings-rail-label">Settings</p>
+            <nav class="settings-rail" role="tablist" aria-label="Settings sections">
+                <button type="button" role="tab" id="rail-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-rail-tab">Session</button>
+                <button type="button" role="tab" id="rail-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-rail-tab">Features</button>
+                <button type="button" role="tab" id="rail-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-rail-tab">Storage</button>
+                <button type="button" role="tab" id="rail-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-rail-tab">Updates</button>
+            </nav>
+        </div>
 
         <div class="settings-main">
+            <!-- Settings search: a client-side filter over the sections and
+                 fields below, visible in both layouts (rail and tab bar).
+                 The script block at the bottom wires it with addEventListener
+                 because the page CSP blocks inline handlers. -->
+            <div class="mb-4">
+                <input type="search" id="settings-search" placeholder="Search settings..." aria-label="Search settings"
+                       autocomplete="off" class="form-input w-full sm:w-96">
+                <p id="settings-search-empty" class="hidden text-sm text-[var(--text-muted)] mt-2">No settings match your search.</p>
+            </div>
+
             <!-- Submenu bar: the narrow-screen (below 1280px) control; one
                  section at a time, hash preserves the active tab -->
             <div class="settings-tabs" role="tablist" aria-label="Settings sections">
                 <button type="button" role="tab" id="tab-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-tab">Session</button>
                 <button type="button" role="tab" id="tab-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-tab">Features</button>
                 <button type="button" role="tab" id="tab-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-tab">Storage</button>
-                <button type="button" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="settings-tab">Security</button>
                 <button type="button" role="tab" id="tab-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-tab">Updates</button>
             </div>
 
@@ -284,8 +212,29 @@
                                             <option value="nla">nla</option>
                                         </select>
                                     </div>
+                                    <div>
+                                        <label class="form-label">Auth Package</label>
+                                        <select name="default_rdp_auth_pkg" class="form-input">
+                                            <option value="">Default</option>
+                                            <option value="ntlm">ntlm</option>
+                                            <option value="kerberos">kerberos</option>
+                                            <option value="negotiate">negotiate</option>
+                                        </select>
+                                        <p class="text-xs text-[var(--text-muted)] mt-1">Empty falls back to the [rdp] config, then NTLM</p>
+                                    </div>
                                 </div>
-                                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                        <div>
+                                            <span class="text-sm text-[var(--text-primary)]">Auto Size</span>
+                                            <p class="text-xs text-[var(--text-muted)]">Scale the session to the browser window</p>
+                                        </div>
+                                        <div class="toggle-switch">
+                                            <input type="checkbox" id="default_rdp_auto_size" checked>
+                                            <span class="toggle-slider"></span>
+                                        </div>
+                                    </label>
+                                    <input type="hidden" name="default_rdp_auto_size" id="default_rdp_auto_size-hidden" value="false">
                                     <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
                                         <div>
                                             <span class="text-sm text-[var(--text-primary)]">H.264</span>
@@ -335,6 +284,19 @@
                                         <input type="number" name="default_ssh_height" value="1080" class="form-input">
                                     </div>
                                 </div>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                        <div>
+                                            <span class="text-sm text-[var(--text-primary)]">Auto Size</span>
+                                            <p class="text-xs text-[var(--text-muted)]">Scale the terminal to the browser window</p>
+                                        </div>
+                                        <div class="toggle-switch">
+                                            <input type="checkbox" id="default_ssh_auto_size" checked>
+                                            <span class="toggle-slider"></span>
+                                        </div>
+                                    </label>
+                                    <input type="hidden" name="default_ssh_auto_size" id="default_ssh_auto_size-hidden" value="false">
+                                </div>
                             </div>
 
                             <!-- VNC -->
@@ -369,6 +331,23 @@
                                         </label>
                                         <input type="hidden" name="default_vnc_disable_paste" id="default_vnc_disable_paste-hidden" value="false">
                                     </div>
+                                </div>
+                            </div>
+
+                            <!-- Bulk apply: write the current RDP/SSH defaults
+                                 into every saved connection entry. -->
+                            <div class="pt-3 border-t border-[var(--border)]">
+                                <div class="flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                        <p class="text-sm font-semibold text-[var(--text-primary)]">Apply to all RDP connections</p>
+                                        <p class="text-xs text-[var(--text-muted)] mt-1">
+                                            Write the current RDP defaults (Auto Size, Security Mode, Auth Package)
+                                            into every saved RDP connection, and Auto Size into every saved SSH connection.
+                                            Per-connection settings in the address book are overwritten.
+                                        </p>
+                                    </div>
+                                    <button type="button" id="btn-apply-auto-size"
+                                            class="btn btn-secondary btn-sm">Apply to all RDP connections</button>
                                 </div>
                             </div>
                         </div>
@@ -419,6 +398,18 @@
                                 </div>
                             </label>
                             <input type="hidden" name="enable_api_keys" id="enable_api_keys-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Compliance Mode</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Disable direct API access: admin API keys and self-service tokens are rejected; only interactive sessions and scoped desktop tokens authenticate</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="compliance_mode">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="compliance_mode" id="compliance_mode-hidden" value="false">
 
                             <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
                                 <div>
@@ -565,27 +556,26 @@
 
                 <!-- Storage -->
                 <section role="tabpanel" id="panel-storage" aria-labelledby="tab-storage" tabindex="-1" hidden class="space-y-4">
-                    <!-- Storage backends -->
+                    <!-- Storage backends: where connection credentials live.
+                         Copy explains both backends and when to pick each; no
+                         decorative icons, per the design rule for this panel. -->
                     <div class="card">
                         <h2 class="settings-card-header">
-                            Storage
+                            Storage Backends
                         </h2>
+                        <p class="text-sm text-[var(--text-muted)] mb-4">
+                            Connection credentials are read server-side when a session starts and never reach
+                            the browser. Where they are kept is a deployment decision between two backends.
+                        </p>
                         <div class="space-y-3">
                             <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
                                 <div>
-                                    <span class="text-sm text-[var(--text-primary)]">Vault Address Book</span>
-                                    <p class="text-xs text-[var(--text-muted)]">Use Vault/OpenBao for connection storage</p>
-                                </div>
-                                <div class="toggle-switch">
-                                    <input type="checkbox" id="vault_enabled">
-                                    <span class="toggle-slider"></span>
-                                </div>
-                            </label>
-                            <input type="hidden" name="vault_enabled" id="vault_enabled-hidden" value="false">
-                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                                <div>
                                     <span class="text-sm text-[var(--text-primary)]">DB-Only Mode</span>
-                                    <p class="text-xs text-[var(--text-muted)]">Store connections in SQLite (no Vault required)</p>
+                                    <p class="text-xs text-[var(--text-muted)]">
+                                        The simplest backend, recommended for most deployments. Credentials stay in
+                                        the application database, encrypted at rest with AES-256-GCM. Nothing extra
+                                        to run or maintain.
+                                    </p>
                                 </div>
                                 <div class="toggle-switch">
                                     <input type="checkbox" id="db_only_mode">
@@ -593,40 +583,46 @@
                                 </div>
                             </label>
                             <input type="hidden" name="db_only_mode" id="db_only_mode-hidden" value="false">
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Vault Address Book</span>
+                                    <p class="text-xs text-[var(--text-muted)]">
+                                        Keep credentials in HashiCorp Vault or OpenBao, the shared secrets manager
+                                        used in enterprise and HashiCorp environments. Choose this when your
+                                        organization already runs Vault or OpenBao and wants connection secrets
+                                        managed alongside its other secrets. Requires a configured
+                                        <code class="text-[var(--text-primary)]">[vault]</code> section in the
+                                        config file.
+                                    </p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="vault_enabled">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="vault_enabled" id="vault_enabled-hidden" value="false">
                         </div>
+                        <p class="text-xs text-[var(--text-muted)] mt-4">
+                            Pros and cons of each backend, plus setup steps, are in the
+                            <a class="text-[var(--accent)] hover:underline" href="/docs">deployment guide's storage section</a>.
+                        </p>
                     </div>
 
-                    <!-- Connection Custom Fields -->
+                    <!-- Customization: the connection custom fields editor and
+                         what it does. The editor itself is unchanged. -->
                     <div class="card">
                         <h2 class="settings-card-header">
-                            Connection Custom Fields
+                            Customization
                         </h2>
-                        <p class="text-xs text-[var(--text-muted)] mb-4">
-                            Optional extra fields shown on connection entry forms (e.g. Environment, Owner, Cost Center).
-                            Off by default — add a field below to enable them.
+                        <p class="text-sm text-[var(--text-muted)] mb-4">
+                            Connection custom fields add optional extra inputs (e.g. Environment, Owner,
+                            Cost Center) to connection entry forms and to the filter bar on the Connections
+                            page. Off by default; add a field below to enable them.
                         </p>
                         <div id="custom-fields-editor" class="space-y-3"></div>
                         <button type="button" id="add-custom-field"
                                 class="mt-3 btn btn-secondary btn-sm">+ Add Field</button>
                         <input type="hidden" name="custom_fields" id="custom_fields-hidden" value="[]">
-                    </div>
-                </section>
-
-                <!-- Security -->
-                <section role="tabpanel" id="panel-security" aria-labelledby="tab-security" tabindex="-1" hidden class="space-y-4">
-                    <div class="card">
-                        <h2 class="settings-card-header">
-                            Security
-                        </h2>
-                        <p class="text-sm text-[var(--text-muted)] mb-4">
-                            The TLS certificate and key used by the server are configured in the Session section.
-                            Everything else security-related has its own page:
-                        </p>
-                        <ul class="space-y-2 text-sm">
-                            <li><a class="text-[var(--accent)] hover:underline" href="/admin/auth.html">Auth Providers</a> <span class="text-[var(--text-muted)]">(authentication methods, account lockout, password policy)</span></li>
-                            <li><a class="text-[var(--accent)] hover:underline" href="/admin/roles.html">Roles &amp; Permissions</a> <span class="text-[var(--text-muted)]">(system and connection-level RBAC)</span></li>
-                            <li><a class="text-[var(--accent)] hover:underline" href="/admin/audit.html">Audit Log</a> <span class="text-[var(--text-muted)]">(tamper-evident session audit trail)</span></li>
-                        </ul>
                     </div>
                 </section>
 
@@ -678,6 +674,25 @@
     </div>
 </div>
 
+<!-- Apply RDP defaults: confirmation dialog. The count of entries
+     the bulk endpoint updated is shown after the request completes. -->
+<div id="apply-auto-size-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="apply-auto-size-title">
+    <div class="card w-full max-w-sm text-center">
+        <h2 id="apply-auto-size-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Apply RDP defaults?</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">
+            Every saved RDP connection gets the current Auto Size, Security Mode, and Auth Package
+            defaults above, overwriting its per-connection settings. SSH connections get the Auto Size default.
+        </p>
+        <p id="apply-auto-size-status" class="text-sm mb-4" aria-live="polite"></p>
+        <div class="flex justify-center gap-3">
+            <button id="apply-auto-size-cancel"
+                    class="btn btn-secondary btn-sm">Cancel</button>
+            <button id="apply-auto-size-ok"
+                    class="btn btn-primary btn-sm">Apply</button>
+        </div>
+    </div>
+</div>
+
 <script src="/vendor/htmx-json-enc.js"></script>
 <script nonce="{{ csp_nonce }}">
 function showError(message) {
@@ -712,13 +727,14 @@ function syncToggle(name) {
 
 // Feature toggle names shared by the load code and the change listeners.
 var toggleBoxes = [
-    'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
+    'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys', 'compliance_mode',
     'enable_recordings', 'enable_web_sessions', 'enable_spice',
     'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_powershell_ssh',
     'enable_file_transfer',
     'desktop_kiosk', 'desktop_transfers', 'desktop_pairing',
     'vault_enabled', 'db_only_mode',
     'default_rdp_h264', 'default_rdp_gfx', 'default_rdp_drive',
+    'default_rdp_auto_size', 'default_ssh_auto_size',
     'default_vnc_disable_copy', 'default_vnc_disable_paste'
 ];
 
@@ -737,14 +753,74 @@ document.getElementById('save-confirm-ok').addEventListener('click', function() 
     document.getElementById('save-confirm').classList.add('hidden');
 });
 
+// ── Apply RDP defaults to existing connections ──
+// PUT /api/addressbook/defaults/apply writes the current global defaults
+// (auto size, security, auth package for RDP; auto size for SSH) into every
+// saved rdp/ssh entry (admin-only, idempotent). Confirm first, then show
+// the count of entries updated. All wiring is addEventListener: the page
+// CSP blocks inline handlers.
+var applyBtn = document.getElementById('btn-apply-auto-size');
+var applyDialog = document.getElementById('apply-auto-size-confirm');
+var applyStatus = document.getElementById('apply-auto-size-status');
+var applyOk = document.getElementById('apply-auto-size-ok');
+var applyCancel = document.getElementById('apply-auto-size-cancel');
+
+function closeApplyDialog() {
+    applyDialog.classList.add('hidden');
+    applyStatus.textContent = '';
+    applyOk.disabled = false;
+    applyOk.textContent = 'Apply';
+    applyOk.style.display = '';
+    applyCancel.style.display = '';
+}
+
+if (applyBtn) {
+    applyBtn.addEventListener('click', function() {
+        applyStatus.textContent = '';
+        applyStatus.className = 'text-sm mb-4';
+        applyDialog.classList.remove('hidden');
+    });
+    applyCancel.addEventListener('click', closeApplyDialog);
+    applyOk.addEventListener('click', function() {
+        applyOk.disabled = true;
+        applyOk.textContent = 'Applying\u2026';
+        fetch('/api/addressbook/defaults/apply', {
+            method: 'PUT',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({})
+        }).then(function(r) {
+            return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+        }).then(function(res) {
+            if (!res.ok) {
+                applyOk.disabled = false;
+                applyOk.textContent = 'Apply';
+                applyStatus.className = 'text-sm mb-4 text-red-400';
+                applyStatus.textContent = (res.data && res.data.error) || 'Failed to apply defaults.';
+                return;
+            }
+            var count = (res.data && typeof res.data.applied === 'number') ? res.data.applied : 0;
+            applyStatus.className = 'text-sm mb-4 text-emerald-400';
+            applyStatus.textContent = 'Updated ' + count + ' connection' + (count === 1 ? '' : 's') + '.';
+            applyOk.style.display = 'none';
+            applyCancel.style.display = 'none';
+        }).catch(function() {
+            applyOk.disabled = false;
+            applyOk.textContent = 'Apply';
+            applyStatus.className = 'text-sm mb-4 text-red-400';
+            applyStatus.textContent = 'Failed to apply defaults.';
+        });
+    });
+}
+
 // ── Settings section tabs ──
 // Plain-JS tab switch: no inline handlers (CSP), wired with
 // addEventListener. The active section survives a reload via the location
-// hash (#session, #features, #storage, #security, #updates). Two controls
-// exist — the left rail on wide screens and the tab bar below 1280px — and
-// both carry the same aria-selected/tabindex state, so the hash and the
-// roving focus work identically whichever one is rendered.
-var settingsSections = ['session', 'features', 'storage', 'security', 'updates'];
+// hash (#session, #features, #storage, #updates). Two controls exist — the
+// left rail on wide screens and the tab bar below 1280px — and both carry
+// the same aria-selected/tabindex state, so the hash and the roving focus
+// work identically whichever one is rendered.
+var settingsSections = ['session', 'features', 'storage', 'updates'];
 
 function settingsPanel(name) {
     return document.getElementById('panel-' + name);
@@ -773,7 +849,15 @@ function showSettingsSection(name, opts) {
                 tab.setAttribute('aria-selected', 'true');
                 tab.setAttribute('tabindex', '0');
             });
-            if (focusPanel) panel.focus();
+            if (focusPanel) {
+                // Focus without scrolling: the panels are stacked in the DOM
+                // and carry tabindex="-1", so a plain focus() scrolls the
+                // activated panel into view, jumping the page to mid-scroll
+                // for sections below the tall Session panel. The view stays
+                // at the top of the page; the user scrolls down themselves.
+                panel.focus({ preventScroll: true });
+                window.scrollTo(0, 0);
+            }
         } else {
             panel.hidden = true;
             settingsNavs(s).forEach(function(tab) {
@@ -985,6 +1069,10 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
             if (sel && s.default_rdp_security) {
                 sel.value = s.default_rdp_security;
             }
+            var authSel = document.querySelector('select[name="default_rdp_auth_pkg"]');
+            if (authSel && s.default_rdp_auth_pkg !== undefined && s.default_rdp_auth_pkg !== null) {
+                authSel.value = s.default_rdp_auth_pkg;
+            }
             var boxes = toggleBoxes;
             boxes.forEach(function(name) {
                 var box = document.getElementById(name);
@@ -1016,5 +1104,64 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
             showError('Failed to load settings: ' + (e.message || e));
         });
 })();
+
+// ── Settings search ──
+// Client-side filter: typing hides the cards whose label text does not
+// match, and hides whole sections with no matches, across all four tabs.
+// When the active section has no matches the search jumps to the first
+// section that does, so results stay visible. Clearing the input restores
+// the tab-driven visibility. All wiring is addEventListener: the page CSP
+// blocks inline handlers.
+var settingsSearchInput = document.getElementById('settings-search');
+var settingsSearchEmpty = document.getElementById('settings-search-empty');
+var settingsCards = Array.prototype.slice.call(
+    document.querySelectorAll('#settings-form .card'));
+var featuresGroupToggle = document.getElementById('toggle-features');
+
+function applySettingsSearch() {
+    var q = (settingsSearchInput.value || '').trim().toLowerCase();
+    var matchBySection = {};
+    settingsCards.forEach(function(card) {
+        var section = card.closest('section[role="tabpanel"]');
+        var hit = !q || (card.textContent || '').toLowerCase().indexOf(q) !== -1;
+        card.classList.toggle('settings-search-hidden', !hit);
+        if (section) {
+            if (matchBySection[section.id] === undefined) matchBySection[section.id] = false;
+            if (hit) matchBySection[section.id] = true;
+        }
+    });
+    var firstVisible = null;
+    var anyVisible = !q;
+    settingsSections.forEach(function(name) {
+        var panel = settingsPanel(name);
+        if (!panel) return;
+        var hit = !q || matchBySection[panel.id] === true;
+        panel.classList.toggle('settings-search-hidden', !hit);
+        if (hit) anyVisible = true;
+        if (hit && !panel.hidden && !firstVisible) firstVisible = name;
+    });
+    if (q && firstVisible) {
+        var active = (location.hash || '').replace(/^#/, '');
+        if (matchBySection['panel-' + active] !== true) {
+            showSettingsSection(firstVisible, { focus: false });
+        }
+    }
+    if (settingsSearchEmpty) {
+        settingsSearchEmpty.classList.toggle('hidden', anyVisible);
+    }
+    // A hit inside the collapsible Features group is only useful when the
+    // group is open; expand it while a search is active.
+    if (q && featuresGroupToggle) {
+        var group = document.getElementById(featuresGroupToggle.getAttribute('aria-controls'));
+        if (group && group.hidden) {
+            featuresGroupToggle.setAttribute('aria-expanded', 'true');
+            group.hidden = false;
+        }
+    }
+}
+
+if (settingsSearchInput) {
+    settingsSearchInput.addEventListener('input', applySettingsSearch);
+}
 </script>
 {% endblock %}
