@@ -223,11 +223,14 @@ unset, so a plain `cargo test` needs nothing but a Rust toolchain.
 
 `tests/ldap_integration.rs` exercises the LDAP auth provider against a real
 OpenLDAP server: bind + search, group resolution, anti-enumeration, user
-lookup, and the full login flow through the binary. Start the local harness
-and run them:
+lookup, and the full login flow through the binary. Start the local harness,
+seed it, and run them:
 
 ```bash
 docker compose -f docker-compose.ldap.yml up -d --wait
+docker cp tests/fixtures/ldap-seed.ldif persea-ldap-test:/tmp/ldap-seed.ldif
+docker exec persea-ldap-test ldapadd -x -H ldap://localhost:389 \
+  -D cn=admin,dc=example,dc=com -w admin -f /tmp/ldap-seed.ldif
 TEST_LDAP_URL=ldap://127.0.0.1:3389 cargo test --test ldap_integration
 ```
 

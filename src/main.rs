@@ -2305,6 +2305,8 @@ async fn run_server(
         .route("/api/audit/events", get(api::admin::audit_events))
         .route("/api/audit/verify", get(api::admin::audit_verify))
         .route("/api/audit/export", get(api::admin::audit_export))
+        // TLS certificate metadata for the Security page's TLS tab.
+        .route("/api/admin/tls-cert-info", get(api::admin::tls_cert_info))
         .route(
             "/api/admin/upload-logo",
             post(api::settings::upload_logo)
@@ -2370,7 +2372,7 @@ async fn run_server(
         )
         .route(
             "/api/addressbook/defaults/apply",
-            put(api::ab_apply_auto_size_defaults),
+            put(api::ab_apply_defaults),
         )
         .route("/api/ssh/probe-host-key", post(api::ssh_probe_host_key))
         // Personal folders (owner-only, any authenticated user)
@@ -2641,7 +2643,9 @@ async fn run_server(
         .layer(Extension(database.clone()));
 
     // Feature-gated pages: recordings and API-key account pages 404 when
-    // their `enable_*` toggle is off (request-time check).
+    // their `enable_*` toggle is off (request-time check). The API-key
+    // pages render the combined profile page with the API Keys tab active
+    // (see handlers::account::tokens_page).
     let gated_recordings_page = Router::new()
         .route("/recordings.html", get(handlers::pages::recordings_page))
         .layer(middleware::from_fn(feature_gate))
@@ -2667,6 +2671,12 @@ async fn run_server(
         .route("/sessions.html", get(handlers::pages::sessions_page))
         .route("/reports.html", get(handlers::pages::admin_reports_page))
         .route("/admin.html", get(handlers::pages::admin_users_page))
+        // Consolidated Security page: hash tabs host the users/groups/roles/
+        // auth/audit section partials plus the TLS certificates tab.
+        .route(
+            "/admin/security.html",
+            get(handlers::pages::admin_security_page),
+        )
         // Account pages (templates)
         .route(
             "/account/profile.html",
