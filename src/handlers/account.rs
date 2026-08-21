@@ -292,7 +292,7 @@ pub async fn totp_disable(
     State(state): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(body): Json<TotpCodeRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let Extension(AuthIdentity::User { email, .. }) =
@@ -364,40 +364,50 @@ pub async fn profile_page(
         is_admin: is_admin(&identity),
         active_page: "profile".to_string(),
         csp_nonce: nonce.0,
+        initial_tab: "profile".to_string(),
     }
     .into_response()
 }
 
-/// GET /account/tokens.html
+/// GET /account/tokens.html (and the legacy /tokens.html alias)
+///
+/// The API-key management UI now lives in the combined profile page's
+/// "API Keys" tab; this deep link renders that page with the tab active.
+/// The route stays feature-gated on `enable_api_keys` in main.rs.
 pub async fn tokens_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
-    templates::AccountTokensTemplate {
+    templates::ProfileTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
         is_admin: is_admin(&identity),
-        active_page: "tokens".to_string(),
+        active_page: "profile".to_string(),
         csp_nonce: nonce.0,
+        initial_tab: "tokens".to_string(),
     }
     .into_response()
 }
 
 /// GET /account/totp.html
+///
+/// The TOTP management UI now lives in the combined profile page's
+/// "Security" tab; this deep link renders that page with the tab active.
 pub async fn totp_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
-    templates::AccountTotpTemplate {
+    templates::ProfileTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
         is_admin: is_admin(&identity),
-        active_page: "totp".to_string(),
+        active_page: "profile".to_string(),
         csp_nonce: nonce.0,
+        initial_tab: "security".to_string(),
     }
     .into_response()
 }
@@ -411,10 +421,17 @@ pub async fn docs_page(
 ) -> Response {
     let docs = crate::templates::DOCS
         .iter()
-        .map(|(slug, title, html)| templates::DocSection {
+        .map(|(slug, title, html, headings)| templates::DocSection {
             slug: (*slug).to_string(),
             title: (*title).to_string(),
             html: (*html).to_string(),
+            headings: headings
+                .iter()
+                .map(|(h_slug, h_text)| templates::DocHeading {
+                    slug: (*h_slug).to_string(),
+                    text: (*h_text).to_string(),
+                })
+                .collect(),
         })
         .collect();
     templates::DocsTemplate {

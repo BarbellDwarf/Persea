@@ -1,6 +1,7 @@
 //! SQLite database layer for admin/API key management.
 
 use crate::audit::{compute_event_hash, AuditEvent, AuditFilters};
+use crate::auth_provider::RecheckVerdict;
 use crate::db_pool::DbPool;
 use crate::providers_db::{DbProvider, MoveDirection};
 use crate::rbac::{ConnectionGroup, CustomRole, EntityType, ObjectPermission, PermissionEntry};
@@ -177,6 +178,11 @@ pub struct UserApiToken {
     pub max_role: Option<String>,
     /// Optional expiry; an expired token is rejected.
     pub expires_at: Option<String>,
+    /// Token kind: `user` (self-service/admin-minted) or `scoped`
+    /// (desktop bridge token, issued by interactive login or device
+    /// pairing). The bridge layers (LDAP re-validation, compliance mode)
+    /// target `scoped` rows only.
+    pub token_type: String,
     /// Whether the token is disabled.
     pub disabled: bool,
     /// When the token was created (UTC).
@@ -357,6 +363,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             token_hash    TEXT NOT NULL UNIQUE,
             max_role      TEXT,
             expires_at    TEXT,
+            token_type    TEXT NOT NULL DEFAULT 'user',
             disabled      INTEGER NOT NULL DEFAULT 0,
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
             last_used_at  TEXT,
@@ -454,6 +461,7 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
             user_name     TEXT NOT NULL DEFAULT '',
             user_role     TEXT NOT NULL DEFAULT 'viewer',
             oidc_subject  TEXT,
+            desktop       INTEGER NOT NULL DEFAULT 0,
             created_at    TEXT NOT NULL DEFAULT (datetime('now')),
             expires_at    TEXT NOT NULL
         );",
@@ -512,6 +520,31 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
     // column from the CREATE TABLE above; existing databases are ALTERed
     // here, idempotent-guarded like the other column migrations.
     if let Err(e) = conn.execute("ALTER TABLE session_history ADD COLUMN source_ip TEXT", []) {
+        if !e.to_string().contains("duplicate column") {
+            return Err(e);
+        }
+    }
+
+    // Migration: scoped token type discriminator (persea#227). Fresh
+    // databases get the column from the CREATE TABLE above; existing
+    // databases are ALTERed here, idempotent-guarded like the other
+    // column migrations.
+    if let Err(e) = conn.execute(
+        "ALTER TABLE user_api_tokens ADD COLUMN token_type TEXT NOT NULL DEFAULT 'user'",
+        [],
+    ) {
+        if !e.to_string().contains("duplicate column") {
+            return Err(e);
+        }
+    }
+
+    // Migration: desktop-login intent on the pending MFA record
+    // (persea#227). The MFA completion handler reads it to mint the
+    // scoped desktop token after the TOTP gate.
+    if let Err(e) = conn.execute(
+        "ALTER TABLE auth_pending_mfa ADD COLUMN desktop INTEGER NOT NULL DEFAULT 0",
+        [],
+    ) {
         if !e.to_string().contains("duplicate column") {
             return Err(e);
         }
@@ -685,7 +718,10 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
 }
 
 /// Hash an API key with SHA-256 and return hex (unsalted, legacy).
-fn hash_key(key: &str) -> String {
+/// Crate-visible so the session-credentials store keys its entries with
+/// the same token-hash convention as `auth_sessions.token_hash`
+/// (persea#245).
+pub(crate) fn hash_key(key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
     hex::encode(hasher.finalize())
@@ -943,6 +979,10 @@ pub enum AuthError {
     IpNotAllowed,
     /// The session token is invalid or expired.
     InvalidSession,
+    /// A scoped token's account failed re-validation (LDAP account gone,
+    /// locked, disabled, expired, or credentials rotated): the token was
+    /// invalidated server-side (persea#226).
+    AccountRevalidationFailed,
 }
 
 impl std::fmt::Display for AuthError {
@@ -953,6 +993,9 @@ impl std::fmt::Display for AuthError {
             Self::Expired => write!(f, "API key has expired"),
             Self::IpNotAllowed => write!(f, "client IP not in allowed list"),
             Self::InvalidSession => write!(f, "invalid or expired session"),
+            Self::AccountRevalidationFailed => {
+                write!(f, "account re-validation failed; sign in again")
+            }
         }
     }
 }
@@ -1250,6 +1293,20 @@ pub fn delete_auth_session(db: &Db, token: &str) -> rusqlite::Result<bool> {
         params![token_hash],
     )?;
     Ok(changed > 0)
+}
+
+/// Whether an auth session row exists and has not expired. Used by the
+/// session-credential prune (persea#245) to drop retained credentials
+/// whose session ended through logout, revocation, or DB-side expiry.
+pub fn auth_session_is_live(db: &Db, token_hash: &str) -> rusqlite::Result<bool> {
+    db_route!(db, auth_session_is_live_pool, token_hash.to_string());
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = ?1 AND expires_at > datetime('now')",
+        params![token_hash],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
 }
 
 /// Clean up expired auth sessions.
@@ -1679,12 +1736,45 @@ pub fn create_user_token(
     Ok((id, token))
 }
 
+/// Create a scoped user token (desktop bridge): same storage as
+/// [`create_user_token`], but stamped `token_type = 'scoped'` so the
+/// bridge layers (LDAP re-validation, compliance mode) can target these
+/// rows. Returns the plaintext token (shown once), prefixed `rgu_` like
+/// every other user token.
+pub fn create_scoped_user_token(
+    db: &Db,
+    user_id: i64,
+    name: &str,
+    max_role: Option<&str>,
+    expires_at: Option<&str>,
+) -> rusqlite::Result<(i64, String)> {
+    db_route!(
+        db,
+        create_scoped_user_token_pool,
+        user_id,
+        name.to_string(),
+        max_role.map(str::to_string),
+        expires_at.map(str::to_string)
+    );
+    let raw_key = generate_key();
+    let token = format!("rgu_{}", raw_key);
+    let token_hash = hash_key(&token);
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO user_api_tokens (user_id, name, token_hash, max_role, expires_at, token_type)
+         VALUES (?1, ?2, ?3, ?4, ?5, 'scoped')",
+        params![user_id, name, token_hash, max_role, expires_at],
+    )?;
+    let id = conn.last_insert_rowid();
+    Ok((id, token))
+}
+
 /// List all tokens for a specific user (no key material).
 pub fn list_user_tokens(db: &Db, user_id: i64) -> rusqlite::Result<Vec<UserApiToken>> {
     db_route!(db, list_user_tokens_pool, user_id);
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at
+        "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at, token_type
          FROM user_api_tokens WHERE user_id = ?1 ORDER BY id",
     )?;
     let rows = stmt.query_map(params![user_id], |row| {
@@ -1694,6 +1784,7 @@ pub fn list_user_tokens(db: &Db, user_id: i64) -> rusqlite::Result<Vec<UserApiTo
             name: row.get(2)?,
             max_role: row.get(3)?,
             expires_at: row.get(4)?,
+            token_type: row.get(8)?,
             disabled: row.get::<_, i32>(5)? != 0,
             created_at: row.get(6)?,
             last_used_at: row.get(7)?,
@@ -1707,7 +1798,7 @@ pub fn list_all_user_tokens(db: &Db) -> rusqlite::Result<Vec<(UserApiToken, Stri
     db_route!(db, list_all_user_tokens_pool);
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, u.email
+        "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, t.token_type, u.email
          FROM user_api_tokens t
          JOIN users u ON u.id = t.user_id
          ORDER BY t.id",
@@ -1719,14 +1810,196 @@ pub fn list_all_user_tokens(db: &Db) -> rusqlite::Result<Vec<(UserApiToken, Stri
             name: row.get(2)?,
             max_role: row.get(3)?,
             expires_at: row.get(4)?,
+            token_type: row.get(8)?,
             disabled: row.get::<_, i32>(5)? != 0,
             created_at: row.get(6)?,
             last_used_at: row.get(7)?,
         };
-        let email: String = row.get(8)?;
+        let email: String = row.get(9)?;
         Ok((token, email))
     })?;
     rows.collect()
+}
+
+// ── Scoped-token account re-validation (persea#226) ─────────────────────
+
+/// Registry and bounded cache for scoped-token account re-validation.
+///
+/// Providers that can re-check an account's status (LDAP) register
+/// themselves at construction; [`validate_user_token`] consults the
+/// registry for every `scoped` token and re-checks the account on a
+/// bounded interval, so a rotated, locked, disabled, or expired account
+/// kills its tokens within the re-check TTL. Providers that cannot
+/// re-check (database, OIDC, RADIUS, SAML) leave scoped tokens
+/// untouched.
+pub mod revalidation {
+    use super::*;
+    use crate::auth_provider::{AuthProvider, RecheckVerdict};
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    use std::time::{Duration, Instant};
+
+    /// How long a successful re-check is trusted before the account is
+    /// checked again. Bounds how quickly a rotated/locked/expired
+    /// account kills its tokens.
+    const VALID_TTL: Duration = Duration::from_secs(60);
+    /// How long a "not an account this provider manages" verdict is
+    /// trusted. Stable per subject, so a long TTL avoids pointless
+    /// round trips for non-LDAP users.
+    const NOT_APPLICABLE_TTL: Duration = Duration::from_secs(3600);
+    /// How long an "provider unreachable" verdict is trusted. Dampens a
+    /// down LDAP server: at most one slow round trip per user per window
+    /// instead of one per request.
+    const UNAVAILABLE_TTL: Duration = Duration::from_secs(10);
+    /// Cache bound: beyond this many (user, subject) pairs the oldest
+    /// entries are evicted.
+    const MAX_ENTRIES: usize = 4096;
+
+    static REVALIDATORS: OnceLock<Mutex<Vec<Arc<dyn AuthProvider>>>> = OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<(i64, String), CacheEntry>>> = OnceLock::new();
+
+    struct CacheEntry {
+        verdict: RecheckVerdict,
+        checked_at: Instant,
+        pwd_last_set: Option<String>,
+    }
+
+    fn revalidators() -> &'static Mutex<Vec<Arc<dyn AuthProvider>>> {
+        REVALIDATORS.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    fn cache() -> &'static Mutex<HashMap<(i64, String), CacheEntry>> {
+        CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    /// Register a provider that can re-check account status. Called by
+    /// providers at construction (LDAP).
+    pub fn register(provider: Arc<dyn AuthProvider>) {
+        revalidators().lock().unwrap().push(provider);
+    }
+
+    /// Test hook: clear the registry and cache so tests start isolated.
+    #[cfg(test)]
+    pub fn reset_for_tests() {
+        revalidators().lock().unwrap().clear();
+        cache().lock().unwrap().clear();
+    }
+
+    /// Test hook: force the cached entry for (user, subject) stale so the
+    /// next check re-runs the revalidators.
+    #[cfg(test)]
+    pub fn expire_for_tests(user_id: i64, subject: &str) {
+        if let Some(entry) = cache()
+            .lock()
+            .unwrap()
+            .get_mut(&(user_id, subject.to_string()))
+        {
+            entry.checked_at = Instant::now() - Duration::from_secs(3600);
+        }
+    }
+
+    fn entry_ttl(verdict: &RecheckVerdict) -> Duration {
+        match verdict {
+            RecheckVerdict::Valid { .. } => VALID_TTL,
+            RecheckVerdict::NotApplicable => NOT_APPLICABLE_TTL,
+            RecheckVerdict::Unavailable => UNAVAILABLE_TTL,
+            // Invalid is never cached: the caller deletes the token.
+            RecheckVerdict::Invalid => VALID_TTL,
+        }
+    }
+
+    fn evict(cache: &mut HashMap<(i64, String), CacheEntry>) {
+        if cache.len() <= MAX_ENTRIES {
+            return;
+        }
+        // Drop the oldest entry; the cache is a performance aid, so a
+        // coarse eviction is fine.
+        if let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, e)| e.checked_at)
+            .map(|(k, _)| k.clone())
+        {
+            cache.remove(&oldest);
+        }
+    }
+
+    /// Re-check the account behind `subject` for `user_id`, using the
+    /// bounded cache. Returns the verdict; callers must invalidate the
+    /// token on [`RecheckVerdict::Invalid`].
+    pub fn check(user_id: i64, subject: &str) -> RecheckVerdict {
+        let now = Instant::now();
+        let previous = {
+            let cache = cache().lock().unwrap();
+            match cache.get(&(user_id, subject.to_string())) {
+                Some(entry) => {
+                    if now.duration_since(entry.checked_at) < entry_ttl(&entry.verdict) {
+                        return entry.verdict.clone();
+                    }
+                    entry.pwd_last_set.clone()
+                }
+                None => None,
+            }
+        };
+
+        let providers: Vec<Arc<dyn AuthProvider>> = revalidators().lock().unwrap().clone();
+        if providers.is_empty() {
+            return RecheckVerdict::NotApplicable;
+        }
+
+        for provider in &providers {
+            // The LDAP client creates its own tokio runtime internally, so
+            // it must run off any tokio runtime context (same rule as the
+            // auth chain in handlers/auth.rs).
+            let verdict = futures::executor::block_on(
+                provider.revalidate_account(subject, previous.as_deref()),
+            );
+            match &verdict {
+                RecheckVerdict::NotApplicable => continue,
+                RecheckVerdict::Invalid => return verdict,
+                RecheckVerdict::Unavailable => {
+                    let mut cache = cache().lock().unwrap();
+                    cache.insert(
+                        (user_id, subject.to_string()),
+                        CacheEntry {
+                            verdict: verdict.clone(),
+                            checked_at: now,
+                            // Keep the last known marker so a rotation
+                            // during the outage is still detected after.
+                            pwd_last_set: previous.clone(),
+                        },
+                    );
+                    evict(&mut cache);
+                    return verdict;
+                }
+                RecheckVerdict::Valid { pwd_last_set } => {
+                    let mut cache = cache().lock().unwrap();
+                    cache.insert(
+                        (user_id, subject.to_string()),
+                        CacheEntry {
+                            verdict: verdict.clone(),
+                            checked_at: now,
+                            pwd_last_set: pwd_last_set.clone(),
+                        },
+                    );
+                    evict(&mut cache);
+                    return verdict;
+                }
+            }
+        }
+
+        // No provider manages this subject: cache the stable verdict long.
+        let mut cache = cache().lock().unwrap();
+        cache.insert(
+            (user_id, subject.to_string()),
+            CacheEntry {
+                verdict: RecheckVerdict::NotApplicable,
+                checked_at: now,
+                pwd_last_set: None,
+            },
+        );
+        evict(&mut cache);
+        RecheckVerdict::NotApplicable
+    }
 }
 
 /// Validate a user API token. Returns the user and token metadata.
@@ -1738,74 +2011,114 @@ pub fn validate_user_token(db: &Db, token: &str) -> Result<(User, UserApiToken),
     use subtle::ConstantTimeEq;
 
     let token_hash = hash_key(token);
-    let conn = db.lock().unwrap();
+    let (user, token_info) = {
+        let conn = db.lock().unwrap();
 
-    // Fetch all tokens with their users and compare hashes in constant time
-    let mut stmt = conn
-        .prepare(
-            "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at,
-                    u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups,
-                    t.token_hash, u.custom_role_id, u.auth_source
-             FROM user_api_tokens t
-             JOIN users u ON u.id = t.user_id",
-        )
-        .map_err(|_| AuthError::InvalidKey)?;
-    let (user, token_info) = stmt
-        .query_map([], |row| {
-            let stored_hash: String = row.get(17)?;
-            let token_info = UserApiToken {
-                id: row.get(0)?,
-                user_id: row.get(1)?,
-                name: row.get(2)?,
-                max_role: row.get(3)?,
-                expires_at: row.get(4)?,
-                disabled: row.get::<_, i32>(5)? != 0,
-                created_at: row.get(6)?,
-                last_used_at: row.get(7)?,
-            };
-            let user = User {
-                id: row.get(8)?,
-                email: row.get(9)?,
-                name: row.get(10)?,
-                oidc_subject: row.get(11)?,
-                role: row.get(12)?,
-                disabled: row.get::<_, i32>(13)? != 0,
-                created_at: row.get(14)?,
-                last_login_at: row.get(15)?,
-                oidc_groups: row.get(16)?,
-                custom_role_id: row.get(18)?,
-                auth_source: row.get(19)?,
-            };
-            Ok((user, token_info, stored_hash))
-        })
-        .map_err(|_| AuthError::InvalidKey)?
-        .filter_map(|r| r.ok())
-        .find(|(_, _, stored_hash)| token_hash.as_bytes().ct_eq(stored_hash.as_bytes()).into())
-        .map(|(user, token_info, _)| (user, token_info))
-        .ok_or(AuthError::InvalidKey)?;
+        // Fetch all tokens with their users and compare hashes in constant time
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at,
+                        u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups,
+                        t.token_hash, u.custom_role_id, u.auth_source, t.token_type
+                 FROM user_api_tokens t
+                 JOIN users u ON u.id = t.user_id",
+            )
+            .map_err(|_| AuthError::InvalidKey)?;
+        let (user, token_info) = stmt
+            .query_map([], |row| {
+                let stored_hash: String = row.get(17)?;
+                let token_info = UserApiToken {
+                    id: row.get(0)?,
+                    user_id: row.get(1)?,
+                    name: row.get(2)?,
+                    max_role: row.get(3)?,
+                    expires_at: row.get(4)?,
+                    token_type: row.get(20)?,
+                    disabled: row.get::<_, i32>(5)? != 0,
+                    created_at: row.get(6)?,
+                    last_used_at: row.get(7)?,
+                };
+                let user = User {
+                    id: row.get(8)?,
+                    email: row.get(9)?,
+                    name: row.get(10)?,
+                    oidc_subject: row.get(11)?,
+                    role: row.get(12)?,
+                    disabled: row.get::<_, i32>(13)? != 0,
+                    created_at: row.get(14)?,
+                    last_login_at: row.get(15)?,
+                    oidc_groups: row.get(16)?,
+                    custom_role_id: row.get(18)?,
+                    auth_source: row.get(19)?,
+                };
+                Ok((user, token_info, stored_hash))
+            })
+            .map_err(|_| AuthError::InvalidKey)?
+            .filter_map(|r| r.ok())
+            .find(|(_, _, stored_hash)| token_hash.as_bytes().ct_eq(stored_hash.as_bytes()).into())
+            .map(|(user, token_info, _)| (user, token_info))
+            .ok_or(AuthError::InvalidKey)?;
 
-    if token_info.disabled {
-        return Err(AuthError::Disabled);
-    }
-
-    if user.disabled {
-        return Err(AuthError::Disabled);
-    }
-
-    if let Some(ref exp) = token_info.expires_at {
-        // Fail closed: an unparseable expiry is treated as expired rather than
-        // ignored, so a malformed value cannot authenticate indefinitely.
-        match parse_expires_at(exp) {
-            Some(expires) if Utc::now() <= expires => {}
-            _ => return Err(AuthError::Expired),
+        if token_info.disabled {
+            return Err(AuthError::Disabled);
         }
+
+        if user.disabled {
+            return Err(AuthError::Disabled);
+        }
+
+        if let Some(ref exp) = token_info.expires_at {
+            // Fail closed: an unparseable expiry is treated as expired rather than
+            // ignored, so a malformed value cannot authenticate indefinitely.
+            match parse_expires_at(exp) {
+                Some(expires) if Utc::now() <= expires => {}
+                _ => return Err(AuthError::Expired),
+            }
+        }
+
+        (user, token_info)
+    };
+
+    // Scoped tokens re-check the account against the configured provider
+    // (LDAP) on use, bounded by a short-TTL cache (persea#226): a rotated,
+    // locked, disabled, or expired account kills the token server-side.
+    // The DB lock is dropped before the re-check so the LDAP round trip
+    // never blocks other store calls.
+    if token_info.token_type == "scoped"
+        && matches!(
+            revalidation::check(token_info.user_id, &user.email),
+            RecheckVerdict::Invalid
+        )
+    {
+        let conn = db.lock().unwrap();
+        let _ = conn.execute(
+            "DELETE FROM user_api_tokens WHERE id = ?1",
+            params![token_info.id],
+        );
+        drop(conn);
+        let _ = log_token_event(
+            db,
+            Some(token_info.id),
+            Some(&token_info.name),
+            &user.email,
+            "revalidation_failed",
+            None,
+            Some("account re-validation failed (rotated, locked, disabled, or expired)"),
+        );
+        return Err(AuthError::AccountRevalidationFailed);
     }
 
-    // Update last_used_at
-    let _ = conn.execute(
+    // Update last_used_at. A zero-row update means the token was revoked
+    // while the re-check ran (the scan above predates it), so the request
+    // must not authenticate with it.
+    let conn = db.lock().unwrap();
+    let updated = conn.execute(
         "UPDATE user_api_tokens SET last_used_at = datetime('now') WHERE id = ?1",
         params![token_info.id],
     );
+    if updated.map(|n| n == 0).unwrap_or(false) {
+        return Err(AuthError::InvalidKey);
+    }
 
     Ok((user, token_info))
 }
@@ -3090,6 +3403,9 @@ pub struct PendingMfa {
     pub user_role: String,
     /// OIDC subject carried through the pending login, so the post-MFA upsert matches the right user.
     pub oidc_subject: Option<String>,
+    /// Desktop-login intent: when set, the MFA completion handler mints a
+    /// scoped desktop token alongside the session (persea#227).
+    pub desktop: bool,
     /// When the record was created (UTC).
     pub created_at: String,
     /// When the record expires; lookups ignore expired rows.
@@ -3106,6 +3422,54 @@ pub fn create_pending_mfa(
     oidc_subject: Option<&str>,
     ttl_secs: u64,
 ) -> rusqlite::Result<String> {
+    create_pending_mfa_inner(
+        db,
+        user_id,
+        user_email,
+        user_name,
+        user_role,
+        oidc_subject,
+        ttl_secs,
+        false,
+    )
+}
+
+/// Create a pending MFA record for a desktop login. Identical to
+/// [`create_pending_mfa`] except the record carries the desktop-login
+/// intent so the MFA completion handler mints the scoped token after the
+/// TOTP gate (persea#227).
+pub fn create_pending_mfa_desktop(
+    db: &Db,
+    user_id: i64,
+    user_email: &str,
+    user_name: &str,
+    user_role: &str,
+    oidc_subject: Option<&str>,
+    ttl_secs: u64,
+) -> rusqlite::Result<String> {
+    create_pending_mfa_inner(
+        db,
+        user_id,
+        user_email,
+        user_name,
+        user_role,
+        oidc_subject,
+        ttl_secs,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create_pending_mfa_inner(
+    db: &Db,
+    user_id: i64,
+    user_email: &str,
+    user_name: &str,
+    user_role: &str,
+    oidc_subject: Option<&str>,
+    ttl_secs: u64,
+    desktop: bool,
+) -> rusqlite::Result<String> {
     db_route!(
         db,
         create_pending_mfa_pool,
@@ -3114,16 +3478,26 @@ pub fn create_pending_mfa(
         user_name.to_string(),
         user_role.to_string(),
         oidc_subject.map(str::to_string),
-        ttl_secs
+        ttl_secs,
+        desktop
     );
     let token = generate_key();
     let token_hash = hash_key(&token);
     let conn = db.lock().unwrap();
     let ttl_modifier = format!("+{} seconds", ttl_secs);
     conn.execute(
-        "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, expires_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, datetime('now', ?7))",
-        params![token_hash, user_id, user_email, user_name, user_role, oidc_subject, ttl_modifier],
+        "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, desktop, expires_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now', ?8))",
+        params![
+            token_hash,
+            user_id,
+            user_email,
+            user_name,
+            user_role,
+            oidc_subject,
+            desktop as i32,
+            ttl_modifier
+        ],
     )?;
     Ok(token)
 }
@@ -3134,7 +3508,7 @@ pub fn get_pending_mfa(db: &Db, token: &str) -> rusqlite::Result<Option<PendingM
     let token_hash = hash_key(token);
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT user_id, user_email, user_name, user_role, oidc_subject, created_at, expires_at
+        "SELECT user_id, user_email, user_name, user_role, oidc_subject, created_at, expires_at, desktop
          FROM auth_pending_mfa WHERE token_hash = ?1 AND expires_at > datetime('now')",
     )?;
     let mut rows = stmt.query_map(params![token_hash], |row| {
@@ -3144,6 +3518,7 @@ pub fn get_pending_mfa(db: &Db, token: &str) -> rusqlite::Result<Option<PendingM
             user_name: row.get(2)?,
             user_role: row.get(3)?,
             oidc_subject: row.get(4)?,
+            desktop: row.get::<_, i32>(7)? != 0,
             created_at: row.get(5)?,
             expires_at: row.get(6)?,
         })
@@ -3493,6 +3868,29 @@ pub fn get_ab_folder(db: &Db, scope: &str, name: &str) -> rusqlite::Result<AbFol
         "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at
          FROM address_book_folders WHERE scope = ?1 AND name = ?2",
         params![scope, name],
+        |row| {
+            Ok(AbFolder {
+                id: row.get(0)?,
+                scope: row.get(1)?,
+                name: row.get(2)?,
+                description: row.get(3)?,
+                allowed_groups: row.get(4)?,
+                inherit_from_parent: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        },
+    )
+}
+
+/// Fetch a folder by id (used by the personal-folder reference paths).
+pub fn get_ab_folder_by_id(db: &Db, folder_id: i64) -> rusqlite::Result<AbFolder> {
+    db_route!(db, get_ab_folder_by_id_pool, folder_id);
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at
+         FROM address_book_folders WHERE id = ?1",
+        params![folder_id],
         |row| {
             Ok(AbFolder {
                 id: row.get(0)?,
@@ -4627,6 +5025,335 @@ mod tests {
         assert!(validate_api_key(&db, &k, None).is_ok());
         let k = add_admin(&db, "none", None, None).unwrap();
         assert!(validate_api_key(&db, &k, None).is_ok());
+    }
+
+    #[test]
+    fn scoped_token_is_stamped_and_listed() {
+        let db = test_db();
+        let uid = upsert_user(&db, "scoped@example.com", "Scoped", None, "viewer", &[])
+            .unwrap()
+            .id;
+        let (id, _plaintext) =
+            create_scoped_user_token(&db, uid, "Persea Desktop (login)", Some("viewer"), None)
+                .unwrap();
+        let tokens = list_user_tokens(&db, uid).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].id, id);
+        assert_eq!(tokens[0].token_type, "scoped");
+        // The ordinary create path stays 'user'.
+        let (_id2, _t2) = create_user_token(&db, uid, "self-service", None, None).unwrap();
+        let tokens = list_user_tokens(&db, uid).unwrap();
+        assert_eq!(tokens.len(), 2);
+        assert!(tokens
+            .iter()
+            .any(|t| t.name == "Persea Desktop (login)" && t.token_type == "scoped"));
+        assert!(tokens
+            .iter()
+            .any(|t| t.name == "self-service" && t.token_type == "user"));
+    }
+
+    #[test]
+    fn scoped_token_expires_server_side() {
+        let db = test_db();
+        let uid = upsert_user(&db, "expire@example.com", "Expire", None, "viewer", &[])
+            .unwrap()
+            .id;
+        // Future expiry: the token validates.
+        let (_id, plaintext) = create_scoped_user_token(
+            &db,
+            uid,
+            "Persea Desktop (login)",
+            Some("viewer"),
+            Some("2999-01-01 00:00:00"),
+        )
+        .unwrap();
+        let (user, meta) = validate_user_token(&db, &plaintext).unwrap();
+        assert_eq!(user.id, uid);
+        assert_eq!(meta.token_type, "scoped");
+        // Past expiry: rejected with Expired (fail closed), and the row is
+        // still revocable by id.
+        let (_id2, plaintext2) = create_scoped_user_token(
+            &db,
+            uid,
+            "Persea Desktop (old)",
+            Some("viewer"),
+            Some("2000-01-01 00:00:00"),
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_user_token(&db, &plaintext2),
+            Err(AuthError::Expired)
+        ));
+        // The expiry cleanup also reaps expired scoped rows.
+        cleanup_expired_user_tokens(&db).unwrap();
+        let tokens = list_user_tokens(&db, uid).unwrap();
+        assert_eq!(tokens.len(), 1, "expired scoped token must be reaped");
+    }
+
+    #[test]
+    fn scoped_token_is_revocable_by_user_and_admin() {
+        let db = test_db();
+        let uid = upsert_user(&db, "revoke@example.com", "Revoke", None, "viewer", &[])
+            .unwrap()
+            .id;
+        let (token_id, _plaintext) =
+            create_scoped_user_token(&db, uid, "Persea Desktop (login)", Some("viewer"), None)
+                .unwrap();
+        // User (owner) revocation.
+        assert!(revoke_user_token(&db, uid, token_id).unwrap());
+        assert!(list_user_tokens(&db, uid).unwrap().is_empty());
+        // Admin revocation (no ownership check).
+        let (_id2, _t2) =
+            create_scoped_user_token(&db, uid, "Persea Desktop (login)", Some("viewer"), None)
+                .unwrap();
+        let tokens = list_user_tokens(&db, uid).unwrap();
+        assert!(admin_revoke_user_token(&db, tokens[0].id).unwrap());
+        assert!(list_user_tokens(&db, uid).unwrap().is_empty());
+    }
+
+    // ── Scoped-token account re-validation (persea#226) ────────────────
+
+    /// Serializes the re-check tests: they share the global revalidation
+    /// registry, which parallel tests would otherwise clobber.
+    static REVALIDATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Mock revalidator: returns a scripted verdict for its configured
+    /// subject and NotApplicable for everything else, so it never
+    /// interferes with other tests sharing the global registry.
+    struct MockRevalidator {
+        subject: String,
+        script: std::sync::Mutex<Vec<RecheckVerdict>>,
+        calls: std::sync::Mutex<usize>,
+    }
+
+    impl MockRevalidator {
+        fn new(subject: &str, script: Vec<RecheckVerdict>) -> Self {
+            Self {
+                subject: subject.to_string(),
+                script: std::sync::Mutex::new(script),
+                calls: std::sync::Mutex::new(0),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::auth_provider::AuthProvider for MockRevalidator {
+        fn id(&self) -> &str {
+            "mock-revalidator"
+        }
+
+        fn capabilities(&self) -> crate::auth_provider::Capabilities {
+            crate::auth_provider::Capabilities::AUTHENTICATE
+        }
+
+        async fn authenticate(
+            &self,
+            _request: &crate::auth_provider::AuthRequest,
+        ) -> crate::auth_provider::AuthResult {
+            crate::auth_provider::AuthResult::Failure(
+                "mock revalidator does not authenticate".into(),
+            )
+        }
+
+        async fn revalidate_account(
+            &self,
+            subject: &str,
+            _previous_pwd_last_set: Option<&str>,
+        ) -> RecheckVerdict {
+            if subject != self.subject {
+                return RecheckVerdict::NotApplicable;
+            }
+            *self.calls.lock().unwrap() += 1;
+            let mut script = self.script.lock().unwrap();
+            if script.len() > 1 {
+                script.remove(0)
+            } else {
+                script[0].clone()
+            }
+        }
+    }
+
+    fn register_mock(mock: MockRevalidator) -> std::sync::Arc<MockRevalidator> {
+        let arc = std::sync::Arc::new(mock);
+        revalidation::register(arc.clone());
+        arc
+    }
+
+    fn scoped_token_for(db: &Db, email: &str) -> (i64, i64, String) {
+        let uid = upsert_user(db, email, "Recheck", None, "viewer", &[])
+            .unwrap()
+            .id;
+        let (token_id, plaintext) =
+            create_scoped_user_token(db, uid, "Persea Desktop (login)", Some("viewer"), None)
+                .unwrap();
+        (uid, token_id, plaintext)
+    }
+
+    #[test]
+    fn scoped_token_recheck_valid_account_passes() {
+        let _guard = REVALIDATION_TEST_LOCK.lock().unwrap();
+        revalidation::reset_for_tests();
+        let db = test_db();
+        let (_uid, _id, plaintext) = scoped_token_for(&db, "recheck-valid@example.com");
+        register_mock(MockRevalidator::new(
+            "recheck-valid@example.com",
+            vec![RecheckVerdict::Valid { pwd_last_set: None }],
+        ));
+        let (user, meta) = validate_user_token(&db, &plaintext).unwrap();
+        assert_eq!(user.email, "recheck-valid@example.com");
+        assert_eq!(meta.token_type, "scoped");
+    }
+
+    #[test]
+    fn scoped_token_recheck_invalid_account_kills_token() {
+        let _guard = REVALIDATION_TEST_LOCK.lock().unwrap();
+        revalidation::reset_for_tests();
+        let db = test_db();
+        let (uid, _token_id, plaintext) = scoped_token_for(&db, "recheck-invalid@example.com");
+        register_mock(MockRevalidator::new(
+            "recheck-invalid@example.com",
+            vec![RecheckVerdict::Invalid],
+        ));
+        assert!(matches!(
+            validate_user_token(&db, &plaintext),
+            Err(AuthError::AccountRevalidationFailed)
+        ));
+        // The token is invalidated server-side: the row is gone and the
+        // same plaintext no longer validates.
+        assert!(list_user_tokens(&db, uid).unwrap().is_empty());
+        assert!(matches!(
+            validate_user_token(&db, &plaintext),
+            Err(AuthError::InvalidKey)
+        ));
+        // The invalidation is recorded in the token audit log.
+        let audit = list_token_audit_log(&db, 10, Some("recheck-invalid@example.com")).unwrap();
+        assert!(
+            audit.iter().any(|e| e.action == "revalidation_failed"),
+            "expected a revalidation_failed audit entry, got {audit:?}"
+        );
+    }
+
+    #[test]
+    fn scoped_token_recheck_rotation_detected_after_ttl() {
+        let _guard = REVALIDATION_TEST_LOCK.lock().unwrap();
+        revalidation::reset_for_tests();
+        let db = test_db();
+        let (uid, _token_id, plaintext) = scoped_token_for(&db, "recheck-rotated@example.com");
+        // First re-check sees the original pwdLastSet marker; the second
+        // (after the cache TTL) simulates the provider detecting that the
+        // marker changed, i.e. the credentials rotated.
+        register_mock(MockRevalidator::new(
+            "recheck-rotated@example.com",
+            vec![
+                RecheckVerdict::Valid {
+                    pwd_last_set: Some("T1".into()),
+                },
+                RecheckVerdict::Invalid,
+            ],
+        ));
+        assert!(validate_user_token(&db, &plaintext).is_ok());
+        // Force the cached success stale so the next use re-checks.
+        revalidation::expire_for_tests(uid, "recheck-rotated@example.com");
+        assert!(matches!(
+            validate_user_token(&db, &plaintext),
+            Err(AuthError::AccountRevalidationFailed)
+        ));
+        assert!(list_user_tokens(&db, uid).unwrap().is_empty());
+    }
+
+    #[test]
+    fn scoped_token_recheck_unavailable_fails_open() {
+        let _guard = REVALIDATION_TEST_LOCK.lock().unwrap();
+        revalidation::reset_for_tests();
+        let db = test_db();
+        let (_uid, _id, plaintext) = scoped_token_for(&db, "recheck-down@example.com");
+        register_mock(MockRevalidator::new(
+            "recheck-down@example.com",
+            vec![RecheckVerdict::Unavailable],
+        ));
+        // An LDAP outage must not log out every desktop user: the token
+        // keeps working and the next use retries the re-check.
+        assert!(validate_user_token(&db, &plaintext).is_ok());
+    }
+
+    #[test]
+    fn scoped_token_recheck_not_applicable_passes() {
+        let _guard = REVALIDATION_TEST_LOCK.lock().unwrap();
+        revalidation::reset_for_tests();
+        let db = test_db();
+        let (_uid, _id, plaintext) = scoped_token_for(&db, "recheck-na@example.com");
+        register_mock(MockRevalidator::new(
+            "recheck-na@example.com",
+            vec![RecheckVerdict::NotApplicable],
+        ));
+        assert!(validate_user_token(&db, &plaintext).is_ok());
+    }
+
+    #[test]
+    fn plain_user_tokens_are_not_rechecked() {
+        let _guard = REVALIDATION_TEST_LOCK.lock().unwrap();
+        revalidation::reset_for_tests();
+        let db = test_db();
+        let uid = upsert_user(
+            &db,
+            "recheck-plain@example.com",
+            "Plain",
+            None,
+            "viewer",
+            &[],
+        )
+        .unwrap()
+        .id;
+        let (_id, plaintext) = create_user_token(&db, uid, "self-service", None, None).unwrap();
+        // Even with a revalidator that would kill the account, ordinary
+        // user tokens are untouched: the re-check targets scoped tokens.
+        register_mock(MockRevalidator::new(
+            "recheck-plain@example.com",
+            vec![RecheckVerdict::Invalid],
+        ));
+        assert!(validate_user_token(&db, &plaintext).is_ok());
+    }
+
+    #[test]
+    fn recheck_cache_hits_within_ttl() {
+        let _guard = REVALIDATION_TEST_LOCK.lock().unwrap();
+        revalidation::reset_for_tests();
+        let db = test_db();
+        let (_uid, _id, plaintext) = scoped_token_for(&db, "recheck-cache@example.com");
+        let mock = register_mock(MockRevalidator::new(
+            "recheck-cache@example.com",
+            vec![RecheckVerdict::Valid { pwd_last_set: None }],
+        ));
+        assert!(validate_user_token(&db, &plaintext).is_ok());
+        assert!(validate_user_token(&db, &plaintext).is_ok());
+        // The second validation within the TTL must not hit the provider.
+        assert_eq!(
+            mock.calls(),
+            1,
+            "the cached verdict must serve the second use"
+        );
+    }
+
+    #[test]
+    fn pending_mfa_desktop_flag_roundtrips() {
+        let db = test_db();
+        let uid = upsert_user(&db, "mfa@example.com", "MFA", None, "viewer", &[])
+            .unwrap()
+            .id;
+        let plain =
+            create_pending_mfa_desktop(&db, uid, "mfa@example.com", "MFA", "viewer", None, 300)
+                .unwrap();
+        let pending = get_pending_mfa(&db, &plain).unwrap().unwrap();
+        assert!(pending.desktop);
+        // The ordinary path stays a web login.
+        let plain2 =
+            create_pending_mfa(&db, uid, "mfa@example.com", "MFA", "viewer", None, 300).unwrap();
+        let pending2 = get_pending_mfa(&db, &plain2).unwrap().unwrap();
+        assert!(!pending2.desktop);
     }
 }
 
@@ -6512,6 +7239,38 @@ async fn delete_auth_session_pool(pool: &DbPool, token: String) -> rusqlite::Res
     Ok(changed > 0)
 }
 
+async fn auth_session_is_live_pool(pool: &DbPool, token_hash: String) -> rusqlite::Result<bool> {
+    let row = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch_opt(
+                p,
+                "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = $1 AND expires_at > now()",
+                &[Arg::Str(token_hash)],
+            )
+            .await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch_opt(
+                p,
+                "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = ? AND expires_at > NOW()",
+                &[Arg::Str(token_hash)],
+            )
+            .await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch_opt(
+                p,
+                "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = ? AND expires_at > datetime('now')",
+                &[Arg::Str(token_hash)],
+            )
+            .await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(row.map(|r| r.get::<i64>(0)).unwrap_or(0) > 0)
+}
+
 async fn cleanup_expired_sessions_pool(pool: &DbPool) -> rusqlite::Result<usize> {
     let n = pool_exec(
         pool,
@@ -6846,6 +7605,7 @@ macro_rules! user_token_row {
             name: $row.get(2),
             max_role: $row.get(3),
             expires_at: $row.get(4),
+            token_type: $row.get(8),
             disabled: $row.get(5),
             created_at: $row.get(6),
             last_used_at: $row.get(7),
@@ -6883,16 +7643,48 @@ async fn create_user_token_pool(
     Ok((id, token))
 }
 
+/// Pool variant of [`create_scoped_user_token`]: stamps `token_type =
+/// 'scoped'` on the row so the desktop bridge layers can target it.
+async fn create_scoped_user_token_pool(
+    pool: &DbPool,
+    user_id: i64,
+    name: String,
+    max_role: Option<String>,
+    expires_at: Option<String>,
+) -> rusqlite::Result<(i64, String)> {
+    let raw_key = generate_key();
+    let token = format!("rgu_{}", raw_key);
+    let token_hash = hash_key(&token);
+    let id = exec_returning_id(
+        pool,
+        qsql!(
+            pool,
+            "INSERT INTO user_api_tokens (user_id, name, token_hash, max_role, expires_at, token_type) VALUES ($1, $2, $3, $4, $5, 'scoped') RETURNING id",
+            "INSERT INTO user_api_tokens (user_id, name, token_hash, max_role, expires_at, token_type) VALUES (?, ?, ?, ?, ?, 'scoped')"
+        ),
+        &[
+            Arg::I64(user_id),
+            Arg::Str(name),
+            Arg::Str(token_hash),
+            Arg::OptStr(max_role),
+            Arg::OptStr(expires_at),
+        ],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok((id, token))
+}
+
 async fn list_user_tokens_pool(pool: &DbPool, user_id: i64) -> rusqlite::Result<Vec<UserApiToken>> {
     let rows = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at FROM user_api_tokens WHERE user_id = $1 ORDER BY id", &[Arg::I64(user_id)]).await
+            pg_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at, token_type FROM user_api_tokens WHERE user_id = $1 ORDER BY id", &[Arg::I64(user_id)]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at FROM user_api_tokens WHERE user_id = ? ORDER BY id", &[Arg::I64(user_id)]).await
+            mysql_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at, token_type FROM user_api_tokens WHERE user_id = ? ORDER BY id", &[Arg::I64(user_id)]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at FROM user_api_tokens WHERE user_id = ? ORDER BY id", &[Arg::I64(user_id)]).await
+            sqlite_fetch(p, "SELECT id, user_id, name, max_role, expires_at, disabled, created_at, last_used_at, token_type FROM user_api_tokens WHERE user_id = ? ORDER BY id", &[Arg::I64(user_id)]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
@@ -6903,20 +7695,20 @@ async fn list_user_tokens_pool(pool: &DbPool, user_id: i64) -> rusqlite::Result<
 async fn list_all_user_tokens_pool(pool: &DbPool) -> rusqlite::Result<Vec<(UserApiToken, String)>> {
     let rows = match pool {
         DbPool::Postgres(p) => {
-            pg_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
+            pg_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, t.token_type, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
         }
         DbPool::MySQL(p) => {
-            mysql_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
+            mysql_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, t.token_type, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
         }
         DbPool::SQLite(p) => {
-            sqlite_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
+            sqlite_fetch(p, "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, t.token_type, u.email FROM user_api_tokens t JOIN users u ON u.id = t.user_id ORDER BY t.id", &[]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
     Ok(rows
         .iter()
-        .map(|row| (user_token_row!(row), row.get::<String>(8)))
+        .map(|row| (user_token_row!(row), row.get::<String>(9)))
         .collect())
 }
 
@@ -6930,11 +7722,11 @@ async fn validate_user_token_pool(
         pool,
         "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, \
                 u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, \
-                t.token_hash, u.custom_role_id, u.auth_source \
+                t.token_hash, u.custom_role_id, u.auth_source, t.token_type \
          FROM user_api_tokens t JOIN users u ON u.id = t.user_id",
         "SELECT t.id, t.user_id, t.name, t.max_role, t.expires_at, t.disabled, t.created_at, t.last_used_at, \
                 u.id, u.email, u.name, u.oidc_subject, u.role, u.disabled, u.created_at, u.last_login_at, u.oidc_groups, \
-                t.token_hash, u.custom_role_id, u.auth_source \
+                t.token_hash, u.custom_role_id, u.auth_source, t.token_type \
          FROM user_api_tokens t JOIN users u ON u.id = t.user_id"
     );
     let rows = match pool {
@@ -6959,6 +7751,7 @@ async fn validate_user_token_pool(
         name: row.get(2),
         max_role: row.get(3),
         expires_at: row.get(4),
+        token_type: row.get(20),
         disabled: row.get(5),
         created_at: row.get(6),
         last_used_at: row.get(7),
@@ -6990,7 +7783,48 @@ async fn validate_user_token_pool(
         }
     }
 
-    let _ = pool_exec(
+    // Scoped tokens re-check the account against the configured provider
+    // (LDAP) on use, bounded by a short-TTL cache (persea#226). The pool
+    // worker runs inside a tokio runtime, and the LDAP client creates its
+    // own runtime internally, so the re-check runs on a blocking thread.
+    if token_info.token_type == "scoped" {
+        let uid = token_info.user_id;
+        let subject = user.email.clone();
+        let verdict = tokio::task::spawn_blocking(move || revalidation::check(uid, &subject))
+            .await
+            .unwrap_or(RecheckVerdict::Unavailable);
+        if matches!(verdict, RecheckVerdict::Invalid) {
+            let _ = pool_exec(
+                pool,
+                qsql!(
+                    pool,
+                    "DELETE FROM user_api_tokens WHERE id = $1",
+                    "DELETE FROM user_api_tokens WHERE id = ?"
+                ),
+                &[Arg::I64(token_info.id)],
+            )
+            .await;
+            let _ = log_token_event_pool(
+                pool,
+                Some(token_info.id),
+                Some(token_info.name.clone()),
+                user.email.clone(),
+                "revalidation_failed".to_string(),
+                None,
+                Some(
+                    "account re-validation failed (rotated, locked, disabled, or expired)"
+                        .to_string(),
+                ),
+            )
+            .await;
+            return Err(AuthError::AccountRevalidationFailed);
+        }
+    }
+
+    // Update last_used_at. A zero-row update means the token was revoked
+    // while the re-check ran (the scan above predates it), so the request
+    // must not authenticate with it.
+    let updated = pool_exec(
         pool,
         &format!(
             "UPDATE user_api_tokens SET last_used_at = {} WHERE id = {}",
@@ -7000,6 +7834,9 @@ async fn validate_user_token_pool(
         &[Arg::I64(token_info.id)],
     )
     .await;
+    if updated.map(|n| n == 0).unwrap_or(false) {
+        return Err(AuthError::InvalidKey);
+    }
 
     Ok((user, token_info))
 }
@@ -8381,12 +9218,14 @@ macro_rules! pending_mfa_row {
             user_name: $row.get(2),
             user_role: $row.get(3),
             oidc_subject: $row.get(4),
+            desktop: $row.get(7),
             created_at: $row.get(5),
             expires_at: $row.get(6),
         }
     };
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn create_pending_mfa_pool(
     pool: &DbPool,
     user_id: i64,
@@ -8395,15 +9234,16 @@ async fn create_pending_mfa_pool(
     user_role: String,
     oidc_subject: Option<String>,
     ttl_secs: u64,
+    desktop: bool,
 ) -> rusqlite::Result<String> {
     let token = generate_key();
     let token_hash = hash_key(&token);
     let (sql, args) = match pool {
         DbPool::Postgres(_) => (
             format!(
-                "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, expires_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, {})",
-                ts_now_plus_secs(pool, "$7")
+                "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, desktop, expires_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, {})",
+                ts_now_plus_secs(pool, "$8")
             ),
             vec![
                 Arg::Str(token_hash),
@@ -8412,13 +9252,14 @@ async fn create_pending_mfa_pool(
                 Arg::Str(user_name),
                 Arg::Str(user_role),
                 Arg::OptStr(oidc_subject),
+                Arg::Bool(desktop),
                 Arg::I64(ttl_secs as i64),
             ],
         ),
         DbPool::MySQL(_) => (
             format!(
-                "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, expires_at) \
-                 VALUES (?, ?, ?, ?, ?, ?, {})",
+                "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, desktop, expires_at) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?, {})",
                 ts_now_plus_secs(pool, "?")
             ),
             vec![
@@ -8428,12 +9269,13 @@ async fn create_pending_mfa_pool(
                 Arg::Str(user_name),
                 Arg::Str(user_role),
                 Arg::OptStr(oidc_subject),
+                Arg::Bool(desktop),
                 Arg::I64(ttl_secs as i64),
             ],
         ),
         _ => (
-            "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, expires_at) \
-             VALUES (?, ?, ?, ?, ?, ?, datetime('now', ?))"
+            "INSERT INTO auth_pending_mfa (token_hash, user_id, user_email, user_name, user_role, oidc_subject, desktop, expires_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', ?))"
                 .to_string(),
             vec![
                 Arg::Str(token_hash),
@@ -8442,6 +9284,7 @@ async fn create_pending_mfa_pool(
                 Arg::Str(user_name),
                 Arg::Str(user_role),
                 Arg::OptStr(oidc_subject),
+                Arg::Bool(desktop),
                 Arg::Str(format!("+{} seconds", ttl_secs)),
             ],
         ),
@@ -8456,7 +9299,7 @@ async fn get_pending_mfa_pool(
 ) -> rusqlite::Result<Option<PendingMfa>> {
     let token_hash = hash_key(&token);
     let sql = format!(
-        "SELECT user_id, user_email, user_name, user_role, oidc_subject, created_at, expires_at \
+        "SELECT user_id, user_email, user_name, user_role, oidc_subject, created_at, expires_at, desktop \
          FROM auth_pending_mfa WHERE token_hash = {} AND expires_at > {}",
         ph1(pool),
         ts_now(pool)
@@ -8780,6 +9623,24 @@ async fn get_ab_folder_pool(
         }
         DbPool::SQLite(p) => {
             sqlite_fetch_opt(p, "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at FROM address_book_folders WHERE scope = ? AND name = ?", &[Arg::Str(scope), Arg::Str(name)]).await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    row.map(|r| ab_folder_row!(&r))
+        .ok_or(rusqlite::Error::QueryReturnedNoRows)
+}
+
+async fn get_ab_folder_by_id_pool(pool: &DbPool, folder_id: i64) -> rusqlite::Result<AbFolder> {
+    let row = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch_opt(p, "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at FROM address_book_folders WHERE id = $1", &[Arg::I64(folder_id)]).await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch_opt(p, "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at FROM address_book_folders WHERE id = ?", &[Arg::I64(folder_id)]).await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch_opt(p, "SELECT id, scope, name, description, allowed_groups, inherit_from_parent, created_at, updated_at FROM address_book_folders WHERE id = ?", &[Arg::I64(folder_id)]).await
         }
         DbPool::None => return Err(no_pool_err()),
     }

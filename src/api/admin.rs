@@ -7,10 +7,13 @@ use super::{AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultC
 use crate::auth::{AuthIdentity, WsTicketStore};
 use crate::db::Db;
 use crate::error::AppError;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::{extract::State, Extension, Json};
+use axum::{Extension, Json};
+use serde::Serialize;
 use serde_json::json;
+use x509_parser::prelude::{FromDer, X509Certificate};
 
 /// `GET /api/health`: liveness and dependency checks.
 ///
@@ -336,10 +339,19 @@ const SETTING_DESKTOP_KIOSK: &str = "desktop_kiosk";
 const SETTING_DESKTOP_TRANSFERS: &str = "desktop_transfers";
 const SETTING_DESKTOP_PAIRING: &str = "desktop_pairing";
 
+/// `system_settings` key backing the compliance-mode gate (S3, persea#228):
+/// closes the direct API surface (admin API keys + self-service user
+/// tokens) while interactive sessions and scoped desktop tokens keep
+/// authenticating. Default OFF, read by the auth middleware per request.
+const SETTING_COMPLIANCE_MODE: &str = "compliance_mode";
+
 /// `GET /api/auth/status`: login-page configuration for anonymous
 /// callers: OIDC availability, site title, drive flag, the resolved
 /// theme data, the server version, the desktop-shell capability
-/// probe, and the cached server update-check result (S16).
+/// probe, the compliance-mode flag (S3, persea#228), and the cached
+/// server update-check result (S16). Answers without authentication so
+/// the desktop app can detect the mode and switch to the login-prompt
+/// flow.
 pub async fn auth_status(
     Extension(oidc_enabled): Extension<OidcEnabled>,
     Extension(site_title): Extension<SiteTitle>,
@@ -355,11 +367,14 @@ pub async fn auth_status(
         crate::settings_merge::toggle_enabled(&settings, SETTING_DESKTOP_TRANSFERS, true);
     let desktop_pairing = COMPILED_DESKTOP_PAIRING
         && crate::settings_merge::toggle_enabled(&settings, SETTING_DESKTOP_PAIRING, true);
+    let compliance_mode =
+        crate::settings_merge::toggle_enabled(&settings, SETTING_COMPLIANCE_MODE, false);
 
     let mut resp = json!({
         "oidc_enabled": oidc_enabled.0,
         "site_title": site_title.0,
         "drive_configured": drive_configured.0,
+        "compliance_mode": compliance_mode,
         "version": env!("CARGO_PKG_VERSION"),
         "capabilities": {
             "drive_api": true,
@@ -442,7 +457,7 @@ pub async fn get_docs(
     }
     let sections: Vec<serde_json::Value> = DOCS
         .iter()
-        .map(|(slug, title, html)| json!({ "slug": slug, "title": title, "html": html }))
+        .map(|(slug, title, html, _)| json!({ "slug": slug, "title": title, "html": html }))
         .collect();
     Ok(Json(json!(sections)))
 }
@@ -684,6 +699,130 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+// ── TLS certificate metadata (Security page) ───────────────────────────────
+
+/// Parsed metadata for the server's TLS certificate, exposed to the
+/// Security page's TLS Certificates tab.
+#[derive(Serialize)]
+struct CertMetadata {
+    /// Certificate subject, e.g. "CN=persea.example.com".
+    subject: String,
+    /// Certificate issuer, e.g. "CN=persea.example.com".
+    issuer: String,
+    /// Validity start as an RFC 3339 timestamp.
+    not_before: String,
+    /// Expiry as an RFC 3339 timestamp.
+    not_after: String,
+    /// Whole days until expiry (negative once expired).
+    expires_in_days: i64,
+    /// "valid", "expiring_soon" (within 30 days), or "expired".
+    status: &'static str,
+}
+
+/// Expiry status: "expired" past the not-after instant, "expiring_soon"
+/// within the 30-day warning window, "valid" otherwise.
+fn cert_status(not_after_ts: i64, now_ts: i64) -> &'static str {
+    let days = (not_after_ts - now_ts).div_euclid(86_400);
+    if days < 0 {
+        "expired"
+    } else if days <= 30 {
+        "expiring_soon"
+    } else {
+        "valid"
+    }
+}
+
+/// Format a Unix timestamp as an RFC 3339 string (falls back to the raw
+/// seconds when the timestamp is out of chrono's representable range).
+fn fmt_timestamp(ts: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|| ts.to_string())
+}
+
+/// Read a PEM certificate file and extract subject, issuer, and validity
+/// metadata. `rustls_pemfile` pulls the first CERTIFICATE block; the DER it
+/// yields is parsed with the pure-Rust x509-parser crate.
+fn parse_cert_metadata(cert_path: &std::path::Path) -> Result<CertMetadata, String> {
+    let pem = std::fs::read(cert_path).map_err(|e| format!("failed to read certificate: {e}"))?;
+    let certs = rustls_pemfile::certs(&mut &pem[..])
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to parse certificate PEM: {e}"))?;
+    let der = certs
+        .first()
+        .ok_or_else(|| "no certificate found in PEM file".to_string())?;
+    let (_, cert) = X509Certificate::from_der(der.as_ref())
+        .map_err(|e| format!("failed to parse certificate: {e}"))?;
+    let not_before_ts = cert.validity().not_before.timestamp();
+    let not_after_ts = cert.validity().not_after.timestamp();
+    let now_ts = chrono::Utc::now().timestamp();
+    Ok(CertMetadata {
+        subject: cert.subject().to_string(),
+        issuer: cert.issuer().to_string(),
+        not_before: fmt_timestamp(not_before_ts),
+        not_after: fmt_timestamp(not_after_ts),
+        expires_in_days: (not_after_ts - now_ts).div_euclid(86_400),
+        status: cert_status(not_after_ts, now_ts),
+    })
+}
+
+/// `GET /api/admin/tls-cert-info?cert_path=...&key_path=...` — TLS
+/// certificate metadata for the Security page's TLS Certificates tab.
+///
+/// Admin only. The caller passes the configured paths (fetched from
+/// `GET /api/system/settings`); the endpoint reports whether each file
+/// exists and, when the cert file is readable, its parsed subject, issuer,
+/// validity window, and a 30-day expiry warning state. Unparseable or
+/// missing files are reported in-band (`cert` null + `cert_error`), never
+/// as a 500, so the tab can render a clear status.
+pub async fn tls_cert_info(
+    Extension(database): Extension<Db>,
+    identity: Option<Extension<AuthIdentity>>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    if !identity
+        .as_ref()
+        .map(|Extension(id)| id.has_role("admin"))
+        .unwrap_or(false)
+    {
+        return Err(AppError::Forbidden("admin role required".into()));
+    }
+    // Resolve the paths server-side from the stored settings: the client
+    // never supplies file paths (no arbitrary-file oracle).
+    let db = database.clone();
+    let settings =
+        tokio::task::spawn_blocking(move || crate::settings_merge::load_db_settings(&db))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))?
+            .unwrap_or_default();
+    let get = |key: &str| {
+        settings
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_default()
+    };
+    let cert_path = get("tls_cert_path");
+    let key_path = get("tls_key_path");
+    let cert_exists = !cert_path.is_empty() && std::path::Path::new(&cert_path).is_file();
+    let key_exists = !key_path.is_empty() && std::path::Path::new(&key_path).is_file();
+    let (cert, cert_error) = if cert_exists {
+        match parse_cert_metadata(std::path::Path::new(&cert_path)) {
+            Ok(meta) => (json!(meta), None),
+            Err(e) => (serde_json::Value::Null, Some(e)),
+        }
+    } else {
+        (serde_json::Value::Null, None)
+    };
+    Ok(Json(json!({
+        "tls_cert_path": cert_path,
+        "tls_key_path": key_path,
+        "cert_exists": cert_exists,
+        "key_exists": key_exists,
+        "cert": cert,
+        "cert_error": cert_error,
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -874,5 +1013,254 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── TLS certificate info endpoint (Security page TLS tab) ─────────────
+
+    fn tls_router(db: Db, id: Option<AuthIdentity>) -> Router {
+        let r = Router::new()
+            .route("/api/admin/tls-cert-info", get(tls_cert_info))
+            .layer(Extension(db));
+        match id {
+            Some(id) => r.layer(Extension(id)),
+            None => r,
+        }
+    }
+
+    /// Seed the tls_cert_path/tls_key_path settings the endpoint resolves.
+    fn seed_tls_settings(db: &Db, cert_path: &str, key_path: &str) {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+            [],
+        )
+        .unwrap();
+        for (key, value) in [("tls_cert_path", cert_path), ("tls_key_path", key_path)] {
+            conn.execute(
+                "INSERT INTO system_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                rusqlite::params![key, value],
+            )
+            .unwrap();
+        }
+    }
+
+    /// Generate a self-signed cert fixture (rcgen) with a far-future expiry
+    /// and write it to `dir`; returns the cert path.
+    fn write_fixture_cert(dir: &std::path::Path) -> std::path::PathBuf {
+        let mut params = rcgen::CertificateParams::new(vec!["persea.example.com".to_string()])
+            .expect("fixture cert params");
+        params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "persea.example.com");
+        params.not_before = rcgen::date_time_ymd(2026, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2099, 1, 1);
+        let key = rcgen::KeyPair::generate().expect("fixture key");
+        let cert = params.self_signed(&key).expect("fixture cert");
+        let path = dir.join("cert.pem");
+        std::fs::write(&path, cert.pem()).expect("fixture cert write");
+        path
+    }
+
+    #[tokio::test]
+    async fn tls_cert_info_parses_fixture_cert() {
+        let dir = std::env::temp_dir().join(format!("persea-tls-fixture-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cert_path = write_fixture_cert(&dir);
+        let db = test_db();
+        seed_tls_settings(&db, &cert_path.to_string_lossy(), "/nonexistent/key.pem");
+        let router = tls_router(db, Some(identity("admin@example.com", "Admin", "admin")));
+        let resp = router
+            .oneshot(req_get("/api/admin/tls-cert-info"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        assert_eq!(body["cert_exists"], json!(true));
+        assert_eq!(body["key_exists"], json!(false));
+        assert_eq!(body["cert"]["status"], json!("valid"));
+        assert!(
+            body["cert"]["expires_in_days"].as_i64().unwrap() > 1000,
+            "2099 fixture must be far in the future"
+        );
+        let subject = body["cert"]["subject"].as_str().unwrap();
+        let issuer = body["cert"]["issuer"].as_str().unwrap();
+        assert!(
+            subject.contains("persea.example.com"),
+            "subject must carry the fixture CN: {subject}"
+        );
+        assert!(
+            issuer.contains("persea.example.com"),
+            "issuer must carry the fixture CN: {issuer}"
+        );
+        assert_eq!(subject, issuer, "self-signed cert subject == issuer");
+        assert!(
+            body["cert"]["not_after"]
+                .as_str()
+                .unwrap()
+                .starts_with("2099"),
+            "not_after must reflect the fixture expiry: {}",
+            body["cert"]["not_after"]
+        );
+        assert!(
+            body["cert"]["not_before"]
+                .as_str()
+                .unwrap()
+                .starts_with("2026"),
+            "not_before must reflect the fixture start: {}",
+            body["cert"]["not_before"]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn tls_cert_info_missing_files_report_false_existence() {
+        let db = test_db();
+        seed_tls_settings(&db, "/nonexistent/cert.pem", "/nonexistent/key.pem");
+        let router = tls_router(db, Some(identity("admin@example.com", "Admin", "admin")));
+        let resp = router
+            .oneshot(req_get("/api/admin/tls-cert-info"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        assert_eq!(body["cert_exists"], json!(false));
+        assert_eq!(body["key_exists"], json!(false));
+        assert!(body["cert"].is_null());
+        assert!(body["cert_error"].is_null());
+    }
+
+    #[tokio::test]
+    async fn tls_cert_info_unparseable_pem_reports_error_in_band() {
+        let dir = std::env::temp_dir().join(format!("persea-cert-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("bad.pem");
+        std::fs::write(&bad, "not a pem").unwrap();
+        let db = test_db();
+        seed_tls_settings(&db, &bad.to_string_lossy(), "");
+        let router = tls_router(db, Some(identity("admin@example.com", "Admin", "admin")));
+        let resp = router
+            .oneshot(req_get("/api/admin/tls-cert-info"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&body_string(resp).await).unwrap();
+        assert_eq!(body["cert_exists"], json!(true));
+        assert!(body["cert"].is_null());
+        assert!(
+            body["cert_error"].as_str().is_some(),
+            "a parse failure must carry an error message"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn tls_cert_info_requires_admin() {
+        let cases: [Option<AuthIdentity>; 2] = [
+            None,
+            Some(identity("viewer@example.com", "Viewer", "viewer")),
+        ];
+        for id in cases {
+            let router = tls_router(test_db(), id);
+            let resp = router
+                .oneshot(req_get("/api/admin/tls-cert-info"))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        }
+    }
+
+    #[test]
+    fn cert_status_thresholds() {
+        let now = 1_800_000_000i64;
+        let day = 86_400i64;
+        assert_eq!(cert_status(now + 31 * day, now), "valid");
+        assert_eq!(cert_status(now + 30 * day, now), "expiring_soon");
+        assert_eq!(cert_status(now, now), "expiring_soon");
+        assert_eq!(cert_status(now - 1, now), "expired");
+        assert_eq!(cert_status(now - 365 * day, now), "expired");
+    }
+
+    // ── Compliance probe (GET /api/auth/status, persea#228) ──────────────
+
+    fn status_router(db: Option<Db>) -> Router {
+        let r = Router::new()
+            .route("/api/auth/status", get(auth_status))
+            .layer(Extension(crate::api::OidcEnabled(false)))
+            .layer(Extension(crate::api::SiteTitle("Persea".into())))
+            .layer(Extension(crate::api::DriveConfigured(false)))
+            .layer(Extension(crate::api::ThemeData {
+                admin_preset: "dark".into(),
+                admin_colors: crate::config::builtin_presets()
+                    .first()
+                    .map(|(_, c)| c.clone())
+                    .expect("builtin presets exist"),
+                logo_url: None,
+                presets: std::collections::HashMap::new(),
+            }));
+        match db {
+            Some(db) => r.layer(Extension(db)),
+            None => r,
+        }
+    }
+
+    /// Store a compliance setting row exactly as the settings API would.
+    fn set_system_setting(db: &Db, key: &str, value: &str) {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS system_settings (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL DEFAULT '',
+                updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO system_settings (key, value, updated_at)
+             VALUES (?1, ?2, CURRENT_TIMESTAMP)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+            rusqlite::params![key, value],
+        )
+        .unwrap();
+    }
+
+    async fn get_status_json(router: &Router) -> serde_json::Value {
+        let resp = router
+            .clone()
+            .oneshot(req_get("/api/auth/status"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        serde_json::from_str(&body_string(resp).await).unwrap()
+    }
+
+    #[tokio::test]
+    async fn auth_status_advertises_compliance_mode() {
+        // Unset toggle → off (existing deployments unaffected).
+        let body = get_status_json(&status_router(Some(test_db()))).await;
+        assert_eq!(body["compliance_mode"], json!(false));
+
+        // Stored "true" → advertised, so the desktop app can switch to the
+        // login-prompt flow.
+        let db = test_db();
+        set_system_setting(&db, SETTING_COMPLIANCE_MODE, "true");
+        let body = get_status_json(&status_router(Some(db))).await;
+        assert_eq!(body["compliance_mode"], json!(true));
+
+        // Flipped back to "false" → advertised off.
+        let db = test_db();
+        set_system_setting(&db, SETTING_COMPLIANCE_MODE, "false");
+        let body = get_status_json(&status_router(Some(db))).await;
+        assert_eq!(body["compliance_mode"], json!(false));
+    }
+
+    #[tokio::test]
+    async fn auth_status_answers_without_auth_or_db() {
+        // The probe is anonymous by design and must keep answering without
+        // a DB handle, advertising the default (off) mode.
+        let body = get_status_json(&status_router(None)).await;
+        assert_eq!(body["compliance_mode"], json!(false));
+        assert!(body["version"].as_str().is_some());
+        assert!(body["capabilities"]["desktop_bridge"].as_bool().is_some());
     }
 }

@@ -806,6 +806,16 @@ Guacamole.SessionRecording = function SessionRecording(source, refreshInterval) 
         if (activeSeek) {
             activeSeek.aborted = true;
             activeSeek = null;
+
+            // A user-initiated seek hides the display while it replays
+            // frames. Aborting a seek means the display must be usable
+            // again: a newer seek re-hides it, while pause/play/cancel
+            // paths continue with it visible. Without this restore, a
+            // pause or play click during a seek leaves the display
+            // hidden until the next seek completes.
+            var displayElement = playbackClient.getDisplay().getElement();
+            if (displayElement)
+                displayElement.style.visibility = 'visible';
         }
     };
 
@@ -1146,6 +1156,12 @@ Guacamole.SessionRecording = function SessionRecording(source, refreshInterval) 
         if (frames.length === 0)
             return;
 
+        // Hide the display while the seek replays frames, so that only the
+        // target frame is presented when the seek completes
+        var displayElement = playbackClient.getDisplay().getElement();
+        if (displayElement)
+            displayElement.style.visibility = 'hidden';
+
         // Abort active seek operation, if any
         recording.cancel();
 
@@ -1176,6 +1192,10 @@ Guacamole.SessionRecording = function SessionRecording(source, refreshInterval) 
 
         // Seek to the closest frame before or at the requested position
         seekToFrame(closestFrame, function seekComplete() {
+
+            // Restore the display now that the seek has completed
+            if (displayElement)
+                displayElement.style.visibility = 'visible';
 
             // Update the current position to the requested position
             // and invoke the the onseek callback. Note that this is the
