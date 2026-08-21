@@ -304,6 +304,22 @@ impl SessionManager {
         let toggle = |key: &str| crate::settings_merge::toggle_enabled(&settings, key, true);
         check_session_type_enabled(&req.session_type, req.address_book_entry.as_deref(), toggle)?;
 
+        // PowerShell remoting entries are SSH sessions with a per-entry
+        // command (the PowerShell binary, default pwsh.exe). Resolve the
+        // entry's binary once so the lockdown gate and the guacd `command`
+        // arg both see it. Only SSH sessions with an address-book entry can
+        // be PowerShell sessions; everything else skips the lookup.
+        let powershell_binary = if req.session_type == SessionType::Ssh {
+            let db = self.db.clone();
+            let key = req.address_book_entry.clone();
+            tokio::task::spawn_blocking(move || entry_powershell_binary(&db, key.as_deref()))
+                .await
+                .unwrap_or(None)
+        } else {
+            None
+        };
+        powershell_gate(powershell_binary.as_deref(), toggle)?;
+
         // Effective per-protocol global defaults (admin Settings → Session
         // → Session defaults). Precedence: the request/entry value wins,
         // then the stored global default, then the code defaults inside
@@ -513,10 +529,11 @@ impl SessionManager {
                         .as_ref()
                         .map(|(_, _, c)| *c)
                         .unwrap_or(false),
-                    command: self
-                        .config
-                        .ssh_tmux_detach
-                        .then(|| TMUX_DETACH_WRAPPER.to_string()),
+                    command: powershell_binary.or_else(|| {
+                        self.config
+                            .ssh_tmux_detach
+                            .then(|| TMUX_DETACH_WRAPPER.to_string())
+                    }),
                 });
                 (
                     params, hostname, username, None, None, ssh_banner, None, None, None,
@@ -1889,6 +1906,61 @@ async fn check_allowed_network(
     )))
 }
 
+/// Resolve the PowerShell binary for an address-book entry, if the entry is
+/// a PowerShell remoting entry. The binary is stored in the entry's
+/// `protocol_config` JSON (`powershell_binary`); the entry type is the
+/// `protocol` column. PowerShell entries without a stored binary fall back
+/// to the `pwsh.exe` default (the entry form's default). Returns `None` for
+/// non-PowerShell entries, missing entries, or any read failure — plain SSH
+/// sessions are unaffected.
+/// Reject PowerShell sessions when the feature toggle is off. The
+/// binary presence marks the entry as a PowerShell session; the toggle
+/// defaults to enabled, matching the other `enable_*` gates.
+fn powershell_gate(
+    powershell_binary: Option<&str>,
+    toggle: impl Fn(&str) -> bool,
+) -> Result<(), SessionError> {
+    if powershell_binary.is_some() && !toggle("enable_powershell_ssh") {
+        return Err(SessionError::ValidationError(
+            "PowerShell sessions are disabled by an administrator".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn entry_powershell_binary(
+    db: &Option<crate::db::Db>,
+    address_book_entry: Option<&str>,
+) -> Option<String> {
+    let db = db.as_ref()?;
+    let key = address_book_entry?;
+    // The key is `scope/folder/entry`; folder paths may themselves contain
+    // slashes (nested folders), so scope is up to the first slash and the
+    // entry is after the last one (mirrors the frontend's key parsing).
+    let first = key.find('/')?;
+    let last = key.rfind('/')?;
+    if last <= first {
+        return None;
+    }
+    let scope = &key[..first];
+    let folder = &key[first + 1..last];
+    let entry = &key[last + 1..];
+    let folder_rec = crate::db::get_ab_folder(db, scope, folder).ok()?;
+    let entry_rec = crate::db::get_ab_entry(db, folder_rec.id, entry).ok()?;
+    if entry_rec.protocol != "powershell" {
+        return None;
+    }
+    let config: serde_json::Value = serde_json::from_str(&entry_rec.protocol_config).ok()?;
+    Some(
+        config
+            .get("powershell_binary")
+            .and_then(|v| v.as_str())
+            .filter(|b| !b.is_empty())
+            .unwrap_or("pwsh.exe")
+            .to_string(),
+    )
+}
+
 /// Which `enable_*` lockdown toggle gates a session type. `Vnc` and `Ssh`
 /// have no toggles (the settings page offers none) and are never blocked
 /// here — SSH is always allowed like VNC; `enable_ssh_tunnels` only gates
@@ -2361,6 +2433,25 @@ mod tests {
         assert_eq!(creds[0].0, "https://ok.com");
     }
 
+    // ── PowerShell feature gate ──
+
+    #[test]
+    fn powershell_gate_blocks_when_toggle_off() {
+        let err = powershell_gate(Some("pwsh.exe"), |k| k != "enable_powershell_ssh");
+        assert!(matches!(err, Err(SessionError::ValidationError(_))));
+    }
+
+    #[test]
+    fn powershell_gate_allows_when_toggle_on_or_unset() {
+        assert!(powershell_gate(Some("pwsh.exe"), |_| true).is_ok());
+        assert!(powershell_gate(Some("pwsh.exe"), |_| false).is_err());
+    }
+
+    #[test]
+    fn powershell_gate_ignores_plain_ssh() {
+        assert!(powershell_gate(None, |_| false).is_ok());
+    }
+
     // ── Protocol lockdown toggles ──
 
     const ALL_TYPES: [SessionType; 7] = [
@@ -2477,6 +2568,22 @@ mod tests {
             .is_ok(),
             "non-vSphere entries must not be gated by enable_vmware"
         );
+    }
+
+    // ── PowerShell remoting entry resolution ──
+
+    #[test]
+    fn powershell_entry_key_parses_scope_folder_entry() {
+        // No DB: the lookup must fail soft (None) rather than error, and the
+        // key parsing must handle nested folder paths (folder = everything
+        // between the first and last slash).
+        assert_eq!(entry_powershell_binary(&None, None), None);
+        assert_eq!(
+            entry_powershell_binary(&None, Some("shared/infra/web/entry")),
+            None
+        );
+        assert_eq!(entry_powershell_binary(&None, Some("shared/folder")), None);
+        assert_eq!(entry_powershell_binary(&None, Some("vsphere/vm-01")), None);
     }
 
     // ── VDI container username sanitization ──

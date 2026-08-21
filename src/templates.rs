@@ -218,6 +218,7 @@ fn render_app_page(page_template: &str, context: &impl Serialize) -> Response {
 /// {% if features.ssh_tunnels %}  ← enable_ssh_tunnels (jump-host UI)
 /// {% if features.web_sessions %} ← enable_web_sessions
 /// {% if features.vdi %}          ← enable_vdi
+/// {% if features.powershell_ssh %} ← enable_powershell_ssh
 /// {% if features.spice %}        ← enable_spice
 /// {% if features.proxmox %}      ← enable_proxmox
 /// {% if features.vmware %}       ← enable_vmware
@@ -241,6 +242,8 @@ pub struct FeatureFlags {
     pub web_sessions: bool,
     /// VDI desktop container sessions (`enable_vdi`).
     pub vdi: bool,
+    /// PowerShell remoting over SSH connection type (`enable_powershell_ssh`).
+    pub powershell_ssh: bool,
     /// SPICE connection type available in the UI (`enable_spice`).
     pub spice: bool,
     /// Proxmox VE connection type (`enable_proxmox`).
@@ -268,6 +271,7 @@ impl Default for FeatureFlags {
             ssh_tunnels: true,
             web_sessions: true,
             vdi: true,
+            powershell_ssh: true,
             spice: true,
             proxmox: true,
             vmware: true,
@@ -295,6 +299,11 @@ impl FeatureFlags {
                 true,
             ),
             vdi: crate::settings_merge::toggle_enabled(settings, "enable_vdi", true),
+            powershell_ssh: crate::settings_merge::toggle_enabled(
+                settings,
+                "enable_powershell_ssh",
+                true,
+            ),
             spice: crate::settings_merge::toggle_enabled(settings, "enable_spice", true),
             proxmox: crate::settings_merge::toggle_enabled(settings, "enable_proxmox", true),
             vmware: crate::settings_merge::toggle_enabled(settings, "enable_vmware", true),

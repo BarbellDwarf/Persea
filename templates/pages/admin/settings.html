@@ -431,6 +431,18 @@
 
                     <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
                         <div>
+                            <span class="text-sm text-[var(--text-primary)]">PowerShell (SSH)</span>
+                            <p class="text-xs text-[var(--text-muted)]">PowerShell remoting over SSH to Windows hosts</p>
+                        </div>
+                        <div class="toggle-switch">
+                            <input type="checkbox" id="enable_powershell_ssh">
+                            <span class="toggle-slider"></span>
+                        </div>
+                    </label>
+                    <input type="hidden" name="enable_powershell_ssh" id="enable_powershell_ssh-hidden" value="false">
+
+                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                        <div>
                             <span class="text-sm text-[var(--text-primary)]">File Transfer</span>
                             <p class="text-xs text-[var(--text-muted)]">Upload and download files via RDP drive and SSH SFTP</p>
                         </div>
@@ -642,7 +654,8 @@ function syncToggle(name) {
 var toggleBoxes = [
     'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
     'enable_recordings', 'enable_web_sessions', 'enable_spice',
-    'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_file_transfer',
+    'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_powershell_ssh',
+    'enable_file_transfer',
     'desktop_kiosk', 'desktop_transfers', 'desktop_pairing',
     'vault_enabled', 'db_only_mode',
     'default_rdp_h264', 'default_rdp_gfx', 'default_rdp_drive',

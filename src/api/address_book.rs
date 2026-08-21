@@ -356,6 +356,21 @@ fn entry_info_from_db_row(database: &Db, row: &db::AbEntry) -> crate::vault::Ent
     info
 }
 
+/// Inject the per-entry PowerShell binary (stored in the `protocol_config`
+/// JSON column) into a serialized `EntryInfo` object so the edit modal can
+/// prefill the field. `EntryInfo` has no field for it — it is
+/// PowerShell-only metadata that lives in the protocol_config JSON.
+fn inject_powershell_binary(row: &db::AbEntry, mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = value.as_object_mut() {
+        let config: serde_json::Value =
+            serde_json::from_str(&row.protocol_config).unwrap_or(serde_json::Value::Null);
+        if let Some(bin) = config.get("powershell_binary").and_then(|b| b.as_str()) {
+            obj.insert("powershell_binary".into(), json!(bin));
+        }
+    }
+    value
+}
+
 /// Serialize the non-credential entry fields into the `protocol_config` JSON
 /// column. Credential fields are stored separately (DB credentials table in
 /// db mode, vault copy in vault mode).
@@ -557,6 +572,15 @@ fn has_credential_fields(entry: &AddressBookEntry) -> bool {
         || entry.container_password.is_some()
 }
 
+/// Whether the PowerShell (SSH) entry type is enabled. Unset toggles
+/// default to enabled, matching the runtime gate in session/create.rs
+/// (`settings_merge::toggle_enabled(..., true)`).
+fn powershell_ssh_enabled(database: &Db) -> bool {
+    crate::settings_merge::load_db_settings(database)
+        .map(|s| crate::settings_merge::toggle_enabled(&s, "enable_powershell_ssh", true))
+        .unwrap_or(true)
+}
+
 /// Overlay decrypted DB credential rows onto an entry (db mode).
 fn apply_db_credentials(
     database: &Db,
@@ -750,6 +774,12 @@ pub struct CreateEntryRequest {
     /// siblings of `entry` are ignored by serde when absent.
     #[serde(default)]
     pub allowed_groups: Option<Vec<String>>,
+    /// PowerShell binary to launch for PowerShell (SSH) entries (default
+    /// `pwsh.exe`). Stored in `protocol_config.powershell_binary`; kept as a
+    /// sibling of the flattened `entry` because `AddressBookEntry` has no
+    /// field for it.
+    #[serde(default)]
+    pub powershell_binary: Option<String>,
     /// Flattened connection fields (protocol, hostname, port,
     /// credentials) from the `AddressBookEntry` shape.
     #[serde(flatten)]
@@ -768,6 +798,10 @@ pub struct UpdateEntryRequest {
     /// audit subject).
     #[serde(default)]
     pub name: Option<String>,
+    /// PowerShell binary for PowerShell (SSH) entries; stored in
+    /// `protocol_config.powershell_binary` (see `CreateEntryRequest`).
+    #[serde(default)]
+    pub powershell_binary: Option<String>,
     /// Flattened connection fields from the `AddressBookEntry` shape.
     #[serde(flatten)]
     pub entry: AddressBookEntry,
@@ -1063,7 +1097,10 @@ pub async fn ab_list_all(
                 {
                     continue;
                 }
-                entries.push(entry_info_from_db_row(&database, entry));
+                entries.push(inject_powershell_binary(
+                    entry,
+                    json!(entry_info_from_db_row(&database, entry)),
+                ));
             }
         }
 
@@ -1163,7 +1200,10 @@ pub async fn ab_search_index(
             emitted.push(json!({
                 "scope": scope,
                 "folder_path": path,
-                "entry": entry_info_from_db_row(&database, entry),
+                "entry": inject_powershell_binary(
+                    entry,
+                    json!(entry_info_from_db_row(&database, entry)),
+                ),
             }));
         }
     }
@@ -1213,7 +1253,10 @@ pub async fn ab_list_entries(
         {
             continue;
         }
-        entries.push(entry_info_from_db_row(&database, entry));
+        entries.push(inject_powershell_binary(
+            entry,
+            json!(entry_info_from_db_row(&database, entry)),
+        ));
     }
 
     Ok(Json(json!(entries)))
@@ -1497,6 +1540,7 @@ pub async fn ab_connect_entry(
 
     let session_type = match ab_entry.session_type.as_str() {
         "ssh" => SessionType::Ssh,
+        "powershell" => SessionType::Ssh,
         "rdp" => SessionType::Rdp,
         "vnc" => SessionType::Vnc,
         "spice" => SessionType::Spice,
@@ -1956,6 +2000,11 @@ pub async fn ab_create_entry(
     }
 
     let session_type = req.entry.session_type.clone();
+    if session_type == "powershell" && !powershell_ssh_enabled(&database) {
+        return Err(AppError::Validation(
+            "PowerShell (SSH) entries are disabled by an administrator".into(),
+        ));
+    }
     let vault_mode =
         vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await;
 
@@ -2007,7 +2056,15 @@ pub async fn ab_create_entry(
 
     let mut entry = req.entry.clone();
     entry.display_name = Some(display_name.clone());
-    let config = build_protocol_config(&entry);
+    let mut config = build_protocol_config(&entry);
+    if let Some(bin) = req
+        .powershell_binary
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+    {
+        config.insert("powershell_binary".into(), json!(bin));
+    }
     let entry_id = db::create_ab_entry(
         &database,
         folder_id,
@@ -2158,6 +2215,12 @@ pub async fn ab_update_entry(
     let mut payload = data.clone();
     if let Some(name) = data.name.as_ref().filter(|n| !n.trim().is_empty()) {
         payload.entry.display_name = Some(name.trim().to_string());
+    }
+
+    if payload.entry.session_type == "powershell" && !powershell_ssh_enabled(&database) {
+        return Err(AppError::Validation(
+            "PowerShell (SSH) entries are disabled by an administrator".into(),
+        ));
     }
 
     let folder_rec = db::get_ab_folder(&database, &scope, &folder)
@@ -2346,6 +2409,14 @@ pub async fn ab_update_entry(
         } else {
             merged_config.insert(k, v);
         }
+    }
+    if let Some(bin) = payload
+        .powershell_binary
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+    {
+        merged_config.insert("powershell_binary".into(), json!(bin));
     }
     let allowed_groups = payload
         .allowed_groups
@@ -2839,6 +2910,7 @@ pub async fn quick_connect(
 
         let session_type = match ab_entry.session_type.as_str() {
             "ssh" => SessionType::Ssh,
+            "powershell" => SessionType::Ssh,
             "rdp" => SessionType::Rdp,
             "vnc" => SessionType::Vnc,
             "web" => SessionType::Web,

@@ -287,6 +287,7 @@ fn feature_flags_default_all_on_when_settings_absent() {
         ("api_keys", f.api_keys),
         ("ssh_tunnels", f.ssh_tunnels),
         ("recordings", f.recordings),
+        ("powershell_ssh", f.powershell_ssh),
     ] {
         assert!(v, "flag {label} must default on");
     }
@@ -300,6 +301,7 @@ fn feature_flags_flip_with_stored_toggles() {
         ("enable_api_keys".to_string(), "false".to_string()),
         ("enable_ssh_tunnels".to_string(), "false".to_string()),
         ("enable_recordings".to_string(), "false".to_string()),
+        ("enable_powershell_ssh".to_string(), "false".to_string()),
     ];
     let f = FeatureFlags::from_settings(&stored);
     assert!(!f.rdp);
@@ -307,6 +309,7 @@ fn feature_flags_flip_with_stored_toggles() {
     assert!(!f.api_keys);
     assert!(!f.ssh_tunnels);
     assert!(!f.recordings);
+    assert!(!f.powershell_ssh);
     // Untouched flags stay on.
     assert!(f.spice);
     assert!(f.proxmox);
@@ -577,6 +580,7 @@ async fn settings_page_keeps_every_toggle_and_field() {
         "enable_proxmox",
         "enable_vmware",
         "enable_vdi",
+        "enable_powershell_ssh",
         "enable_file_transfer",
         "desktop_kiosk",
         "desktop_transfers",
