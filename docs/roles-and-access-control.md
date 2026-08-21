@@ -241,7 +241,7 @@ access. Operators and viewers can *view* tokens an admin created for them.
 **1. Create users and set roles**, Admin → Users (`/admin/users.html`): add
 users, change roles, disable accounts, and see who logged in from where.
 
-**2. Map groups to roles**, Admin page (`/admin.html`): once people have
+**2. Map groups to roles**, Admin → Groups (`/admin/groups.html`): once people have
 logged in, the groups persea has seen appear here; map them to roles so
 membership assigns roles automatically.
 
@@ -262,6 +262,46 @@ hash-chain audit trail with chain-integrity verification.
 
 **7. Let powerusers automate**: they create their own tokens on the Tokens
 page (`/tokens.html`, also under Account).
+
+---
+
+## User management and profile self-service
+
+### Admin edits (Admin → Users)
+
+Admins can edit a user's **name**, **email**, and **password** from the
+**Edit** action on the Admin → Users page (or `PUT /api/users/{email}`).
+What is editable depends on where the account comes from:
+
+- **Name**: editable for any user.
+- **Email and password**: editable for **database** users only. LDAP and
+  OIDC identities are provider-owned: their email and password are
+  overwritten on every login, so the fields are read-only and the API
+  rejects attempts to change them with a clear message.
+- Email changes enforce uniqueness (409 conflict on a duplicate) and
+  password resets enforce the password policy (minimum length and reuse
+  history) exactly like user creation. Sessions, API tokens, and RBAC
+  grants key by user id, so an email change preserves them without
+  re-keying. Admin edits are written to the audit log.
+
+### Profile self-service (Account → Profile)
+
+Users edit their own profile on the Account → Profile page
+(`/account/profile.html`):
+
+- **Name**: editable by any user.
+- **Email**: editable by **database** users only, and only when the
+  **current password** is supplied. LDAP/OIDC accounts see the field as
+  read-only ("Managed by your identity provider"). Email uniqueness is
+  enforced the same way as admin edits.
+- **Password**: database users can change their own password with the
+  current password plus the new one (and a confirmation); the password
+  policy applies. Provider accounts have no password form.
+
+The page also shows the account's auth source and TOTP status. The
+self-service endpoints are `PUT /api/me` (name/email) and
+`POST /api/me/password`; both are gated on the caller's own auth source,
+so a user can never change provider-owned fields through self-service.
 
 ---
 

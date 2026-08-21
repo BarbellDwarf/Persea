@@ -83,6 +83,9 @@ rcgen = "0.14"
 tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"
+# Pure-Rust X.509 parsing for the Security page's TLS certificate tab
+# (subject/issuer/expiry metadata from the PEM cert file).
+x509-parser = "0.18"
 
 # OIDC
 openidconnect = "4"
