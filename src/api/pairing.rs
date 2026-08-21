@@ -14,7 +14,9 @@
 //!
 //! The minted token is an ordinary user token (same table as
 //! `/api/me/tokens`): role-capped at the user's current role, no expiry by
-//! default, and revocable through the existing `DELETE /api/me/tokens/{id}`.
+//! default, stamped `token_type = 'scoped'` (the desktop bridge type, see
+//! `mint_login_scoped_token` for the interactive-login sibling with a 12h
+//! TTL), and revocable through the existing `DELETE /api/me/tokens/{id}`.
 //! The plaintext is handed out only by the status endpoint, so the desktop
 //! shell never needs the webview's cookies.
 
@@ -848,6 +850,13 @@ pub async fn pairing_status(
     })))
 }
 
+/// TTL of a login-issued scoped desktop token, in hours (persea#227).
+pub const SCOPED_TOKEN_TTL_HOURS: i64 = 12;
+/// Name of the scoped token minted by an interactive desktop login.
+/// Distinct from the pairing token name (`Persea Desktop (hostname)`) so
+/// re-pairing and re-login never revoke each other's token.
+pub const LOGIN_TOKEN_NAME: &str = "Persea Desktop (login)";
+
 /// Mint the paired user token: role-capped at the user's current role, no
 /// expiry, named `Persea Desktop (hostname)`. A previous token with the
 /// same name is revoked first, so re-pairing refreshes the device token.
@@ -858,6 +867,56 @@ async fn mint_paired_token(
     ip: &std::net::IpAddr,
 ) -> Result<(i64, String, String, String), AppError> {
     let name = token_name(hostname);
+    mint_desktop_token(
+        database,
+        user_id,
+        name,
+        None,
+        ip,
+        "device pairing (desktop shell)",
+    )
+    .await
+}
+
+/// Mint the scoped token issued by an interactive desktop login
+/// (persea#227): bound to the user, role-capped at the user's current
+/// role, `token_type = 'scoped'`, 12-hour TTL. A previous login-issued
+/// token is revoked first (refresh semantics: a new login invalidates the
+/// old desktop token). Returns (token_id, plaintext, name, max_role,
+/// expires_db, expires_rfc3339).
+pub async fn mint_login_scoped_token(
+    database: &Db,
+    user_id: i64,
+    ip: &std::net::IpAddr,
+) -> Result<(i64, String, String, String, String, String), AppError> {
+    let now = chrono::Utc::now();
+    let expires = now + chrono::Duration::hours(SCOPED_TOKEN_TTL_HOURS);
+    let expires_db = db_ts(expires);
+    let expires_rfc = expires.to_rfc3339();
+    let (token_id, plaintext, name, max_role) = mint_desktop_token(
+        database,
+        user_id,
+        LOGIN_TOKEN_NAME.to_string(),
+        Some(expires_db.clone()),
+        ip,
+        "interactive login (desktop shell)",
+    )
+    .await?;
+    Ok((token_id, plaintext, name, max_role, expires_db, expires_rfc))
+}
+
+/// Mint a desktop user token: role-capped at the user's current role,
+/// `token_type = 'scoped'`, optionally expiring, named `name`. A previous
+/// token with the same name is revoked first (refresh semantics: a new
+/// desktop login/pairing invalidates the old desktop token).
+async fn mint_desktop_token(
+    database: &Db,
+    user_id: i64,
+    name: String,
+    expires_at: Option<String>,
+    ip: &std::net::IpAddr,
+    audit_note: &str,
+) -> Result<(i64, String, String, String), AppError> {
     let _ = revoke_tokens_named(database, user_id, name.clone()).await?;
     let (email, role) = user_identity_by_id(database, user_id)
         .await?
@@ -865,9 +924,16 @@ async fn mint_paired_token(
 
     let name_for_token = name.clone();
     let role_for_token = role.clone();
+    let expires_for_token = expires_at;
     let db = database.clone();
     let result = tokio::task::spawn_blocking(move || {
-        db::create_user_token(&db, user_id, &name_for_token, Some(&role_for_token), None)
+        db::create_scoped_user_token(
+            &db,
+            user_id,
+            &name_for_token,
+            Some(&role_for_token),
+            expires_for_token.as_deref(),
+        )
     })
     .await
     .map_err(AppError::from)?
@@ -875,7 +941,8 @@ async fn mint_paired_token(
         let msg = e.to_string();
         if msg.contains("UNIQUE constraint") {
             AppError::Conflict(
-                "token name already exists — delete the old paired token and re-pair".into(),
+                "token name already exists — revoke the previous desktop token and sign in again"
+                    .into(),
             )
         } else {
             AppError::Internal("failed to create token".into())
@@ -887,6 +954,7 @@ async fn mint_paired_token(
     let email_clone = email.clone();
     let name_clone = name.clone();
     let ip_str = ip.to_string();
+    let audit_note_owned = audit_note.to_string();
     let _ = tokio::task::spawn_blocking(move || {
         db::log_token_event(
             &db,
@@ -895,7 +963,7 @@ async fn mint_paired_token(
             &email_clone,
             "created",
             Some(&ip_str),
-            Some("device pairing (desktop shell)"),
+            Some(&audit_note_owned),
         )
     })
     .await;
@@ -962,5 +1030,106 @@ mod tests {
         assert!(limiter.allow("k"));
         assert!(!limiter.allow("k"));
         assert!(limiter.allow("other"));
+    }
+
+    #[tokio::test]
+    async fn login_scoped_token_is_scoped_with_12h_ttl() {
+        use crate::db::{self, Db};
+        let db: Db = db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user = db::upsert_user(
+            &db,
+            "desktop@example.com",
+            "Desktop",
+            None,
+            "poweruser",
+            &[],
+        )
+        .unwrap();
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+        let (token_id, plaintext, name, max_role, expires_db, expires_rfc) =
+            mint_login_scoped_token(&db, user.id, &ip).await.unwrap();
+
+        assert_eq!(name, LOGIN_TOKEN_NAME);
+        assert_eq!(max_role, "poweruser");
+
+        // Stored as a scoped user token with a server-side expiry ~12h out.
+        let tokens = db::list_user_tokens(&db, user.id).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].id, token_id);
+        assert_eq!(tokens[0].token_type, "scoped");
+        let exp = tokens[0]
+            .expires_at
+            .clone()
+            .expect("login scoped token must carry an expiry");
+        assert_eq!(exp, expires_db);
+        let exp_ndt = chrono::NaiveDateTime::parse_from_str(&exp, "%Y-%m-%d %H:%M:%S").unwrap();
+        let hours_ahead = (exp_ndt - chrono::Utc::now().naive_utc()).num_minutes() as f64 / 60.0;
+        assert!(
+            (11.0..13.0).contains(&hours_ahead),
+            "TTL should be about 12 hours, got {hours_ahead:.1}h"
+        );
+        assert!(
+            expires_rfc.starts_with("20"),
+            "rfc3339 expiry: {expires_rfc}"
+        );
+
+        // The token validates through the normal user-token path (same
+        // surface the pairing token covers), role-capped at the user role.
+        let (u, meta) = db::validate_user_token(&db, &plaintext).unwrap();
+        assert_eq!(u.id, user.id);
+        assert_eq!(meta.token_type, "scoped");
+        assert_eq!(meta.max_role.as_deref(), Some("poweruser"));
+    }
+
+    #[tokio::test]
+    async fn login_scoped_token_refreshes_and_is_revocable() {
+        use crate::db::{self, Db};
+        let db: Db = db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user =
+            db::upsert_user(&db, "desktop@example.com", "Desktop", None, "operator", &[]).unwrap();
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+        let (token_id, _t1, _n, _r, _e1, _e2) =
+            mint_login_scoped_token(&db, user.id, &ip).await.unwrap();
+        let (token_id2, _t2, _n2, _r2, _e3, _e4) =
+            mint_login_scoped_token(&db, user.id, &ip).await.unwrap();
+        assert_ne!(token_id, token_id2);
+
+        // Refresh semantics: a new login revokes the previous login token.
+        let tokens = db::list_user_tokens(&db, user.id).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].id, token_id2);
+        assert!(db::revoke_user_token(&db, user.id, token_id2).unwrap());
+        assert!(db::list_user_tokens(&db, user.id).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconnect_after_token_invalidation_mints_working_token() {
+        use crate::db::{self, Db};
+        let db: Db = db::init_db(std::path::Path::new(":memory:")).unwrap();
+        let user =
+            db::upsert_user(&db, "desktop@example.com", "Desktop", None, "operator", &[]).unwrap();
+        let ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+
+        let (token_id, t1, _n1, _r1, _e1, _e2) =
+            mint_login_scoped_token(&db, user.id, &ip).await.unwrap();
+        assert!(db::validate_user_token(&db, &t1).is_ok());
+
+        // Invalidation (rotation, lockout, or expiry all funnel into the
+        // same row delete): the old token stops authenticating.
+        assert!(db::revoke_user_token(&db, user.id, token_id).unwrap());
+        assert!(db::validate_user_token(&db, &t1).is_err());
+
+        // Reconnect: the client signs in again through the normal
+        // interactive login flow, which mints a fresh working scoped
+        // token. Sessions already open are untouched (covered by the
+        // session/token independence tests).
+        let (token_id2, t2, name2, _r2, _e3, _e4) =
+            mint_login_scoped_token(&db, user.id, &ip).await.unwrap();
+        assert_ne!(token_id2, token_id);
+        assert_eq!(name2, LOGIN_TOKEN_NAME);
+        let (u, meta) = db::validate_user_token(&db, &t2).unwrap();
+        assert_eq!(u.id, user.id);
+        assert_eq!(meta.token_type, "scoped");
+        assert_eq!(meta.max_role.as_deref(), Some("operator"));
     }
 }
