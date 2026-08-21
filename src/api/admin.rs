@@ -457,7 +457,7 @@ pub async fn get_docs(
     }
     let sections: Vec<serde_json::Value> = DOCS
         .iter()
-        .map(|(slug, title, html)| json!({ "slug": slug, "title": title, "html": html }))
+        .map(|(slug, title, html, _)| json!({ "slug": slug, "title": title, "html": html }))
         .collect();
     Ok(Json(json!(sections)))
 }
