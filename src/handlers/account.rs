@@ -52,6 +52,22 @@ pub async fn change_password(
         }
     };
 
+    // LDAP/OIDC accounts have no local password: reject before the
+    // current-password check so the message is accurate.
+    let db_for_source = database.clone();
+    let email_for_source = email.clone();
+    let auth_source = tokio::task::spawn_blocking(move || {
+        crate::db::get_user_auth_source(&db_for_source, &email_for_source)
+    })
+    .await
+    .map_err(|e| AppError::Internal(e.to_string()))?
+    .map_err(|_| AppError::Session("user not found".into()))?;
+    if auth_source != "database" {
+        return Err(AppError::Validation(
+            "password is managed by the identity provider for this user".into(),
+        ));
+    }
+
     let policy = policy.map(|Extension(p)| p).unwrap_or_default();
     policy
         .check_length(&body.new_password)
@@ -276,7 +292,7 @@ pub async fn totp_disable(
     State(state): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
-    headers: HeaderMap,
+    _headers: HeaderMap,
     Json(body): Json<TotpCodeRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
     let Extension(AuthIdentity::User { email, .. }) =
@@ -348,40 +364,50 @@ pub async fn profile_page(
         is_admin: is_admin(&identity),
         active_page: "profile".to_string(),
         csp_nonce: nonce.0,
+        initial_tab: "profile".to_string(),
     }
     .into_response()
 }
 
-/// GET /account/tokens.html
+/// GET /account/tokens.html (and the legacy /tokens.html alias)
+///
+/// The API-key management UI now lives in the combined profile page's
+/// "API Keys" tab; this deep link renders that page with the tab active.
+/// The route stays feature-gated on `enable_api_keys` in main.rs.
 pub async fn tokens_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
-    templates::AccountTokensTemplate {
+    templates::ProfileTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
         is_admin: is_admin(&identity),
-        active_page: "tokens".to_string(),
+        active_page: "profile".to_string(),
         csp_nonce: nonce.0,
+        initial_tab: "tokens".to_string(),
     }
     .into_response()
 }
 
 /// GET /account/totp.html
+///
+/// The TOTP management UI now lives in the combined profile page's
+/// "Security" tab; this deep link renders that page with the tab active.
 pub async fn totp_page(
     Extension(site_title): Extension<SiteTitle>,
     Extension(theme): Extension<ThemeData>,
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
-    templates::AccountTotpTemplate {
+    templates::ProfileTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
         is_admin: is_admin(&identity),
-        active_page: "totp".to_string(),
+        active_page: "profile".to_string(),
         csp_nonce: nonce.0,
+        initial_tab: "security".to_string(),
     }
     .into_response()
 }
@@ -393,12 +419,28 @@ pub async fn docs_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<CspNonce>,
 ) -> Response {
+    let docs = crate::templates::DOCS
+        .iter()
+        .map(|(slug, title, html, headings)| templates::DocSection {
+            slug: (*slug).to_string(),
+            title: (*title).to_string(),
+            html: (*html).to_string(),
+            headings: headings
+                .iter()
+                .map(|(h_slug, h_text)| templates::DocHeading {
+                    slug: (*h_slug).to_string(),
+                    text: (*h_text).to_string(),
+                })
+                .collect(),
+        })
+        .collect();
     templates::DocsTemplate {
         site_title: site_title.0.clone(),
         logo_url: logo_url(&theme),
         is_admin: is_admin(&identity),
         active_page: "docs".to_string(),
         csp_nonce: nonce.0,
+        docs,
     }
     .into_response()
 }
@@ -480,5 +522,95 @@ mod tests {
             format!("persea_mfa_pending={token}").parse().unwrap(),
         )]);
         assert!(resolve_totp_identity(None, &db, &headers).await.is_err());
+    }
+
+    fn user_identity(email: &str) -> Option<Extension<AuthIdentity>> {
+        Some(Extension(AuthIdentity::User {
+            email: email.to_string(),
+            name: "U".to_string(),
+            role: "viewer".to_string(),
+            groups: vec![],
+        }))
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_wrong_current_password() {
+        let db = test_db();
+        create_user(&db, "u@example.com", "viewer");
+        let err = change_password(
+            user_identity("u@example.com"),
+            Extension(db),
+            None,
+            Json(ChangePasswordRequest {
+                current_password: "wrong-password".to_string(),
+                new_password: "a-brand-new-password-42".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn change_password_succeeds_with_correct_current_password() {
+        let db = test_db();
+        create_user(&db, "u@example.com", "viewer");
+        let resp = change_password(
+            user_identity("u@example.com"),
+            Extension(db.clone()),
+            None,
+            Json(ChangePasswordRequest {
+                current_password: "s3cret-p@ss".to_string(),
+                new_password: "a-brand-new-password-42".to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resp.0["ok"], true);
+        let (_, _, _, _, _, stored_hash) = crate::db::get_user_login_info(&db, "u@example.com")
+            .unwrap()
+            .unwrap();
+        assert!(
+            crate::password::verify_password("a-brand-new-password-42", &stored_hash.unwrap())
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_short_new_password() {
+        let db = test_db();
+        create_user(&db, "u@example.com", "viewer");
+        let err = change_password(
+            user_identity("u@example.com"),
+            Extension(db),
+            None,
+            Json(ChangePasswordRequest {
+                current_password: "s3cret-p@ss".to_string(),
+                new_password: "short".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn change_password_rejects_non_database_user() {
+        let db = test_db();
+        let hash = crate::password::hash_password("s3cret-p@ss").unwrap();
+        crate::db::create_user_with_password(&db, "oidc@example.com", "O", &hash, "viewer", "oidc")
+            .unwrap();
+        let err = change_password(
+            user_identity("oidc@example.com"),
+            Extension(db),
+            None,
+            Json(ChangePasswordRequest {
+                current_password: "s3cret-p@ss".to_string(),
+                new_password: "a-brand-new-password-42".to_string(),
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, AppError::Validation(_)));
     }
 }

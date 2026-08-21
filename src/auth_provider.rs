@@ -122,6 +122,11 @@ pub struct AuthRequest {
     pub callback_params: Option<HashMap<String, String>>,
     /// Bearer / API key token.
     pub bearer_token: Option<String>,
+    /// RelayState for redirect providers (SAML): echoed by the IdP on the
+    /// callback so the ACS handler can recover flow intent (e.g. a desktop
+    /// login that must mint a scoped token). `None` leaves the request
+    /// byte-identical to the pre-desktop build.
+    pub relay_state: Option<String>,
     /// Raw request headers — providers that need special headers can read them
     /// here without coupling to axum.
     pub headers: HashMap<String, String>,
@@ -135,9 +140,38 @@ impl Default for AuthRequest {
             password: None,
             callback_params: None,
             bearer_token: None,
+            relay_state: None,
             headers: HashMap::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// RecheckVerdict
+// ---------------------------------------------------------------------------
+
+/// Outcome of an account re-validation check (scoped-token re-validation,
+/// persea#226).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecheckVerdict {
+    /// The account is valid. `pwd_last_set` carries the directory's
+    /// password-last-set marker (AD `pwdLastSet`), when the directory
+    /// exposes one; the caller stores it and passes it back on the next
+    /// re-check so a credential rotation is detected.
+    Valid {
+        /// Directory marker for when the password was last set, if the
+        /// directory exposes one.
+        pwd_last_set: Option<String>,
+    },
+    /// The account is gone, locked, disabled, or expired (or its
+    /// credentials rotated): the token must be invalidated.
+    Invalid,
+    /// The subject is not an account this provider manages; no re-check
+    /// applies.
+    NotApplicable,
+    /// The provider could not be reached; skip this round and retry on
+    /// the next use.
+    Unavailable,
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +228,27 @@ pub trait AuthProvider: Send + Sync {
     /// Only needed by providers that can resolve user info independently.
     async fn lookup_user(&self, _subject: &str) -> Option<UserInfo> {
         None
+    }
+
+    /// Re-validate that the account behind `subject` still exists and is
+    /// usable (not locked, disabled, or expired). Called by the scoped
+    /// token validation path on use, bounded by a short-TTL cache, so a
+    /// rotated, locked, or expired account kills its tokens within the
+    /// re-check interval (persea#226).
+    ///
+    /// `previous_pwd_last_set` is the marker from the last successful
+    /// re-check, if any; a provider that can detect credential rotation
+    /// compares it against the current value.
+    ///
+    /// The default returns [`RecheckVerdict::NotApplicable`]: providers
+    /// that cannot re-check account state (database, OIDC, RADIUS, SAML)
+    /// leave scoped tokens untouched.
+    async fn revalidate_account(
+        &self,
+        _subject: &str,
+        _previous_pwd_last_set: Option<&str>,
+    ) -> RecheckVerdict {
+        RecheckVerdict::NotApplicable
     }
 
     /// Whether this provider renders an inline username + password login form.

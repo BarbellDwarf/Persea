@@ -6,8 +6,8 @@ use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::templates::{
     AdminAuditTemplate, AdminAuthTemplate, AdminBrandingTemplate, AdminGroupsTemplate,
-    AdminReportsTemplate, AdminSettingsTemplate, AdminTunnelsTemplate, AdminUsersTemplate,
-    ConnectionsPageTemplate, RecordingsPageTemplate, SessionsPageTemplate,
+    AdminReportsTemplate, AdminSecurityTemplate, AdminSettingsTemplate, AdminTunnelsTemplate,
+    AdminUsersTemplate, ConnectionsPageTemplate, RecordingsPageTemplate, SessionsPageTemplate,
 };
 use crate::CspNonce;
 
@@ -279,6 +279,28 @@ pub async fn admin_branding_page(
         logo_url: logo_url(&theme),
         is_admin: is_admin(&identity),
         active_page: "branding".to_string(),
+        csp_nonce: nonce.0.clone(),
+    };
+    tmpl.into_response()
+}
+
+/// GET /admin/security.html — admin security page: hash-based tabs render
+/// the section partials (users, groups, roles, auth providers, audit) plus
+/// the TLS certificates panel.
+pub async fn admin_security_page(
+    Extension(site_title): Extension<SiteTitle>,
+    Extension(theme): Extension<ThemeData>,
+    identity: Option<Extension<AuthIdentity>>,
+    Extension(nonce): Extension<CspNonce>,
+) -> Response {
+    if let Err(resp) = require_admin_page(&identity, &nonce) {
+        return resp;
+    }
+    let tmpl = AdminSecurityTemplate {
+        site_title: site_title.0.clone(),
+        logo_url: logo_url(&theme),
+        is_admin: is_admin(&identity),
+        active_page: "security".to_string(),
         csp_nonce: nonce.0.clone(),
     };
     tmpl.into_response()
