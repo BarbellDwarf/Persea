@@ -401,6 +401,18 @@
 
                             <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
                                 <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Compliance Mode</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Disable direct API access: admin API keys and self-service tokens are rejected; only interactive sessions and scoped desktop tokens authenticate</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="compliance_mode">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="compliance_mode" id="compliance_mode-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
                                     <span class="text-sm text-[var(--text-primary)]">Recordings</span>
                                     <p class="text-xs text-[var(--text-muted)]">Session recording and playback for audit</p>
                                 </div>
@@ -715,7 +727,7 @@ function syncToggle(name) {
 
 // Feature toggle names shared by the load code and the change listeners.
 var toggleBoxes = [
-    'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
+    'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys', 'compliance_mode',
     'enable_recordings', 'enable_web_sessions', 'enable_spice',
     'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_powershell_ssh',
     'enable_file_transfer',
