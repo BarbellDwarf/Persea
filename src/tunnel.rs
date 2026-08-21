@@ -391,31 +391,23 @@ pub async fn start_chain(
 
     for (i, hop) in hops.iter().enumerate() {
         // Determine what this hop's SSH connects to
-        let connect_host;
-        let connect_port;
-        if i == 0 {
+        let (connect_host, connect_port) = if i == 0 {
             // First hop connects directly to its hostname
-            connect_host = hop.hostname.clone();
-            connect_port = hop.port;
+            (hop.hostname.clone(), hop.port)
         } else {
             // Subsequent hops connect through the previous tunnel's local listener
             let prev_addr = tunnels[i - 1].local_addr;
-            connect_host = prev_addr.ip().to_string();
-            connect_port = prev_addr.port();
-        }
+            (prev_addr.ip().to_string(), prev_addr.port())
+        };
 
         // Determine the direct-tcpip target for this hop
-        let fwd_host;
-        let fwd_port;
-        if i + 1 < hops.len() {
+        let (fwd_host, fwd_port) = if i + 1 < hops.len() {
             // Not the last hop — forward to the next hop
-            fwd_host = hops[i + 1].hostname.clone();
-            fwd_port = hops[i + 1].port;
+            (hops[i + 1].hostname.clone(), hops[i + 1].port)
         } else {
             // Last hop — forward to the real target
-            fwd_host = target_host.to_string();
-            fwd_port = target_port;
-        }
+            (target_host.to_string(), target_port)
+        };
 
         let config = TunnelConfig {
             jump_host: connect_host,

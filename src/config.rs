@@ -415,12 +415,23 @@ pub struct AuthConfig {
     pub saml: Option<crate::auth_providers::saml::SamlConfig>,
     /// TOTP second-factor configuration.
     pub totp: Option<AuthTotpConfig>,
-    /// When true, the username/password from password-based logins (database,
+    /// When true, every login password from password-based logins (database,
     /// LDAP, RADIUS, SAML) is stored encrypted and reused as fallback
     /// credentials for connection entries that carry none of their own.
     /// OIDC/SSO logins have no password to pass through. Off by default.
     #[serde(default)]
     pub pass_login_credentials: bool,
+    /// When true, the password from a successful LDAP/database login is
+    /// retained transiently for the auth session that minted it: encrypted
+    /// with the storage key, held in memory keyed to the session, TTL-bound
+    /// to the session lifetime, and cleared when the session ends (logout,
+    /// expiry, revocation). The connect flow tries these session credentials
+    /// for connection entries that carry no credentials of their own, after
+    /// the entry and preset credentials miss and before the prompt. Off by
+    /// default: forwarding the login password to targets is sensitive and
+    /// must be opted in per instance.
+    #[serde(default)]
+    pub forward_session_credentials: bool,
 }
 
 /// TOTP configuration for the auth chain (maps to `[auth.totp]` in TOML).
