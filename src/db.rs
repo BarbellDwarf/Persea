@@ -718,7 +718,10 @@ pub fn init_db(path: &Path) -> rusqlite::Result<Db> {
 }
 
 /// Hash an API key with SHA-256 and return hex (unsalted, legacy).
-fn hash_key(key: &str) -> String {
+/// Crate-visible so the session-credentials store keys its entries with
+/// the same token-hash convention as `auth_sessions.token_hash`
+/// (persea#245).
+pub(crate) fn hash_key(key: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(key.as_bytes());
     hex::encode(hasher.finalize())
@@ -1290,6 +1293,20 @@ pub fn delete_auth_session(db: &Db, token: &str) -> rusqlite::Result<bool> {
         params![token_hash],
     )?;
     Ok(changed > 0)
+}
+
+/// Whether an auth session row exists and has not expired. Used by the
+/// session-credential prune (persea#245) to drop retained credentials
+/// whose session ended through logout, revocation, or DB-side expiry.
+pub fn auth_session_is_live(db: &Db, token_hash: &str) -> rusqlite::Result<bool> {
+    db_route!(db, auth_session_is_live_pool, token_hash.to_string());
+    let conn = db.lock().unwrap();
+    conn.query_row(
+        "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = ?1 AND expires_at > datetime('now')",
+        params![token_hash],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
 }
 
 /// Clean up expired auth sessions.
@@ -7220,6 +7237,38 @@ async fn delete_auth_session_pool(pool: &DbPool, token: String) -> rusqlite::Res
     .await
     .map_err(map_sqlx_err)?;
     Ok(changed > 0)
+}
+
+async fn auth_session_is_live_pool(pool: &DbPool, token_hash: String) -> rusqlite::Result<bool> {
+    let row = match pool {
+        DbPool::Postgres(p) => {
+            pg_fetch_opt(
+                p,
+                "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = $1 AND expires_at > now()",
+                &[Arg::Str(token_hash)],
+            )
+            .await
+        }
+        DbPool::MySQL(p) => {
+            mysql_fetch_opt(
+                p,
+                "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = ? AND expires_at > NOW()",
+                &[Arg::Str(token_hash)],
+            )
+            .await
+        }
+        DbPool::SQLite(p) => {
+            sqlite_fetch_opt(
+                p,
+                "SELECT COUNT(*) FROM auth_sessions WHERE token_hash = ? AND expires_at > datetime('now')",
+                &[Arg::Str(token_hash)],
+            )
+            .await
+        }
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(row.map(|r| r.get::<i64>(0)).unwrap_or(0) > 0)
 }
 
 async fn cleanup_expired_sessions_pool(pool: &DbPool) -> rusqlite::Result<usize> {

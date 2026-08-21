@@ -22,7 +22,7 @@ Four per-entry fields control RDP video behaviour (settable via the address-book
 - **`enable_gfx`: Graphics Pipeline.** Activates the RDP Graphics Pipeline Extension (RDPGFX), which enables the RemoteFX codec and, on supporting servers, H.264. Recommended for video monitoring and media-heavy sessions. persea always negotiates 32-bit colour depth, which GFX requires.
 - **`enable_desktop_composition`: Desktop Composition.** Enables Windows Desktop Window Manager (DWM) compositing in the remote session. Improves rendering of video overlays, transparency, and smooth scrolling. Increases bandwidth slightly.
 - **`force_lossless`: Force Lossless.** Forces PNG-only encoding (no JPEG/WebP lossy compression). Better for text-heavy workloads where visual fidelity matters. Uses significantly more bandwidth: not recommended for video content.
-- **`enable_h264`: H.264 Passthrough.** Lets guacd forward the server's raw H.264 (AVC420/AVC444) stream to the browser's WebCodecs decoder instead of decoding and re-encoding it (see [H.264 passthrough](#h264-passthrough-pipeline)). Default: on. Requires GFX and an H.264-capable server (e.g. xrdp rebuilt with x264, or Windows with AVC enabled).
+- **`enable_h264`: H.264 Passthrough.** Lets guacd forward the server's raw H.264 (AVC420/AVC444) stream to the browser's WebCodecs decoder instead of decoding and re-encoding it (see [H.264 passthrough](#h264-passthrough-pipeline-xrdp-with-x264-or-windows-with-avc)). Default: on. Requires GFX and an H.264-capable server (e.g. xrdp rebuilt with x264, or Windows with AVC enabled).
 
 ## For slow connections
 
