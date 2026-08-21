@@ -3,9 +3,11 @@
 //! `SessionManager` owns the in-memory session map and drives state
 //! transitions (pending, active, disconnected, terminal). `types` defines
 //! the session model and the JSON request shape, `create` builds sessions
-//! and performs the guacd handshake.
+//! and performs the guacd handshake, `credentials` holds the transient
+//! session-scoped login credentials (persea#245).
 
 mod create;
+mod credentials;
 mod manager;
 mod types;
 
@@ -72,17 +74,25 @@ pub(super) fn generate_share_token() -> String {
 /// Resolve the RDP NLA authentication package for this session.
 ///
 /// Precedence: per-entry (or per-request) value if non-empty, else the
-/// server-wide `[rdp] default_auth_pkg`, else `"ntlm"`. We default to
+/// stored global default (`default_rdp_auth_pkg` system setting), else
+/// the server-wide `[rdp] default_auth_pkg`, else `"ntlm"`. We default to
 /// NTLM because Kerberos requires a KDC reachable via DNS (often over
 /// TCP) and its failure mode is a silent hang that looks like a stuck
 /// RDP connection. Admins who actually run Kerberos-integrated hosts
-/// can set `default_auth_pkg = "kerberos"` or `"negotiate"` in
-/// `config.toml`.
+/// can set the global default (or `default_auth_pkg = "kerberos"` /
+/// `"negotiate"` in `config.toml`).
 pub(super) fn resolve_rdp_auth_pkg(
     entry_value: Option<&str>,
+    stored_default: Option<&str>,
     config: &crate::config::Config,
 ) -> Option<String> {
     if let Some(v) = entry_value {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    if let Some(v) = stored_default {
         let trimmed = v.trim();
         if !trimmed.is_empty() {
             return Some(trimmed.to_string());
@@ -363,6 +373,7 @@ mod tests {
             username: "alice".into(),
             url: None,
             banner: None,
+            auto_size: true,
             guacd_stream: None,
             connection_id: "conn-test".into(),
             share_token: share_token.to_string(),

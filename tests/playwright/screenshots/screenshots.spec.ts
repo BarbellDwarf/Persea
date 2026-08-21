@@ -144,8 +144,9 @@ test.describe('Canonical screenshots', () => {
     // paragraphs contain the same words).
     const desktop = page.locator('.card', { hasText: 'Desktop' });
     // Settings are tabbed — the Features tab (Desktop toggles) is
-    // hidden until selected.
-    await page.locator('#tab-features').click();
+    // hidden until selected. On wide screens the left rail replaces the
+    // tab bar, so click whichever Features control is visible.
+    await page.locator('#rail-features:visible, #tab-features:visible').first().click();
     await expect(desktop.getByText('Kiosk Mode', { exact: true })).toBeVisible();
     await expect(desktop.getByText('File Transfers', { exact: true })).toBeVisible();
     await expect(desktop.getByText('Device Pairing', { exact: true })).toBeVisible();

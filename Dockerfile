@@ -86,6 +86,13 @@ ENV CARGO_BUILD_JOBS=${CARGO_JOBS}
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY build.rs ./
+# build.rs renders docs/*.md into the DOCS const at compile time. It must
+# see the real docs/ during the dependency-cache build too: the build-script
+# output is cached (gha cache), and if the first run produced an empty const
+# (no docs/ present), the second stage's build.rs does not re-run (COPY
+# preserves mtimes, so the fingerprint matches the cache) and the image
+# ships with an empty documentation page.
+COPY docs/ docs/
 
 # Create dummy sources so cargo can resolve all [[bin]] targets during the
 # dependency-cache build.  These are overwritten by the real COPYs below.
@@ -107,7 +114,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs npm \
 COPY src/ src/
 COPY templates/ templates/
 COPY migrations/ migrations/
-COPY docs/ docs/
 COPY static/ static/
 COPY tailwind.config.js ./
 RUN npx --yes tailwindcss@3 -i static/css/input.css -o static/css/tailwind.min.css --minify

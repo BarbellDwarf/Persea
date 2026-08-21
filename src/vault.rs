@@ -262,6 +262,12 @@ pub struct AddressBookEntry {
     /// reappear when the pointer nears the left edge of the display.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub autohide_side_tabs: Option<bool>,
+    /// Auto-size the session to the browser window (persea#142). Per-entry
+    /// override for the global `default_rdp_auto_size` / `default_ssh_auto_size`
+    /// settings; unset means "use the global default" (which itself defaults
+    /// to true). Only meaningful for rdp and ssh entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_size: Option<bool>,
     /// SPICE: connect using TLS.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spice_tls: Option<bool>,
@@ -484,6 +490,10 @@ pub struct EntryInfo {
     /// Auto-hide the clipboard/files side tabs when idle.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub autohide_side_tabs: Option<bool>,
+    /// Auto-size the session to the browser window (#142). Per-entry
+    /// override for the global per-protocol auto-size defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_size: Option<bool>,
     /// SPICE: connect using TLS.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spice_tls: Option<bool>,
@@ -592,6 +602,7 @@ impl From<(&str, &AddressBookEntry)> for EntryInfo {
             auto_open_if_singleton: e.auto_open_if_singleton,
             fullscreen_on_connect: e.fullscreen_on_connect,
             autohide_side_tabs: e.autohide_side_tabs,
+            auto_size: e.auto_size,
             spice_tls: e.spice_tls,
             spice_tls_port: e.spice_tls_port,
             spice_ca_cert: e.spice_ca_cert.clone(),

@@ -61,6 +61,7 @@ fn test_session(id: Uuid, created_by: &str, status: SessionStatus) -> Session {
         username: "alice".into(),
         url: None,
         banner: None,
+        auto_size: true,
         guacd_stream: None,
         connection_id: "conn-test".into(),
         share_token: "owner-secret".into(),

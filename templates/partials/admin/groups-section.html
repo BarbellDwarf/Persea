@@ -1,0 +1,380 @@
+<div>
+    <div class="flex items-center justify-between mb-6">
+        <div>
+            <h1 class="text-2xl font-bold text-[var(--text-primary)]">Group Management</h1>
+            <p class="text-sm text-[var(--text-muted)] mt-1">Manage local groups and map auth-provider groups to them</p>
+        </div>
+        <button data-action="open-create-modal" class="btn btn-primary btn-sm">
+            + Create Group
+        </button>
+    </div>
+
+    <!-- Feedback (aria-live) -->
+    <div id="groups-feedback" class="mb-4" aria-live="polite"></div>
+
+    <!-- Groups Table -->
+    <div class="card table-wrapper">
+        <table class="w-full">
+            <thead>
+                <tr class="border-b border-[var(--border)] text-left text-xs text-[var(--text-muted)] uppercase tracking-wider">
+                    <th>Name</th>
+                    <th>Description</th>
+                    <th>Mapped Provider Groups</th>
+                    <th>Folders</th>
+                    <th class="text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody id="groups-tbody" class="divide-y divide-[var(--border)]">
+                <tr><td colspan="5" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">Loading groups...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <p class="text-xs text-[var(--text-muted)] mt-3">
+        Renaming or deleting a group won't automatically update folders that already
+        reference it — you'll need to update folder access manually afterward.
+    </p>
+</div>
+
+<!-- Create Group Modal -->
+<div id="groups-create-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="create-group-title">
+    <div class="card w-full max-w-md">
+        <h2 id="create-group-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Create Group</h2>
+        <form id="create-group-form">
+            <div class="space-y-4">
+                <div>
+                    <label class="form-label">Name</label>
+                    <input type="text" id="create-group-name" required class="form-input" placeholder="e.g. engineers">
+                </div>
+                <div>
+                    <label class="form-label">Description</label>
+                    <input type="text" id="create-group-description" class="form-input" placeholder="Optional">
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button type="button" data-action="close-create-modal" class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="submit" id="btn-create-group" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Group Modal -->
+<div id="groups-edit-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="edit-group-title">
+    <div class="card w-full max-w-md">
+        <h2 id="edit-group-title" class="text-lg font-bold text-[var(--text-primary)] mb-4">Edit Group</h2>
+        <form id="edit-group-form">
+            <input type="hidden" id="edit-group-id">
+            <div class="space-y-4">
+                <div>
+                    <label class="form-label">Name</label>
+                    <input type="text" id="edit-group-name" required class="form-input">
+                </div>
+                <div>
+                    <label class="form-label">Description</label>
+                    <input type="text" id="edit-group-description" class="form-input">
+                </div>
+            </div>
+            <div class="flex justify-end gap-3 mt-6">
+                <button type="button" data-action="close-edit-modal" class="btn btn-secondary btn-sm">Cancel</button>
+                <button type="submit" id="btn-update-group" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Mappings Modal -->
+<div id="mappings-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="mappings-title">
+    <div class="card w-full max-w-lg">
+        <h2 id="mappings-title" class="text-lg font-bold text-[var(--text-primary)] mb-1">Provider Group Mappings</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">Group: <span id="mappings-group-name" class="text-[var(--text-primary)]"></span></p>
+
+        <label class="form-label">Add mapping</label>
+        <div class="flex items-center gap-2 mb-4">
+            <select id="mappings-select" class="form-input flex-1"></select>
+            <button data-action="add-mapping" class="btn btn-primary btn-sm whitespace-nowrap">Add</button>
+        </div>
+        <p id="mappings-elsewhere" class="text-xs text-[var(--text-muted)] mb-3 hidden"></p>
+
+        <ul id="mappings-list" class="divide-y divide-[var(--border)] border border-[var(--border)] rounded-lg">
+            <li class="px-4 py-3 text-sm text-[var(--text-muted)]">No mappings yet.</li>
+        </ul>
+
+        <div class="flex justify-end gap-3 mt-6">
+            <button type="button" data-action="close-mappings-modal" class="btn btn-secondary btn-sm">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Confirm Modal -->
+<div id="groups-delete-modal" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="delete-group-title">
+    <div class="card w-full max-w-sm">
+        <h2 id="delete-group-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Delete Group</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">
+            Group <span id="delete-group-name" class="text-[var(--text-primary)]"></span> and its auth-provider mappings
+            will be removed. Folders that already reference this group name will keep it — the name
+            still grants access on its own, so update folder access if needed.
+        </p>
+        <div class="flex justify-end gap-3">
+            <button type="button" data-action="close-delete-modal" class="btn btn-secondary btn-sm">Cancel</button>
+            <button type="button" data-action="confirm-delete" class="btn btn-danger btn-sm">Delete</button>
+        </div>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+function groupsEsc(s) {
+    if (typeof escapeHtml === 'function') { return escapeHtml(s); }
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
+}
+
+function groupsShowStatus(msg, ok) {
+    var el = document.getElementById('groups-feedback');
+    el.innerHTML = '<div class="text-sm px-4 py-2 rounded-lg border ' +
+        (ok ? 'bg-emerald-900/40 text-emerald-300 border-emerald-800'
+            : 'bg-red-900/40 text-red-300 border-red-800') + '">' + groupsEsc(msg) + '</div>';
+    if (ok) { setTimeout(function() { el.innerHTML = ''; }, 4000); }
+}
+
+function groupsApi(path, opts) {
+    opts = opts || {};
+    opts.headers = apiHeaders(opts.headers);
+    return fetch(path, opts).then(function(r) {
+        if (!r.ok) {
+            return r.json().catch(function() { return {}; }).then(function(data) {
+                throw new Error(data.error || ('Request failed (' + r.status + ')'));
+            });
+        }
+        return r.status === 204 ? null : r.json();
+    });
+}
+
+var groupsCache = [];
+function groupById(id) {
+    for (var i = 0; i < groupsCache.length; i++) { if (groupsCache[i].id === id) return groupsCache[i]; }
+    return null;
+}
+
+function renderGroupRow(g) {
+    var mapped = g.provider_group_count > 0
+        ? '<span class="text-emerald-400">' + g.provider_group_count + ' mapped</span>'
+        : '<span class="text-[var(--text-muted)]">—</span>';
+    return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
+        '<td class="px-4 py-3 text-sm font-medium text-[var(--text-primary)]">' + groupsEsc(g.name) +
+            (g.auto_provisioned ? ' <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-blue-900/40 text-blue-300 border border-blue-800">auto</span>' : '') +
+        '</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (g.description ? groupsEsc(g.description) : '—') + '</td>' +
+        '<td class="px-4 py-3 text-sm">' + mapped + '</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + g.folder_count + '</td>' +
+        '<td class="px-4 py-3 text-right text-sm whitespace-nowrap">' +
+            '<button data-action="open-mappings-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-blue-400 mr-3">Mappings</button>' +
+            '<button data-action="open-edit-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit</button>' +
+            '<button data-action="open-delete-modal" data-id="' + g.id + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
+        '</td></tr>';
+}
+
+function loadGroups() {
+    groupsApi('/api/admin/groups')
+        .then(function(data) {
+            var tbody = document.getElementById('groups-tbody');
+            var groups = data.groups || [];
+            groupsCache = groups;
+            if (!groups.length) {
+                tbody.innerHTML = '<tr><td colspan="5" class="px-4 py-8 text-center text-[var(--text-muted)] text-sm">No groups yet — create one to start mapping auth-provider groups.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = groups.map(renderGroupRow).join('');
+        })
+        .catch(function(e) {
+            document.getElementById('groups-tbody').innerHTML =
+                '<tr><td colspan="5" class="px-4 py-8 text-center text-red-400 text-sm">Failed to load groups</td></tr>';
+            groupsShowStatus(e.message, false);
+        });
+}
+
+// ── Create ──
+window.groupsOpenCreateModal = function() {
+    document.getElementById('groups-create-modal').classList.remove('hidden');
+    document.getElementById('create-group-name').focus();
+};
+window.groupsCloseCreateModal = function() {
+    document.getElementById('groups-create-modal').classList.add('hidden');
+    document.getElementById('create-group-form').reset();
+};
+document.getElementById('create-group-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    document.getElementById('btn-create-group').disabled = true;
+    groupsApi('/api/admin/groups', {
+        method: 'POST',
+        body: JSON.stringify({
+            name: document.getElementById('create-group-name').value.trim(),
+            description: document.getElementById('create-group-description').value.trim()
+        })
+    })
+    .then(function() {
+        groupsCloseCreateModal();
+        loadGroups();
+        groupsShowStatus('Group created', true);
+    })
+    .catch(function(err) { groupsShowStatus(err.message, false); })
+    .finally(function() { document.getElementById('btn-create-group').disabled = false; });
+});
+
+// ── Edit ──
+window.groupsOpenEditModal = function(id) {
+    var g = groupById(id);
+    if (!g) { return; }
+    document.getElementById('edit-group-id').value = g.id;
+    document.getElementById('edit-group-name').value = g.name;
+    document.getElementById('edit-group-description').value = g.description || '';
+    document.getElementById('groups-edit-modal').classList.remove('hidden');
+};
+window.groupsCloseEditModal = function() {
+    document.getElementById('groups-edit-modal').classList.add('hidden');
+};
+document.getElementById('edit-group-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    document.getElementById('btn-update-group').disabled = true;
+    groupsApi('/api/admin/groups/' + document.getElementById('edit-group-id').value, {
+        method: 'PUT',
+        body: JSON.stringify({
+            name: document.getElementById('edit-group-name').value.trim(),
+            description: document.getElementById('edit-group-description').value.trim()
+        })
+    })
+    .then(function() {
+        groupsCloseEditModal();
+        loadGroups();
+        groupsShowStatus('Group updated', true);
+    })
+    .catch(function(err) { groupsShowStatus(err.message, false); })
+    .finally(function() { document.getElementById('btn-update-group').disabled = false; });
+});
+
+// ── Delete ──
+var groupsDeleteTarget = null;
+window.groupsOpenDeleteModal = function(id) {
+    var g = groupById(id);
+    if (!g) { return; }
+    groupsDeleteTarget = g.id;
+    document.getElementById('delete-group-name').textContent = g.name;
+    document.getElementById('groups-delete-modal').classList.remove('hidden');
+};
+window.groupsCloseDeleteModal = function() {
+    document.getElementById('groups-delete-modal').classList.add('hidden');
+};
+window.groupsConfirmDelete = function() {
+    groupsApi('/api/admin/groups/' + groupsDeleteTarget, { method: 'DELETE' })
+        .then(function(data) {
+            groupsCloseDeleteModal();
+            loadGroups();
+            groupsShowStatus('Group deleted' + (data && data.mappings_removed > 0
+                ? ' — removed ' + data.mappings_removed + ' provider-group mapping(s)'
+                : ''), true);
+        })
+        .catch(function(err) { groupsShowStatus(err.message, false); });
+};
+
+// ── Mappings ──
+var mappingsGroupId = null;
+window.openMappingsModal = function(id) {
+    var g = groupById(id);
+    if (!g) { return; }
+    mappingsGroupId = g.id;
+    document.getElementById('mappings-group-name').textContent = g.name;
+    document.getElementById('mappings-modal').classList.remove('hidden');
+    document.getElementById('mappings-list').innerHTML = '<li class="px-4 py-3 text-sm text-[var(--text-muted)]">Loading...</li>';
+    document.getElementById('mappings-select').innerHTML = '<option value="">Loading...</option>';
+    groupsApi('/api/admin/groups/' + id)
+        .then(function(data) {
+            var list = document.getElementById('mappings-list');
+            var mappings = data.mappings || [];
+            if (!mappings.length) {
+                list.innerHTML = '<li class="px-4 py-3 text-sm text-[var(--text-muted)]">No mappings yet.</li>';
+            } else {
+                list.innerHTML = mappings.map(function(m) {
+                    return '<li class="flex items-center justify-between px-4 py-3 text-sm">' +
+                        '<span class="text-[var(--text-primary)]">' + groupsEsc(m.provider_group) + '</span>' +
+                        '<button data-action="remove-mapping" data-mapping-id="' + m.id + '" class="text-xs text-red-400 hover:text-red-300">Remove</button>' +
+                    '</li>';
+                }).join('');
+            }
+            var select = document.getElementById('mappings-select');
+            var elsewhere = [];
+            var options = (data.known_groups || []).filter(function(k) {
+                if (k.mapped) {
+                    if (k.group_id === id) { return false; }
+                    elsewhere.push(k.name);
+                    return false;
+                }
+                return true;
+            });
+            if (!options.length) {
+                select.innerHTML = '<option value="">No unmapped groups available</option>';
+            } else {
+                select.innerHTML = options.map(function(k) {
+                    return '<option value="' + groupsEsc(k.name) + '">' + groupsEsc(k.name) + '</option>';
+                }).join('');
+            }
+            var ew = document.getElementById('mappings-elsewhere');
+            if (elsewhere.length) {
+                ew.textContent = 'Already mapped to another group: ' + elsewhere.join(', ');
+                ew.classList.remove('hidden');
+            } else {
+                ew.classList.add('hidden');
+            }
+        })
+        .catch(function(err) {
+            document.getElementById('mappings-list').innerHTML =
+                '<li class="px-4 py-3 text-sm text-red-400">Failed to load mappings</li>';
+            groupsShowStatus(err.message, false);
+        });
+};
+window.closeMappingsModal = function() {
+    document.getElementById('mappings-modal').classList.add('hidden');
+};
+window.addMapping = function() {
+    var providerGroup = document.getElementById('mappings-select').value;
+    if (!providerGroup) { return; }
+    groupsApi('/api/admin/groups/' + mappingsGroupId + '/mappings', {
+        method: 'POST',
+        body: JSON.stringify({ provider_group: providerGroup })
+    })
+    .then(function() {
+        openMappingsModal(mappingsGroupId, document.getElementById('mappings-group-name').textContent);
+        loadGroups();
+        groupsShowStatus('Mapping added', true);
+    })
+    .catch(function(err) { groupsShowStatus(err.message, false); });
+};
+window.removeMapping = function(mappingId) {
+    groupsApi('/api/admin/groups/' + mappingsGroupId + '/mappings/' + mappingId, { method: 'DELETE' })
+        .then(function() {
+            openMappingsModal(mappingsGroupId);
+            loadGroups();
+            groupsShowStatus('Mapping removed', true);
+        })
+        .catch(function(err) { groupsShowStatus(err.message, false); });
+};
+
+document.addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    var action = btn.getAttribute('data-action');
+    var id = btn.getAttribute('data-id');
+
+    if (action === 'open-create-modal') { groupsOpenCreateModal(); }
+    else if (action === 'close-create-modal') { groupsCloseCreateModal(); }
+    else if (action === 'close-edit-modal') { groupsCloseEditModal(); }
+    else if (action === 'add-mapping') { addMapping(); }
+    else if (action === 'close-mappings-modal') { closeMappingsModal(); }
+    else if (action === 'close-delete-modal') { groupsCloseDeleteModal(); }
+    else if (action === 'confirm-delete') { groupsConfirmDelete(); }
+    else if (action === 'open-mappings-modal') { openMappingsModal(Number(id)); }
+    else if (action === 'open-edit-modal') { groupsOpenEditModal(Number(id)); }
+    else if (action === 'open-delete-modal') { groupsOpenDeleteModal(Number(id)); }
+    else if (action === 'remove-mapping') { removeMapping(Number(btn.getAttribute('data-mapping-id'))); }
+});
+
+loadGroups();
+</script>

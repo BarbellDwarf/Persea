@@ -46,40 +46,6 @@
     outline-offset: 2px;
 }
 
-/* ── Settings section tabs ─────────────────────────────── */
-.settings-tabs {
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 20px;
-    overflow-x: auto;
-}
-.settings-tab {
-    appearance: none;
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    padding: 10px 14px;
-    font-size: var(--text-sm);
-    font-weight: 500;
-    color: var(--text-muted);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: color 0.15s;
-}
-.settings-tab:hover {
-    color: var(--text-primary);
-}
-.settings-tab:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-}
-.settings-tab[aria-selected="true"] {
-    color: var(--accent);
-    border-bottom-color: var(--accent);
-}
-
 /* ── Consistent card headers + collapsible groups ─────── */
 .settings-card-header {
     display: flex;
@@ -106,502 +72,592 @@
 .settings-group-toggle[aria-expanded="true"] .settings-chevron {
     transform: rotate(180deg);
 }
+
+/* Settings search: cards and sections the query does not match are
+   hidden; clearing the search restores tab-driven visibility. */
+.settings-search-hidden { display: none; }
 </style>
 
-<div class="max-w-4xl mx-auto">
+<div>
     <div class="mb-6">
         <h1 class="text-2xl font-bold text-[var(--text-primary)]">System Settings</h1>
         <p class="text-sm text-[var(--text-muted)] mt-1">Configure server, session, and feature settings</p>
     </div>
 
-    <!-- Submenu bar: one section at a time, hash preserves the active tab -->
-    <div class="settings-tabs" role="tablist" aria-label="Settings sections">
-        <button type="button" role="tab" id="tab-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-tab">Session</button>
-        <button type="button" role="tab" id="tab-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-tab">Features</button>
-        <button type="button" role="tab" id="tab-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-tab">Storage</button>
-        <button type="button" role="tab" id="tab-security" aria-controls="panel-security" aria-selected="false" tabindex="-1" class="settings-tab">Security</button>
-        <button type="button" role="tab" id="tab-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-tab">Updates</button>
-    </div>
-
-    <form id="settings-form" hx-put="/api/system/settings" hx-ext="json-enc" hx-swap="none"
-          class="space-y-6">
-
-        <!-- Session -->
-        <section role="tabpanel" id="panel-session" aria-labelledby="tab-session" tabindex="-1" class="space-y-4">
-            <!-- Server Settings -->
-            <div class="card">
-                <h2 class="settings-card-header">
-                    <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
-                    Server
-                </h2>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label class="form-label">Listen Address</label>
-                        <input type="text" name="listen_addr" value="0.0.0.0:8089" class="form-input">
-                    </div>
-                    <div>
-                        <label class="form-label">guacd Address</label>
-                        <input type="text" name="guacd_addr" value="127.0.0.1:4822" class="form-input">
-                    </div>
-                    <div>
-                        <label class="form-label">TLS Certificate</label>
-                        <div class="flex items-center gap-2">
-                            <input type="text" name="tls_cert_path" placeholder="Not configured" class="flex-1 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] text-sm">
-                            <span id="tls-status" class="px-2 py-0.5 text-xs rounded border bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]">Not Set</span>
-                        </div>
-                    </div>
-                    <div>
-                        <label class="form-label">TLS Key</label>
-                        <input type="text" name="tls_key_path" placeholder="Not configured" class="form-input">
-                    </div>
-                </div>
-            </div>
-
-            <!-- Session Settings -->
-            <div class="card">
-                <h2 class="settings-card-header">
-                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                    Session
-                </h2>
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label class="form-label">Max Duration (seconds)</label>
-                        <input type="number" name="session_max_duration_secs" value="28800" class="form-input">
-                        <p class="text-xs text-[var(--text-muted)] mt-1">8 hours default</p>
-                    </div>
-                    <div>
-                        <label class="form-label">Concurrent Session Limit</label>
-                        <input type="number" name="max_concurrent_sessions" value="0" class="form-input">
-                        <p class="text-xs text-[var(--text-muted)] mt-1">0 = unlimited</p>
-                    </div>
-                    <div>
-                        <label class="form-label">History Retention (days)</label>
-                        <input type="number" name="session_history_retention_days" value="90" class="form-input">
-                    </div>
-                </div>
-            </div>
-
-            <!-- Session defaults: per-protocol global defaults applied when
-                 an entry or ad-hoc request does not specify its own value.
-                 Precedence: entry > global default > built-in code default. -->
-            <div class="card">
-                <h2 class="settings-card-header">
-                    <svg class="w-5 h-5 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9h8m-8 4h8m-8 4h4M3 3h18v18H3V3z"/></svg>
-                    Session Defaults
-                </h2>
-                <p class="text-xs text-[var(--text-muted)] mb-4">
-                    Applied when a connection entry or ad-hoc session does not specify its own value.
-                    Entry settings win; these are the fallback. Changes affect new sessions only.
-                </p>
-
-                <div class="space-y-5">
-                    <!-- RDP -->
-                    <div>
-                        <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">RDP</h3>
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                                <label class="form-label">Width (pixels)</label>
-                                <input type="number" name="default_rdp_width" value="1920" class="form-input">
-                            </div>
-                            <div>
-                                <label class="form-label">Height (pixels)</label>
-                                <input type="number" name="default_rdp_height" value="1080" class="form-input">
-                            </div>
-                            <div>
-                                <label class="form-label">DPI</label>
-                                <input type="number" name="default_rdp_dpi" value="96" class="form-input">
-                            </div>
-                            <div>
-                                <label class="form-label">Security Mode</label>
-                                <select name="default_rdp_security" class="form-input">
-                                    <option value="any">any</option>
-                                    <option value="rdp">rdp</option>
-                                    <option value="tls">tls</option>
-                                    <option value="nla">nla</option>
-                                </select>
-                            </div>
-                        </div>
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
-                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                                <div>
-                                    <span class="text-sm text-[var(--text-primary)]">H.264</span>
-                                    <p class="text-xs text-[var(--text-muted)]">Hardware video passthrough</p>
-                                </div>
-                                <div class="toggle-switch">
-                                    <input type="checkbox" id="default_rdp_h264" checked>
-                                    <span class="toggle-slider"></span>
-                                </div>
-                            </label>
-                            <input type="hidden" name="default_rdp_h264" id="default_rdp_h264-hidden" value="false">
-                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                                <div>
-                                    <span class="text-sm text-[var(--text-primary)]">GFX Pipeline</span>
-                                    <p class="text-xs text-[var(--text-muted)]">Graphics Pipeline Extension</p>
-                                </div>
-                                <div class="toggle-switch">
-                                    <input type="checkbox" id="default_rdp_gfx" checked>
-                                    <span class="toggle-slider"></span>
-                                </div>
-                            </label>
-                            <input type="hidden" name="default_rdp_gfx" id="default_rdp_gfx-hidden" value="false">
-                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                                <div>
-                                    <span class="text-sm text-[var(--text-primary)]">Drive / File Transfer</span>
-                                    <p class="text-xs text-[var(--text-muted)]">Mount the RDP drive by default</p>
-                                </div>
-                                <div class="toggle-switch">
-                                    <input type="checkbox" id="default_rdp_drive">
-                                    <span class="toggle-slider"></span>
-                                </div>
-                            </label>
-                            <input type="hidden" name="default_rdp_drive" id="default_rdp_drive-hidden" value="false">
-                        </div>
-                    </div>
-
-                    <!-- SSH -->
-                    <div>
-                        <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">SSH</h3>
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                                <label class="form-label">Terminal Width (columns)</label>
-                                <input type="number" name="default_ssh_width" value="1920" class="form-input">
-                            </div>
-                            <div>
-                                <label class="form-label">Terminal Height (rows)</label>
-                                <input type="number" name="default_ssh_height" value="1080" class="form-input">
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- VNC -->
-                    <div>
-                        <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">VNC</h3>
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div>
-                                <label class="form-label">Color Depth (bits per pixel)</label>
-                                <input type="number" name="default_vnc_color_depth" value="24" class="form-input">
-                            </div>
-                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                                    <div>
-                                        <span class="text-sm text-[var(--text-primary)]">Clipboard Copy</span>
-                                        <p class="text-xs text-[var(--text-muted)]">Remote desktop to client</p>
-                                    </div>
-                                    <div class="toggle-switch">
-                                        <input type="checkbox" id="default_vnc_disable_copy">
-                                        <span class="toggle-slider"></span>
-                                    </div>
-                                </label>
-                                <input type="hidden" name="default_vnc_disable_copy" id="default_vnc_disable_copy-hidden" value="false">
-                                <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                                    <div>
-                                        <span class="text-sm text-[var(--text-primary)]">Clipboard Paste</span>
-                                        <p class="text-xs text-[var(--text-muted)]">Client to remote desktop</p>
-                                    </div>
-                                    <div class="toggle-switch">
-                                        <input type="checkbox" id="default_vnc_disable_paste">
-                                        <span class="toggle-slider"></span>
-                                    </div>
-                                </label>
-                                <input type="hidden" name="default_vnc_disable_paste" id="default_vnc_disable_paste-hidden" value="false">
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Features (protocol toggles + Desktop) -->
-        <section role="tabpanel" id="panel-features" aria-labelledby="tab-features" tabindex="-1" hidden class="space-y-4">
-            <!-- Features: collapsible group -->
-            <div class="card">
-                <button type="button" class="settings-card-header settings-group-toggle" id="toggle-features" aria-expanded="false" aria-controls="features-group">
-                    <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                    Features
-                    <svg class="settings-chevron w-5 h-5 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                </button>
-                <div id="features-group" class="space-y-3" hidden>
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">RDP</span>
-                            <p class="text-xs text-[var(--text-muted)]">Remote Desktop Protocol connections via guacd</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_rdp">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_rdp" id="enable_rdp-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">SSH Tunnels</span>
-                            <p class="text-xs text-[var(--text-muted)]">SSH tunnel management for secure remote access</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_ssh_tunnels">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_ssh_tunnels" id="enable_ssh_tunnels-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">API Keys</span>
-                            <p class="text-xs text-[var(--text-muted)]">User-managed API key generation and revocation</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_api_keys">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_api_keys" id="enable_api_keys-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">Recordings</span>
-                            <p class="text-xs text-[var(--text-muted)]">Session recording and playback for audit</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_recordings">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_recordings" id="enable_recordings-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">Web Sessions</span>
-                            <p class="text-xs text-[var(--text-muted)]">Browser-based web proxy sessions</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_web_sessions">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_web_sessions" id="enable_web_sessions-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">SPICE</span>
-                            <p class="text-xs text-[var(--text-muted)]">SPICE protocol for KVM/QEMU virtual machines</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_spice">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_spice" id="enable_spice-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">Proxmox</span>
-                            <p class="text-xs text-[var(--text-muted)]">Proxmox VE integration for VM management</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_proxmox">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_proxmox" id="enable_proxmox-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">VMware</span>
-                            <p class="text-xs text-[var(--text-muted)]">VMware vSphere/ESXi integration</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_vmware">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_vmware" id="enable_vmware-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">VDI (Docker)</span>
-                            <p class="text-xs text-[var(--text-muted)]">Per-user Docker desktop containers</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_vdi">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_vdi" id="enable_vdi-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">PowerShell (SSH)</span>
-                            <p class="text-xs text-[var(--text-muted)]">PowerShell remoting over SSH to Windows hosts</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_powershell_ssh">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_powershell_ssh" id="enable_powershell_ssh-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">File Transfer</span>
-                            <p class="text-xs text-[var(--text-muted)]">Upload and download files via RDP drive and SSH SFTP</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="enable_file_transfer">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="enable_file_transfer" id="enable_file_transfer-hidden" value="false">
-                </div>
-            </div>
-
-            <!-- Desktop -->
-            <div class="card">
-                <h2 class="settings-card-header">
-                    <svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25m6-12V15a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 15V5.25m18 0A2.25 2.25 0 0018.75 3H5.25A2.25 2.25 0 003 5.25m18 0V12a2.25 2.25 0 01-2.25 2.25H5.25A2.25 2.25 0 013 12V5.25"/></svg>
-                    Desktop
-                </h2>
-                <div class="space-y-3">
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">Kiosk Mode</span>
-                            <p class="text-xs text-[var(--text-muted)]">Allow the desktop app to launch in locked-down kiosk mode</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="desktop_kiosk">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="desktop_kiosk" id="desktop_kiosk-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">File Transfers</span>
-                            <p class="text-xs text-[var(--text-muted)]">Allow file transfers to and from the desktop app</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="desktop_transfers">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="desktop_transfers" id="desktop_transfers-hidden" value="false">
-
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">Device Pairing</span>
-                            <p class="text-xs text-[var(--text-muted)]">Allow pairing desktop devices with user accounts</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="desktop_pairing">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="desktop_pairing" id="desktop_pairing-hidden" value="false">
-                </div>
-            </div>
-        </section>
-
-        <!-- Storage -->
-        <section role="tabpanel" id="panel-storage" aria-labelledby="tab-storage" tabindex="-1" hidden class="space-y-4">
-            <!-- Storage backends -->
-            <div class="card">
-                <h2 class="settings-card-header">
-                    <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/></svg>
-                    Storage
-                </h2>
-                <div class="space-y-3">
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">Vault Address Book</span>
-                            <p class="text-xs text-[var(--text-muted)]">Use Vault/OpenBao for connection storage</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="vault_enabled">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="vault_enabled" id="vault_enabled-hidden" value="false">
-                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
-                        <div>
-                            <span class="text-sm text-[var(--text-primary)]">DB-Only Mode</span>
-                            <p class="text-xs text-[var(--text-muted)]">Store connections in SQLite (no Vault required)</p>
-                        </div>
-                        <div class="toggle-switch">
-                            <input type="checkbox" id="db_only_mode">
-                            <span class="toggle-slider"></span>
-                        </div>
-                    </label>
-                    <input type="hidden" name="db_only_mode" id="db_only_mode-hidden" value="false">
-                </div>
-            </div>
-
-            <!-- Connection Custom Fields -->
-            <div class="card">
-                <h2 class="settings-card-header">
-                    <svg class="w-5 h-5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                    Connection Custom Fields
-                </h2>
-                <p class="text-xs text-[var(--text-muted)] mb-4">
-                    Optional extra fields shown on connection entry forms (e.g. Environment, Owner, Cost Center).
-                    Off by default — add a field below to enable them.
-                </p>
-                <div id="custom-fields-editor" class="space-y-3"></div>
-                <button type="button" id="add-custom-field"
-                        class="mt-3 btn btn-secondary btn-sm">+ Add Field</button>
-                <input type="hidden" name="custom_fields" id="custom_fields-hidden" value="[]">
-            </div>
-        </section>
-
-        <!-- Security -->
-        <section role="tabpanel" id="panel-security" aria-labelledby="tab-security" tabindex="-1" hidden class="space-y-4">
-            <div class="card">
-                <h2 class="settings-card-header">
-                    <svg class="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285z"/></svg>
-                    Security
-                </h2>
-                <p class="text-sm text-[var(--text-muted)] mb-4">
-                    The TLS certificate and key used by the server are configured in the Session section.
-                    Everything else security-related has its own page:
-                </p>
-                <ul class="space-y-2 text-sm">
-                    <li><a class="text-[var(--accent)] hover:underline" href="/admin/auth.html">Auth Providers</a> <span class="text-[var(--text-muted)]">(authentication methods, account lockout, password policy)</span></li>
-                    <li><a class="text-[var(--accent)] hover:underline" href="/admin/roles.html">Roles &amp; Permissions</a> <span class="text-[var(--text-muted)]">(system and connection-level RBAC)</span></li>
-                    <li><a class="text-[var(--accent)] hover:underline" href="/admin/audit.html">Audit Log</a> <span class="text-[var(--text-muted)]">(tamper-evident session audit trail)</span></li>
-                </ul>
-            </div>
-        </section>
-
-        <!-- Updates -->
-        <section role="tabpanel" id="panel-updates" aria-labelledby="tab-updates" tabindex="-1" hidden class="space-y-4">
-            <div class="card">
-                <h2 class="settings-card-header">
-                    <svg class="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
-                    Software Updates
-                </h2>
-                <p class="text-sm text-[var(--text-muted)] mb-4">
-                    Update checks run on the server and are configured in the persea config file
-                    under the <code class="text-[var(--text-primary)]">[updates]</code> section:
-                    <code class="text-[var(--text-primary)]">enabled</code>,
-                    <code class="text-[var(--text-primary)]">check_url</code> and
-                    <code class="text-[var(--text-primary)]">check_interval_hours</code>.
-                    When a newer stable release exists, an admin banner links to it.
-                </p>
-                <p class="text-sm text-[var(--text-muted)]">
-                    Air-gapped deployments disable the check with <code class="text-[var(--text-primary)]">enabled = false</code>,
-                    or point <code class="text-[var(--text-primary)]">check_url</code> at an internal mirror.
-                    See the <a class="text-[var(--accent)] hover:underline" href="/docs">deployment guide</a> for details.
-                </p>
-            </div>
-        </section>
-
-        <!-- Save -->
-        <div class="flex justify-end">
-            <button type="submit"
-                    class="btn btn-primary">
-                Save Settings
-            </button>
+    <div class="settings-layout">
+        <!-- Left rail: the wide-screen (1280px+) section list. Shares the
+             hash persistence, aria-selected state and roving tabindex of
+             the tab bar; the script block drives both. -->
+        <div class="settings-rail-wrap">
+            <p class="settings-rail-label">Settings</p>
+            <nav class="settings-rail" role="tablist" aria-label="Settings sections">
+                <button type="button" role="tab" id="rail-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-rail-tab">Session</button>
+                <button type="button" role="tab" id="rail-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-rail-tab">Features</button>
+                <button type="button" role="tab" id="rail-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-rail-tab">Storage</button>
+                <button type="button" role="tab" id="rail-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-rail-tab">Updates</button>
+            </nav>
         </div>
-    </form>
+
+        <div class="settings-main">
+            <!-- Settings search: a client-side filter over the sections and
+                 fields below, visible in both layouts (rail and tab bar).
+                 The script block at the bottom wires it with addEventListener
+                 because the page CSP blocks inline handlers. -->
+            <div class="mb-4">
+                <input type="search" id="settings-search" placeholder="Search settings..." aria-label="Search settings"
+                       autocomplete="off" class="form-input w-full sm:w-96">
+                <p id="settings-search-empty" class="hidden text-sm text-[var(--text-muted)] mt-2">No settings match your search.</p>
+            </div>
+
+            <!-- Submenu bar: the narrow-screen (below 1280px) control; one
+                 section at a time, hash preserves the active tab -->
+            <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+                <button type="button" role="tab" id="tab-session" aria-controls="panel-session" aria-selected="true" tabindex="0" class="settings-tab">Session</button>
+                <button type="button" role="tab" id="tab-features" aria-controls="panel-features" aria-selected="false" tabindex="-1" class="settings-tab">Features</button>
+                <button type="button" role="tab" id="tab-storage" aria-controls="panel-storage" aria-selected="false" tabindex="-1" class="settings-tab">Storage</button>
+                <button type="button" role="tab" id="tab-updates" aria-controls="panel-updates" aria-selected="false" tabindex="-1" class="settings-tab">Updates</button>
+            </div>
+
+            <form id="settings-form" hx-put="/api/system/settings" hx-ext="json-enc" hx-swap="none"
+                  class="space-y-6">
+
+                <!-- Session -->
+                <section role="tabpanel" id="panel-session" aria-labelledby="tab-session" tabindex="-1" class="space-y-4">
+                    <!-- Server Settings -->
+                    <div class="card">
+                        <h2 class="settings-card-header">
+                            Server
+                        </h2>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="form-label">Listen Address</label>
+                                <input type="text" name="listen_addr" value="0.0.0.0:8089" class="form-input">
+                            </div>
+                            <div>
+                                <label class="form-label">guacd Address</label>
+                                <input type="text" name="guacd_addr" value="127.0.0.1:4822" class="form-input">
+                            </div>
+                            <div>
+                                <label class="form-label">TLS Certificate</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="text" name="tls_cert_path" placeholder="Not configured" class="flex-1 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] text-sm">
+                                    <span id="tls-status" class="px-2 py-0.5 text-xs rounded border bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]">Not Set</span>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="form-label">TLS Key</label>
+                                <input type="text" name="tls_key_path" placeholder="Not configured" class="form-input">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Session Settings -->
+                    <div class="card">
+                        <h2 class="settings-card-header">
+                            Session
+                        </h2>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div>
+                                <label class="form-label">Max Duration (seconds)</label>
+                                <input type="number" name="session_max_duration_secs" value="28800" class="form-input">
+                                <p class="text-xs text-[var(--text-muted)] mt-1">8 hours default</p>
+                            </div>
+                            <div>
+                                <label class="form-label">Concurrent Session Limit</label>
+                                <input type="number" name="max_concurrent_sessions" value="0" class="form-input">
+                                <p class="text-xs text-[var(--text-muted)] mt-1">0 = unlimited</p>
+                            </div>
+                            <div>
+                                <label class="form-label">History Retention (days)</label>
+                                <input type="number" name="session_history_retention_days" value="90" class="form-input">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Session defaults: per-protocol global defaults applied when
+                         an entry or ad-hoc request does not specify its own value.
+                         Precedence: entry > global default > built-in code default. -->
+                    <div class="card">
+                        <h2 class="settings-card-header">
+                            Session Defaults
+                        </h2>
+                        <p class="text-xs text-[var(--text-muted)] mb-4">
+                            Applied when a connection entry or ad-hoc session does not specify its own value.
+                            Entry settings win; these are the fallback. Changes affect new sessions only.
+                        </p>
+
+                        <div class="space-y-5">
+                            <!-- RDP -->
+                            <div>
+                                <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">RDP</h3>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="form-label">Width (pixels)</label>
+                                        <input type="number" name="default_rdp_width" value="1920" class="form-input">
+                                    </div>
+                                    <div>
+                                        <label class="form-label">Height (pixels)</label>
+                                        <input type="number" name="default_rdp_height" value="1080" class="form-input">
+                                    </div>
+                                    <div>
+                                        <label class="form-label">DPI</label>
+                                        <input type="number" name="default_rdp_dpi" value="96" class="form-input">
+                                    </div>
+                                    <div>
+                                        <label class="form-label">Security Mode</label>
+                                        <select name="default_rdp_security" class="form-input">
+                                            <option value="any">any</option>
+                                            <option value="rdp">rdp</option>
+                                            <option value="tls">tls</option>
+                                            <option value="nla">nla</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="form-label">Auth Package</label>
+                                        <select name="default_rdp_auth_pkg" class="form-input">
+                                            <option value="">Default</option>
+                                            <option value="ntlm">ntlm</option>
+                                            <option value="kerberos">kerberos</option>
+                                            <option value="negotiate">negotiate</option>
+                                        </select>
+                                        <p class="text-xs text-[var(--text-muted)] mt-1">Empty falls back to the [rdp] config, then NTLM</p>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                        <div>
+                                            <span class="text-sm text-[var(--text-primary)]">Auto Size</span>
+                                            <p class="text-xs text-[var(--text-muted)]">Scale the session to the browser window</p>
+                                        </div>
+                                        <div class="toggle-switch">
+                                            <input type="checkbox" id="default_rdp_auto_size" checked>
+                                            <span class="toggle-slider"></span>
+                                        </div>
+                                    </label>
+                                    <input type="hidden" name="default_rdp_auto_size" id="default_rdp_auto_size-hidden" value="false">
+                                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                        <div>
+                                            <span class="text-sm text-[var(--text-primary)]">H.264</span>
+                                            <p class="text-xs text-[var(--text-muted)]">Hardware video passthrough</p>
+                                        </div>
+                                        <div class="toggle-switch">
+                                            <input type="checkbox" id="default_rdp_h264" checked>
+                                            <span class="toggle-slider"></span>
+                                        </div>
+                                    </label>
+                                    <input type="hidden" name="default_rdp_h264" id="default_rdp_h264-hidden" value="false">
+                                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                        <div>
+                                            <span class="text-sm text-[var(--text-primary)]">GFX Pipeline</span>
+                                            <p class="text-xs text-[var(--text-muted)]">Graphics Pipeline Extension</p>
+                                        </div>
+                                        <div class="toggle-switch">
+                                            <input type="checkbox" id="default_rdp_gfx" checked>
+                                            <span class="toggle-slider"></span>
+                                        </div>
+                                    </label>
+                                    <input type="hidden" name="default_rdp_gfx" id="default_rdp_gfx-hidden" value="false">
+                                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                        <div>
+                                            <span class="text-sm text-[var(--text-primary)]">Drive / File Transfer</span>
+                                            <p class="text-xs text-[var(--text-muted)]">Mount the RDP drive by default</p>
+                                        </div>
+                                        <div class="toggle-switch">
+                                            <input type="checkbox" id="default_rdp_drive">
+                                            <span class="toggle-slider"></span>
+                                        </div>
+                                    </label>
+                                    <input type="hidden" name="default_rdp_drive" id="default_rdp_drive-hidden" value="false">
+                                </div>
+                            </div>
+
+                            <!-- SSH -->
+                            <div>
+                                <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">SSH</h3>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="form-label">Terminal Width (columns)</label>
+                                        <input type="number" name="default_ssh_width" value="1920" class="form-input">
+                                    </div>
+                                    <div>
+                                        <label class="form-label">Terminal Height (rows)</label>
+                                        <input type="number" name="default_ssh_height" value="1080" class="form-input">
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                                    <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                        <div>
+                                            <span class="text-sm text-[var(--text-primary)]">Auto Size</span>
+                                            <p class="text-xs text-[var(--text-muted)]">Scale the terminal to the browser window</p>
+                                        </div>
+                                        <div class="toggle-switch">
+                                            <input type="checkbox" id="default_ssh_auto_size" checked>
+                                            <span class="toggle-slider"></span>
+                                        </div>
+                                    </label>
+                                    <input type="hidden" name="default_ssh_auto_size" id="default_ssh_auto_size-hidden" value="false">
+                                </div>
+                            </div>
+
+                            <!-- VNC -->
+                            <div>
+                                <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">VNC</h3>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="form-label">Color Depth (bits per pixel)</label>
+                                        <input type="number" name="default_vnc_color_depth" value="24" class="form-input">
+                                    </div>
+                                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                            <div>
+                                                <span class="text-sm text-[var(--text-primary)]">Clipboard Copy</span>
+                                                <p class="text-xs text-[var(--text-muted)]">Remote desktop to client</p>
+                                            </div>
+                                            <div class="toggle-switch">
+                                                <input type="checkbox" id="default_vnc_disable_copy">
+                                                <span class="toggle-slider"></span>
+                                            </div>
+                                        </label>
+                                        <input type="hidden" name="default_vnc_disable_copy" id="default_vnc_disable_copy-hidden" value="false">
+                                        <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                            <div>
+                                                <span class="text-sm text-[var(--text-primary)]">Clipboard Paste</span>
+                                                <p class="text-xs text-[var(--text-muted)]">Client to remote desktop</p>
+                                            </div>
+                                            <div class="toggle-switch">
+                                                <input type="checkbox" id="default_vnc_disable_paste">
+                                                <span class="toggle-slider"></span>
+                                            </div>
+                                        </label>
+                                        <input type="hidden" name="default_vnc_disable_paste" id="default_vnc_disable_paste-hidden" value="false">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Bulk apply: write the current RDP/SSH defaults
+                                 into every saved connection entry. -->
+                            <div class="pt-3 border-t border-[var(--border)]">
+                                <div class="flex flex-wrap items-center justify-between gap-3">
+                                    <div>
+                                        <p class="text-sm font-semibold text-[var(--text-primary)]">Apply to all RDP connections</p>
+                                        <p class="text-xs text-[var(--text-muted)] mt-1">
+                                            Write the current RDP defaults (Auto Size, Security Mode, Auth Package)
+                                            into every saved RDP connection, and Auto Size into every saved SSH connection.
+                                            Per-connection settings in the address book are overwritten.
+                                        </p>
+                                    </div>
+                                    <button type="button" id="btn-apply-auto-size"
+                                            class="btn btn-secondary btn-sm">Apply to all RDP connections</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Features (protocol toggles + Desktop) -->
+                <section role="tabpanel" id="panel-features" aria-labelledby="tab-features" tabindex="-1" hidden class="space-y-4">
+                    <!-- Features: collapsible group -->
+                    <div class="card">
+                        <button type="button" class="settings-card-header settings-group-toggle" id="toggle-features" aria-expanded="true" aria-controls="features-group">
+                            Features
+                            <svg class="settings-chevron w-5 h-5 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </button>
+                        <div id="features-group" class="space-y-3">
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">RDP</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Remote Desktop Protocol connections via guacd</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_rdp">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_rdp" id="enable_rdp-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">SSH Tunnels</span>
+                                    <p class="text-xs text-[var(--text-muted)]">SSH tunnel management for secure remote access</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_ssh_tunnels">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_ssh_tunnels" id="enable_ssh_tunnels-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">API Keys</span>
+                                    <p class="text-xs text-[var(--text-muted)]">User-managed API key generation and revocation</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_api_keys">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_api_keys" id="enable_api_keys-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Compliance Mode</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Disable direct API access: admin API keys and self-service tokens are rejected; only interactive sessions and scoped desktop tokens authenticate</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="compliance_mode">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="compliance_mode" id="compliance_mode-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Recordings</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Session recording and playback for audit</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_recordings">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_recordings" id="enable_recordings-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Web Sessions</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Browser-based web proxy sessions</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_web_sessions">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_web_sessions" id="enable_web_sessions-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">SPICE</span>
+                                    <p class="text-xs text-[var(--text-muted)]">SPICE protocol for KVM/QEMU virtual machines</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_spice">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_spice" id="enable_spice-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Proxmox</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Proxmox VE integration for VM management</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_proxmox">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_proxmox" id="enable_proxmox-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">VMware</span>
+                                    <p class="text-xs text-[var(--text-muted)]">VMware vSphere/ESXi integration</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_vmware">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_vmware" id="enable_vmware-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">VDI (Docker)</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Per-user Docker desktop containers</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_vdi">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_vdi" id="enable_vdi-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">PowerShell (SSH)</span>
+                                    <p class="text-xs text-[var(--text-muted)]">PowerShell remoting over SSH to Windows hosts</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_powershell_ssh">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_powershell_ssh" id="enable_powershell_ssh-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">File Transfer</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Upload and download files via RDP drive and SSH SFTP</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="enable_file_transfer">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="enable_file_transfer" id="enable_file_transfer-hidden" value="false">
+                        </div>
+                    </div>
+
+                    <!-- Desktop -->
+                    <div class="card">
+                        <h2 class="settings-card-header">
+                            Desktop
+                        </h2>
+                        <div class="space-y-3">
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Kiosk Mode</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Allow the desktop app to launch in locked-down kiosk mode</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="desktop_kiosk">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="desktop_kiosk" id="desktop_kiosk-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">File Transfers</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Allow file transfers to and from the desktop app</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="desktop_transfers">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="desktop_transfers" id="desktop_transfers-hidden" value="false">
+
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Device Pairing</span>
+                                    <p class="text-xs text-[var(--text-muted)]">Allow pairing desktop devices with user accounts</p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="desktop_pairing">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="desktop_pairing" id="desktop_pairing-hidden" value="false">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Storage -->
+                <section role="tabpanel" id="panel-storage" aria-labelledby="tab-storage" tabindex="-1" hidden class="space-y-4">
+                    <!-- Storage backends: where connection credentials live.
+                         Copy explains both backends and when to pick each; no
+                         decorative icons, per the design rule for this panel. -->
+                    <div class="card">
+                        <h2 class="settings-card-header">
+                            Storage Backends
+                        </h2>
+                        <p class="text-sm text-[var(--text-muted)] mb-4">
+                            Connection credentials are read server-side when a session starts and never reach
+                            the browser. Where they are kept is a deployment decision between two backends.
+                        </p>
+                        <div class="space-y-3">
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">DB-Only Mode</span>
+                                    <p class="text-xs text-[var(--text-muted)]">
+                                        The simplest backend, recommended for most deployments. Credentials stay in
+                                        the application database, encrypted at rest with AES-256-GCM. Nothing extra
+                                        to run or maintain.
+                                    </p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="db_only_mode">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="db_only_mode" id="db_only_mode-hidden" value="false">
+                            <label class="flex items-center justify-between px-3 py-2 bg-[var(--bg-card)]/50 rounded-lg">
+                                <div>
+                                    <span class="text-sm text-[var(--text-primary)]">Vault Address Book</span>
+                                    <p class="text-xs text-[var(--text-muted)]">
+                                        Keep credentials in HashiCorp Vault or OpenBao, the shared secrets manager
+                                        used in enterprise and HashiCorp environments. Choose this when your
+                                        organization already runs Vault or OpenBao and wants connection secrets
+                                        managed alongside its other secrets. Requires a configured
+                                        <code class="text-[var(--text-primary)]">[vault]</code> section in the
+                                        config file.
+                                    </p>
+                                </div>
+                                <div class="toggle-switch">
+                                    <input type="checkbox" id="vault_enabled">
+                                    <span class="toggle-slider"></span>
+                                </div>
+                            </label>
+                            <input type="hidden" name="vault_enabled" id="vault_enabled-hidden" value="false">
+                        </div>
+                        <p class="text-xs text-[var(--text-muted)] mt-4">
+                            Pros and cons of each backend, plus setup steps, are in the
+                            <a class="text-[var(--accent)] hover:underline" href="/docs">deployment guide's storage section</a>.
+                        </p>
+                    </div>
+
+                    <!-- Customization: the connection custom fields editor and
+                         what it does. The editor itself is unchanged. -->
+                    <div class="card">
+                        <h2 class="settings-card-header">
+                            Customization
+                        </h2>
+                        <p class="text-sm text-[var(--text-muted)] mb-4">
+                            Connection custom fields add optional extra inputs (e.g. Environment, Owner,
+                            Cost Center) to connection entry forms and to the filter bar on the Connections
+                            page. Off by default; add a field below to enable them.
+                        </p>
+                        <div id="custom-fields-editor" class="space-y-3"></div>
+                        <button type="button" id="add-custom-field"
+                                class="mt-3 btn btn-secondary btn-sm">+ Add Field</button>
+                        <input type="hidden" name="custom_fields" id="custom_fields-hidden" value="[]">
+                    </div>
+                </section>
+
+                <!-- Updates -->
+                <section role="tabpanel" id="panel-updates" aria-labelledby="tab-updates" tabindex="-1" hidden class="space-y-4">
+                    <div class="card">
+                        <h2 class="settings-card-header">
+                            Software Updates
+                        </h2>
+                        <p class="text-sm text-[var(--text-muted)] mb-4">
+                            Update checks run on the server and are configured in the persea config file
+                            under the <code class="text-[var(--text-primary)]">[updates]</code> section:
+                            <code class="text-[var(--text-primary)]">enabled</code>,
+                            <code class="text-[var(--text-primary)]">check_url</code> and
+                            <code class="text-[var(--text-primary)]">check_interval_hours</code>.
+                            When a newer stable release exists, an admin banner links to it.
+                        </p>
+                        <p class="text-sm text-[var(--text-muted)]">
+                            Air-gapped deployments disable the check with <code class="text-[var(--text-primary)]">enabled = false</code>,
+                            or point <code class="text-[var(--text-primary)]">check_url</code> at an internal mirror.
+                            See the <a class="text-[var(--accent)] hover:underline" href="/docs">deployment guide</a> for details.
+                        </p>
+                    </div>
+                </section>
+
+                <!-- Save -->
+                <div class="flex justify-end">
+                    <button type="submit"
+                            class="btn btn-primary">
+                        Save Settings
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
     <div id="settings-feedback" class="mt-4" aria-live="polite"></div>
 </div>
 
@@ -615,6 +671,25 @@
         <p class="text-sm text-[var(--text-muted)] mb-4">Changes will take effect on the next request.</p>
         <button id="save-confirm-ok"
                 class="btn btn-secondary btn-sm">OK</button>
+    </div>
+</div>
+
+<!-- Apply RDP defaults: confirmation dialog. The count of entries
+     the bulk endpoint updated is shown after the request completes. -->
+<div id="apply-auto-size-confirm" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="apply-auto-size-title">
+    <div class="card w-full max-w-sm text-center">
+        <h2 id="apply-auto-size-title" class="text-lg font-bold text-[var(--text-primary)] mb-2">Apply RDP defaults?</h2>
+        <p class="text-sm text-[var(--text-muted)] mb-4">
+            Every saved RDP connection gets the current Auto Size, Security Mode, and Auth Package
+            defaults above, overwriting its per-connection settings. SSH connections get the Auto Size default.
+        </p>
+        <p id="apply-auto-size-status" class="text-sm mb-4" aria-live="polite"></p>
+        <div class="flex justify-center gap-3">
+            <button id="apply-auto-size-cancel"
+                    class="btn btn-secondary btn-sm">Cancel</button>
+            <button id="apply-auto-size-ok"
+                    class="btn btn-primary btn-sm">Apply</button>
+        </div>
     </div>
 </div>
 
@@ -652,13 +727,14 @@ function syncToggle(name) {
 
 // Feature toggle names shared by the load code and the change listeners.
 var toggleBoxes = [
-    'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys',
+    'enable_rdp', 'enable_ssh_tunnels', 'enable_api_keys', 'compliance_mode',
     'enable_recordings', 'enable_web_sessions', 'enable_spice',
     'enable_proxmox', 'enable_vmware', 'enable_vdi', 'enable_powershell_ssh',
     'enable_file_transfer',
     'desktop_kiosk', 'desktop_transfers', 'desktop_pairing',
     'vault_enabled', 'db_only_mode',
     'default_rdp_h264', 'default_rdp_gfx', 'default_rdp_drive',
+    'default_rdp_auto_size', 'default_ssh_auto_size',
     'default_vnc_disable_copy', 'default_vnc_disable_paste'
 ];
 
@@ -677,18 +753,88 @@ document.getElementById('save-confirm-ok').addEventListener('click', function() 
     document.getElementById('save-confirm').classList.add('hidden');
 });
 
+// ── Apply RDP defaults to existing connections ──
+// PUT /api/addressbook/defaults/apply writes the current global defaults
+// (auto size, security, auth package for RDP; auto size for SSH) into every
+// saved rdp/ssh entry (admin-only, idempotent). Confirm first, then show
+// the count of entries updated. All wiring is addEventListener: the page
+// CSP blocks inline handlers.
+var applyBtn = document.getElementById('btn-apply-auto-size');
+var applyDialog = document.getElementById('apply-auto-size-confirm');
+var applyStatus = document.getElementById('apply-auto-size-status');
+var applyOk = document.getElementById('apply-auto-size-ok');
+var applyCancel = document.getElementById('apply-auto-size-cancel');
+
+function closeApplyDialog() {
+    applyDialog.classList.add('hidden');
+    applyStatus.textContent = '';
+    applyOk.disabled = false;
+    applyOk.textContent = 'Apply';
+    applyOk.style.display = '';
+    applyCancel.style.display = '';
+}
+
+if (applyBtn) {
+    applyBtn.addEventListener('click', function() {
+        applyStatus.textContent = '';
+        applyStatus.className = 'text-sm mb-4';
+        applyDialog.classList.remove('hidden');
+    });
+    applyCancel.addEventListener('click', closeApplyDialog);
+    applyOk.addEventListener('click', function() {
+        applyOk.disabled = true;
+        applyOk.textContent = 'Applying\u2026';
+        fetch('/api/addressbook/defaults/apply', {
+            method: 'PUT',
+            headers: apiHeaders(),
+            credentials: 'same-origin',
+            body: JSON.stringify({})
+        }).then(function(r) {
+            return r.json().catch(function() { return {}; }).then(function(d) { return { ok: r.ok, data: d }; });
+        }).then(function(res) {
+            if (!res.ok) {
+                applyOk.disabled = false;
+                applyOk.textContent = 'Apply';
+                applyStatus.className = 'text-sm mb-4 text-red-400';
+                applyStatus.textContent = (res.data && res.data.error) || 'Failed to apply defaults.';
+                return;
+            }
+            var count = (res.data && typeof res.data.applied === 'number') ? res.data.applied : 0;
+            applyStatus.className = 'text-sm mb-4 text-emerald-400';
+            applyStatus.textContent = 'Updated ' + count + ' connection' + (count === 1 ? '' : 's') + '.';
+            applyOk.style.display = 'none';
+            applyCancel.style.display = 'none';
+        }).catch(function() {
+            applyOk.disabled = false;
+            applyOk.textContent = 'Apply';
+            applyStatus.className = 'text-sm mb-4 text-red-400';
+            applyStatus.textContent = 'Failed to apply defaults.';
+        });
+    });
+}
+
 // ── Settings section tabs ──
 // Plain-JS tab switch: no inline handlers (CSP), wired with
 // addEventListener. The active section survives a reload via the location
-// hash (#session, #features, #storage, #security, #updates).
-var settingsSections = ['session', 'features', 'storage', 'security', 'updates'];
+// hash (#session, #features, #storage, #updates). Two controls exist — the
+// left rail on wide screens and the tab bar below 1280px — and both carry
+// the same aria-selected/tabindex state, so the hash and the roving focus
+// work identically whichever one is rendered.
+var settingsSections = ['session', 'features', 'storage', 'updates'];
 
 function settingsPanel(name) {
     return document.getElementById('panel-' + name);
 }
 
-function settingsTab(name) {
-    return document.getElementById('tab-' + name);
+// Both nav buttons for a section (rail + tab bar); the hidden one stays in
+// sync so a layout switch never leaves stale state behind.
+function settingsNavs(name) {
+    var out = [];
+    ['tab', 'rail'].forEach(function(kind) {
+        var el = document.getElementById(kind + '-' + name);
+        if (el) out.push(el);
+    });
+    return out;
 }
 
 function showSettingsSection(name, opts) {
@@ -696,17 +842,28 @@ function showSettingsSection(name, opts) {
     var focusPanel = !opts || opts.focus !== false;
     settingsSections.forEach(function(s) {
         var panel = settingsPanel(s);
-        var tab = settingsTab(s);
-        if (!panel || !tab) return;
+        if (!panel) return;
         if (s === name) {
             panel.hidden = false;
-            tab.setAttribute('aria-selected', 'true');
-            tab.setAttribute('tabindex', '0');
-            if (focusPanel) panel.focus();
+            settingsNavs(s).forEach(function(tab) {
+                tab.setAttribute('aria-selected', 'true');
+                tab.setAttribute('tabindex', '0');
+            });
+            if (focusPanel) {
+                // Focus without scrolling: the panels are stacked in the DOM
+                // and carry tabindex="-1", so a plain focus() scrolls the
+                // activated panel into view, jumping the page to mid-scroll
+                // for sections below the tall Session panel. The view stays
+                // at the top of the page; the user scrolls down themselves.
+                panel.focus({ preventScroll: true });
+                window.scrollTo(0, 0);
+            }
         } else {
             panel.hidden = true;
-            tab.setAttribute('aria-selected', 'false');
-            tab.setAttribute('tabindex', '-1');
+            settingsNavs(s).forEach(function(tab) {
+                tab.setAttribute('aria-selected', 'false');
+                tab.setAttribute('tabindex', '-1');
+            });
         }
     });
     if (location.hash !== '#' + name) {
@@ -714,29 +871,39 @@ function showSettingsSection(name, opts) {
     }
 }
 
-var settingsTabButtons = Array.prototype.slice.call(document.querySelectorAll('.settings-tab'));
+var settingsTabButtons = Array.prototype.slice.call(
+    document.querySelectorAll('.settings-tab, .settings-rail-tab'));
 settingsTabButtons.forEach(function(tab) {
     tab.addEventListener('click', function() {
         showSettingsSection(tab.getAttribute('aria-controls').replace(/^panel-/, ''));
     });
 });
 
-// Arrow/Home/End roving between tabs; activating a tab (Enter/Space/click)
-// moves focus into the section, handled by showSettingsSection.
-document.querySelector('.settings-tabs').addEventListener('keydown', function(evt) {
-    var idx = settingsTabButtons.indexOf(document.activeElement);
-    if (idx === -1) return;
-    var key = evt.key;
-    if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'Home' && key !== 'End') return;
-    evt.preventDefault();
-    if (key === 'Home') idx = 0;
-    else if (key === 'End') idx = settingsTabButtons.length - 1;
-    else if (key === 'ArrowLeft') idx = (idx - 1 + settingsTabButtons.length) % settingsTabButtons.length;
-    else idx = (idx + 1) % settingsTabButtons.length;
-    var target = settingsTabButtons[idx];
-    showSettingsSection(target.getAttribute('aria-controls').replace(/^panel-/, ''), { focus: false });
-    target.focus();
-});
+// Arrow/Home/End roving between nav buttons; activating a button
+// (Enter/Space/click) moves focus into the section, handled by
+// showSettingsSection. The bar reads left/right arrows, the rail also
+// reads up/down.
+function wireSettingsNav(tablist) {
+    var buttons = Array.prototype.slice.call(tablist.querySelectorAll('[role="tab"]'));
+    tablist.addEventListener('keydown', function(evt) {
+        var idx = buttons.indexOf(document.activeElement);
+        if (idx === -1) return;
+        var key = evt.key;
+        var horizontal = key === 'ArrowLeft' || key === 'ArrowRight';
+        var vertical = key === 'ArrowUp' || key === 'ArrowDown';
+        if (!horizontal && !vertical && key !== 'Home' && key !== 'End') return;
+        evt.preventDefault();
+        if (key === 'Home') idx = 0;
+        else if (key === 'End') idx = buttons.length - 1;
+        else if (key === 'ArrowLeft' || key === 'ArrowUp') idx = (idx - 1 + buttons.length) % buttons.length;
+        else idx = (idx + 1) % buttons.length;
+        var target = buttons[idx];
+        showSettingsSection(target.getAttribute('aria-controls').replace(/^panel-/, ''), { focus: false });
+        target.focus();
+    });
+}
+var settingsNavLists = document.querySelectorAll('.settings-tabs, .settings-rail');
+for (var i = 0; i < settingsNavLists.length; i++) wireSettingsNav(settingsNavLists[i]);
 
 window.addEventListener('hashchange', function() {
     showSettingsSection((location.hash || '').replace(/^#/, ''), { focus: false });
@@ -749,12 +916,13 @@ window.addEventListener('hashchange', function() {
     if (settingsSections.indexOf(initial) === -1) initial = 'session';
     settingsSections.forEach(function(s) {
         var panel = settingsPanel(s);
-        var tab = settingsTab(s);
-        if (!panel || !tab) return;
+        if (!panel) return;
         var active = s === initial;
         panel.hidden = !active;
-        tab.setAttribute('aria-selected', active ? 'true' : 'false');
-        tab.setAttribute('tabindex', active ? '0' : '-1');
+        settingsNavs(s).forEach(function(tab) {
+            tab.setAttribute('aria-selected', active ? 'true' : 'false');
+            tab.setAttribute('tabindex', active ? '0' : '-1');
+        });
     });
 })();
 
@@ -901,6 +1069,10 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
             if (sel && s.default_rdp_security) {
                 sel.value = s.default_rdp_security;
             }
+            var authSel = document.querySelector('select[name="default_rdp_auth_pkg"]');
+            if (authSel && s.default_rdp_auth_pkg !== undefined && s.default_rdp_auth_pkg !== null) {
+                authSel.value = s.default_rdp_auth_pkg;
+            }
             var boxes = toggleBoxes;
             boxes.forEach(function(name) {
                 var box = document.getElementById(name);
@@ -932,5 +1104,64 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
             showError('Failed to load settings: ' + (e.message || e));
         });
 })();
+
+// ── Settings search ──
+// Client-side filter: typing hides the cards whose label text does not
+// match, and hides whole sections with no matches, across all four tabs.
+// When the active section has no matches the search jumps to the first
+// section that does, so results stay visible. Clearing the input restores
+// the tab-driven visibility. All wiring is addEventListener: the page CSP
+// blocks inline handlers.
+var settingsSearchInput = document.getElementById('settings-search');
+var settingsSearchEmpty = document.getElementById('settings-search-empty');
+var settingsCards = Array.prototype.slice.call(
+    document.querySelectorAll('#settings-form .card'));
+var featuresGroupToggle = document.getElementById('toggle-features');
+
+function applySettingsSearch() {
+    var q = (settingsSearchInput.value || '').trim().toLowerCase();
+    var matchBySection = {};
+    settingsCards.forEach(function(card) {
+        var section = card.closest('section[role="tabpanel"]');
+        var hit = !q || (card.textContent || '').toLowerCase().indexOf(q) !== -1;
+        card.classList.toggle('settings-search-hidden', !hit);
+        if (section) {
+            if (matchBySection[section.id] === undefined) matchBySection[section.id] = false;
+            if (hit) matchBySection[section.id] = true;
+        }
+    });
+    var firstVisible = null;
+    var anyVisible = !q;
+    settingsSections.forEach(function(name) {
+        var panel = settingsPanel(name);
+        if (!panel) return;
+        var hit = !q || matchBySection[panel.id] === true;
+        panel.classList.toggle('settings-search-hidden', !hit);
+        if (hit) anyVisible = true;
+        if (hit && !panel.hidden && !firstVisible) firstVisible = name;
+    });
+    if (q && firstVisible) {
+        var active = (location.hash || '').replace(/^#/, '');
+        if (matchBySection['panel-' + active] !== true) {
+            showSettingsSection(firstVisible, { focus: false });
+        }
+    }
+    if (settingsSearchEmpty) {
+        settingsSearchEmpty.classList.toggle('hidden', anyVisible);
+    }
+    // A hit inside the collapsible Features group is only useful when the
+    // group is open; expand it while a search is active.
+    if (q && featuresGroupToggle) {
+        var group = document.getElementById(featuresGroupToggle.getAttribute('aria-controls'));
+        if (group && group.hidden) {
+            featuresGroupToggle.setAttribute('aria-expanded', 'true');
+            group.hidden = false;
+        }
+    }
+}
+
+if (settingsSearchInput) {
+    settingsSearchInput.addEventListener('input', applySettingsSearch);
+}
 </script>
 {% endblock %}
