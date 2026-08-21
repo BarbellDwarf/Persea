@@ -258,6 +258,55 @@ jobs:
           TEST_DATABASE_URL_MYSQL: ${{ matrix.test_db_url_mysql }}
         run: cargo test --test backend_tests -- --nocapture
 
+  # Real LDAP integration tests (persea#154) — dockerized OpenLDAP service
+  # container. The osixia bootstrap-dir mount cannot seed the container:
+  # GitHub Actions starts service containers before the checkout step, so
+  # repo files are not on disk yet. The seed LDIF is instead copied in and
+  # loaded with ldapadd after checkout; the health check only verifies slapd
+  # is up and the admin bind works.
+  ldap-integration:
+    runs-on: ubuntu-latest
+    needs: [check]
+    services:
+      ldap:
+        image: osixia/openldap:1.5.0
+        env:
+          LDAP_ORGANISATION: Example
+          LDAP_DOMAIN: example.com
+          LDAP_ADMIN_PASSWORD: admin
+        ports:
+          - 3389:389
+        options: >-
+          --health-cmd "ldapsearch -x -H ldap://localhost:389 -b dc=example,dc=com -D cn=admin,dc=example,dc=com -w admin '(objectClass=*)'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          components: rustfmt, clippy
+          rustflags: ""
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Seed LDAP test data
+        run: |
+          docker cp tests/fixtures/ldap-seed.ldif "${{ job.services.ldap.id }}":/tmp/ldap-seed.ldif
+          for i in $(seq 1 30); do
+            if docker exec "${{ job.services.ldap.id }}" ldapadd -x -H ldap://localhost:389 \
+                -D cn=admin,dc=example,dc=com -w admin -f /tmp/ldap-seed.ldif; then
+              echo "LDAP seed loaded after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+          docker exec "${{ job.services.ldap.id }}" ldapsearch -x -H ldap://localhost:389 \
+            -b dc=example,dc=com -D cn=admin,dc=example,dc=com -w admin '(uid=alice)' \
+            | grep -q 'uid=alice'
+      - name: Run LDAP integration tests
+        env:
+          TEST_LDAP_URL: ldap://127.0.0.1:3389
+        run: cargo test --test ldap_integration -- --nocapture
+
   # Playwright auth E2E — tests password login over HTTP and HTTPS
   playwright-auth:
     runs-on: ubuntu-latest
