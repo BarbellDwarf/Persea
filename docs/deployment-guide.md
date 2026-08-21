@@ -336,7 +336,7 @@ sudo systemctl restart persea
 
 persea must be restarted after the change. The login page then shows a sign-in button alongside the local form.
 
-**Group-to-role mapping.** Roles are assigned per user, but you can map SSO groups to roles automatically: on the Admin → Users page or via the `POST /api/admin/group-mappings` API endpoint. Users arriving from a mapped group get that role on login. (New OIDC users default to *operator* unless a mapping applies, changeable with the `default_role` OIDC setting.)
+**Group-to-role mapping.** Roles are assigned per user, but you can map SSO groups to roles automatically: on the Admin → Groups page (the **Mappings** action per group) or via the `POST /api/admin/group-mappings` API endpoint. Users arriving from a mapped group get that role on login. (New OIDC users default to *operator* unless a mapping applies, changeable with the `default_role` OIDC setting.)
 
 Provider-specific walkthroughs (Authentik, JumpCloud, Entra ID, …) are in [Integrations](integrations.md). SAML, LDAP, and RADIUS are available as alternatives under `[auth]`: see the [Configuration guide](configuration.md).
 
@@ -370,7 +370,7 @@ Where connection credentials live is a deployment decision with two options: the
 | Pros | Nothing extra to run or maintain; works out of the box; backups are just the database backup | Central secret management alongside your other tools; Vault's audit, rotation, and access-control tooling; secrets leave the app database |
 | Cons | Secrets live in the same store as the rest of the data, so the encryption key must be protected like a database password and never changed | Another service to install, run, and keep available; more moving parts; overkill for small deployments |
 
-**DB-backed storage is the recommended default for most deployments.** It is the simplest option and needs no additional infrastructure. Choose Vault-backed storage when your organization already runs Vault or OpenBao and wants connection credentials managed centrally with its other secrets, typically in enterprise or regulated environments.
+**DB-backed storage is the recommended default for most deployments.** It is the simplest option and needs no additional infrastructure. Choose Vault-backed storage when your organization already runs Vault or OpenBao and wants connection credentials managed centrally with its other secrets, typically in enterprise or regulated environments. The Admin → Settings → Storage section shows the same two options as **DB-Only Mode** and **Vault Address Book** toggles; the backend itself is set in the config file (`[storage] backend`), and the settings page links here for the pros and cons.
 
 With the DB backend, everything, including credentials, is stored in the database, with credentials encrypted (AES-256-GCM) using the key from `[storage]` / `PERSEA_STORAGE_KEY`:
 
@@ -407,6 +407,16 @@ Connection custom fields are optional extra inputs defined on Admin → Settings
 Custom fields are off by default; adding the first field on the settings page enables them.
 
 ![Connections page](screenshots/connections.png)
+
+### Personal folders
+
+Every signed-in user gets a private folder tree on the Connections page, separate from the shared address book. Personal folders are for organizing the entries you use often: they hold **references to shared entries, not copies**. Adding an entry to a personal folder never duplicates it, and deleting a personal folder (or removing an entry from one) never touches the shared entry itself. When the shared entry changes, the personal reference follows it automatically.
+
+**How to use them.** The scope filter at the top of the Connections page has a **Personal** option; selecting it shows only your own folders. From any other scope, a **Personal** section appears in the folder tree so you can drag entries onto it. Drag-and-drop works for entry rows and personal sub-folders (a dropped sub-folder moves the folder and its descendants, keeping slash-path nesting intact). If drag-and-drop is not available, the **Add to personal folder** action in the entry detail panel opens a folder picker instead. Personal folders nest via slash paths (`Work/Acme` nests under `Work`), and any user, not just admins, can create, rename, and delete their own folders.
+
+**Privacy.** Personal folders are owner-only: the API rejects requests from anyone else, including admins, with the same 404 a missing folder gets, so one user's folders are never visible to or enumerable by another. API-key identities (which have no user row) are rejected outright. Search and filters cover the personal view; entry create/edit/delete, credential rotation, and CSV import are hidden there because those operations target the shared address book.
+
+**What you can add.** Any shared entry you can read (folder access and RBAC `read` grants apply) can be referenced. Mirrored entries keep their protocol badge and connect through their shared location; if the shared entry becomes unreachable, Connect is disabled with an explanation.
 
 ### Jump hosts and SSH tunnels
 
@@ -547,6 +557,7 @@ Versioning: the deb embeds the build's short commit sha (`X.Y.Z+g<sha>`), so eve
 - [ ] Network allowlists configured per protocol (sessions can't reach unintended hosts)
 - [ ] Sign-in via OIDC/SAML/LDAP with group-to-role mappings
 - [ ] Bootstrap API key deleted once sign-in works
+- [ ] Compliance Mode enabled on instances that must not accept scripted key access (Admin → Settings → Features): admin API keys and self-service tokens are rejected; only interactive sessions and scoped desktop tokens authenticate
 - [ ] Knocknoc gating the login page (optional but strongly recommended)
 - [ ] File-transfer storage encrypted if used in regulated environments
 - [ ] Session recording enabled for audit compliance
@@ -556,6 +567,8 @@ Versioning: the deb embeds the build's short commit sha (`X.Y.Z+g<sha>`), so eve
 The security-relevant toggles (protocol lockdown, desktop shell, file transfer, recordings) live on the Admin → Settings page:
 
 ![Admin settings page](screenshots/admin-settings.png)
+
+The settings page is organized into five sections: **Session** (server, session limits, and the per-protocol session defaults above), **Features** (protocol and feature toggles, including Compliance Mode), **Storage** (storage backends and connection custom fields), **Security** (a navigation card linking to the Auth Providers, Roles & Permissions, and Audit Log pages), and **Updates** (software update checks). On wide screens (1280px and up) the sections render as a left rail next to the content panel; below that width a horizontal tab bar takes over. Both controls share the same section state, so the page remembers where you were. A **Search settings** box filters the sections and cards client-side as you type. The TLS certificate and key fields live in the Session section; everything else security-related has its own page, linked from the Security section.
 
 ### Per-protocol session defaults
 
@@ -572,17 +585,22 @@ Changing a default affects **new sessions only**; running sessions are untouched
 | `default_rdp_width` | `1920` | Default RDP display width in pixels |
 | `default_rdp_height` | `1080` | Default RDP display height in pixels |
 | `default_rdp_dpi` | `96` | Default RDP display density |
+| `default_rdp_auto_size` | `true` | Auto-size the RDP session to the browser window |
 | `default_rdp_security` | `any` | Default RDP security layer: `any`, `rdp`, `tls`, or `nla` |
+| `default_rdp_auth_pkg` | *(empty)* | Default RDP NLA auth package: `ntlm`, `kerberos`, or `negotiate`. Empty falls back to the `[rdp] default_auth_pkg` config value, then NTLM |
 | `default_rdp_h264` | `true` | H.264 passthrough on by default |
 | `default_rdp_gfx` | `true` | Graphics Pipeline Extension on by default |
 | `default_rdp_drive` | `false` | Mount the RDP drive by default (when unset, the `[drive]` config section governs) |
 | `default_ssh_width` | `1920` | Default SSH terminal width in columns |
 | `default_ssh_height` | `1080` | Default SSH terminal height in rows |
+| `default_ssh_auto_size` | `true` | Auto-size the SSH terminal to the browser window |
 | `default_vnc_color_depth` | `24` | Default VNC color depth in bits per pixel |
 | `default_vnc_disable_copy` | `false` | Block clipboard copy (remote desktop → client) by default |
 | `default_vnc_disable_paste` | `false` | Block clipboard paste (client → remote desktop) by default |
 
 The keys are stored in the `system_settings` table like every other admin setting, so they survive restarts and are covered by the same backups as the rest of the database.
+
+**Bulk apply.** The **Apply to all RDP connections** button on the same page (admin only) writes the current RDP defaults (Auto Size, Security Mode, Auth Package) into every saved RDP connection entry, and the SSH auto-size default into every saved SSH (and PowerShell) entry, overwriting per-connection settings. It is idempotent: running it again with unchanged defaults changes nothing. The same operation is available as `PUT /api/addressbook/defaults/apply` and is recorded on the admin audit chain.
 
 ## A note on the audit log
 
