@@ -435,15 +435,26 @@ impl AuthProvider for LdapProvider {
         let mut conn = self.connect().ok()?;
         self.bind_service_account(&mut conn).ok()?;
 
-        let filter = &self
-            .config
-            .user_search_filter
-            .replace("{}", &ldap_escape(subject));
+        // DN-shaped subjects (LDAP logins authenticate with the user DN)
+        // resolve by a base-scope existence search on the DN itself: the
+        // username filter substituted with a DN can never match the entry's
+        // attributes. Plain usernames search the base subtree with the
+        // configured filter.
+        let (base, filter) = if subject.contains('=') {
+            (subject.to_string(), "(objectClass=*)".to_string())
+        } else {
+            (
+                self.config.user_search_base.clone(),
+                self.config
+                    .user_search_filter
+                    .replace("{}", &ldap_escape(subject)),
+            )
+        };
         let search_result = conn
             .search(
-                subject,
+                &base,
                 Scope::Base,
-                filter,
+                &filter,
                 vec![&self.config.display_name_attr, &self.config.email_attr],
             )
             .ok()?;

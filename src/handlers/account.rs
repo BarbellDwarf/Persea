@@ -421,10 +421,17 @@ pub async fn docs_page(
 ) -> Response {
     let docs = crate::templates::DOCS
         .iter()
-        .map(|(slug, title, html)| templates::DocSection {
+        .map(|(slug, title, html, headings)| templates::DocSection {
             slug: (*slug).to_string(),
             title: (*title).to_string(),
             html: (*html).to_string(),
+            headings: headings
+                .iter()
+                .map(|(h_slug, h_text)| templates::DocHeading {
+                    slug: (*h_slug).to_string(),
+                    text: (*h_text).to_string(),
+                })
+                .collect(),
         })
         .collect();
     templates::DocsTemplate {
