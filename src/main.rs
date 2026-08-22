@@ -44,6 +44,7 @@ mod templates;
 #[cfg(test)]
 mod testing;
 mod thumbnails;
+mod tls_gen;
 mod totp;
 mod tunnel;
 mod updates;
@@ -168,6 +169,9 @@ enum Command {
         /// Admin name (unique)
         #[arg(long)]
         name: String,
+        /// Print only the raw API key (for scripting; decorations go to stderr)
+        #[arg(long)]
+        quiet: bool,
         /// Comma-separated allowed IP CIDRs (e.g. "10.0.0.0/8,192.168.1.0/24")
         #[arg(long)]
         allowed_ips: Option<String>,
@@ -581,8 +585,15 @@ async fn main() {
             name,
             allowed_ips,
             expires,
+            quiet,
         }) => {
-            cmd_add_admin(&database, &name, allowed_ips.as_deref(), expires.as_deref());
+            cmd_add_admin(
+                &database,
+                &name,
+                allowed_ips.as_deref(),
+                expires.as_deref(),
+                quiet,
+            );
         }
         Some(Command::ListAdmins) => cmd_list_admins(&database),
         Some(Command::DisableAdmin { name }) => cmd_disable_admin(&database, &name),
@@ -754,9 +765,21 @@ fn cmd_unlock_user(database: &Db, email: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_add_admin(database: &Db, name: &str, allowed_ips: Option<&str>, expires: Option<&str>) {
+fn cmd_add_admin(
+    database: &Db,
+    name: &str,
+    allowed_ips: Option<&str>,
+    expires: Option<&str>,
+    quiet: bool,
+) {
     match db::add_admin(database, name, allowed_ips, expires) {
         Ok(key) => {
+            if quiet {
+                // Scripting/entrypoint mode: the key alone on stdout, so a
+                // redirect captures exactly one clean credential line.
+                println!("{}", key);
+                return;
+            }
             println!("Admin '{}' created.", name);
             println!("API Key: {}", key);
             println!();
@@ -860,49 +883,6 @@ fn cmd_rotate_key(database: &Db, name: &str) {
     }
 }
 
-/// Generate a self-signed certificate (rcgen — no openssl) and write
-/// cert.pem/key.pem into `out_dir`. localhost and 127.0.0.1 are always in
-/// the SANs. Returns the written paths.
-fn write_self_signed_cert(
-    hostname: &str,
-    out_dir: &std::path::Path,
-    extra_sans: &[String],
-) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
-    use rcgen::{generate_simple_self_signed, CertifiedKey};
-
-    let mut sans = vec![
-        hostname.to_string(),
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-    ];
-    for san in extra_sans {
-        if !sans.contains(san) {
-            sans.push(san.clone());
-        }
-    }
-
-    let CertifiedKey { cert, signing_key } = generate_simple_self_signed(sans)
-        .map_err(|e| format!("certificate generation failed: {}", e))?;
-
-    let cert_path = out_dir.join("cert.pem");
-    let key_path = out_dir.join("key.pem");
-
-    std::fs::write(&cert_path, cert.pem())
-        .map_err(|e| format!("failed to write cert.pem: {}", e))?;
-    std::fs::write(&key_path, signing_key.serialize_pem())
-        .map_err(|e| format!("failed to write key.pem: {}", e))?;
-
-    // The private key must not be world-readable: 0600 on Unix (a no-op
-    // on Windows, where the file inherits the directory ACL).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600));
-    }
-
-    Ok((cert_path, key_path))
-}
-
 /// Data root for `--init`: `%ProgramData%\persea` on Windows, `/opt/persea`
 /// elsewhere (mirroring install.sh's layout).
 fn init_data_root() -> std::path::PathBuf {
@@ -960,7 +940,7 @@ fn cmd_init() {
         let hostname = std::env::var("COMPUTERNAME")
             .or_else(|_| std::env::var("HOSTNAME"))
             .unwrap_or_else(|_| "persea".to_string());
-        match write_self_signed_cert(&hostname, &tls_dir, &[]) {
+        match tls_gen::write_self_signed_cert(&hostname, &tls_dir, &[]) {
             Ok(_) => println!(
                 "Generated self-signed TLS certificate for '{}' in {}",
                 hostname,
@@ -1054,7 +1034,7 @@ fn cmd_init() {
 
 fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
     let dir = std::path::Path::new(out_dir);
-    let (cert_path, key_path) = match write_self_signed_cert(hostname, dir, extra_sans) {
+    let (cert_path, key_path) = match tls_gen::write_self_signed_cert(hostname, dir, extra_sans) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -1833,6 +1813,62 @@ async fn run_server(
 
     // Extract shutdown timeout before config is moved into SessionManager
     let shutdown_timeout_secs = config.shutdown_timeout_secs;
+
+    // First-run TLS auto-provisioning: when server certificates are
+    // configured but missing on disk (a fresh container ships none), a
+    // self-signed pair is generated at the configured paths so the https
+    // listeners below come up instead of panicking on the missing files.
+    // Generation triggers ONLY on absence: mounted real certificates are
+    // never overwritten, and once the pair exists nothing regenerates it.
+    if let Some(tls_cfg) = &config.tls {
+        if let (Some(cert_path), Some(key_path)) = (&tls_cfg.cert_path, &tls_cfg.key_path) {
+            if !cert_path.exists() || !key_path.exists() {
+                // create_dir_all succeeds when the directory already exists;
+                // only genuine failures are logged. If the directory cannot
+                // be created the write below fails and reports it anyway.
+                if let Some(parent) = cert_path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        tracing::warn!(
+                            "Failed to create TLS directory {}: {}",
+                            parent.display(),
+                            e
+                        );
+                    }
+                }
+                let missing = if !cert_path.exists() {
+                    cert_path.as_path()
+                } else {
+                    key_path.as_path()
+                };
+                // SANs always include localhost/127.0.0.1; the listen host
+                // joins them when usable (unspecified addresses fall back
+                // to localhost).
+                let bind_host = config
+                    .listen_addr
+                    .rsplit_once(':')
+                    .map(|(h, _)| h)
+                    .unwrap_or(config.listen_addr.as_str())
+                    .trim_start_matches('[')
+                    .trim_end_matches(']');
+                let hostname = match bind_host {
+                    "" | "0.0.0.0" | "::" | "[::]" => "localhost".to_string(),
+                    other => other.to_string(),
+                };
+                match tls_gen::ensure_self_signed_pair(cert_path, key_path, &hostname, &[]) {
+                    Ok(true) => tracing::warn!(
+                        "TLS certificate not found at {} — generated self-signed certificate ({}); mount real certificates for production",
+                        missing.display(),
+                        cert_path.display()
+                    ),
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(
+                        "TLS auto-provisioning failed: {} (the server will fail to load TLS)",
+                        e
+                    ),
+                }
+            }
+        }
+    }
 
     // Build TLS connector for guacd if configured
     let guacd_tls = build_guacd_tls(&config);
