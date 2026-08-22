@@ -169,6 +169,9 @@ enum Command {
         /// Admin name (unique)
         #[arg(long)]
         name: String,
+        /// Print only the raw API key (for scripting; decorations go to stderr)
+        #[arg(long)]
+        quiet: bool,
         /// Comma-separated allowed IP CIDRs (e.g. "10.0.0.0/8,192.168.1.0/24")
         #[arg(long)]
         allowed_ips: Option<String>,
@@ -582,8 +585,15 @@ async fn main() {
             name,
             allowed_ips,
             expires,
+            quiet,
         }) => {
-            cmd_add_admin(&database, &name, allowed_ips.as_deref(), expires.as_deref());
+            cmd_add_admin(
+                &database,
+                &name,
+                allowed_ips.as_deref(),
+                expires.as_deref(),
+                quiet,
+            );
         }
         Some(Command::ListAdmins) => cmd_list_admins(&database),
         Some(Command::DisableAdmin { name }) => cmd_disable_admin(&database, &name),
@@ -755,9 +765,21 @@ fn cmd_unlock_user(database: &Db, email: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_add_admin(database: &Db, name: &str, allowed_ips: Option<&str>, expires: Option<&str>) {
+fn cmd_add_admin(
+    database: &Db,
+    name: &str,
+    allowed_ips: Option<&str>,
+    expires: Option<&str>,
+    quiet: bool,
+) {
     match db::add_admin(database, name, allowed_ips, expires) {
         Ok(key) => {
+            if quiet {
+                // Scripting/entrypoint mode: the key alone on stdout, so a
+                // redirect captures exactly one clean credential line.
+                println!("{}", key);
+                return;
+            }
             println!("Admin '{}' created.", name);
             println!("API Key: {}", key);
             println!();

@@ -325,7 +325,9 @@ else
     if ! chmod 600 "$ADMIN_KEY_FILE" 2>/dev/null; then
         echo "warning: could not set owner-only permissions on $ADMIN_KEY_FILE (filesystem does not support chmod) — the admin API key may be readable by other users on the host"
     fi
-    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin > "$ADMIN_KEY_FILE" 2>&1
+    # --quiet prints ONLY the raw key on stdout; stderr goes to the container
+    # log so startup noise never contaminates the credential file (#259).
+    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin --quiet > "$ADMIN_KEY_FILE"
     echo "Admin API key written to $ADMIN_KEY_FILE (owner-read only)"
 fi
 
