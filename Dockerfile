@@ -164,6 +164,9 @@ RUN printf 'krb5-config krb5-config/default_realm string \n' | debconf-set-selec
     # socat: the RDP relay's outbound leg (system binaries are typically
     # allowed by endpoint filters that block the gateway's own processes)
     socat \
+    # gosu: the entrypoint starts as root, reconciles ownership of the app
+    # dirs for bind mounts (PUID/PGID aware), then drops privileges
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Install guacd
@@ -268,6 +271,34 @@ RUN chown persea:persea /opt/persea && \
 RUN cat > /opt/persea/entrypoint.sh <<'SCRIPT'
 #!/bin/sh
 set -e
+
+# Root-init: when started as root, reconcile ownership of the app dirs for
+# the persea user (honoring optional PUID/PGID overrides), then drop
+# privileges and re-execute this script unprivileged. When NOT started as
+# root (Kubernetes runAsNonRoot / arbitrary UID platforms / docker --user),
+# skip reconciliation entirely: mount permissions are the platform's job.
+if [ "$(id -u)" = "0" ]; then
+    PUID="${PUID:-996}"
+    PGID="${PGID:-996}"
+    CUR_UID=$(id -u persea)
+    CUR_GID=$(id -g persea)
+    if [ "$PGID" != "$CUR_GID" ]; then
+        groupmod -o -g "$PGID" persea
+    fi
+    if [ "$PUID" != "$CUR_UID" ] || [ "$PGID" != "$CUR_GID" ]; then
+        usermod -o -u "$PUID" -g "$PGID" persea
+        chown -R persea:persea /home/persea
+    fi
+    for D in /opt/persea/data /opt/persea/recordings /opt/persea/tls \
+             /opt/persea/certs /opt/persea/drives /opt/persea/scripts \
+             /opt/persea/vdi-homes; do
+        mkdir -p "$D"
+        chown -R persea:persea "$D"
+    done
+    chown persea:persea /opt/persea/config.toml.default /opt/persea
+    echo "Running as root at startup: reconciled ownership for uid=$PUID gid=$PGID, dropping to persea."
+    exec gosu persea:persea "$0" "$@"
+fi
 
 # Copy default config on first run (if no config file is mounted/present)
 CONFIG_PATH="/opt/persea/config.toml"
@@ -454,5 +485,8 @@ ENV HOME=/home/persea
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -skf https://localhost:8089/api/health || exit 1
 
-USER persea
+# No USER directive here on purpose: the entrypoint starts as root, reconciles
+# ownership for bind mounts (PUID/PGID), and drops to persea via gosu. Starts
+# that are already non-root (docker --user, Kubernetes runAsNonRoot) skip the
+# reconciliation block entirely.
 ENTRYPOINT ["/opt/persea/entrypoint.sh"]
