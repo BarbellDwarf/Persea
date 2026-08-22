@@ -308,6 +308,27 @@ if [ ! -f "$DB_PATH" ]; then
 fi
 chmod 600 "$DB_PATH" 2>/dev/null || true
 
+# Create admin API key on first run. This must happen BEFORE any other
+# persea invocation: generate-cert and serve both run db migrations in
+# main(), so a database they have touched is non-empty and a size check
+# below it would skip credential creation on every boot forever (#259:
+# fresh containers shipped with zero credentials).
+ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
+if [ -s "$DB_PATH" ]; then
+    echo "existing database detected; skipping admin bootstrap"
+else
+    echo "First run detected — creating admin API key..."
+    touch "$ADMIN_KEY_FILE"
+    # Best-effort: some bind mounts (Windows/WSL, 9p, virtiofs) don't support
+    # chmod and would otherwise kill the script under set -e, leaving the DB
+    # uncreated and the container looping on first run forever.
+    if ! chmod 600 "$ADMIN_KEY_FILE" 2>/dev/null; then
+        echo "warning: could not set owner-only permissions on $ADMIN_KEY_FILE (filesystem does not support chmod) — the admin API key may be readable by other users on the host"
+    fi
+    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin > "$ADMIN_KEY_FILE" 2>&1
+    echo "Admin API key written to $ADMIN_KEY_FILE (owner-read only)"
+fi
+
 # Generate TLS cert at runtime if not already present (e.g. mounted)
 TLS_DIR="/opt/persea/tls"
 if [ ! -f "$TLS_DIR/cert.pem" ] || [ ! -f "$TLS_DIR/key.pem" ]; then
@@ -335,22 +356,6 @@ if [ ! -f "$TLS_DIR/cert.pem" ] || [ ! -f "$TLS_DIR/key.pem" ]; then
         fi
         echo "Added secure_cookies = false for self-signed cert."
     fi
-fi
-
-# Create admin API key on first run (if the DB is still empty: the file is
-# pre-created above, migrations run on the first add-admin/serve).
-if [ ! -s "$DB_PATH" ]; then
-    echo "First run detected — creating admin API key..."
-    ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
-    touch "$ADMIN_KEY_FILE"
-    # Best-effort: some bind mounts (Windows/WSL, 9p, virtiofs) don't support
-    # chmod and would otherwise kill the script under set -e, leaving the DB
-    # uncreated and the container looping on first run forever.
-    if ! chmod 600 "$ADMIN_KEY_FILE" 2>/dev/null; then
-        echo "warning: could not set owner-only permissions on $ADMIN_KEY_FILE (filesystem does not support chmod) — the admin API key may be readable by other users on the host"
-    fi
-    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin > "$ADMIN_KEY_FILE" 2>&1
-    echo "Admin API key written to $ADMIN_KEY_FILE (owner-read only)"
 fi
 
 # Print the running version on beta images (PERSEA_BETA=1 set at build time

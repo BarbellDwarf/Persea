@@ -107,6 +107,14 @@ docker run -d -p 8089:8089 \
 
 The three volumes are what keep your data across container upgrades. The `persea-tls` one matters more than it looks: without it, the container generates a fresh self-signed certificate every time it is recreated, and browsers warn again about a changed certificate. For production, mount your own certificate over `/opt/persea/tls/cert.pem` and `key.pem`.
 
+### First run
+
+A fresh container provisions what it needs on first boot:
+
+- **TLS certificates**: the shipped config serves `/opt/persea/tls/cert.pem` and `/opt/persea/tls/key.pem`. When either file is absent at startup, persea generates a self-signed pair at those paths (SANs cover the hostname, `localhost`, and `127.0.0.1`; the private key gets owner-only permissions) and logs a warning telling you to mount real certificates for production. Generation triggers only on absence: certificates you mount are never overwritten, and once a pair exists no restart regenerates it. Keep the `persea-tls` volume (or bind-mount the directory) so the pair survives container recreation.
+- **Bind-mount caveat**: anything mounted over `/opt/persea/tls` shadows what the image put there. An empty host directory receives the freshly generated pair on first boot, which then persists on the host. A read-only mount cannot receive generated files, so always supply both `cert.pem` and `key.pem` when mounting read-only.
+- **Credentials**: on the very first boot (empty database), the entrypoint creates an admin account and writes its API key to `/opt/persea/data/admin-key.txt` (owner-readable only; the key itself lives only in that file). If you prefer the interactive route, ignore the file and use the setup wizard on first visit instead. Restarts create nothing further: the bootstrap runs only while the database is still empty, and existing databases log `existing database detected; skipping admin bootstrap`.
+
 ## Step 2: First-run setup
 
 ### The setup wizard
