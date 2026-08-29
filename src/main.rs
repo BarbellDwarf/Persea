@@ -2020,6 +2020,29 @@ async fn run_server(
         database.clone(),
     ));
 
+    // Close stale active-history rows from a previous unclean shutdown
+    // (persea#273): any row whose status is still 'active' with
+    // ended_at IS NULL was left behind by a crash or restart. In HA
+    // mode, rows owned by other still-live instances are excluded.
+    if let Some(db) = manager.db() {
+        let owner = if manager.ha_enabled() {
+            Some(manager.instance_id())
+        } else {
+            None
+        };
+        match crate::db::close_stale_active_history(db, owner) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                closed = n,
+                "Startup sweep: closed stale active session-history rows"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "Startup sweep: failed to close stale active-history rows"
+            ),
+        }
+    }
+
     // Spawn background task to reap sessions that exceed max duration or
     // have been idle past the configured idle timeout. The check interval
     // tracks the SMALLER of the two timeouts so idle reaping is prompt
@@ -3070,6 +3093,15 @@ async fn run_server(
                 "Graceful shutdown initiated — waiting for sessions to drain"
             );
 
+            // Close every still-open session-history row so the DB
+            // converges with live state instead of leaving zombie rows
+            // with status='active' forever (persea#273).
+            if let Some(db) = shutdown_mgr.db() {
+                if let Err(e) = crate::db::close_all_open_sessions(db, "server_shutdown") {
+                    tracing::warn!(error = %e, "Shutdown: failed to close open session-history rows");
+                }
+            }
+
             handle_clone.graceful_shutdown(Some(std::time::Duration::from_secs(timeout)));
         });
 
@@ -3135,6 +3167,15 @@ async fn run_server(
                 timeout_secs = shutdown_timeout_secs,
                 "Graceful shutdown initiated — waiting for sessions to drain"
             );
+
+            // Close every still-open session-history row so the DB
+            // converges with live state instead of leaving zombie rows
+            // with status='active' forever (persea#273).
+            if let Some(db) = shutdown_mgr.db() {
+                if let Err(e) = crate::db::close_all_open_sessions(db, "server_shutdown") {
+                    tracing::warn!(error = %e, "Shutdown: failed to close open session-history rows");
+                }
+            }
 
             // 2. Give active sessions time to drain
             tokio::time::sleep(std::time::Duration::from_secs(shutdown_timeout_secs)).await;

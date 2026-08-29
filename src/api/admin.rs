@@ -174,12 +174,10 @@ pub async fn health(
         }),
     );
 
-    // Count active sessions
-    let sessions = state.list_sessions().await;
-    let active_sessions = sessions
-        .iter()
-        .filter(|s| s.status == crate::session::SessionStatus::Active)
-        .count();
+    // Count live sessions from the in-memory manager (single source of
+    // truth; replaces the DB-row count that included zombie rows from
+    // crashed processes — persea#273).
+    let active_sessions = state.active_session_count().await;
 
     let status = if checks.values().all(|c| {
         matches!(
@@ -249,11 +247,10 @@ pub async fn system_status(
     .await
     .unwrap_or((0.0, 0, 0.0));
 
+    // Use the in-memory manager as the single source of truth for live
+    // session counts (persea#273).
+    let active_sessions = manager.active_session_count().await;
     let sessions = manager.list_sessions().await;
-    let active_sessions = sessions
-        .iter()
-        .filter(|s| s.status == crate::session::SessionStatus::Active)
-        .count();
     let pending_sessions = sessions
         .iter()
         .filter(|s| s.status == crate::session::SessionStatus::Pending)
