@@ -2443,10 +2443,11 @@ pub fn close_all_open_sessions(db: &Db, status: &str) -> rusqlite::Result<u64> {
     db_route!(db, close_all_open_sessions_pool, status.to_string());
     let conn = db.lock().unwrap();
     // SQLite: compute duration from stored started_at; set ended_at to now.
+    // Clamp to >= 0 via MAX() to guard against clock skew or timezone drift.
     let changed = conn.execute(
         "UPDATE session_history
          SET ended_at = datetime('now'),
-             duration_secs = CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER),
+             duration_secs = MAX(CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER), 0),
              status = ?1
          WHERE ended_at IS NULL",
         params![status],
@@ -8483,16 +8484,25 @@ async fn end_session_history_pool(
 }
 
 async fn close_all_open_sessions_pool(pool: &DbPool, status: String) -> rusqlite::Result<u64> {
-    let duration_expr = match pool {
-        DbPool::Postgres(_) => "EXTRACT(EPOCH FROM (now() - started_at::timestamp))::bigint",
-        DbPool::MySQL(_) => "TIMESTAMPDIFF(SECOND, started_at, UTC_TIMESTAMP())",
-        _ => "CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER)",
+    let (duration_expr, max_fn) = match pool {
+        DbPool::Postgres(_) => (
+            "EXTRACT(EPOCH FROM (now() - started_at::timestamp))::bigint",
+            "GREATEST",
+        ),
+        DbPool::MySQL(_) => (
+            "TIMESTAMPDIFF(SECOND, started_at, UTC_TIMESTAMP())",
+            "GREATEST",
+        ),
+        _ => (
+            "CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER)",
+            "MAX",
+        ),
     };
     let rows = pool_exec(
         pool,
         &format!(
-            "UPDATE session_history SET ended_at = {}, duration_secs = {}, status = {} WHERE ended_at IS NULL",
-            ts_now(pool), duration_expr, ph1(pool)
+            "UPDATE session_history SET ended_at = {}, duration_secs = {}({}, 0), status = {} WHERE ended_at IS NULL",
+            ts_now(pool), max_fn, duration_expr, ph1(pool)
         ),
         &[Arg::Str(status)],
     )
@@ -8546,8 +8556,8 @@ async fn close_stale_active_history_pool(
     let rows = pool_exec(
         pool,
         &format!(
-            "UPDATE session_history SET ended_at = {}, duration_secs = {}({}, {}), status = 'interrupted' WHERE status = 'active' AND ended_at IS NULL{}",
-            ts_now(pool), max_fn, duration_expr, ph2(pool), ha_subquery
+            "UPDATE session_history SET ended_at = {}, duration_secs = {}({}, 0), status = 'interrupted' WHERE status = 'active' AND ended_at IS NULL{}",
+            ts_now(pool), max_fn, duration_expr, ha_subquery
         ),
         &args,
     )
