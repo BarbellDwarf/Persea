@@ -14,6 +14,7 @@ pub mod tokens;
 pub mod users;
 pub mod vsphere;
 
+use crate::db::{self, Db};
 use crate::vault::{AddressBookEntry, FolderConfig, VaultBackend, VaultError};
 use std::sync::Arc;
 
@@ -360,6 +361,34 @@ impl VaultBackends {
 /// Shared Vault backend set, injected into handlers via axum
 /// `Extension`.
 pub type VaultState = Arc<VaultBackends>;
+
+// ── Shared address-book helpers ────────────────────────────────────────
+
+/// Check whether the DB-backed address book storage is usable.
+///
+/// The name is historical and misleading: this does not probe a cheap
+/// flag. It runs `list_ab_folders(None)` — a full folder listing against
+/// the database — and treats any error as "storage unavailable" (the
+/// address book tables do not exist yet, e.g. before first-run setup).
+/// Shared by the address book handlers and the CSV import endpoint.
+pub fn is_db_storage_available(db: &Db) -> bool {
+    db::list_ab_folders(db, None).is_ok()
+}
+
+/// Resolve the credential encryption key: the startup-resolved `StorageKey`
+/// extension (config `[storage].encryption_key`, falling back to the
+/// `PERSEA_STORAGE_KEY` env var) takes precedence; the env var is re-checked
+/// for callers that run without the extension (e.g. handler tests).
+pub fn resolve_encryption_key(storage_key: Option<&StorageKey>) -> String {
+    storage_key
+        .and_then(|k| k.0.clone())
+        .or_else(|| {
+            std::env::var("PERSEA_STORAGE_KEY")
+                .ok()
+                .filter(|k| !k.is_empty())
+        })
+        .unwrap_or_default()
+}
 
 // ── Re-exports for main.rs compatibility ──
 
