@@ -1,32 +1,23 @@
 #!/bin/sh
 # persea RPM %post scriptlet — storage key, cert bootstrap, SELinux, firewalld.
-# The storage key + cert + secure_cookies logic mirrors the root persea.spec
-# %post and install.sh / debian/postinst.
+# The storage key bootstrap is delegated to `persea ensure-storage-key`;
+# the cert + secure_cookies logic mirrors install.sh / debian/postinst.
 set -e
 
 # Ensure data directories have correct ownership
 chown -R persea:persea /opt/persea/data
 chown -R persea:persea /opt/persea/recordings
 
-# Generate a storage encryption key if the config has none: the server
-# refuses to start without one (credentials would sit in plaintext).
-# Mirrors the root persea.spec %post and the secure_cookies pattern below.
+# Ensure a storage encryption key exists in the config: delegated to the
+# persea binary (TOML-aware: an existing key at any indentation is
+# preserved byte-for-byte, a missing or empty one is generated and
+# persisted atomically). The old shell greps matched column-0 keys only,
+# missed an indented key inside [storage], and injected a second one: a
+# hard TOML parse error that crash-looped the service on first boot.
 CONFIG="/opt/persea/config.toml"
-if [ -f "$CONFIG" ] && ! grep -qE '^[[:space:]]*encryption_key[[:space:]]*=' "$CONFIG" 2>/dev/null; then
-    KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    if grep -q '^\[storage\]' "$CONFIG" 2>/dev/null; then
-        # Insert into the existing [storage] section — a second [storage]
-        # header is invalid TOML ("duplicate key") and breaks config loading.
-        sed -i "/^\[storage\]/a encryption_key = \"$KEY\"" "$CONFIG"
-    else
-        {
-            echo ""
-            echo "[storage]"
-            echo "encryption_key = \"$KEY\""
-        } >> "$CONFIG"
-    fi
-    echo "Generated storage encryption key."
-fi
+/opt/persea/bin/persea --config "$CONFIG" ensure-storage-key
+# The config now holds the encryption key: not world-readable.
+chmod 600 "$CONFIG"
 
 # Generate a self-signed TLS certificate if none exists
 if [ ! -f /opt/persea/tls/cert.pem ] || [ ! -f /opt/persea/tls/key.pem ]; then
@@ -57,27 +48,6 @@ if [ ! -f /opt/persea/tls/cert.pem ] || [ ! -f /opt/persea/tls/key.pem ]; then
     fi
 fi
 chown -R persea:persea /opt/persea/tls
-
-# Generate a storage encryption key if the config has none: the server
-# refuses to start without one (credentials would sit in plaintext).
-# TOML-aware: inserts into an existing [storage] table, appends one only
-# when absent, so admin-modified configs never get a duplicate table.
-CONFIG="/opt/persea/config.toml"
-KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-if ! grep -q '^encryption_key' "$CONFIG" 2>/dev/null; then
-    if grep -q '^\[storage\]' "$CONFIG" 2>/dev/null; then
-        sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$CONFIG"
-    else
-        {
-            echo ""
-            echo "[storage]"
-            echo "encryption_key = \"$KEY\""
-        } >> "$CONFIG"
-    fi
-    echo "Generated storage encryption key."
-fi
-# The config now holds the encryption key: not world-readable.
-chmod 600 "$CONFIG"
 
 # The SQLite DB holds session tokens and encrypted credentials: never
 # world-readable. Pre-create it with owner-only perms so the first service

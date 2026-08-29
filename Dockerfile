@@ -307,24 +307,16 @@ if [ ! -f "$CONFIG_PATH" ]; then
     cp /opt/persea/config.toml.default "$CONFIG_PATH"
 fi
 
-# Generate a storage encryption key on first run if none is set: without
-# one the server refuses to start (credentials would sit in plaintext).
-# TOML-aware: inserts into an existing [storage] table, appends one only
-# when absent, so admin-modified configs never get a duplicate table.
+# Ensure a storage encryption key exists in the config: delegated to the
+# persea binary (TOML-aware: an existing key at any indentation is
+# preserved byte-for-byte, a missing or empty one is generated and
+# persisted atomically). The old shell grep matched column-0 keys only,
+# missed an indented key inside [storage], and injected a second one: a
+# hard TOML parse error that crash-looped the container on first boot.
 # Skipped when PERSEA_STORAGE_KEY is set: the env var wins, and a
 # placeholder there must fail loudly at startup, not be papered over.
-if [ -z "${PERSEA_STORAGE_KEY:-}" ] && ! grep -q '^encryption_key' "$CONFIG_PATH" 2>/dev/null; then
-    KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    if grep -q '^\[storage\]' "$CONFIG_PATH" 2>/dev/null; then
-        sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$CONFIG_PATH"
-    else
-        {
-            echo ""
-            echo "[storage]"
-            echo "encryption_key = \"$KEY\""
-        } >> "$CONFIG_PATH"
-    fi
-    echo "Generated storage encryption key."
+if [ -z "${PERSEA_STORAGE_KEY:-}" ]; then
+    /opt/persea/bin/persea --config "$CONFIG_PATH" ensure-storage-key
 fi
 # The config now holds the encryption key: not world-readable. Best-effort:
 # some bind mounts (Windows/WSL, 9p, virtiofs) don't support chmod.
@@ -340,10 +332,12 @@ fi
 chmod 600 "$DB_PATH" 2>/dev/null || true
 
 # Create admin API key on first run. This must happen BEFORE any other
-# persea invocation: generate-cert and serve both run db migrations in
-# main(), so a database they have touched is non-empty and a size check
-# below it would skip credential creation on every boot forever (#259:
-# fresh containers shipped with zero credentials).
+# persea invocation that opens the database: generate-cert and serve both
+# run db migrations in main(), so a database they have touched is non-empty
+# and a size check below it would skip credential creation on every boot
+# forever (#259: fresh containers shipped with zero credentials).
+# ensure-storage-key above is safe: it exits before the config load and
+# never opens the database.
 ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
 if [ -s "$DB_PATH" ]; then
     echo "existing database detected; skipping admin bootstrap"

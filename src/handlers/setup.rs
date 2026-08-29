@@ -4,7 +4,7 @@ use axum::Extension;
 use serde::Deserialize;
 
 use crate::api::SiteTitle;
-use crate::config::Config;
+use crate::config::{storage_section_for, toml_escape, Config};
 use crate::db_pool::{DbKind, DbPool};
 use crate::templates::SetupTemplate;
 use crate::CspNonce;
@@ -55,24 +55,6 @@ fn detect_ips() -> Vec<String> {
     ips
 }
 
-/// Escape a value for embedding in a TOML basic string so crafted input
-/// cannot break out of the quoted literal or inject further keys.
-fn toml_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out
-}
-
 /// Human-readable label for the active backend (setup page indicator).
 fn backend_label(kind: DbKind) -> &'static str {
     match kind {
@@ -87,60 +69,6 @@ fn current_backend() -> Option<String> {
     crate::db::active_pool()
         .and_then(|p| p.kind())
         .map(|b| backend_label(b).to_string())
-}
-
-/// Generate a fresh 64-char hex storage encryption key (32 bytes).
-fn generate_storage_key() -> String {
-    use rand::RngExt;
-    let mut buf = [0u8; 32];
-    rand::rng().fill(&mut buf);
-    hex::encode(buf)
-}
-
-/// Extract the `[storage]` section (header + body) from a config file,
-/// stopping at the next `[` header. Returns None when the section is absent.
-fn extract_storage_section(text: &str) -> Option<String> {
-    let mut lines = text.lines();
-    lines.position(|l| l.trim() == "[storage]")?;
-    let mut section = String::from("[storage]\n");
-    for l in lines {
-        if l.trim_start().starts_with('[') {
-            break;
-        }
-        section.push_str(l);
-        section.push('\n');
-    }
-    Some(section)
-}
-
-/// Whether a `[storage]` section body already sets `encryption_key`.
-fn section_has_key(section: &str) -> bool {
-    section.lines().any(|l| {
-        let t = l.trim_start();
-        t.starts_with("encryption_key") && t.contains('=')
-    })
-}
-
-/// The `[storage]` section to write into the generated config: the existing
-/// section verbatim (so an admin-set encryption key survives the wizard's
-/// rewrite — overwriting the config without it would make the server refuse
-/// to start on the next boot), with a fresh key added when the section has
-/// none. A fresh section with a new key when the config has no `[storage]`
-/// at all: the generated config always carries a key.
-fn storage_section_for(config_path: &str) -> String {
-    let existing = std::fs::read_to_string(config_path).ok();
-    match existing.as_deref().and_then(extract_storage_section) {
-        Some(section) if section_has_key(&section) => section,
-        Some(section) => format!(
-            "{}\nencryption_key = \"{}\"\n",
-            section.trim_end(),
-            generate_storage_key()
-        ),
-        None => format!(
-            "[storage]\nencryption_key = \"{}\"\n",
-            generate_storage_key()
-        ),
-    }
 }
 
 /// Check if setup is needed (no users in the active store at all).
@@ -394,7 +322,8 @@ pub async fn setup_submit(
         std::env::var("RUSTGUAC_CONFIG").unwrap_or_else(|_| "/opt/persea/config.toml".to_string());
 
     // The storage section holds the credential encryption key: preserve an
-    // existing one verbatim and always emit a key (see storage_section_for).
+    // existing one verbatim and always emit a key (single implementation in
+    // crate::config, shared with ensure-storage-key and the startup guard).
     let storage_section = storage_section_for(&config_path);
 
     let config = format!(

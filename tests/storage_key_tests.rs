@@ -6,7 +6,8 @@
 //! `db::init_db(":memory:")`.
 
 use persea::config::{
-    ensure_db_storage_key, generate_encryption_key, persist_storage_encryption_key, Config,
+    ensure_db_storage_key, ensure_storage_encryption_key, generate_encryption_key,
+    persist_storage_encryption_key, read_storage_encryption_key, storage_section_for, Config,
     StorageKeyGuard,
 };
 use persea::db::{self, Db};
@@ -255,4 +256,238 @@ fn persist_creates_file_and_section_when_absent() {
     persist_storage_encryption_key(&path_str(&cfg_path), &key).unwrap();
     let file = std::fs::read_to_string(&cfg_path).unwrap();
     assert_eq!(file, format!("[storage]\nencryption_key = \"{}\"\n", key));
+}
+
+// ── persea#271: one storage-key bootstrap for Rust and shell ───────────────
+
+/// persea#271: an indented `encryption_key` inside `[storage]` is valid
+/// TOML. The old shell bootstraps grepped column 0 only, saw no key, and
+/// injected a second one — a hard TOML parse error that crash-looped the
+/// container on first boot. The single implementation must see the key and
+/// leave the file untouched byte-for-byte.
+#[test]
+fn indented_key_is_seen_and_preserved_exactly_once() {
+    without_env_key();
+    let dir = scratch_dir("indented");
+    let cfg_path = dir.join("config.toml");
+    let key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let original = format!(
+        "listen_addr = \"127.0.0.1:8089\"\n\n[storage]\n  backend = \"db\"\n  encryption_key = \"{}\"\n",
+        key
+    );
+    std::fs::write(&cfg_path, &original).unwrap();
+
+    // One run: the key is reported, the file is untouched, and exactly one
+    // encryption_key line remains.
+    let ensured = ensure_storage_encryption_key(path_str(&cfg_path)).unwrap();
+    assert_eq!(ensured, key);
+    assert_eq!(std::fs::read_to_string(&cfg_path).unwrap(), original);
+    let file = std::fs::read_to_string(&cfg_path).unwrap();
+    assert_eq!(file.matches("encryption_key").count(), 1);
+
+    // A second run is idempotent.
+    let again = ensure_storage_encryption_key(path_str(&cfg_path)).unwrap();
+    assert_eq!(again, key);
+    assert_eq!(std::fs::read_to_string(&cfg_path).unwrap(), original);
+
+    // The config loads and the key is picked up: the old crash-loop ended
+    // in a hard TOML parse error, which this must not reproduce.
+    let reloaded = Config::load(Some(path_str(&cfg_path)));
+    assert_eq!(reloaded.storage_encryption_key().as_deref(), Some(key));
+}
+
+/// A pre-existing key is preserved byte-for-byte: the file is not rewritten
+/// at all when it already holds a usable key.
+#[test]
+fn ensure_preserves_existing_key_byte_for_byte() {
+    without_env_key();
+    let dir = scratch_dir("preserve");
+    let cfg_path = dir.join("config.toml");
+    let key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    let original = format!("[storage]\nencryption_key = \"{}\"\n", key);
+    std::fs::write(&cfg_path, &original).unwrap();
+
+    let ensured = ensure_storage_encryption_key(path_str(&cfg_path)).unwrap();
+    assert_eq!(ensured, key);
+    assert_eq!(std::fs::read_to_string(&cfg_path).unwrap(), original);
+    assert_eq!(
+        read_storage_encryption_key(path_str(&cfg_path)).as_deref(),
+        Some(key)
+    );
+}
+
+/// The file ends up owner-only (0600) after a write, both when the ensure
+/// pass creates it and when it rewrites an existing world-readable one.
+#[cfg(unix)]
+#[test]
+fn written_config_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    without_env_key();
+
+    let dir = scratch_dir("mode-fresh");
+    let cfg_path = dir.join("config.toml");
+    ensure_storage_encryption_key(path_str(&cfg_path)).unwrap();
+    let mode = std::fs::metadata(&cfg_path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+
+    let dir = scratch_dir("mode-rewrite");
+    let cfg_path = dir.join("config.toml");
+    std::fs::write(&cfg_path, "listen_addr = \"127.0.0.1:8089\"\n").unwrap();
+    std::fs::set_permissions(&cfg_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    ensure_storage_encryption_key(path_str(&cfg_path)).unwrap();
+    let mode = std::fs::metadata(&cfg_path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+}
+
+/// A config left with duplicate `encryption_key` entries (the damage the
+/// old column-0 grep bootstraps caused) is repaired to exactly one line and
+/// valid TOML again.
+#[test]
+fn duplicate_keys_left_by_old_installers_are_repaired() {
+    without_env_key();
+    let dir = scratch_dir("dedupe");
+    let cfg_path = dir.join("config.toml");
+    std::fs::write(
+        &cfg_path,
+        "[storage]\nbackend = \"db\"\nencryption_key = \"a\"\n  encryption_key = \"b\"\n",
+    )
+    .unwrap();
+
+    let ensured = ensure_storage_encryption_key(path_str(&cfg_path)).unwrap();
+    let file = std::fs::read_to_string(&cfg_path).unwrap();
+    assert_eq!(file.matches("encryption_key").count(), 1);
+    assert!(file.contains(&format!("encryption_key = \"{}\"", ensured)));
+    assert!(file.contains("backend = \"db\""));
+
+    let reloaded = Config::load(Some(path_str(&cfg_path)));
+    assert_eq!(
+        reloaded.storage_encryption_key().as_deref(),
+        Some(ensured.as_str())
+    );
+}
+
+/// An empty `encryption_key` counts as no key: it is replaced with a
+/// generated one instead of duplicated.
+#[test]
+fn empty_key_is_replaced_with_a_generated_one() {
+    without_env_key();
+    let dir = scratch_dir("ensure-empty");
+    let cfg_path = dir.join("config.toml");
+    std::fs::write(
+        &cfg_path,
+        "[storage]\nbackend = \"db\"\nencryption_key = \"\"\n",
+    )
+    .unwrap();
+
+    let ensured = ensure_storage_encryption_key(path_str(&cfg_path)).unwrap();
+    assert_eq!(ensured.len(), 64);
+    let file = std::fs::read_to_string(&cfg_path).unwrap();
+    assert_eq!(file.matches("encryption_key").count(), 1);
+    let reloaded = Config::load(Some(path_str(&cfg_path)));
+    assert_eq!(
+        reloaded.storage_encryption_key().as_deref(),
+        Some(ensured.as_str())
+    );
+}
+
+/// `storage` defined as an inline table cannot be edited by the line-based
+/// writer: the ensure pass fails closed instead of appending a second
+/// definition of the table.
+#[test]
+fn inline_storage_table_fails_closed_without_corruption() {
+    without_env_key();
+    let dir = scratch_dir("inline");
+    let cfg_path = dir.join("config.toml");
+    let original = "storage = { backend = \"db\" }\nlisten_addr = \"127.0.0.1:8089\"\n";
+    std::fs::write(&cfg_path, &original).unwrap();
+
+    let err = ensure_storage_encryption_key(path_str(&cfg_path)).unwrap_err();
+    assert!(err.to_string().contains("inline"));
+    assert_eq!(std::fs::read_to_string(&cfg_path).unwrap(), original);
+}
+
+/// The setup wizard's generated section preserves an existing section
+/// verbatim — including an indented key and other storage settings — so an
+/// admin-set key survives the wizard's full-file rewrite.
+#[test]
+fn storage_section_preserves_existing_section() {
+    let dir = scratch_dir("section");
+    let cfg_path = dir.join("config.toml");
+    let key = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    std::fs::write(
+        &cfg_path,
+        format!(
+            "listen_addr = \"127.0.0.1:8089\"\n\n[storage]\n  backend = \"db\"\n  encryption_key = \"{}\"\n\n[recording]\npath = \"./recordings\"\n",
+            key
+        ),
+    )
+    .unwrap();
+
+    let section = storage_section_for(path_str(&cfg_path));
+    assert!(section.contains(&format!("encryption_key = \"{}\"", key)));
+    assert!(section.contains("backend = \"db\""));
+    assert_eq!(section.matches("encryption_key").count(), 1);
+    assert!(!section.contains("[recording]"));
+}
+
+/// Without a `[storage]` section the wizard's section is generated fresh
+/// with a new key.
+#[test]
+fn storage_section_generated_when_absent() {
+    let dir = scratch_dir("section-none");
+    let cfg_path = dir.join("config.toml");
+    std::fs::write(&cfg_path, "listen_addr = \"127.0.0.1:8089\"\n").unwrap();
+
+    let section = storage_section_for(path_str(&cfg_path));
+    assert!(section.starts_with("[storage]\n"));
+    assert_eq!(section.matches("encryption_key").count(), 1);
+    let line = section.lines().nth(1).unwrap().trim();
+    let key = line
+        .strip_prefix("encryption_key = \"")
+        .unwrap()
+        .strip_suffix('"')
+        .unwrap();
+    assert_eq!(key.len(), 64);
+}
+
+/// The `ensure-storage-key` CLI subcommand runs before any config load or
+/// database open (the Docker entrypoint calls it ahead of the first-run
+/// admin bootstrap) and never prints the key.
+#[test]
+fn cli_subcommand_ensures_key_without_touching_the_db() {
+    without_env_key();
+    let dir = scratch_dir("cli");
+    let cfg_path = dir.join("config.toml");
+    std::fs::write(&cfg_path, "listen_addr = \"127.0.0.1:8089\"\n").unwrap();
+
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_persea"))
+        .args(["--config", path_str(&cfg_path), "ensure-storage-key"])
+        .env_remove("RUSTGUAC_CONFIG")
+        .env_remove("PERSEA_STORAGE_KEY")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let key = read_storage_encryption_key(path_str(&cfg_path)).expect("subcommand persisted a key");
+    assert_eq!(key.len(), 64);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stdout.contains(&key), "key leaked to stdout");
+    assert!(!stderr.contains(&key), "key leaked to stderr");
+
+    // Idempotent re-run: preserved, file unchanged.
+    let before = std::fs::read_to_string(&cfg_path).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_persea"))
+        .args(["--config", path_str(&cfg_path), "ensure-storage-key"])
+        .env_remove("RUSTGUAC_CONFIG")
+        .env_remove("PERSEA_STORAGE_KEY")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("preserved"));
+    assert_eq!(std::fs::read_to_string(&cfg_path).unwrap(), before);
 }
