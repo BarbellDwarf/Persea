@@ -1134,6 +1134,124 @@ pub struct QuickConnectQuery {
     pub entry: Option<String>,
 }
 
+// ── Shared connect-path steps ──────────────────────────────────────────
+//
+// `ab_connect_entry` (the JSON connect endpoint) and `quick_connect`
+// (the GET/POST /api/connect redirector) run the same checks around
+// their request-shaped differences. These helpers are the shared
+// steps; each handler keeps its own error rendering and its own
+// identity gate (quick connect redirects unauthenticated callers to
+// login, the connect endpoint 403s), so wire behavior stays put.
+
+/// Denial text for [`rbac_connect_allowed`], identical in both connect
+/// paths' responses.
+const RBAC_CONNECT_DENIED: &str = "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.";
+
+/// RBAC per-connection Connect grant check, shared by both connect
+/// paths. True when the caller may proceed: the admin role (the check
+/// is skipped, as before), no admin DB configured (also skipped, as
+/// before), or a granted `Connect` object permission on
+/// `{scope}/{folder}/{entry}`. False only on a definite deny; callers
+/// render the denial with their own error surface. The rusqlite lookup
+/// runs in `spawn_blocking`.
+pub(crate) async fn rbac_connect_allowed(
+    manager: &AppState,
+    id: &AuthIdentity,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+) -> bool {
+    if id.has_role("admin") {
+        return true;
+    }
+    let Some(db_ref) = manager.db() else {
+        return true;
+    };
+    let db_rbac = db_ref.clone();
+    let email = id.display_name().to_string();
+    let conn_id = format!("{}/{}/{}", scope, folder, entry);
+    tokio::task::spawn_blocking(move || {
+        // Look up user by email to get numeric ID
+        let user = db::get_user_by_email(&db_rbac, &email).ok();
+        match user {
+            Some(u) => rbac::check_connection_permission(
+                &db_rbac,
+                u.id,
+                &conn_id,
+                rbac::ObjectPermission::Connect,
+            )
+            .unwrap_or(false),
+            // Unknown user — deny
+            None => false,
+        }
+    })
+    .await
+    .unwrap_or(false)
+}
+
+/// Failure of the shared credential resolution
+/// ([`load_entry_credentials`]). The variants stay typed because the
+/// two connect paths render them differently:
+///
+/// - `ab_connect_entry`: `Db`/`DbFallback` propagate the `AppError`
+///   as-is, `Vault` wraps into `AppError::Vault`.
+/// - `quick_connect`: `Db` re-renders the `AppError`, `DbFallback`
+///   becomes a 500 with the "Failed to read stored credentials" text,
+///   `Vault` becomes a 502 with the "Failed to read address book
+///   entry" text.
+pub(crate) enum CredLoadError {
+    /// Decryption of the stored credential rows failed on the plain DB
+    /// path.
+    Db(AppError),
+    /// Decryption of the stored credential rows failed after the vault
+    /// copy was missing (the DB-fallback path).
+    DbFallback(AppError),
+    /// The Vault backend itself failed.
+    Vault(VaultError),
+}
+
+/// Load an entry's credential fields into `ab_entry` — the shared
+/// resolution both connect paths use. When the Vault backend serves the
+/// scope, the vault copy supplies the credential fields (its metadata
+/// is ignored), falling back to the encrypted DB rows when no vault copy
+/// exists yet (db→vault switch, or the copy was never written; the DB
+/// entry itself was already confirmed to exist). Otherwise the DB rows
+/// are decrypted directly.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn load_entry_credentials(
+    database: &Db,
+    scope: &str,
+    folder: &str,
+    entry: &str,
+    entry_id: i64,
+    vault: &VaultState,
+    backend: Option<&StorageBackend>,
+    storage_key: Option<&StorageKey>,
+    ab_entry: &mut AddressBookEntry,
+) -> Result<(), CredLoadError> {
+    if vault_credentials_enabled(backend, vault).await {
+        match vault.get_entry(scope, folder, entry).await {
+            Ok(vault_entry) => {
+                apply_vault_credentials(&vault_entry, ab_entry);
+                Ok(())
+            }
+            // The DB entry exists but has no vault copy yet (e.g. the
+            // backend was switched to vault after DB-mode use, or the copy
+            // was never written). Fall back to the DB credential rows so the
+            // entry stays reachable; a genuinely missing entry was caught by
+            // the DB lookup above.
+            Err(VaultError::NotFound) => {
+                apply_db_credentials(database, entry_id, storage_key, ab_entry)
+                    .map_err(CredLoadError::DbFallback)
+            }
+            Err(e) => Err(CredLoadError::Vault(e)),
+        }
+    } else {
+        // Credentials live in the DB: decrypt the stored credential rows.
+        apply_db_credentials(database, entry_id, storage_key, ab_entry).map_err(CredLoadError::Db)
+    }
+}
+
 fn default_scope() -> String {
     "shared".into()
 }
@@ -1885,34 +2003,8 @@ pub async fn ab_connect_entry(
         check_folder_access_db(&database, &scope, &folder, &id)?;
 
         // RBAC connection permission check (skip for admin role)
-        if !id.has_role("admin") {
-            if let Some(db_ref) = manager.db() {
-                let db_rbac = db_ref.clone();
-                let email = id.display_name().to_string();
-                let conn_id = format!("{}/{}/{}", scope, folder, entry);
-                let has_perm = tokio::task::spawn_blocking(move || {
-                    // Look up user by email to get numeric ID
-                    let user = db::get_user_by_email(&db_rbac, &email).ok();
-                    match user {
-                        Some(u) => rbac::check_connection_permission(
-                            &db_rbac,
-                            u.id,
-                            &conn_id,
-                            rbac::ObjectPermission::Connect,
-                        )
-                        .unwrap_or(false),
-                        // Unknown user — deny
-                        None => false,
-                    }
-                })
-                .await
-                .unwrap_or(false);
-                if !has_perm {
-                    return Err(AppError::Forbidden(
-                        "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.".into(),
-                    ));
-                }
-            }
+        if !rbac_connect_allowed(&manager, &id, &scope, &folder, &entry).await {
+            return Err(AppError::Forbidden(RBAC_CONNECT_DENIED.into()));
         }
 
         let folder_rec = db::get_ab_folder(&database, &scope, &folder)
@@ -1928,33 +2020,22 @@ pub async fn ab_connect_entry(
     // Metadata always comes from the DB.
     let mut ab_entry = ab_entry_from_db(&entry_rec);
 
-    if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
-        // Credentials live in Vault: read only the credential fields back
-        // from the vault copy; its metadata is ignored.
-        match vault.get_entry(&scope, &folder, &entry).await {
-            Ok(vault_entry) => apply_vault_credentials(&vault_entry, &mut ab_entry),
-            // The DB entry exists but has no vault copy yet (e.g. the
-            // backend was switched to vault after DB-mode use, or the copy
-            // was never written). Fall back to the DB credential rows so the
-            // entry stays reachable; a genuinely missing entry was caught by
-            // the DB lookup above.
-            Err(VaultError::NotFound) => apply_db_credentials(
-                &database,
-                entry_rec.id,
-                storage_key.as_ref().map(|Extension(k)| k),
-                &mut ab_entry,
-            )?,
-            Err(e) => return Err(AppError::Vault(e.to_string())),
-        }
-    } else {
-        // Credentials live in the DB: decrypt the stored credential rows.
-        apply_db_credentials(
-            &database,
-            entry_rec.id,
-            storage_key.as_ref().map(|Extension(k)| k),
-            &mut ab_entry,
-        )?;
-    }
+    load_entry_credentials(
+        &database,
+        &scope,
+        &folder,
+        &entry,
+        entry_rec.id,
+        &vault,
+        backend.as_ref().map(|Extension(b)| b),
+        storage_key.as_ref().map(|Extension(k)| k),
+        &mut ab_entry,
+    )
+    .await
+    .map_err(|e| match e {
+        CredLoadError::Db(e) | CredLoadError::DbFallback(e) => e,
+        CredLoadError::Vault(e) => AppError::Vault(e.to_string()),
+    })?;
 
     // Per-user preset fallback: entries without their own password use the
     // user's preset credentials (set on the profile page). This covers
@@ -3243,35 +3324,8 @@ pub async fn quick_connect(
             }
 
             // RBAC connection permission check (skip for admin role)
-            if !id.has_role("admin") {
-                if let Some(db_ref) = manager.db() {
-                    let db_rbac = db_ref.clone();
-                    let email = id.display_name().to_string();
-                    let conn_id = format!("{}/{}/{}", scope, folder, entry);
-                    let has_perm = tokio::task::spawn_blocking(move || {
-                        // Look up user by email to get numeric ID
-                        let user = db::get_user_by_email(&db_rbac, &email).ok();
-                        match user {
-                            Some(u) => rbac::check_connection_permission(
-                                &db_rbac,
-                                u.id,
-                                &conn_id,
-                                rbac::ObjectPermission::Connect,
-                            )
-                            .unwrap_or(false),
-                            // Unknown user — deny
-                            None => false,
-                        }
-                    })
-                    .await
-                    .unwrap_or(false);
-                    if !has_perm {
-                        return quick_connect_error(
-                            StatusCode::FORBIDDEN,
-                            "No permission to connect to this entry. Ask an administrator to grant your group Connect access to it.",
-                        );
-                    }
-                }
+            if !rbac_connect_allowed(&manager, &id, scope, folder, entry).await {
+                return quick_connect_error(StatusCode::FORBIDDEN, RBAC_CONNECT_DENIED);
             }
         }
 
@@ -3304,44 +3358,30 @@ pub async fn quick_connect(
         }
         let mut ab_entry = ab_entry_from_db(&entry_rec);
 
-        if vault_credentials_enabled(backend.as_ref().map(|Extension(b)| b), &vault).await {
-            // Credentials live in Vault: read only the credential fields
-            // back from the vault copy; its metadata is ignored.
-            match vault.get_entry(scope, folder, entry).await {
-                Ok(vault_entry) => apply_vault_credentials(&vault_entry, &mut ab_entry),
-                // No vault copy (db→vault switch, or the copy was never
-                // written): fall back to the DB credential rows, exactly
-                // like ab_connect_entry, so the entry stays reachable.
-                Err(VaultError::NotFound) => {
-                    if let Err(e) = apply_db_credentials(
-                        &database,
-                        entry_rec.id,
-                        storage_key.as_ref().map(|Extension(k)| k),
-                        &mut ab_entry,
-                    ) {
-                        return quick_connect_error(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            &format!("Failed to read stored credentials: {}", e),
-                        );
-                    }
-                }
-                Err(e) => {
-                    return quick_connect_error(
-                        StatusCode::BAD_GATEWAY,
-                        &format!("Failed to read address book entry: {}", e),
-                    );
-                }
-            }
-        } else {
-            // Credentials live in the DB: decrypt the stored rows.
-            if let Err(e) = apply_db_credentials(
-                &database,
-                entry_rec.id,
-                storage_key.as_ref().map(|Extension(k)| k),
-                &mut ab_entry,
-            ) {
-                return e.into_response();
-            }
+        if let Err(e) = load_entry_credentials(
+            &database,
+            scope,
+            folder,
+            entry,
+            entry_rec.id,
+            &vault,
+            backend.as_ref().map(|Extension(b)| b),
+            storage_key.as_ref().map(|Extension(k)| k),
+            &mut ab_entry,
+        )
+        .await
+        {
+            return match e {
+                CredLoadError::Db(e) => e.into_response(),
+                CredLoadError::DbFallback(e) => quick_connect_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Failed to read stored credentials: {}", e),
+                ),
+                CredLoadError::Vault(e) => quick_connect_error(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("Failed to read address book entry: {}", e),
+                ),
+            };
         }
 
         // Session credential forwarding (persea#245): with
