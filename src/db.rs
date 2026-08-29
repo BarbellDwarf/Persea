@@ -11674,6 +11674,7 @@ pub(crate) async fn audit_events_pool(
                     session_id: row.get(7),
                     prev_hash: row.get(8),
                     event_hash: row.get(9),
+                    username: None,
                 },
             )
         })
@@ -11754,6 +11755,7 @@ macro_rules! audit_event_row {
             session_id: $row.get(7),
             prev_hash: $row.get(8),
             event_hash: $row.get(9),
+            username: None,
         }
     }};
 }
@@ -11781,7 +11783,70 @@ pub(crate) async fn audit_list_events_pool(
         DbPool::None => return Err(no_pool_err()),
     }
     .map_err(map_sqlx_err)?;
-    Ok(rows.iter().map(|row| audit_event_row!(row)).collect())
+    let mut events: Vec<AuditEvent> = rows.iter().map(|row| audit_event_row!(row)).collect();
+
+    // Resolve usernames: fetch user names for numeric user_ids in batch.
+    let numeric_ids: Vec<i64> = events
+        .iter()
+        .filter_map(|e| e.user_id.as_ref()?.parse::<i64>().ok())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let user_map = audit_resolve_usernames_pool(pool, &numeric_ids)
+        .await
+        .unwrap_or_default();
+    for event in &mut events {
+        if let Some(ref uid) = event.user_id {
+            event.username = if let Ok(id) = uid.parse::<i64>() {
+                Some(
+                    user_map
+                        .get(&id)
+                        .cloned()
+                        .unwrap_or_else(|| format!("deleted user #{id}")),
+                )
+            } else {
+                Some(uid.clone())
+            };
+        }
+    }
+    Ok(events)
+}
+
+/// Fetch user names for a batch of numeric user IDs.
+/// Returns a map of user_id -> name for all found users.
+pub(crate) async fn audit_resolve_usernames_pool(
+    pool: &DbPool,
+    user_ids: &[i64],
+) -> rusqlite::Result<std::collections::HashMap<i64, String>> {
+    if user_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let is_pg = matches!(pool, DbPool::Postgres(_));
+    let placeholders: Vec<String> = user_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| placeholder(is_pg, i + 1))
+        .collect();
+    let sql = format!(
+        "SELECT id, name FROM users WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let args: Vec<Arg> = user_ids.iter().map(|id| Arg::I64(*id)).collect();
+    let rows = match pool {
+        DbPool::Postgres(p) => pg_fetch(p, &sql, &args).await,
+        DbPool::MySQL(p) => mysql_fetch(p, &sql, &args).await,
+        DbPool::SQLite(p) => sqlite_fetch(p, &sql, &args).await,
+        DbPool::None => return Err(no_pool_err()),
+    }
+    .map_err(map_sqlx_err)?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let id: i64 = row.get(0);
+            let name: String = row.get(1);
+            (id, name)
+        })
+        .collect())
 }
 
 pub(crate) async fn audit_count_events_pool(
