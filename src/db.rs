@@ -2430,6 +2430,53 @@ pub fn end_session_history(
     Ok(())
 }
 
+/// Close every still-open session-history row (ended_at IS NULL) by
+/// marking it with a terminal status and a real duration. Called during
+/// graceful shutdown after `cancel_all_sessions()` so the DB converges
+/// with reality instead of leaving zombie rows with `status='active'`
+/// forever (persea#273).
+///
+/// `status` is the terminal status to write (e.g. `"server_shutdown"`);
+/// the duration is computed as `now - started_at` so the row carries
+/// meaningful stats even though it was interrupted.
+pub fn close_all_open_sessions(db: &Db, status: &str) -> rusqlite::Result<u64> {
+    db_route!(db, close_all_open_sessions_pool, status.to_string());
+    let conn = db.lock().unwrap();
+    // SQLite: compute duration from stored started_at; set ended_at to now.
+    let changed = conn.execute(
+        "UPDATE session_history
+         SET ended_at = datetime('now'),
+             duration_secs = CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER),
+             status = ?1
+         WHERE ended_at IS NULL",
+        params![status],
+    )?;
+    Ok(changed as u64)
+}
+
+/// Startup sweep: mark every row whose `status` is still `'active'` and
+/// `ended_at IS NULL` as interrupted. These are rows left behind by a
+/// crash or unclean restart (the process died before `end_session_history`
+/// could run). The duration is computed as `now - started_at` so it stays
+/// non-negative and meaningful.
+///
+/// Called once at startup, before the reapers spawn (persea#273).
+pub fn close_stale_active_history(db: &Db) -> rusqlite::Result<u64> {
+    db_route!(db, close_stale_active_history_pool);
+    let conn = db.lock().unwrap();
+    // Use started_at so duration_secs stays non-negative even for rows
+    // that predate a clock jump.
+    let changed = conn.execute(
+        "UPDATE session_history
+         SET ended_at = datetime('now'),
+             duration_secs = CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER),
+             status = 'interrupted'
+         WHERE status = 'active' AND ended_at IS NULL",
+        [],
+    )?;
+    Ok(changed as u64)
+}
+
 /// Attach the connection reason to a session-history row (V09). Called
 /// right after `insert_session_history`; the guarded WHERE keeps the
 /// first reason written (never overwrites a user-supplied one).
@@ -5355,6 +5402,141 @@ mod tests {
         let pending2 = get_pending_mfa(&db, &plain2).unwrap().unwrap();
         assert!(!pending2.desktop);
     }
+
+    // ── close_stale_active_history / close_all_open_sessions (persea#273) ──
+
+    #[test]
+    fn close_stale_active_history_marks_zombies_as_interrupted() {
+        let db = test_db();
+        // Seed a row whose status defaults to 'active' with ended_at NULL
+        // (the zombie pattern: process crashed before end_session_history ran).
+        insert_session_history(
+            &db,
+            "zombie-1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "alice",
+            "Alice",
+            None,
+            None,
+            None,
+            Some("10.9.8.7"),
+        )
+        .unwrap();
+        // A second session that was properly ended: must not be touched.
+        insert_session_history(
+            &db,
+            "done-1",
+            "rdp",
+            "10.0.0.2",
+            Some(3389),
+            "bob",
+            "Bob",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        end_session_history(&db, "done-1", "completed", 120, None).unwrap();
+
+        let closed = close_stale_active_history(&db).unwrap();
+        assert_eq!(closed, 1, "only the zombie row should be closed");
+
+        let conn = db.lock().unwrap();
+        // The zombie row now has a terminal status and a non-NULL ended_at.
+        let (status, ended): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, ended_at FROM session_history WHERE session_id = 'zombie-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "interrupted");
+        assert!(ended.is_some(), "ended_at must be set after the sweep");
+
+        // The properly ended row is unchanged.
+        let status2: String = conn
+            .query_row(
+                "SELECT status FROM session_history WHERE session_id = 'done-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(status2, "completed");
+    }
+
+    #[test]
+    fn close_all_open_sessions_sets_terminal_status() {
+        let db = test_db();
+        // Seed two open sessions.
+        insert_session_history(
+            &db,
+            "open-1",
+            "ssh",
+            "10.0.0.1",
+            Some(22),
+            "alice",
+            "Alice",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        insert_session_history(
+            &db,
+            "open-2",
+            "vnc",
+            "10.0.0.2",
+            Some(5900),
+            "bob",
+            "Bob",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        // One is already closed: must not be touched.
+        insert_session_history(
+            &db,
+            "already-closed",
+            "rdp",
+            "10.0.0.3",
+            Some(3389),
+            "carol",
+            "Carol",
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        end_session_history(&db, "already-closed", "completed", 60, None).unwrap();
+
+        let closed = close_all_open_sessions(&db, "server_shutdown").unwrap();
+        assert_eq!(closed, 2, "both open rows should be closed");
+
+        let conn = db.lock().unwrap();
+        let rows: Vec<(String, String, Option<String>)> = conn
+            .prepare("SELECT session_id, status, ended_at FROM session_history ORDER BY session_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        for (sid, status, ended) in &rows {
+            if sid == "already-closed" {
+                assert_eq!(status, "completed");
+            } else {
+                assert_eq!(status, "server_shutdown");
+                assert!(ended.is_some(), "{sid} must have ended_at set");
+            }
+        }
+    }
 }
 
 // ── Local groups + provider-group mappings ────────────────────────────
@@ -8170,6 +8352,44 @@ async fn end_session_history_pool(
     .await
     .map_err(map_sqlx_err)?;
     Ok(())
+}
+
+async fn close_all_open_sessions_pool(pool: &DbPool, status: String) -> rusqlite::Result<u64> {
+    let duration_expr = match pool {
+        DbPool::Postgres(_) => "EXTRACT(EPOCH FROM (now() - started_at::timestamp))::bigint",
+        DbPool::MySQL(_) => "TIMESTAMPDIFF(SECOND, started_at, UTC_TIMESTAMP())",
+        _ => "CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER)",
+    };
+    let rows = pool_exec(
+        pool,
+        &format!(
+            "UPDATE session_history SET ended_at = {}, duration_secs = {}, status = {} WHERE ended_at IS NULL",
+            ts_now(pool), duration_expr, ph1(pool)
+        ),
+        &[Arg::Str(status)],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(rows)
+}
+
+async fn close_stale_active_history_pool(pool: &DbPool) -> rusqlite::Result<u64> {
+    let duration_expr = match pool {
+        DbPool::Postgres(_) => "EXTRACT(EPOCH FROM (now() - started_at::timestamp))::bigint",
+        DbPool::MySQL(_) => "TIMESTAMPDIFF(SECOND, started_at, UTC_TIMESTAMP())",
+        _ => "CAST((julianday(datetime('now')) - julianday(started_at)) * 86400 AS INTEGER)",
+    };
+    let rows = pool_exec(
+        pool,
+        &format!(
+            "UPDATE session_history SET ended_at = {}, duration_secs = {}, status = 'interrupted' WHERE status = 'active' AND ended_at IS NULL",
+            ts_now(pool), duration_expr
+        ),
+        &[],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    Ok(rows)
 }
 
 async fn update_session_history_reason_pool(
