@@ -5,6 +5,46 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-08-29
+
+### Security
+
+- Force-logout now revokes all of a user's API tokens (scoped desktop
+  tokens included) alongside their sessions, with a dedicated audit
+  event — closing the "logged out but token still works" gap on the
+  admin force-logout path (#270)
+
+### Fixed
+
+- Storage-key bootstrap consolidated into one implementation with a new
+  `persea ensure-storage-key` CLI subcommand; fixes a first-boot crash
+  loop when config files carry an indented `encryption_key` (the old
+  shell installers injected a duplicate key) — install.sh, the Docker
+  entrypoint, install-release.sh, and both RPM/deb postinsts now route
+  through it (#271)
+- Spice, Proxmox, and VDI address-book entries could not be connected
+  from the quick-connect link surface (HTTP 400 "Unknown session type");
+  both connect paths now build identical session parameters for all
+  entry types (#280)
+- Active-session counts no longer contradict each other between the
+  Reports, Connections, and Sessions pages; stale "active" rows left
+  behind by restarts or crashes are closed on shutdown and swept at
+  startup (#273)
+
+### Changed
+
+- Audit log now shows usernames instead of numeric IDs, readable
+  timestamps, and structured detail rows in the admin Audit Log; CSV
+  export gains a username column (#272)
+- API-key request path no longer reads the system_settings table twice
+  per request (in-memory flag cache; per-instance view — see known
+  limitation) (#276)
+
+### Known limitations
+
+- In multi-instance (HA) deployments, settings-flag changes propagate to
+  other instances on their restart rather than immediately (#289)
+
 <!--
 Release checklist (delete this comment before tagging v1.0.1):
 - [ ] `cargo test` + `cargo fmt --check` green on the final commit
