@@ -5660,6 +5660,11 @@ mod tests {
             .unwrap();
         assert_eq!(status2, "interrupted");
 
+        // Release the connection lock before re-entering the sweep: the
+        // mutex is not reentrant, and holding `conn` across the second
+        // close_stale_active_history call deadlocks the test thread.
+        drop(conn);
+
         // Idempotency: running the sweep a second time touches nothing
         // (the orphan's ended_at is now set, so the WHERE guard excludes it;
         // remote-live is still skipped by the HA NOT EXISTS).
