@@ -603,13 +603,14 @@ pub async fn put_settings(
     }
 
     let db_clone = database.clone();
+    let entries_clone = entries.clone();
     tokio::task::spawn_blocking(move || {
         if crate::db::pool_active() {
-            return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| crate::db::settings_put_pool(pool, entries));
+            return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| crate::db::settings_put_pool(pool, entries_clone));
         }
         let conn = db_clone.lock().unwrap();
         conn.execute_batch(CREATE_TABLE_SQL)?;
-        for (key, value) in &entries {
+        for (key, value) in &entries_clone {
             conn.execute(
                 "INSERT INTO system_settings (key, value, updated_at)
                  VALUES (?1, ?2, CURRENT_TIMESTAMP)
@@ -621,6 +622,13 @@ pub async fn put_settings(
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;
+
+    // Invalidate the cached settings flags for any flag-shaped keys that
+    // were just written, so subsequent API-key requests see the new values
+    // without a restart (persea#276).
+    for (key, value) in &entries {
+        crate::auth::update_settings_cache(key, value);
+    }
 
     let db_clone = database.clone();
     let stored = tokio::task::spawn_blocking(move || read_all_settings(&db_clone))
