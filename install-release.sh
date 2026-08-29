@@ -96,25 +96,14 @@ else
     info "Config already exists at $PREFIX/config.toml (not overwritten)"
 fi
 
-# Generate a storage encryption key if the config has none: the server
-# refuses to start without one (credentials would sit in plaintext).
-# TOML-aware: inserts into an existing [storage] table, appends one only
-# when absent, so admin-modified configs never get a duplicate table.
-# Mirrors debian/postinst and the Docker entrypoint; respects an
-# admin-set key.
-if ! grep -q '^encryption_key' "$PREFIX/config.toml" 2>/dev/null; then
-    KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    if grep -q '^\[storage\]' "$PREFIX/config.toml" 2>/dev/null; then
-        sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$PREFIX/config.toml"
-    else
-        {
-            echo ""
-            echo "[storage]"
-            echo "encryption_key = \"$KEY\""
-        } >> "$PREFIX/config.toml"
-    fi
-    info "Generated storage encryption key."
-fi
+# Ensure a storage encryption key exists: delegated to the persea
+# binary (TOML-aware: an existing key at any indentation is preserved
+# byte-for-byte, a missing or empty one is generated and persisted
+# atomically). The old shell grep matched column-0 keys only, missed an
+# indented key inside [storage], and injected a second one: a hard TOML
+# parse error that crash-looped the service on first boot.
+"$PREFIX/bin/persea" --config "$PREFIX/config.toml" ensure-storage-key
+info "Storage encryption key ensured."
 # The config now holds the encryption key: not world-readable.
 chmod 600 "$PREFIX/config.toml"
 
