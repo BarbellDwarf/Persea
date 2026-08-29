@@ -8550,8 +8550,8 @@ async fn close_stale_active_history_pool(
         (None, _) => String::new(),
     };
     let mut args = Vec::new();
-    if owner_instance.is_some() {
-        args.push(Arg::Str(owner_instance.unwrap()));
+    if let Some(ref owner) = owner_instance {
+        args.push(Arg::Str(owner.clone()));
     }
     let rows = pool_exec(
         pool,
