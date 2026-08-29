@@ -99,25 +99,14 @@ fi
 
 %post
 chown -R persea:persea %{_prefix}/data %{_prefix}/recordings
-# Generate a storage encryption key if the config has none: the server
-# refuses to start without one (credentials would sit in plaintext).
-# TOML-aware: inserts into an existing [storage] table, appends one only
-# when absent, so admin-modified configs never get a duplicate table.
-# Mirrors debian/postinst and rpm/scripts/post.sh; respects an admin-set key.
+# Ensure a storage encryption key exists in the config: delegated to the
+# persea binary (TOML-aware: an existing key at any indentation is
+# preserved byte-for-byte, a missing or empty one is generated and
+# persisted atomically). The old shell grep matched column-0 keys only,
+# missed an indented key inside [storage], and injected a second one: a
+# hard TOML parse error that crash-looped the service on first boot.
 CONFIG="%{_prefix}/config.toml"
-KEY=$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-if ! grep -q '^encryption_key' "$CONFIG" 2>/dev/null; then
-    if grep -q '^\[storage\]' "$CONFIG" 2>/dev/null; then
-        sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$CONFIG"
-    else
-        {
-            echo ""
-            echo "[storage]"
-            echo "encryption_key = \"$KEY\""
-        } >> "$CONFIG"
-    fi
-    echo "Generated storage encryption key."
-fi
+%{_prefix}/bin/persea --config "$CONFIG" ensure-storage-key
 # The config now holds the encryption key: not world-readable.
 chmod 600 "$CONFIG"
 # The SQLite DB holds session tokens and encrypted credentials: never

@@ -314,6 +314,13 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Ensure the config file holds a `[storage].encryption_key`: an
+    /// existing key is preserved byte-for-byte, a missing or empty one is
+    /// generated and persisted atomically (file rewritten owner-only on
+    /// unix). Used by install.sh, the Docker entrypoint and the RPM/deb
+    /// postinsts instead of shell key injection. The key is never printed.
+    EnsureStorageKey,
 }
 
 #[tokio::main]
@@ -328,6 +335,22 @@ async fn main() {
 
     if cli.init {
         cmd_init();
+        return;
+    }
+
+    // ensure-storage-key must dispatch BEFORE the config load: it exists to
+    // complete or repair the config (including one a previous broken
+    // injector left with a duplicate key), and it must not open the
+    // database — the Docker entrypoint calls it ahead of the first-run
+    // admin bootstrap, which depends on the database still being untouched.
+    if let Some(Command::EnsureStorageKey) = cli.command {
+        let path = cli
+            .config
+            .clone()
+            .or_else(|| std::env::var("RUSTGUAC_CONFIG").ok())
+            .or_else(crate::config::windows_default_config_path)
+            .unwrap_or_else(|| "/opt/persea/config.toml".to_string());
+        cmd_ensure_storage_key(&path);
         return;
     }
 
@@ -672,6 +695,12 @@ async fn main() {
             migrate::cmd_vault_migrate(&config, &scope, &from, &to, users, overwrite, dry_run)
                 .await;
         }
+        // Dispatched before the config load (see the check above the match):
+        // it completes or repairs the config file and must not touch the
+        // database, so it can run ahead of the first-run admin bootstrap.
+        Some(Command::EnsureStorageKey) => {
+            unreachable!("ensure-storage-key returns before the config load")
+        }
     }
 }
 
@@ -893,6 +922,29 @@ fn init_data_root() -> std::path::PathBuf {
     #[cfg(not(windows))]
     {
         std::path::PathBuf::from("/opt/persea")
+    }
+}
+
+/// `ensure-storage-key`: make sure the config file holds a storage
+/// encryption key, then exit. The key itself is never printed — only
+/// whether it was already set or freshly generated.
+fn cmd_ensure_storage_key(path: &str) {
+    let had_key = crate::config::read_storage_encryption_key(path).is_some();
+    match crate::config::ensure_storage_encryption_key(path) {
+        Ok(_) => {
+            if had_key {
+                println!("storage encryption key already set in {} — preserved", path);
+            } else {
+                println!("generated storage encryption key in {}", path);
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "Error: could not ensure a storage encryption key in {}: {}",
+                path, e
+            );
+            std::process::exit(1);
+        }
     }
 }
 
