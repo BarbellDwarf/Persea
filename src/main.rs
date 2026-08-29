@@ -431,6 +431,11 @@ async fn main() {
     // live in the app database; config-file providers still work alongside.
     crate::providers_db::migrate(&database).expect("Failed to migrate auth_providers table");
 
+    // Seed the settings flags cache so the auth middleware reads two
+    // booleans from memory instead of two spawn_blocking DB queries on
+    // every API-key request (persea#276).
+    auth::init_settings_cache(&database);
+
     // Resolve log format: CLI flag wins, then RUST_LOG_FORMAT=json env var.
     let log_format = match cli.log_format {
         LogFormat::Json => LogFormat::Json,

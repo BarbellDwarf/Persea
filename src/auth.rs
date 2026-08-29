@@ -11,9 +11,91 @@ use axum::{
 use ipnetwork::IpNetwork;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Instant;
 use tokio::sync::Mutex;
+
+// ── Cached system_settings flags (persea#276) ────────────────────────
+//
+// Two boolean flags are read on every API-key-authenticated request but
+// change rarely (admin toggles). Holding them in a process-wide cache
+// eliminates two `spawn_blocking` DB reads per request on the hottest
+// path. Coherence is per-instance: multi-instance deployments each
+// cache their own view, matching today's behaviour.
+//
+// Invalidation: the PUT /api/system/settings handler calls
+// `update_settings_cache(key, value)` after a successful commit so
+// toggles take effect without restart.
+
+/// Cached boolean flags from `system_settings`.
+#[derive(Clone, Copy, Debug)]
+pub struct SettingsFlags {
+    /// Whether API-key authentication is permitted.
+    pub api_keys_enabled: bool,
+    /// Whether compliance mode (persea#228) is active.
+    pub compliance_mode_enabled: bool,
+}
+
+/// Process-wide cache. Initialized once at startup via
+/// [`init_settings_cache`]; invalidated per-key by the admin PUT handler
+/// via [`update_settings_cache`].
+static SETTINGS_CACHE: OnceLock<RwLock<SettingsFlags>> = OnceLock::new();
+
+/// Load both flags from the database in a single blocking call. Returns
+/// the defaults when the table is missing or unreadable (matches the
+/// legacy per-read fallbacks).
+fn load_settings_flags_from_db(db: &Db) -> SettingsFlags {
+    SettingsFlags {
+        api_keys_enabled: crate::settings_merge::read_toggle(db, "enable_api_keys", true),
+        compliance_mode_enabled: crate::settings_merge::read_toggle(db, "compliance_mode", false),
+    }
+}
+
+/// Seed the cache at startup. Must be called once, after the DB pool is
+/// ready and before the router serves requests.
+pub fn init_settings_cache(db: &Db) {
+    let flags = load_settings_flags_from_db(db);
+    let _ = SETTINGS_CACHE.set(RwLock::new(flags));
+}
+
+/// Refresh the cached value for one flag key. Called by the admin
+/// settings PUT handler after a successful DB commit. No-op when the
+/// cache has not been initialized (defensive; should not happen in
+/// production).
+pub fn update_settings_cache(key: &str, value: &str) {
+    let Some(rw) = SETTINGS_CACHE.get() else {
+        return;
+    };
+    if let Ok(mut flags) = rw.write() {
+        match key {
+            "enable_api_keys" => flags.api_keys_enabled = value == "true",
+            "compliance_mode" => flags.compliance_mode_enabled = value == "true",
+            _ => {}
+        }
+    }
+}
+
+/// Read the cached `enable_api_keys` flag. Falls back to a direct DB
+/// read when the cache has not been initialized.
+pub async fn cached_api_keys_enabled(db: &Db) -> bool {
+    if let Some(rw) = SETTINGS_CACHE.get() {
+        if let Ok(flags) = rw.read() {
+            return flags.api_keys_enabled;
+        }
+    }
+    api_keys_enabled(db).await
+}
+
+/// Read the cached `compliance_mode` flag. Falls back to a direct DB
+/// read when the cache has not been initialized.
+pub async fn cached_compliance_mode_enabled(db: &Db) -> bool {
+    if let Some(rw) = SETTINGS_CACHE.get() {
+        if let Ok(flags) = rw.read() {
+            return flags.compliance_mode_enabled;
+        }
+    }
+    compliance_mode_enabled(db).await
+}
 
 /// Single-use WebSocket ticket. Created via POST /api/ws-ticket, consumed on
 /// WebSocket connect. Prevents API keys from appearing in WebSocket URLs.
@@ -403,7 +485,7 @@ pub async fn require_auth(
         // The admin can lock down API-key auth entirely. Reject
         // outright when disabled — a request presenting only an API key has
         // no other way to authenticate (admin keys and user tokens alike).
-        if !api_keys_enabled(&db).await {
+        if !cached_api_keys_enabled(&db).await {
             tracing::warn!(client_ip = %ip, "API key authentication rejected: enable_api_keys is disabled by an administrator");
             return crate::error::AppError::error_response(
                 StatusCode::FORBIDDEN,
@@ -415,7 +497,7 @@ pub async fn require_auth(
         // the direct API surface. Admin API keys and self-service user
         // tokens stop authenticating; interactive sessions and scoped
         // tokens (minted by the desktop login/pairing flow) keep working.
-        let compliance = compliance_mode_enabled(&db).await;
+        let compliance = cached_compliance_mode_enabled(&db).await;
 
         let validate_ip = Some(ip);
         let db_clone = db.clone();
@@ -597,14 +679,14 @@ pub async fn optional_auth(
         // When the admin locked down API-key auth, an API key is
         // ignored here — optional auth passes through silently so a cookie
         // or ticket on the same request can still authenticate it.
-        if !api_keys_enabled(&db).await {
+        if !cached_api_keys_enabled(&db).await {
             tracing::debug!(client_ip = %ip, "Optional auth: API key ignored — enable_api_keys is disabled by an administrator");
         } else {
             // Compliance mode (persea#228): a valid admin key or
             // self-service user token is ignored here too, mirroring the
             // enable_api_keys lockdown — the request keeps whatever cookie
             // or ticket it also carries.
-            let compliance = compliance_mode_enabled(&db).await;
+            let compliance = cached_compliance_mode_enabled(&db).await;
             let db_clone = db.clone();
             let key_clone = key.clone();
             let result = tokio::task::spawn_blocking(move || {
