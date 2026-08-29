@@ -1966,7 +1966,7 @@ async fn run_server(
     // Close stale active-history rows from a previous unclean shutdown
     // (persea#273): any row whose status is still 'active' with
     // ended_at IS NULL was left behind by a crash or restart.
-    if let Some(ref db) = manager.db() {
+    if let Some(db) = manager.db() {
         match crate::db::close_stale_active_history(db) {
             Ok(0) => {}
             Ok(n) => tracing::info!(
@@ -3033,7 +3033,7 @@ async fn run_server(
             // Close every still-open session-history row so the DB
             // converges with live state instead of leaving zombie rows
             // with status='active' forever (persea#273).
-            if let Some(ref db) = shutdown_mgr.db() {
+            if let Some(db) = shutdown_mgr.db() {
                 if let Err(e) = crate::db::close_all_open_sessions(db, "server_shutdown") {
                     tracing::warn!(error = %e, "Shutdown: failed to close open session-history rows");
                 }
@@ -3108,7 +3108,7 @@ async fn run_server(
             // Close every still-open session-history row so the DB
             // converges with live state instead of leaving zombie rows
             // with status='active' forever (persea#273).
-            if let Some(ref db) = shutdown_mgr.db() {
+            if let Some(db) = shutdown_mgr.db() {
                 if let Err(e) = crate::db::close_all_open_sessions(db, "server_shutdown") {
                     tracing::warn!(error = %e, "Shutdown: failed to close open session-history rows");
                 }
