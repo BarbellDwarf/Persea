@@ -842,6 +842,186 @@ pub struct ConnectRequest {
     pub reason: Option<String>,
 }
 
+/// Request-side overrides for [`params_from_entry`].
+///
+/// The two connect paths can override different subsets of the entry's
+/// stored values: `ab_connect_entry` takes a JSON body
+/// ([`ConnectRequest`]), quick connect takes the query string
+/// ([`QuickConnectQuery`], display geometry only). Fields the caller
+/// cannot supply stay `None`, and the entry's stored value is used.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ConnectOverrides {
+    /// Login username override; the stored one wins when absent.
+    pub username: Option<String>,
+    /// Login password override; the stored one wins when absent.
+    pub password: Option<String>,
+    /// RDP domain override; the stored one wins when absent.
+    pub domain: Option<String>,
+    /// Banner text shown in the client; the stored one wins when absent.
+    pub banner: Option<String>,
+    /// Connection reason (V09). No entry fallback exists: only the
+    /// caller can supply it.
+    pub reason: Option<String>,
+    /// Display width override.
+    pub width: Option<u32>,
+    /// Display height override.
+    pub height: Option<u32>,
+    /// Display DPI override.
+    pub dpi: Option<u32>,
+}
+
+impl ConnectOverrides {
+    /// The overrides a `POST .../connect` body ([`ConnectRequest`]) can
+    /// express.
+    pub(crate) fn from_connect_request(req: &ConnectRequest) -> Self {
+        Self {
+            username: req.username.clone(),
+            password: req.password.clone(),
+            domain: req.domain.clone(),
+            banner: req.banner.clone(),
+            reason: req.reason.clone(),
+            width: req.width,
+            height: req.height,
+            dpi: req.dpi,
+        }
+    }
+
+    /// The overrides the quick-connect query string can express (display
+    /// geometry only; the query carries no credential or banner fields).
+    pub(crate) fn from_quick_connect_query(query: &QuickConnectQuery) -> Self {
+        Self {
+            width: query.width,
+            height: query.height,
+            dpi: query.dpi,
+            ..Default::default()
+        }
+    }
+}
+
+/// The entry's `session_type` is not one of the protocols persea serves.
+/// Both connect paths render this with their own error surface (the JSON
+/// `AppError::Internal` vs the quick-connect HTML error page), so the
+/// shared builder returns it typed instead of an `AppError`.
+#[derive(Debug)]
+pub(crate) struct UnknownSessionType(pub String);
+
+/// Build the [`CreateSessionRequest`] for connecting to an address book
+/// entry — the single construction site shared by both connect paths
+/// (`ab_connect_entry` and `quick_connect`).
+///
+/// History: each path carried its own ~60-line construction and the
+/// copies had drifted. Quick connect never mapped the `spice`, `proxmox`,
+/// or `vdi` session types (those entries failed with "Unknown session
+/// type"), built `ProxmoxParams::default()` instead of using the entry's
+/// proxmox fields, and dropped the entry's `auto_size` override. This
+/// function implements the `ab_connect_entry` behavior for every entry;
+/// quick connect's output changes only on those drifted fields, which is
+/// the intended fix.
+pub(crate) fn params_from_entry(
+    entry: &AddressBookEntry,
+    overrides: ConnectOverrides,
+    address_book_entry: String,
+    address_book_folder: &str,
+) -> Result<CreateSessionRequest, UnknownSessionType> {
+    let session_type = match entry.session_type.as_str() {
+        "ssh" | "powershell" => SessionType::Ssh,
+        "rdp" => SessionType::Rdp,
+        "vnc" => SessionType::Vnc,
+        "spice" => SessionType::Spice,
+        "proxmox" => SessionType::Proxmox,
+        "web" => SessionType::Web,
+        "vdi" => SessionType::Vdi,
+        other => return Err(UnknownSessionType(other.to_string())),
+    };
+    Ok(CreateSessionRequest {
+        session_type,
+        hostname: entry.hostname.clone(),
+        port: entry.port,
+        username: overrides.username.or_else(|| entry.username.clone()),
+        password: overrides.password.or_else(|| entry.password.clone()),
+        ignore_cert: entry.ignore_cert,
+        max_monitors: entry.max_monitors,
+        jump_hosts: entry.jump_hosts.clone(),
+        jump_host: None,
+        jump_port: None,
+        jump_username: None,
+        jump_password: None,
+        jump_private_key: None,
+        width: overrides.width,
+        height: overrides.height,
+        dpi: overrides.dpi,
+        auto_size: entry.auto_size,
+        banner: overrides.banner.or_else(|| entry.banner.clone()),
+        reason: overrides.reason,
+        enable_drive: entry.enable_drive,
+        disable_copy: entry.disable_copy,
+        disable_paste: entry.disable_paste,
+        enable_recording: entry.enable_recording,
+        address_book_entry: Some(address_book_entry),
+        address_book_folder: Some(address_book_folder.to_string()),
+        entry_display_name: entry.display_name.clone(),
+        max_recordings: entry.max_recordings,
+        allow_sharing: entry.allow_sharing,
+        fullscreen_on_connect: entry.fullscreen_on_connect,
+        autohide_side_tabs: entry.autohide_side_tabs,
+        ssh: Some(SshParams {
+            private_key: entry.private_key.clone(),
+            generate_keypair: None,
+            record_typescript: entry.record_typescript,
+        }),
+        rdp: Some(RdpParams {
+            domain: overrides.domain.or_else(|| entry.domain.clone()),
+            security: entry.security.clone(),
+            auth_pkg: entry.auth_pkg.clone(),
+            kdc_url: entry.kdc_url.clone(),
+            kerberos_cache: None,
+            remote_app: entry.remote_app.clone(),
+            remote_app_dir: entry.remote_app_dir.clone(),
+            remote_app_args: entry.remote_app_args.clone(),
+            enable_gfx: entry.enable_gfx,
+            enable_desktop_composition: entry.enable_desktop_composition,
+            enable_wallpaper: entry.enable_wallpaper,
+            enable_theming: entry.enable_theming,
+            enable_full_window_drag: entry.enable_full_window_drag,
+            force_lossless: entry.force_lossless,
+            enable_h264: entry.enable_h264,
+        }),
+        vnc: Some(VncParams {
+            color_depth: entry.color_depth,
+        }),
+        web: Some(WebParams {
+            url: entry.url.clone(),
+            login_script: entry.login_script.clone(),
+            autofill: entry.autofill.clone(),
+            allowed_domains: entry.allowed_domains.clone(),
+        }),
+        vdi: Some(VdiParams {
+            container_image: entry.container_image.clone(),
+            container_cpu_limit: entry.container_cpu_limit,
+            container_memory_limit: entry.container_memory_limit,
+            container_env: entry.container_env.clone(),
+            container_idle_timeout_mins: entry.container_idle_timeout_mins,
+            container_username: entry.container_username.clone(),
+            container_password: entry.container_password.clone(),
+        }),
+        spice: Some(SpiceParams {
+            spice_tls: entry.spice_tls,
+            spice_tls_port: entry.spice_tls_port,
+            spice_ca_cert: entry.spice_ca_cert.clone(),
+            spice_cert_subject: entry.spice_cert_subject.clone(),
+            spice_proxy: entry.spice_proxy.clone(),
+        }),
+        proxmox: Some(ProxmoxParams {
+            proxmox_url: entry.proxmox_url.clone(),
+            proxmox_node: entry.proxmox_node.clone(),
+            proxmox_vmid: entry.proxmox_vmid,
+            proxmox_token_id: entry.proxmox_token_id.clone(),
+            proxmox_token_secret: entry.proxmox_token_secret.clone(),
+            proxmox_verify_tls: entry.proxmox_verify_tls,
+        }),
+    })
+}
+
 /// Body for `POST /api/ssh/probe-host-key`.
 #[derive(Deserialize)]
 pub struct ProbeHostKeyRequest {
@@ -1908,23 +2088,6 @@ pub async fn ab_connect_entry(
         ab_entry
     };
 
-    let session_type = match ab_entry.session_type.as_str() {
-        "ssh" => SessionType::Ssh,
-        "powershell" => SessionType::Ssh,
-        "rdp" => SessionType::Rdp,
-        "vnc" => SessionType::Vnc,
-        "spice" => SessionType::Spice,
-        "proxmox" => SessionType::Proxmox,
-        "web" => SessionType::Web,
-        "vdi" => SessionType::Vdi,
-        other => {
-            return Err(AppError::Internal(format!(
-                "unknown session type: {}",
-                other
-            )))
-        }
-    };
-
     let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
     // Keep the resolved identity for the interactive-credentials signal
     // (persea#246): the fields are moved into `create_req` below, and the
@@ -1932,93 +2095,13 @@ pub async fn ab_connect_entry(
     let prompt_username = ab_entry.username.clone();
     let prompt_domain = ab_entry.domain.clone();
     let prompt_display_name = ab_entry.display_name.clone();
-    let create_req = CreateSessionRequest {
-        session_type,
-        hostname: ab_entry.hostname,
-        port: ab_entry.port,
-        username: req.username.or(ab_entry.username),
-        password: req.password.or(ab_entry.password),
-        ignore_cert: ab_entry.ignore_cert,
-        max_monitors: ab_entry.max_monitors,
-        jump_hosts: ab_entry.jump_hosts,
-        jump_host: None,
-        jump_port: None,
-        jump_username: None,
-        jump_password: None,
-        jump_private_key: None,
-        width: req.width,
-        height: req.height,
-        dpi: req.dpi,
-        auto_size: ab_entry.auto_size,
-        banner: req.banner.or(ab_entry.banner),
-        reason: req.reason,
-        enable_drive: ab_entry.enable_drive,
-        disable_copy: ab_entry.disable_copy,
-        disable_paste: ab_entry.disable_paste,
-        enable_recording: ab_entry.enable_recording,
-        address_book_entry: Some(ab_entry_key),
-        address_book_folder: Some(folder.to_string()),
-        entry_display_name: ab_entry.display_name.clone(),
-        max_recordings: ab_entry.max_recordings,
-        allow_sharing: ab_entry.allow_sharing,
-        fullscreen_on_connect: ab_entry.fullscreen_on_connect,
-        autohide_side_tabs: ab_entry.autohide_side_tabs,
-        ssh: Some(SshParams {
-            private_key: ab_entry.private_key,
-            generate_keypair: None,
-            record_typescript: ab_entry.record_typescript,
-        }),
-        rdp: Some(RdpParams {
-            domain: req.domain.or(ab_entry.domain),
-            security: ab_entry.security,
-            auth_pkg: ab_entry.auth_pkg,
-            kdc_url: ab_entry.kdc_url,
-            kerberos_cache: None,
-            remote_app: ab_entry.remote_app,
-            remote_app_dir: ab_entry.remote_app_dir,
-            remote_app_args: ab_entry.remote_app_args,
-            enable_gfx: ab_entry.enable_gfx,
-            enable_desktop_composition: ab_entry.enable_desktop_composition,
-            enable_wallpaper: ab_entry.enable_wallpaper,
-            enable_theming: ab_entry.enable_theming,
-            enable_full_window_drag: ab_entry.enable_full_window_drag,
-            force_lossless: ab_entry.force_lossless,
-            enable_h264: ab_entry.enable_h264,
-        }),
-        vnc: Some(VncParams {
-            color_depth: ab_entry.color_depth,
-        }),
-        web: Some(WebParams {
-            url: ab_entry.url,
-            login_script: ab_entry.login_script,
-            autofill: ab_entry.autofill,
-            allowed_domains: ab_entry.allowed_domains,
-        }),
-        vdi: Some(VdiParams {
-            container_image: ab_entry.container_image,
-            container_cpu_limit: ab_entry.container_cpu_limit,
-            container_memory_limit: ab_entry.container_memory_limit,
-            container_env: ab_entry.container_env,
-            container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
-            container_username: ab_entry.container_username,
-            container_password: ab_entry.container_password,
-        }),
-        spice: Some(SpiceParams {
-            spice_tls: ab_entry.spice_tls,
-            spice_tls_port: ab_entry.spice_tls_port,
-            spice_ca_cert: ab_entry.spice_ca_cert,
-            spice_cert_subject: ab_entry.spice_cert_subject,
-            spice_proxy: ab_entry.spice_proxy,
-        }),
-        proxmox: Some(ProxmoxParams {
-            proxmox_url: ab_entry.proxmox_url,
-            proxmox_node: ab_entry.proxmox_node,
-            proxmox_vmid: ab_entry.proxmox_vmid,
-            proxmox_token_id: ab_entry.proxmox_token_id,
-            proxmox_token_secret: ab_entry.proxmox_token_secret,
-            proxmox_verify_tls: ab_entry.proxmox_verify_tls,
-        }),
-    };
+    let create_req = params_from_entry(
+        &ab_entry,
+        ConnectOverrides::from_connect_request(&req),
+        ab_entry_key,
+        &folder,
+    )
+    .map_err(|UnknownSessionType(t)| AppError::Internal(format!("unknown session type: {}", t)))?;
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip_addr = client_ip(&headers, addr.ip(), &proxies);
@@ -3334,20 +3417,6 @@ pub async fn quick_connect(
             );
         }
 
-        let session_type = match ab_entry.session_type.as_str() {
-            "ssh" => SessionType::Ssh,
-            "powershell" => SessionType::Ssh,
-            "rdp" => SessionType::Rdp,
-            "vnc" => SessionType::Vnc,
-            "web" => SessionType::Web,
-            other => {
-                return quick_connect_error(
-                    StatusCode::BAD_REQUEST,
-                    &format!("Unknown session type: {}", other),
-                );
-            }
-        };
-
         let ab_entry_key = format!("{}/{}/{}", scope, folder, entry);
         // Keep the resolved identity for the interactive-credentials
         // signal (persea#246): the fields are moved into `create_req`
@@ -3356,85 +3425,19 @@ pub async fn quick_connect(
         let prompt_username = ab_entry.username.clone();
         let prompt_domain = ab_entry.domain.clone();
         let prompt_display_name = ab_entry.display_name.clone();
-        let create_req = CreateSessionRequest {
-            session_type,
-            hostname: ab_entry.hostname,
-            port: ab_entry.port,
-            username: ab_entry.username,
-            password: ab_entry.password,
-            ignore_cert: ab_entry.ignore_cert,
-            max_monitors: ab_entry.max_monitors,
-            jump_hosts: ab_entry.jump_hosts,
-            jump_host: None,
-            jump_port: None,
-            jump_username: None,
-            jump_password: None,
-            jump_private_key: None,
-            width: query.width,
-            height: query.height,
-            dpi: query.dpi,
-            auto_size: None,
-            banner: ab_entry.banner,
-            reason: None,
-            enable_drive: ab_entry.enable_drive,
-            disable_copy: ab_entry.disable_copy,
-            disable_paste: ab_entry.disable_paste,
-            enable_recording: ab_entry.enable_recording,
-            address_book_entry: Some(ab_entry_key),
-            address_book_folder: Some(folder.to_string()),
-            entry_display_name: ab_entry.display_name.clone(),
-            max_recordings: ab_entry.max_recordings,
-            allow_sharing: ab_entry.allow_sharing,
-            fullscreen_on_connect: ab_entry.fullscreen_on_connect,
-            autohide_side_tabs: ab_entry.autohide_side_tabs,
-            ssh: Some(SshParams {
-                private_key: ab_entry.private_key,
-                generate_keypair: None,
-                record_typescript: ab_entry.record_typescript,
-            }),
-            rdp: Some(RdpParams {
-                domain: ab_entry.domain,
-                security: ab_entry.security,
-                auth_pkg: ab_entry.auth_pkg,
-                kdc_url: ab_entry.kdc_url,
-                kerberos_cache: None,
-                remote_app: ab_entry.remote_app,
-                remote_app_dir: ab_entry.remote_app_dir,
-                remote_app_args: ab_entry.remote_app_args,
-                enable_gfx: ab_entry.enable_gfx,
-                enable_desktop_composition: ab_entry.enable_desktop_composition,
-                enable_wallpaper: ab_entry.enable_wallpaper,
-                enable_theming: ab_entry.enable_theming,
-                enable_full_window_drag: ab_entry.enable_full_window_drag,
-                force_lossless: ab_entry.force_lossless,
-                enable_h264: ab_entry.enable_h264,
-            }),
-            vnc: Some(VncParams {
-                color_depth: ab_entry.color_depth,
-            }),
-            web: Some(WebParams {
-                url: ab_entry.url,
-                login_script: ab_entry.login_script,
-                autofill: ab_entry.autofill,
-                allowed_domains: ab_entry.allowed_domains,
-            }),
-            vdi: Some(VdiParams {
-                container_image: ab_entry.container_image,
-                container_cpu_limit: ab_entry.container_cpu_limit,
-                container_memory_limit: ab_entry.container_memory_limit,
-                container_env: ab_entry.container_env,
-                container_idle_timeout_mins: ab_entry.container_idle_timeout_mins,
-                container_username: ab_entry.container_username,
-                container_password: ab_entry.container_password,
-            }),
-            spice: Some(SpiceParams {
-                spice_tls: ab_entry.spice_tls,
-                spice_tls_port: ab_entry.spice_tls_port,
-                spice_ca_cert: ab_entry.spice_ca_cert,
-                spice_cert_subject: ab_entry.spice_cert_subject,
-                spice_proxy: ab_entry.spice_proxy,
-            }),
-            proxmox: Some(ProxmoxParams::default()),
+        let create_req = match params_from_entry(
+            &ab_entry,
+            ConnectOverrides::from_quick_connect_query(&query),
+            ab_entry_key,
+            folder,
+        ) {
+            Ok(create_req) => create_req,
+            Err(UnknownSessionType(t)) => {
+                return quick_connect_error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("Unknown session type: {}", t),
+                );
+            }
         };
 
         tracing::info!(
@@ -5250,6 +5253,241 @@ mod tests {
             allowed.status(),
             StatusCode::OK,
             "with the Connect grant the credential prompt is served"
+        );
+    }
+
+    // ── params_from_entry (persea#280): both connect paths must build
+    //    identical params for the same entry ─────────────────────────────
+
+    fn spice_entry() -> AddressBookEntry {
+        AddressBookEntry {
+            session_type: "spice".into(),
+            hostname: Some("spice.example.com".into()),
+            port: Some(5900),
+            username: Some("viewer".into()),
+            password: Some("spice-pw".into()),
+            ignore_cert: Some(true),
+            auto_size: Some(false),
+            display_name: Some("Spice box".into()),
+            spice_tls: Some(true),
+            spice_tls_port: Some(5901),
+            spice_ca_cert: Some("-----BEGIN CERTIFICATE-----".into()),
+            spice_cert_subject: Some("C=US".into()),
+            spice_proxy: Some("http://proxy.example.com:3128".into()),
+            ..Default::default()
+        }
+    }
+
+    fn proxmox_entry() -> AddressBookEntry {
+        AddressBookEntry {
+            session_type: "proxmox".into(),
+            hostname: Some("pve.example.com".into()),
+            port: Some(8006),
+            auto_size: Some(false),
+            display_name: Some("PVE console".into()),
+            proxmox_url: Some("https://pve.example.com:8006".into()),
+            proxmox_node: Some("pve".into()),
+            proxmox_vmid: Some(101),
+            proxmox_token_id: Some("root@pam!persea".into()),
+            proxmox_token_secret: Some("token-secret".into()),
+            proxmox_verify_tls: Some(false),
+            ..Default::default()
+        }
+    }
+
+    fn empty_connect_request() -> ConnectRequest {
+        ConnectRequest {
+            width: None,
+            height: None,
+            dpi: None,
+            banner: None,
+            username: None,
+            password: None,
+            domain: None,
+            reason: None,
+        }
+    }
+
+    fn empty_quick_connect_query() -> QuickConnectQuery {
+        QuickConnectQuery {
+            protocol: None,
+            hostname: None,
+            port: None,
+            username: None,
+            url: None,
+            width: None,
+            height: None,
+            dpi: None,
+            scope: None,
+            folder: None,
+            entry: None,
+        }
+    }
+
+    /// The entry-derived and request-derived fields carried directly on
+    /// the request (everything outside the per-protocol sub-structs).
+    #[derive(Debug, PartialEq)]
+    struct SharedShape {
+        hostname: Option<String>,
+        port: Option<u16>,
+        username: Option<String>,
+        password: Option<String>,
+        ignore_cert: Option<bool>,
+        max_monitors: Option<u32>,
+        auto_size: Option<bool>,
+        banner: Option<String>,
+        reason: Option<String>,
+        enable_drive: Option<bool>,
+        disable_copy: Option<bool>,
+        disable_paste: Option<bool>,
+        enable_recording: Option<bool>,
+        address_book_entry: Option<String>,
+        address_book_folder: Option<String>,
+        max_recordings: Option<u32>,
+        allow_sharing: Option<bool>,
+        fullscreen_on_connect: Option<bool>,
+        autohide_side_tabs: Option<bool>,
+    }
+
+    fn shared_shape(r: &CreateSessionRequest) -> SharedShape {
+        SharedShape {
+            hostname: r.hostname.clone(),
+            port: r.port,
+            username: r.username.clone(),
+            password: r.password.clone(),
+            ignore_cert: r.ignore_cert,
+            max_monitors: r.max_monitors,
+            auto_size: r.auto_size,
+            banner: r.banner.clone(),
+            reason: r.reason.clone(),
+            enable_drive: r.enable_drive,
+            disable_copy: r.disable_copy,
+            disable_paste: r.disable_paste,
+            enable_recording: r.enable_recording,
+            address_book_entry: r.address_book_entry.clone(),
+            address_book_folder: r.address_book_folder.clone(),
+            max_recordings: r.max_recordings,
+            allow_sharing: r.allow_sharing,
+            fullscreen_on_connect: r.fullscreen_on_connect,
+            autohide_side_tabs: r.autohide_side_tabs,
+        }
+    }
+
+    #[test]
+    fn params_from_entry_spice_and_proxmox_parity_between_connect_paths() {
+        let key = "shared/Clients/box".to_string();
+        for entry in [spice_entry(), proxmox_entry()] {
+            // Path A (ab_connect_entry): JSON connect body with no
+            // overrides. Path B (quick_connect): query string with no
+            // geometry. The two input shapes must agree on every field.
+            let via_body = params_from_entry(
+                &entry,
+                ConnectOverrides::from_connect_request(&empty_connect_request()),
+                key.clone(),
+                "Clients",
+            )
+            .unwrap();
+            let via_query = params_from_entry(
+                &entry,
+                ConnectOverrides::from_quick_connect_query(&empty_quick_connect_query()),
+                key.clone(),
+                "Clients",
+            )
+            .unwrap();
+            assert_eq!(via_body.session_type, via_query.session_type);
+            assert_eq!(via_body.ssh, via_query.ssh);
+            assert_eq!(via_body.rdp, via_query.rdp);
+            assert_eq!(via_body.vnc, via_query.vnc);
+            assert_eq!(via_body.web, via_query.web);
+            assert_eq!(via_body.vdi, via_query.vdi);
+            assert_eq!(via_body.spice, via_query.spice);
+            assert_eq!(via_body.proxmox, via_query.proxmox);
+            assert_eq!(shared_shape(&via_body), shared_shape(&via_query));
+
+            // And the previously drifted fields specifically: the entry's
+            // spice / proxmox params must reach the request (quick connect
+            // built ProxmoxParams::default() and rejected these session
+            // types outright before persea#280).
+            match entry.session_type.as_str() {
+                "spice" => {
+                    assert_eq!(via_query.session_type, SessionType::Spice);
+                    let spice = via_query.spice.unwrap();
+                    assert_eq!(spice.spice_tls, Some(true));
+                    assert_eq!(spice.spice_tls_port, Some(5901));
+                    assert_eq!(
+                        spice.spice_ca_cert,
+                        Some("-----BEGIN CERTIFICATE-----".into())
+                    );
+                    assert_eq!(spice.spice_cert_subject, Some("C=US".into()));
+                    assert_eq!(
+                        spice.spice_proxy,
+                        Some("http://proxy.example.com:3128".into())
+                    );
+                }
+                "proxmox" => {
+                    assert_eq!(via_query.session_type, SessionType::Proxmox);
+                    let pve = via_query.proxmox.unwrap();
+                    assert_eq!(pve.proxmox_url, Some("https://pve.example.com:8006".into()));
+                    assert_eq!(pve.proxmox_node, Some("pve".into()));
+                    assert_eq!(pve.proxmox_vmid, Some(101));
+                    assert_eq!(pve.proxmox_token_id, Some("root@pam!persea".into()));
+                    assert_eq!(pve.proxmox_token_secret, Some("token-secret".into()));
+                    assert_eq!(pve.proxmox_verify_tls, Some(false));
+                }
+                other => panic!("unexpected entry type: {}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn params_from_entry_honors_request_overrides_and_entry_fallbacks() {
+        // Connect-body overrides win; the entry's stored values are the
+        // fallback when an override is absent.
+        let mut entry = proxmox_entry();
+        entry.session_type = "rdp".into();
+        entry.domain = Some("STORED".into());
+        entry.banner = Some("stored banner".into());
+        let overrides = ConnectOverrides {
+            username: Some("req-user".into()),
+            password: Some("req-pw".into()),
+            domain: Some("REQDOMAIN".into()),
+            banner: Some("req banner".into()),
+            reason: Some("maintenance".into()),
+            width: Some(1280),
+            height: Some(720),
+            dpi: Some(96),
+        };
+        let req =
+            params_from_entry(&entry, overrides, "shared/Clients/box".into(), "Clients").unwrap();
+        assert_eq!(req.session_type, SessionType::Rdp);
+        assert_eq!(req.username.as_deref(), Some("req-user"));
+        assert_eq!(req.password.as_deref(), Some("req-pw"));
+        assert_eq!(req.banner.as_deref(), Some("req banner"));
+        assert_eq!(req.reason.as_deref(), Some("maintenance"));
+        assert_eq!(req.width, Some(1280));
+        assert_eq!(
+            req.rdp.as_ref().unwrap().domain.as_deref(),
+            Some("REQDOMAIN")
+        );
+        // Absent overrides fall back to the entry.
+        let fallback = params_from_entry(
+            &entry,
+            ConnectOverrides::from_connect_request(&empty_connect_request()),
+            "shared/Clients/box".into(),
+            "Clients",
+        )
+        .unwrap();
+        assert_eq!(fallback.username.as_deref(), entry.username.as_deref());
+        assert_eq!(
+            fallback.rdp.as_ref().unwrap().domain.as_deref(),
+            Some("STORED")
+        );
+        assert_eq!(fallback.banner.as_deref(), Some("stored banner"));
+        assert_eq!(fallback.reason, None);
+        assert_eq!(
+            fallback.auto_size,
+            Some(false),
+            "the entry's auto_size must survive (quick connect used to drop it)"
         );
     }
 

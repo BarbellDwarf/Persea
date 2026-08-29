@@ -33,7 +33,7 @@ pub enum SessionType {
 /// Deserialized from the flat request JSON via `#[serde(flatten)]` on
 /// `CreateSessionRequest`: any JSON key declared only here lands in this
 /// struct regardless of `session_type`.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SshParams {
     /// PEM-encoded private key for key-based auth instead of a password.
     pub private_key: Option<String>,
@@ -45,7 +45,7 @@ pub struct SshParams {
 }
 
 /// RDP-specific session parameters (NLA, RemoteApp, GFX pipeline, ...).
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RdpParams {
     /// Windows domain for the login user (NTLM/Kerberos).
     pub domain: Option<String>,
@@ -85,14 +85,14 @@ pub struct RdpParams {
 /// `color_depth` is also honoured by SPICE sessions (shared display option);
 /// this struct is its canonical flattened home — serde flatten claims a key
 /// once, in declaration order, so the key must not be duplicated elsewhere.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VncParams {
     /// Color depth in bits per pixel (also honoured by SPICE sessions).
     pub color_depth: Option<u8>,
 }
 
 /// Web-browser session parameters (Xvnc + Chromium).
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WebParams {
     /// URL the browser session starts on.
     pub url: Option<String>,
@@ -106,7 +106,7 @@ pub struct WebParams {
 }
 
 /// VDI (Docker desktop container) session parameters.
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VdiParams {
     /// Docker image for VDI sessions (e.g. "myregistry/desktop:latest").
     pub container_image: Option<String>,
@@ -128,7 +128,7 @@ pub struct VdiParams {
 }
 
 /// SPICE-specific session parameters (TLS, CA verification, proxy).
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SpiceParams {
     /// SPICE: connect using TLS.
     pub spice_tls: Option<bool>,
@@ -144,7 +144,7 @@ pub struct SpiceParams {
 }
 
 /// Proxmox VE console session parameters (SPICE brokered via PVE spiceproxy).
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProxmoxParams {
     /// PVE API base URL, a full URL including scheme and port
     /// (e.g. "https://pve.example.com:8006"). persea fetches a just-in-time
