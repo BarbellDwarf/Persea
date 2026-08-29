@@ -1965,9 +1965,15 @@ async fn run_server(
 
     // Close stale active-history rows from a previous unclean shutdown
     // (persea#273): any row whose status is still 'active' with
-    // ended_at IS NULL was left behind by a crash or restart.
+    // ended_at IS NULL was left behind by a crash or restart. In HA
+    // mode, rows owned by other still-live instances are excluded.
     if let Some(db) = manager.db() {
-        match crate::db::close_stale_active_history(db) {
+        let owner = if manager.ha_enabled() {
+            Some(manager.instance_id())
+        } else {
+            None
+        };
+        match crate::db::close_stale_active_history(db, owner) {
             Ok(0) => {}
             Ok(n) => tracing::info!(
                 closed = n,
