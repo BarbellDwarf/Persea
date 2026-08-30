@@ -2027,7 +2027,13 @@ fn entry_auto_size(db: &Option<crate::db::Db>, address_book_entry: Option<&str>)
     let entry = &key[last + 1..];
     let folder_rec = crate::db::get_ab_folder(db, scope, folder).ok()?;
     let entry_rec = crate::db::get_ab_entry(db, folder_rec.id, entry).ok()?;
-    if !matches!(entry_rec.protocol.as_str(), "rdp" | "ssh" | "powershell") {
+    // Per-entry `auto_size` only lives on rdp/ssh/powershell entries
+    // (powershell is the SSH alias). Anything else returns None so the
+    // caller falls back to the global default.
+    if !matches!(
+        SessionType::from_api_str_opt(&entry_rec.protocol),
+        Some(SessionType::Rdp) | Some(SessionType::Ssh)
+    ) {
         return None;
     }
     let config: serde_json::Value = serde_json::from_str(&entry_rec.protocol_config).ok()?;

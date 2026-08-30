@@ -923,16 +923,8 @@ pub(crate) fn params_from_entry(
     address_book_entry: String,
     address_book_folder: &str,
 ) -> Result<CreateSessionRequest, UnknownSessionType> {
-    let session_type = match entry.session_type.as_str() {
-        "ssh" | "powershell" => SessionType::Ssh,
-        "rdp" => SessionType::Rdp,
-        "vnc" => SessionType::Vnc,
-        "spice" => SessionType::Spice,
-        "proxmox" => SessionType::Proxmox,
-        "web" => SessionType::Web,
-        "vdi" => SessionType::Vdi,
-        other => return Err(UnknownSessionType(other.to_string())),
-    };
+    let session_type = SessionType::from_api_str_opt(entry.session_type.as_str())
+        .ok_or_else(|| UnknownSessionType(entry.session_type.clone()))?;
     Ok(CreateSessionRequest {
         session_type,
         hostname: entry.hostname.clone(),
@@ -3526,16 +3518,30 @@ pub async fn quick_connect(
         );
     }
 
+    // Quick-connect is intentionally restrictive: only ssh/rdp/vnc/web
+    // are accepted. `powershell` is an SSH address-book entry type, but
+    // ad-hoc quick-connect has no entry to read the powershell binary
+    // from, so it rejects the alias. `from_api_str_opt` already maps
+    // the alias to `Ssh`; we filter on the allowed set to keep the
+    // legacy "Use ssh, rdp, vnc, or web" error message intact.
+    const QUICK_CONNECT_ALLOWED: &[SessionType] = &[
+        SessionType::Ssh,
+        SessionType::Rdp,
+        SessionType::Vnc,
+        SessionType::Web,
+    ];
     let session_type = match query.protocol.as_deref() {
-        Some("rdp") => SessionType::Rdp,
-        Some("vnc") => SessionType::Vnc,
-        Some("web") => SessionType::Web,
-        Some("ssh") | None => SessionType::Ssh,
-        Some(other) => {
-            return quick_connect_error(
-                StatusCode::BAD_REQUEST,
-                &format!("Unknown protocol '{}'. Use ssh, rdp, vnc, or web.", other),
-            );
+        None => SessionType::Ssh,
+        Some(s) => {
+            match SessionType::from_api_str_opt(s).filter(|t| QUICK_CONNECT_ALLOWED.contains(t)) {
+                Some(t) => t,
+                None => {
+                    return quick_connect_error(
+                        StatusCode::BAD_REQUEST,
+                        &format!("Unknown protocol '{}'. Use ssh, rdp, vnc, or web.", s),
+                    );
+                }
+            }
         }
     };
 
@@ -5448,8 +5454,8 @@ mod tests {
             // spice / proxmox params must reach the request (quick connect
             // built ProxmoxParams::default() and rejected these session
             // types outright before persea#280).
-            match entry.session_type.as_str() {
-                "spice" => {
+            match SessionType::from_api_str_opt(&entry.session_type) {
+                Some(SessionType::Spice) => {
                     assert_eq!(via_query.session_type, SessionType::Spice);
                     let spice = via_query.spice.unwrap();
                     assert_eq!(spice.spice_tls, Some(true));
@@ -5464,7 +5470,7 @@ mod tests {
                         Some("http://proxy.example.com:3128".into())
                     );
                 }
-                "proxmox" => {
+                Some(SessionType::Proxmox) => {
                     assert_eq!(via_query.session_type, SessionType::Proxmox);
                     let pve = via_query.proxmox.unwrap();
                     assert_eq!(pve.proxmox_url, Some("https://pve.example.com:8006".into()));
@@ -5474,7 +5480,7 @@ mod tests {
                     assert_eq!(pve.proxmox_token_secret, Some("token-secret".into()));
                     assert_eq!(pve.proxmox_verify_tls, Some(false));
                 }
-                other => panic!("unexpected entry type: {}", other),
+                other => panic!("unexpected entry type: {:?}", other),
             }
         }
     }

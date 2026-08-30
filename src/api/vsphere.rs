@@ -216,11 +216,7 @@ pub async fn connect_vm(
         });
 
     let (protocol, port) = crate::vsphere::detect_protocol(&vm.guest_os);
-    let session_type = match protocol.as_str() {
-        "rdp" => SessionType::Rdp,
-        "ssh" => SessionType::Ssh,
-        _ => SessionType::Vnc,
-    };
+    let session_type = SessionType::from_api_str(protocol.as_str(), SessionType::Vnc);
 
     let proxies = trusted.map(|Extension(t)| t.0).unwrap_or_default();
     let client_ip = client_ip(&headers, addr.ip(), &proxies);
