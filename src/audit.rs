@@ -784,8 +784,7 @@ mod tests {
             .unwrap();
         assert!(
             stored_user_id.is_none(),
-            "user_id must be NULL for actorless events, got {:?}",
-            stored_user_id
+            "user_id must be NULL for actorless events"
         );
     }
 }
