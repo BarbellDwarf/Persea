@@ -207,10 +207,6 @@ window.addEventListener('hashchange', function() {
 // GET /api/admin/tls-cert-info for file existence + parsed cert metadata
 // (subject, issuer, expiry, 30-day warning state). Every dynamic value is
 // escaped before it lands in innerHTML.
-function securityEsc(s) {
-    if (typeof escapeHtml === 'function') { return escapeHtml(s); }
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
-}
 
 function tlsBadge(status, expiresInDays) {
     if (status === 'valid') {
@@ -230,8 +226,8 @@ function tlsBadge(status, expiresInDays) {
 
 function tlsDetailRow(label, value) {
     return '<div>' +
-        '<p class="form-label">' + securityEsc(label) + '</p>' +
-        '<p class="text-sm text-[var(--text-primary)] break-all">' + securityEsc(value) + '</p>' +
+        '<p class="form-label">' + escapeHtml(label) + '</p>' +
+        '<p class="text-sm text-[var(--text-primary)] break-all">' + escapeHtml(value) + '</p>' +
         '</div>';
 }
 
@@ -247,7 +243,7 @@ function renderTlsStatus(data) {
         '<p class="form-label">Certificate Path</p>' +
         '<div class="flex items-center gap-2">' +
         '<code class="flex-1 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] text-xs break-all">' +
-        securityEsc(data.tls_cert_path || 'Not configured') + '</code>' +
+        escapeHtml(data.tls_cert_path || 'Not configured') + '</code>' +
         (data.cert_exists
             ? '<span class="px-2 py-0.5 text-xs rounded border bg-emerald-900/50 text-emerald-300 border-emerald-800">Present</span>'
             : '<span class="px-2 py-0.5 text-xs rounded border bg-red-900/50 text-red-300 border-red-800">Missing</span>') +
@@ -256,7 +252,7 @@ function renderTlsStatus(data) {
         '<p class="form-label">Private Key Path</p>' +
         '<div class="flex items-center gap-2">' +
         '<code class="flex-1 px-3 py-2 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg text-[var(--text-primary)] text-xs break-all">' +
-        securityEsc(data.tls_key_path || 'Not configured') + '</code>' +
+        escapeHtml(data.tls_key_path || 'Not configured') + '</code>' +
         (data.key_exists
             ? '<span class="px-2 py-0.5 text-xs rounded border bg-emerald-900/50 text-emerald-300 border-emerald-800">Present</span>'
             : '<span class="px-2 py-0.5 text-xs rounded border bg-red-900/50 text-red-300 border-red-800">Missing</span>') +
@@ -275,7 +271,7 @@ function renderTlsStatus(data) {
             tlsBadge(cert.status, cert.expires_in_days) +
             '</div>';
     } else if (data.cert_error) {
-        html += '<p class="text-sm text-red-400 mt-4">' + securityEsc(data.cert_error) + '</p>';
+        html += '<p class="text-sm text-red-400 mt-4">' + escapeHtml(data.cert_error) + '</p>';
     }
     summary.innerHTML = html;
 }
