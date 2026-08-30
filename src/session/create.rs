@@ -225,11 +225,11 @@ async fn handshake_with_timeout(
     )
     .await
     .map_err(|_| {
-        SessionError::GuacdConnection(
-            "timeout connecting to guacd during session-creation handshake".into(),
+        SessionError::guacd_connection(
+            "timeout connecting to guacd during session-creation handshake",
         )
     })?
-    .map_err(|e| SessionError::GuacdConnection(e.to_string()))
+    .map_err(|e| SessionError::from_guacd_error(&e))
 }
 
 /// Count sessions in Pending|Active state: the only states that hold a
@@ -1439,9 +1439,7 @@ impl SessionManager {
                 let ((), (stream, connection_id)) = tokio::try_join!(
                     async {
                         if let Some((h, p, nets)) = pending_net_check.take() {
-                            check_allowed_network(&h, p, &nets)
-                                .await
-                                .map_err(|e| e.to_string())
+                            check_allowed_network(&h, p, &nets).await
                         } else {
                             Ok(())
                         }
@@ -1454,10 +1452,8 @@ impl SessionManager {
                             super::manager::GUACD_IO_TIMEOUT,
                         )
                         .await
-                        .map_err(|e| e.to_string())
                     }
-                )
-                .map_err(SessionError::GuacdConnection)?;
+                )?;
                 (stream, connection_id)
             } else {
                 if let Some((h, p, nets)) = pending_net_check.take() {
