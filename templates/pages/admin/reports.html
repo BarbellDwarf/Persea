@@ -127,22 +127,27 @@ function formatUptime(secs) {
 
 function renderTopConnectionRow(conn) {
     var name = conn.name || conn.address_book_entry || '';
-    var proto = (conn.session_type || '').toUpperCase();
-    var hours = conn.total_hours != null ? conn.total_hours.toFixed(1) : '0';
+    // total_hours arrives as a float of hours; route through formatDuration
+    // so short sessions get seconds (e.g. "23s") instead of "0.0h".
+    var duration = conn.total_hours != null
+        ? formatDuration(Math.round(conn.total_hours * 3600))
+        : '—';
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
         '<td class="px-4 py-2 text-sm text-[var(--text-primary)]">' + escapeHtml(name) +
         ' <span class="text-[var(--text-muted)] text-xs">' + escapeHtml(conn.folder || '') + '</span></td>' +
         '<td class="px-4 py-2 text-sm text-[var(--text-muted)] text-right">' + (conn.session_count || 0) + '</td>' +
-        '<td class="px-4 py-2 text-xs text-[var(--text-muted)] text-right">' + hours + 'h</td></tr>';
+        '<td class="px-4 py-2 text-xs text-[var(--text-muted)] text-right">' + duration + '</td></tr>';
 }
 
 function renderTopUserRow(user) {
     var last = user.last_session ? user.last_session.replace('T', ' ').slice(0, 19) : '—';
-    var hours = user.total_hours != null ? user.total_hours.toFixed(1) : '0';
+    var duration = user.total_hours != null
+        ? formatDuration(Math.round(user.total_hours * 3600))
+        : '—';
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
         '<td class="px-4 py-2 text-sm text-[var(--text-primary)]">' + escapeHtml(user.user || '') + '</td>' +
         '<td class="px-4 py-2 text-sm text-[var(--text-muted)] text-right">' + (user.session_count || 0) + '</td>' +
-        '<td class="px-4 py-2 text-xs text-[var(--text-muted)] text-right">' + hours + 'h</td>' +
+        '<td class="px-4 py-2 text-xs text-[var(--text-muted)] text-right">' + duration + '</td>' +
         '<td class="px-4 py-2 text-xs text-[var(--text-muted)] text-right">' + escapeHtml(last) + '</td></tr>';
 }
 

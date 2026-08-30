@@ -78,6 +78,9 @@
     {% block head %}{% endblock %}
 </head>
 <body class="min-h-screen antialiased">
+    {# Skip-to-content link for keyboard users (WCAG 2.4.1). Visually hidden
+       until focused, then anchored to the main content landmark. #}
+    <a href="#app-main" class="skip-link">Skip to main content</a>
     {% block body %}{% endblock %}
 
     <!-- Shared JS utilities -->
