@@ -12561,11 +12561,17 @@ pub async fn settings_put_pool(
                 .await
                 .map_err(map_sqlx_err)?;
             }
+            // Regex guard: a non-numeric stored epoch coerces to 0
+            // (matching the MySQL/SQLite CAST semantics) instead of
+            // erroring the PUT; the RETURNING cast then reads the
+            // just-written numeric value.
             let (epoch,): (i64,) = sqlx::query_as(
                 "INSERT INTO system_settings (key, value, updated_at) \
                  VALUES ($1, '1', CURRENT_TIMESTAMP) \
                  ON CONFLICT (key) DO UPDATE SET \
-                     value = CAST(CAST(COALESCE(NULLIF(system_settings.value, ''), '0') AS BIGINT) + 1 AS TEXT), \
+                     value = CAST(CASE WHEN system_settings.value ~ '^[0-9]+$' \
+                                  THEN CAST(system_settings.value AS BIGINT) \
+                                  ELSE 0 END + 1 AS TEXT), \
                      updated_at = CURRENT_TIMESTAMP \
                  RETURNING CAST(value AS BIGINT)",
             )

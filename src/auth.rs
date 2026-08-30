@@ -142,12 +142,20 @@ async fn direct_settings_flags(db: &Db) -> SettingsFlags {
 
 /// Point-read the DB epoch off the hot path. `None` on any error: a
 /// failing freshness check must never fail auth, and serving the cache
-/// beats churning reloads while the backend is unhealthy.
+/// beats churning reloads while the backend is unhealthy. The failure is
+/// logged so a stuck epoch check (peers stop seeing each other's
+/// toggles) stays diagnosable.
 async fn current_settings_epoch(db: &Db) -> Option<i64> {
     let db = db.clone();
-    tokio::task::spawn_blocking(move || crate::db::settings_epoch(&db).ok())
-        .await
-        .unwrap_or_default()
+    tokio::task::spawn_blocking(move || match crate::db::settings_epoch(&db) {
+        Ok(epoch) => Some(epoch),
+        Err(e) => {
+            tracing::warn!(error = %e, "settings epoch read failed; serving cached auth flags");
+            None
+        }
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Read one cached flag with epoch validation (persea#289). Single
