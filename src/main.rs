@@ -29,6 +29,7 @@ mod handlers;
 mod import;
 mod metrics;
 mod migrate;
+mod net_util;
 mod oidc;
 mod password;
 mod protocol;
@@ -48,6 +49,7 @@ mod tls_gen;
 mod totp;
 mod tunnel;
 mod updates;
+mod validation;
 mod vault;
 mod vdi;
 mod vsphere;
@@ -1923,11 +1925,8 @@ async fn run_server(
                 // SANs always include localhost/127.0.0.1; the listen host
                 // joins them when usable (unspecified addresses fall back
                 // to localhost).
-                let bind_host = config
-                    .listen_addr
-                    .rsplit_once(':')
-                    .map(|(h, _)| h)
-                    .unwrap_or(config.listen_addr.as_str())
+                let (listen_host_raw, _) = crate::net_util::split_host_port(&config.listen_addr);
+                let bind_host = listen_host_raw
                     .trim_start_matches('[')
                     .trim_end_matches(']');
                 let hostname = match bind_host {

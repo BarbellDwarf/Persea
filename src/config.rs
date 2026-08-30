@@ -2117,9 +2117,8 @@ impl Config {
             .map_err(|e| format!("invalid listen_addr '{}': {}", self.listen_addr, e))?;
 
         // guacd_addr accepts IP:port or hostname:port — validate port is numeric
-        match self.guacd_addr.rsplit(':').next() {
-            Some(port_str) if port_str.parse::<u16>().is_ok() => {}
-            _ => return Err(format!("invalid guacd_addr: {}", self.guacd_addr)),
+        if !crate::net_util::has_valid_trailing_port(&self.guacd_addr) {
+            return Err(format!("invalid guacd_addr: {}", self.guacd_addr));
         }
 
         // CIDR entries must parse

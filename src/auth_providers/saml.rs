@@ -19,6 +19,20 @@ use uuid::Uuid;
 
 use crate::auth_provider::{AuthProvider, AuthRequest, AuthResult, Capabilities};
 
+#[path = "xml_util.rs"]
+mod xml_util;
+
+use std::ops::ControlFlow;
+
+use xml_util::{for_each_event, for_each_start_event, local_name};
+
+/// The event-loop callbacks all end with "keep walking": spell it once
+/// instead of repeating `ControlFlow::Continue(())` at every match arm.
+#[inline]
+fn keep_going() -> ControlFlow<()> {
+    ControlFlow::Continue(())
+}
+
 /// How long an issued AuthnRequest ID stays valid for the InResponseTo
 /// check on the ACS callback. Long enough for a browser round trip, short
 /// enough that stale entries cannot accumulate.
@@ -90,69 +104,74 @@ pub struct IdpMetadata {
 }
 
 /// Parse IdP metadata XML to extract SSO URL, entity ID, and certificate.
+#[allow(clippy::too_many_lines)]
 pub fn parse_idp_metadata(xml: &str) -> Result<IdpMetadata, String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-
     let mut sso_url: Option<String> = None;
     let mut entity_id: Option<String> = None;
     let mut cert_b64: Option<String> = None;
     let mut in_cert = false;
-    let mut buf = Vec::new();
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e))
-            | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match local_name(&tag) {
-                    "EntityDescriptor" => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"entityID" {
-                                entity_id = Some(String::from_utf8_lossy(&attr.value).to_string());
-                            }
+    let mut unescape_err: Option<String> = None;
+
+    for_each_event(xml, true, |event| match event {
+        quick_xml::events::Event::Start(ref e) | quick_xml::events::Event::Empty(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            match local_name(&tag) {
+                "EntityDescriptor" => {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"entityID" {
+                            entity_id = Some(String::from_utf8_lossy(&attr.value).to_string());
                         }
                     }
-                    "SingleSignOnService" => {
-                        let mut binding = String::new();
-                        let mut location = String::new();
-                        for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
-                            match key.as_str() {
-                                "Binding" => binding = val,
-                                "Location" => location = val,
-                                _ => {}
-                            }
-                        }
-                        if binding.contains("HTTP-Redirect") && sso_url.is_none() {
-                            sso_url = Some(location);
+                }
+                "SingleSignOnService" => {
+                    let mut binding = String::new();
+                    let mut location = String::new();
+                    for attr in e.attributes().flatten() {
+                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                        let val = String::from_utf8_lossy(&attr.value).to_string();
+                        match key.as_str() {
+                            "Binding" => binding = val,
+                            "Location" => location = val,
+                            _ => {}
                         }
                     }
-                    "X509Certificate" => {
-                        in_cert = true;
+                    if binding.contains("HTTP-Redirect") && sso_url.is_none() {
+                        sso_url = Some(location);
                     }
-                    _ => {}
                 }
-            }
-            Ok(quick_xml::events::Event::Text(ref e)) => {
-                if in_cert {
-                    let raw = String::from_utf8_lossy(e.as_ref());
-                    let text = xml_unescape(&raw).map_err(|e| e.to_string())?.to_string();
-                    cert_b64 = Some(text);
+                "X509Certificate" => {
+                    in_cert = true;
                 }
+                _ => {}
             }
-            Ok(quick_xml::events::Event::End(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if local_name(&tag) == "X509Certificate" {
-                    in_cert = false;
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => return Err(format!("XML parse error: {e}")),
-            _ => {}
+            keep_going()
         }
-        buf.clear();
+        quick_xml::events::Event::Text(ref e) => {
+            if in_cert && cert_b64.is_none() {
+                let raw = String::from_utf8_lossy(e.as_ref());
+                match xml_unescape(&raw) {
+                    Ok(text) => cert_b64 = Some(text.to_string()),
+                    Err(e) => {
+                        unescape_err = Some(e.to_string());
+                        return ControlFlow::Break(());
+                    }
+                }
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::End(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            if local_name(&tag) == "X509Certificate" {
+                in_cert = false;
+            }
+            keep_going()
+        }
+        _ => keep_going(),
+    })
+    .map_err(|e| format!("XML parse error: {e}"))?;
+    if let Some(e) = unescape_err {
+        return Err(e);
     }
 
     Ok(IdpMetadata {
@@ -173,13 +192,6 @@ fn xml_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
-}
-
-/// Strip namespace prefix from a tag name (e.g. "md:EntityDescriptor" → "EntityDescriptor").
-fn local_name(name: &str) -> &str {
-    name.rsplit_once(':')
-        .map(|(_, local)| local)
-        .unwrap_or(name)
 }
 
 /// Exclusive C14N canonicalization per W3C Recommendation for XML-DSig.
@@ -448,40 +460,33 @@ fn sha256_digest_b64(data: &[u8]) -> String {
 
 /// Extract the DigestValue from a SignedInfo XML fragment.
 fn extract_reference_digest_value(signed_info: &str) -> Option<String> {
-    let mut reader = Reader::from_str(signed_info);
-    reader.config_mut().trim_text(true);
     let mut in_digest_value = false;
     let mut digest_value = String::new();
-    let mut buf = Vec::new();
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e))
-            | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if local_name(&tag) == "DigestValue" {
-                    in_digest_value = true;
-                    digest_value.clear();
-                }
+    let _ = for_each_event(signed_info, true, |event| match event {
+        quick_xml::events::Event::Start(ref e) | quick_xml::events::Event::Empty(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            if local_name(&tag) == "DigestValue" {
+                in_digest_value = true;
+                digest_value.clear();
             }
-            Ok(quick_xml::events::Event::Text(ref e)) => {
-                if in_digest_value {
-                    let raw = String::from_utf8_lossy(e.as_ref());
-                    digest_value.push_str(&raw);
-                }
-            }
-            Ok(quick_xml::events::Event::End(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if local_name(&tag) == "DigestValue" {
-                    in_digest_value = false;
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
+            keep_going()
         }
-        buf.clear();
-    }
+        quick_xml::events::Event::Text(ref e) => {
+            if in_digest_value {
+                digest_value.push_str(&String::from_utf8_lossy(e.as_ref()));
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::End(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            if local_name(&tag) == "DigestValue" {
+                in_digest_value = false;
+            }
+            keep_going()
+        }
+        _ => keep_going(),
+    });
 
     let trimmed = digest_value.trim().to_string();
     if trimmed.is_empty() {
@@ -605,200 +610,167 @@ fn extract_element_by_id(xml: &str, target_id: &str) -> Option<String> {
 
 /// Remove the `<ds:Signature>` element from an XML string (enveloped-signature transform).
 fn remove_signature_element(xml: &str) -> String {
-    use quick_xml::events::Event;
-
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(false);
-    let mut buf = Vec::new();
     let mut out = String::with_capacity(xml.len());
     let mut in_signature = false;
     let mut sig_depth = 0u32;
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                if in_signature {
-                    sig_depth += 1;
-                } else {
-                    let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                    if local_name(&tag) == "Signature" {
-                        in_signature = true;
-                        sig_depth = 1;
-                        continue;
-                    }
-                    out.push('<');
-                    out.push_str(&String::from_utf8_lossy(e.name().as_ref()));
-                    for attr in e.attributes().flatten() {
-                        out.push(' ');
-                        out.push_str(&String::from_utf8_lossy(attr.key.as_ref()));
-                        out.push_str("=\"");
-                        out.push_str(&String::from_utf8_lossy(&attr.value));
-                        out.push('"');
-                    }
-                    out.push('>');
+    let _ = for_each_event(xml, false, |event| match event {
+        quick_xml::events::Event::Start(ref e) => {
+            if in_signature {
+                sig_depth += 1;
+            } else {
+                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                if local_name(&tag) == "Signature" {
+                    in_signature = true;
+                    sig_depth = 1;
+                    return keep_going();
                 }
-            }
-            Ok(Event::End(ref e)) => {
-                if in_signature {
-                    sig_depth -= 1;
-                    if sig_depth == 0 {
-                        in_signature = false;
-                    }
-                } else {
-                    out.push_str("</");
-                    out.push_str(&String::from_utf8_lossy(e.name().as_ref()));
-                    out.push('>');
+                out.push('<');
+                out.push_str(&String::from_utf8_lossy(e.name().as_ref()));
+                for attr in e.attributes().flatten() {
+                    out.push(' ');
+                    out.push_str(&String::from_utf8_lossy(attr.key.as_ref()));
+                    out.push_str("=\"");
+                    out.push_str(&String::from_utf8_lossy(&attr.value));
+                    out.push('"');
                 }
+                out.push('>');
             }
-            Ok(Event::Empty(ref e)) => {
-                if !in_signature {
-                    out.push('<');
-                    out.push_str(&String::from_utf8_lossy(e.name().as_ref()));
-                    for attr in e.attributes().flatten() {
-                        out.push(' ');
-                        out.push_str(&String::from_utf8_lossy(attr.key.as_ref()));
-                        out.push_str("=\"");
-                        out.push_str(&String::from_utf8_lossy(&attr.value));
-                        out.push('"');
-                    }
-                    out.push_str("/>");
-                }
-            }
-            Ok(Event::Text(ref e)) => {
-                if !in_signature {
-                    out.push_str(&String::from_utf8_lossy(e.as_ref()));
-                }
-            }
-            Ok(Event::CData(ref e)) => {
-                if !in_signature {
-                    out.push_str("<![CDATA[");
-                    out.push_str(&String::from_utf8_lossy(e.as_ref()));
-                    out.push_str("]]>");
-                }
-            }
-            Ok(Event::Decl(_)) => {}
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
+            keep_going()
         }
-        buf.clear();
-    }
+        quick_xml::events::Event::End(ref e) => {
+            if in_signature {
+                sig_depth -= 1;
+                if sig_depth == 0 {
+                    in_signature = false;
+                }
+            } else {
+                out.push_str("</");
+                out.push_str(&String::from_utf8_lossy(e.name().as_ref()));
+                out.push('>');
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::Empty(ref e) => {
+            if !in_signature {
+                out.push('<');
+                out.push_str(&String::from_utf8_lossy(e.name().as_ref()));
+                for attr in e.attributes().flatten() {
+                    out.push(' ');
+                    out.push_str(&String::from_utf8_lossy(attr.key.as_ref()));
+                    out.push_str("=\"");
+                    out.push_str(&String::from_utf8_lossy(&attr.value));
+                    out.push('"');
+                }
+                out.push_str("/>");
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::Text(ref e) => {
+            if !in_signature {
+                out.push_str(&String::from_utf8_lossy(e.as_ref()));
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::CData(ref e) => {
+            if !in_signature {
+                out.push_str("<![CDATA[");
+                out.push_str(&String::from_utf8_lossy(e.as_ref()));
+                out.push_str("]]>");
+            }
+            keep_going()
+        }
+        _ => keep_going(),
+    });
 
     out
 }
 
 /// Extract InResponseTo from the `<samlp:Response>` or `<saml:SubjectConfirmationData>`.
 fn extract_in_response_to(xml: &str) -> Option<String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e))
-            | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                let ln = local_name(&tag);
-                if ln == "Response" || ln == "SubjectConfirmationData" {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"InResponseTo" {
-                            return Some(String::from_utf8_lossy(&attr.value).to_string());
-                        }
-                    }
+    let mut found: Option<String> = None;
+    let _ = for_each_start_event(xml, |ln, e| {
+        if ln == "Response" || ln == "SubjectConfirmationData" {
+            for attr in e.attributes().flatten() {
+                if attr.key.as_ref() == b"InResponseTo" {
+                    found = Some(String::from_utf8_lossy(&attr.value).to_string());
+                    return std::ops::ControlFlow::Break(());
                 }
             }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
         }
-        buf.clear();
-    }
-    None
+        std::ops::ControlFlow::Continue(())
+    })
+    .ok();
+    found
 }
 
 /// Extract the Recipient from `<saml:SubjectConfirmationData>`.
 fn extract_recipient(xml: &str) -> Option<String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e))
-            | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if local_name(&tag) == "SubjectConfirmationData" {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"Recipient" {
-                            return Some(String::from_utf8_lossy(&attr.value).to_string());
-                        }
-                    }
+    let mut found: Option<String> = None;
+    let _ = for_each_start_event(xml, |ln, e| {
+        if ln == "SubjectConfirmationData" {
+            for attr in e.attributes().flatten() {
+                if attr.key.as_ref() == b"Recipient" {
+                    found = Some(String::from_utf8_lossy(&attr.value).to_string());
+                    return std::ops::ControlFlow::Break(());
                 }
             }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
         }
-        buf.clear();
-    }
-    None
+        std::ops::ControlFlow::Continue(())
+    })
+    .ok();
+    found
 }
 
 /// Extract Audience values from `AudienceRestriction` in a SAML assertion.
 fn extract_audiences(xml: &str) -> Vec<String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
     let mut in_audience_restriction = false;
     let mut in_audience = false;
     let mut audiences = Vec::new();
     let mut current_text = String::new();
-    let mut buf = Vec::new();
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e))
-            | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match local_name(&tag) {
-                    "AudienceRestriction" => in_audience_restriction = true,
-                    "Audience" if in_audience_restriction => {
-                        in_audience = true;
+    let _ = for_each_event(xml, true, |event| match event {
+        quick_xml::events::Event::Start(ref e) | quick_xml::events::Event::Empty(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            match local_name(&tag) {
+                "AudienceRestriction" => in_audience_restriction = true,
+                "Audience" if in_audience_restriction => {
+                    in_audience = true;
+                    current_text.clear();
+                }
+                _ => {}
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::Text(ref e) => {
+            if in_audience {
+                let raw = String::from_utf8_lossy(e.as_ref());
+                if let Ok(text) = xml_unescape(&raw) {
+                    current_text.push_str(&text);
+                }
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::End(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            match local_name(&tag) {
+                "Audience" => {
+                    if in_audience {
+                        let val = current_text.trim().to_string();
+                        if !val.is_empty() {
+                            audiences.push(val);
+                        }
                         current_text.clear();
                     }
-                    _ => {}
+                    in_audience = false;
                 }
+                "AudienceRestriction" => in_audience_restriction = false,
+                _ => {}
             }
-            Ok(quick_xml::events::Event::Text(ref e)) => {
-                if in_audience {
-                    let raw = String::from_utf8_lossy(e.as_ref());
-                    if let Ok(text) = xml_unescape(&raw) {
-                        current_text.push_str(&text);
-                    }
-                }
-            }
-            Ok(quick_xml::events::Event::End(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match local_name(&tag) {
-                    "Audience" => {
-                        if in_audience {
-                            let val = current_text.trim().to_string();
-                            if !val.is_empty() {
-                                audiences.push(val);
-                            }
-                            current_text.clear();
-                        }
-                        in_audience = false;
-                    }
-                    "AudienceRestriction" => in_audience_restriction = false,
-                    _ => {}
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
+            keep_going()
         }
-        buf.clear();
-    }
+        _ => keep_going(),
+    });
 
     audiences
 }
@@ -1039,17 +1011,17 @@ fn build_authn_request(
 
 /// Extract the ID attribute from an AuthnRequest element.
 fn extract_request_id(xml: &str) -> Option<String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-    if let Ok(quick_xml::events::Event::Start(ref e)) = reader.read_event_into(&mut buf) {
+    let mut found: Option<String> = None;
+    let _ = for_each_start_event(xml, |_ln, e| {
         for attr in e.attributes().flatten() {
             if attr.key.as_ref() == b"ID" {
-                return Some(String::from_utf8_lossy(&attr.value).to_string());
+                found = Some(String::from_utf8_lossy(&attr.value).to_string());
+                return std::ops::ControlFlow::Break(());
             }
         }
-    }
-    None
+        std::ops::ControlFlow::Continue(())
+    });
+    found
 }
 
 /// Sign an AuthnRequest XML with an RSA-SHA256 enveloped signature.
@@ -1250,9 +1222,6 @@ pub fn parse_saml_response(
 
 /// Parse the SAML assertion XML and extract attributes.
 fn parse_assertion_xml(xml: &str) -> Result<SamlAttributes, String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-
     let mut name_id: Option<String> = None;
     let mut session_index: Option<String> = None;
     let mut attributes: HashMap<String, Vec<String>> = HashMap::new();
@@ -1262,80 +1231,78 @@ fn parse_assertion_xml(xml: &str) -> Result<SamlAttributes, String> {
     let mut in_session_index = false;
     let mut current_attr_name = String::new();
     let mut current_text = String::new();
-    let mut buf = Vec::new();
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e))
-            | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match local_name(&tag) {
-                    "NameID" => {
-                        in_name_id = true;
-                        current_text.clear();
-                    }
-                    "Attribute" => {
-                        for attr in e.attributes().flatten() {
-                            if attr.key.as_ref() == b"Name" {
-                                current_attr_name =
-                                    String::from_utf8_lossy(&attr.value).to_string();
-                            }
+    let result = for_each_event(xml, true, |event| match event {
+        quick_xml::events::Event::Start(ref e) | quick_xml::events::Event::Empty(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            match local_name(&tag) {
+                "NameID" => {
+                    in_name_id = true;
+                    current_text.clear();
+                }
+                "Attribute" => {
+                    for attr in e.attributes().flatten() {
+                        if attr.key.as_ref() == b"Name" {
+                            current_attr_name = String::from_utf8_lossy(&attr.value).to_string();
                         }
                     }
-                    "AttributeValue" => {
-                        in_attribute_value = true;
-                        current_text.clear();
-                    }
-                    "SessionIndex" => {
-                        in_session_index = true;
-                        current_text.clear();
-                    }
-                    _ => {}
                 }
-            }
-            Ok(quick_xml::events::Event::Text(ref e)) => {
-                let raw = String::from_utf8_lossy(e.as_ref());
-                if let Ok(text) = xml_unescape(&raw) {
-                    let text_str = text.to_string();
-                    if in_name_id {
-                        name_id = Some(text_str);
-                    } else if in_session_index {
-                        session_index = Some(text_str);
-                    } else if in_attribute_value && !current_attr_name.is_empty() {
-                        current_text.push_str(&text_str);
-                    }
+                "AttributeValue" => {
+                    in_attribute_value = true;
+                    current_text.clear();
                 }
-            }
-            Ok(quick_xml::events::Event::End(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match local_name(&tag) {
-                    "NameID" => {
-                        in_name_id = false;
-                    }
-                    "AttributeValue" => {
-                        if in_attribute_value && !current_attr_name.is_empty() {
-                            let val = current_text.trim().to_string();
-                            if !val.is_empty() {
-                                attributes
-                                    .entry(current_attr_name.clone())
-                                    .or_default()
-                                    .push(val);
-                            }
-                            current_text.clear();
-                        }
-                        in_attribute_value = false;
-                    }
-                    "SessionIndex" => {
-                        in_session_index = false;
-                    }
-                    _ => {}
+                "SessionIndex" => {
+                    in_session_index = true;
+                    current_text.clear();
                 }
+                _ => {}
             }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => return Err(format!("SAML XML parse error: {e}")),
-            _ => {}
+            keep_going()
         }
-        buf.clear();
+        quick_xml::events::Event::Text(ref e) => {
+            let raw = String::from_utf8_lossy(e.as_ref());
+            if let Ok(text) = xml_unescape(&raw) {
+                let text_str = text.to_string();
+                if in_name_id {
+                    name_id = Some(text_str);
+                } else if in_session_index {
+                    session_index = Some(text_str);
+                } else if in_attribute_value && !current_attr_name.is_empty() {
+                    current_text.push_str(&text_str);
+                }
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::End(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            match local_name(&tag) {
+                "NameID" => {
+                    in_name_id = false;
+                }
+                "AttributeValue" => {
+                    if in_attribute_value && !current_attr_name.is_empty() {
+                        let val = current_text.trim().to_string();
+                        if !val.is_empty() {
+                            attributes
+                                .entry(current_attr_name.clone())
+                                .or_default()
+                                .push(val);
+                        }
+                        current_text.clear();
+                    }
+                    in_attribute_value = false;
+                }
+                "SessionIndex" => {
+                    in_session_index = false;
+                }
+                _ => {}
+            }
+            keep_going()
+        }
+        _ => keep_going(),
+    });
+    if let Err(e) = result {
+        return Err(format!("SAML XML parse error: {e}"));
     }
 
     let name_id = name_id.ok_or("No NameID found in SAML assertion")?;
@@ -1369,59 +1336,20 @@ fn validate_response_signature(
     idp_cert_pem: &str,
     request_id: Option<&str>,
 ) -> Result<String, String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
     let mut in_signature_value = false;
     let mut in_signed_info = false;
     let mut signature_value = String::new();
     let mut signed_info_buf = Vec::new();
     let mut signed_info_depth = 0u32;
-    let mut buf = Vec::new();
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match local_name(&tag) {
-                    "SignedInfo" => {
-                        in_signed_info = true;
-                        signed_info_depth = 1;
-                        signed_info_buf.clear();
-                        signed_info_buf.extend_from_slice(b"<");
-                        signed_info_buf.extend_from_slice(e.name().as_ref());
-                        for attr in e.attributes().flatten() {
-                            signed_info_buf.push(b' ');
-                            signed_info_buf.extend_from_slice(attr.key.as_ref());
-                            signed_info_buf.extend_from_slice(b"=\"");
-                            signed_info_buf.extend_from_slice(&attr.value);
-                            signed_info_buf.push(b'"');
-                        }
-                        signed_info_buf.push(b'>');
-                    }
-                    "SignatureValue" => {
-                        in_signature_value = true;
-                        signature_value.clear();
-                    }
-                    _ if in_signed_info => {
-                        signed_info_depth += 1;
-                        // Capture element start
-                        signed_info_buf.extend_from_slice(b"<");
-                        signed_info_buf.extend_from_slice(e.name().as_ref());
-                        for attr in e.attributes().flatten() {
-                            signed_info_buf.push(b' ');
-                            signed_info_buf.extend_from_slice(attr.key.as_ref());
-                            signed_info_buf.extend_from_slice(b"=\"");
-                            signed_info_buf.extend_from_slice(&attr.value);
-                            signed_info_buf.push(b'"');
-                        }
-                        signed_info_buf.push(b'>');
-                    }
-                    _ => {}
-                }
-            }
-            Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if in_signed_info {
+    let result = for_each_event(xml, true, |event| match event {
+        quick_xml::events::Event::Start(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            match local_name(&tag) {
+                "SignedInfo" => {
+                    in_signed_info = true;
+                    signed_info_depth = 1;
+                    signed_info_buf.clear();
                     signed_info_buf.extend_from_slice(b"<");
                     signed_info_buf.extend_from_slice(e.name().as_ref());
                     for attr in e.attributes().flatten() {
@@ -1431,42 +1359,80 @@ fn validate_response_signature(
                         signed_info_buf.extend_from_slice(&attr.value);
                         signed_info_buf.push(b'"');
                     }
-                    signed_info_buf.extend_from_slice(b"/>");
+                    signed_info_buf.push(b'>');
                 }
-                if local_name(&tag) == "SignatureValue" {
+                "SignatureValue" => {
                     in_signature_value = true;
                     signature_value.clear();
                 }
-            }
-            Ok(quick_xml::events::Event::Text(ref e)) => {
-                if in_signature_value {
-                    let raw = String::from_utf8_lossy(e.as_ref());
-                    signature_value.push_str(&raw);
-                }
-                if in_signed_info {
-                    signed_info_buf.extend_from_slice(e.as_ref());
-                }
-            }
-            Ok(quick_xml::events::Event::End(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if in_signed_info {
-                    signed_info_buf.extend_from_slice(b"</");
+                _ if in_signed_info => {
+                    signed_info_depth += 1;
+                    // Capture element start
+                    signed_info_buf.extend_from_slice(b"<");
                     signed_info_buf.extend_from_slice(e.name().as_ref());
-                    signed_info_buf.push(b'>');
-                    signed_info_depth -= 1;
-                    if signed_info_depth == 0 {
-                        in_signed_info = false;
+                    for attr in e.attributes().flatten() {
+                        signed_info_buf.push(b' ');
+                        signed_info_buf.extend_from_slice(attr.key.as_ref());
+                        signed_info_buf.extend_from_slice(b"=\"");
+                        signed_info_buf.extend_from_slice(&attr.value);
+                        signed_info_buf.push(b'"');
                     }
+                    signed_info_buf.push(b'>');
                 }
-                if local_name(&tag) == "SignatureValue" {
-                    in_signature_value = false;
+                _ => {}
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::Empty(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            if in_signed_info {
+                signed_info_buf.extend_from_slice(b"<");
+                signed_info_buf.extend_from_slice(e.name().as_ref());
+                for attr in e.attributes().flatten() {
+                    signed_info_buf.push(b' ');
+                    signed_info_buf.extend_from_slice(attr.key.as_ref());
+                    signed_info_buf.extend_from_slice(b"=\"");
+                    signed_info_buf.extend_from_slice(&attr.value);
+                    signed_info_buf.push(b'"');
+                }
+                signed_info_buf.extend_from_slice(b"/>");
+            }
+            if local_name(&tag) == "SignatureValue" {
+                in_signature_value = true;
+                signature_value.clear();
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::Text(ref e) => {
+            if in_signature_value {
+                let raw = String::from_utf8_lossy(e.as_ref());
+                signature_value.push_str(&raw);
+            }
+            if in_signed_info {
+                signed_info_buf.extend_from_slice(e.as_ref());
+            }
+            keep_going()
+        }
+        quick_xml::events::Event::End(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            if in_signed_info {
+                signed_info_buf.extend_from_slice(b"</");
+                signed_info_buf.extend_from_slice(e.name().as_ref());
+                signed_info_buf.push(b'>');
+                signed_info_depth -= 1;
+                if signed_info_depth == 0 {
+                    in_signed_info = false;
                 }
             }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => return Err(format!("XML parse error finding signature: {e}")),
-            _ => {}
+            if local_name(&tag) == "SignatureValue" {
+                in_signature_value = false;
+            }
+            keep_going()
         }
-        buf.clear();
+        _ => keep_going(),
+    });
+    if let Err(e) = result {
+        return Err(format!("XML parse error finding signature: {e}"));
     }
 
     if signature_value.is_empty() {
@@ -1530,108 +1496,82 @@ fn validate_response_signature(
 
 /// Extract the Reference URI from a SignedInfo XML fragment.
 fn extract_reference_uri(signed_info: &str) -> Option<String> {
-    let mut reader = Reader::from_str(signed_info);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e))
-            | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if local_name(&tag) == "Reference" {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"URI" {
-                            let uri = String::from_utf8_lossy(&attr.value).to_string();
-                            return Some(uri);
-                        }
-                    }
+    let mut found: Option<String> = None;
+    let _ = for_each_start_event(signed_info, |ln, e| {
+        if ln == "Reference" {
+            for attr in e.attributes().flatten() {
+                if attr.key.as_ref() == b"URI" {
+                    found = Some(String::from_utf8_lossy(&attr.value).to_string());
+                    return std::ops::ControlFlow::Break(());
                 }
             }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
         }
-        buf.clear();
-    }
-    None
+        std::ops::ControlFlow::Continue(())
+    })
+    .ok();
+    found
 }
 
 /// Extract the ID attribute from the Assertion element in a SAML response.
 fn extract_assertion_id(xml: &str) -> Option<String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e))
-            | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                if local_name(&tag) == "Assertion" {
-                    for attr in e.attributes().flatten() {
-                        if attr.key.as_ref() == b"ID" {
-                            return Some(String::from_utf8_lossy(&attr.value).to_string());
-                        }
-                    }
+    let mut found: Option<String> = None;
+    let _ = for_each_start_event(xml, |ln, e| {
+        if ln == "Assertion" {
+            for attr in e.attributes().flatten() {
+                if attr.key.as_ref() == b"ID" {
+                    found = Some(String::from_utf8_lossy(&attr.value).to_string());
+                    return std::ops::ControlFlow::Break(());
                 }
             }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
         }
-        buf.clear();
-    }
-    None
+        std::ops::ControlFlow::Continue(())
+    })
+    .ok();
+    found
 }
 
 /// Validate time conditions in the SAML assertion.
 fn validate_time_conditions(xml: &str) -> Result<(), String> {
-    let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
     let mut conditions_not_before: Option<DateTime<Utc>> = None;
     let mut conditions_not_on_or_after: Option<DateTime<Utc>> = None;
     let mut subject_not_on_or_after: Option<DateTime<Utc>> = None;
-    let mut buf = Vec::new();
 
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e))
-            | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                match local_name(&tag) {
-                    "Conditions" => {
-                        for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
-                            match key.as_str() {
-                                "NotBefore" => {
-                                    conditions_not_before = parse_saml_datetime(&val).ok();
-                                }
-                                "NotOnOrAfter" => {
-                                    conditions_not_on_or_after = parse_saml_datetime(&val).ok();
-                                }
-                                _ => {}
+    let result = for_each_event(xml, true, |event| match event {
+        quick_xml::events::Event::Start(ref e) | quick_xml::events::Event::Empty(ref e) => {
+            let tag = String::from_utf8_lossy(e.name().as_ref()).to_string();
+            match local_name(&tag) {
+                "Conditions" => {
+                    for attr in e.attributes().flatten() {
+                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                        let val = String::from_utf8_lossy(&attr.value).to_string();
+                        match key.as_str() {
+                            "NotBefore" => {
+                                conditions_not_before = parse_saml_datetime(&val).ok();
                             }
+                            "NotOnOrAfter" => {
+                                conditions_not_on_or_after = parse_saml_datetime(&val).ok();
+                            }
+                            _ => {}
                         }
                     }
-                    "SubjectConfirmationData" => {
-                        for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
-                            if key == "NotOnOrAfter" {
-                                subject_not_on_or_after = parse_saml_datetime(&val).ok();
-                            }
-                        }
-                    }
-                    _ => {}
                 }
+                "SubjectConfirmationData" => {
+                    for attr in e.attributes().flatten() {
+                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                        let val = String::from_utf8_lossy(&attr.value).to_string();
+                        if key == "NotOnOrAfter" {
+                            subject_not_on_or_after = parse_saml_datetime(&val).ok();
+                        }
+                    }
+                }
+                _ => {}
             }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => return Err(format!("XML parse error: {e}")),
-            _ => {}
+            keep_going()
         }
-        buf.clear();
+        _ => keep_going(),
+    });
+    if let Err(e) = result {
+        return Err(format!("XML parse error: {e}"));
     }
 
     let now = Utc::now();

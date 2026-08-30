@@ -509,10 +509,9 @@ fn parse_port(input: &str) -> Result<Option<u16>, String> {
     if input.is_empty() {
         return Ok(None);
     }
-    input
-        .parse::<u16>()
+    crate::net_util::parse_port(input)
         .map(Some)
-        .map_err(|_| format!("invalid port '{}'", input))
+        .ok_or_else(|| format!("invalid port '{}'", input))
 }
 
 /// Parse an optional string cell: blank -> `None`, otherwise the trimmed

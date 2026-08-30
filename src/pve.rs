@@ -11,7 +11,6 @@
 //! never logs them, and it never includes response bodies (which carry tickets)
 //! in error messages.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::time::Duration;
 
@@ -194,17 +193,34 @@ impl PveBroker {
             .map_err(|e| PveError::Transport(err_chain(&e)))
     }
 
-    /// Resolve which cluster node hosts a VM or container, via
-    /// `/cluster/resources`. This endpoint returns both Qemu VMs and LXC
-    /// containers when `type=vm` (PVE treats LXC as a VM resource type).
-    pub async fn resolve_node(&self, vmid: u32) -> Result<String, PveError> {
-        let url = format!(
-            "{}/api2/json/cluster/resources?type=vm",
-            self.base_url.trim_end_matches('/')
-        );
-        let resp = self
-            .http_client()?
-            .get(&url)
+    /// Issue an authenticated JSON API call and return the parsed response
+    /// envelope (`{"data": ...}`). Sends the `PVEAPIToken` header, maps
+    /// transport failures to [`PveError::Transport`], non-success statuses
+    /// to [`PveError::Api`] (via PVE's own error body), and unparseable
+    /// success bodies to [`PveError::Parse`]. `form` carries the
+    /// form-encoded request body for POST endpoints (e.g. the SPICE
+    /// `proxy` override).
+    ///
+    /// Every PVE console endpoint returns the same envelope, so this is
+    /// the single HTTP path for the client. No call site needs the raw
+    /// response body: even the SPICE path only reads fields out of
+    /// `data`, and error bodies are consumed by `api_error` with the
+    /// ticket-safe truncation there.
+    async fn api_json(
+        &self,
+        method: &str,
+        path: &str,
+        form: Option<&[(&str, &str)]>,
+    ) -> Result<serde_json::Value, PveError> {
+        let url = format!("{}{}", self.base_url.trim_end_matches('/'), path);
+        let client = self.http_client()?;
+        let request = match (method, form) {
+            ("POST", Some(form)) => client.post(&url).form(form),
+            ("POST", None) => client.post(&url),
+            ("GET", _) => client.get(&url),
+            (other, _) => return Err(PveError::Parse(format!("unsupported API method '{other}'"))),
+        };
+        let resp = request
             .header("Authorization", format!("PVEAPIToken={}", self.api_token))
             .send()
             .await
@@ -217,8 +233,16 @@ impl PveBroker {
             .text()
             .await
             .map_err(|e| PveError::Transport(e.to_string()))?;
-        let wrap: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| PveError::Parse(e.to_string()))?;
+        serde_json::from_str(&body).map_err(|e| PveError::Parse(e.to_string()))
+    }
+
+    /// Resolve which cluster node hosts a VM or container, via
+    /// `/cluster/resources`. This endpoint returns both Qemu VMs and LXC
+    /// containers when `type=vm` (PVE treats LXC as a VM resource type).
+    pub async fn resolve_node(&self, vmid: u32) -> Result<String, PveError> {
+        let wrap = self
+            .api_json("GET", "/api2/json/cluster/resources?type=vm", None)
+            .await?;
         let items = wrap
             .get("data")
             .and_then(|d| d.as_array())
@@ -247,80 +271,34 @@ impl PveBroker {
         vm_type: PveVmType,
         proxy: Option<&str>,
     ) -> Result<PveSpiceConfig, PveError> {
-        let url = format!(
-            "{}/api2/json/nodes/{}/{}/{}/spiceproxy",
-            self.base_url.trim_end_matches('/'),
-            node,
-            vm_type,
-            vmid,
-        );
-
-        let client = self.http_client()?;
-
-        let mut req = client
-            .post(&url)
-            .header("Authorization", format!("PVEAPIToken={}", self.api_token));
-        if let Some(p) = proxy {
-            req = req.form(&[("proxy", p)]);
-        }
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| PveError::Transport(err_chain(&e)))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(api_error(status.as_u16(), resp).await);
-        }
+        let path = format!("/api2/json/nodes/{}/{}/{}/spiceproxy", node, vm_type, vmid);
+        // Option<&str> iterates as &&str, so deref once to match &str.
+        let form: Vec<(&str, &str)> = proxy.iter().map(|p| ("proxy", *p)).collect();
+        let wrap = self.api_json("POST", &path, Some(&form)).await?;
 
         // Response shape: {"data": { "host": ..., "proxy": ..., "tls-port": ...,
         // "password": <ticket>, "ca": ..., "host-subject": ..., ... }}
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| PveError::Transport(e.to_string()))?;
-        let wrap: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| PveError::Parse(e.to_string()))?;
-        let data: HashMap<String, serde_json::Value> =
-            serde_json::from_value(wrap.get("data").cloned().unwrap_or_default())
-                .map_err(|e| PveError::Parse(e.to_string()))?;
-
-        let field = |k: &str| -> Option<String> {
-            data.get(k).and_then(|v| v.as_str()).map(str::to_string)
-        };
-        let require = |k: &str| field(k).ok_or_else(|| PveError::Parse(format!("missing '{k}'")));
+        let data = PveData::new(&wrap)?;
 
         // tls-port may be a JSON string or number depending on PVE version.
-        let tls_port = data
-            .get("tls-port")
-            .and_then(|v| {
-                v.as_u64()
-                    .map(|n| n as u16)
-                    .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-            })
-            .ok_or_else(|| PveError::Parse("missing or invalid 'tls-port'".into()))?;
+        let tls_port = data.port("tls-port")?;
 
         Ok(PveSpiceConfig {
-            host: require("host")?,
-            proxy: require("proxy")?,
+            host: data.require("host")?,
+            proxy: data.require("proxy")?,
             tls_port,
-            ticket: require("password")?,
+            ticket: data.require("password")?,
             // PVE escapes newlines in the CA PEM as literal "\n"; guacd needs
             // real newlines.
-            ca_cert: field("ca").unwrap_or_default().replace("\\n", "\n"),
-            host_subject: field("host-subject").unwrap_or_default(),
+            ca_cert: data.field("ca").unwrap_or_default().replace("\\n", "\n"),
+            host_subject: data.field("host-subject").unwrap_or_default(),
         })
     }
 
-    /// Helper to build the API path prefix for a given node + vm type.
+    /// API path suffix for a node + vm type (relative to `base_url`;
+    /// `api_json` prepends the base).
     fn vm_path(&self, node: &str, vm_type: PveVmType, vmid: u32) -> String {
-        format!(
-            "{}/api2/json/nodes/{}/{}/{}",
-            self.base_url.trim_end_matches('/'),
-            node,
-            vm_type,
-            vmid,
-        )
+        format!("/api2/json/nodes/{}/{}/{}", node, vm_type, vmid)
     }
 
     /// Fetch a just-in-time VNC config from the `vncproxy` endpoint.
@@ -332,46 +310,16 @@ impl PveBroker {
         vm_type: PveVmType,
     ) -> Result<VncConfig, PveError> {
         let url = format!("{}/vncproxy", self.vm_path(node, vm_type, vmid));
-        let resp = self
-            .http_client()?
-            .post(&url)
-            .header("Authorization", format!("PVEAPIToken={}", self.api_token))
-            .send()
-            .await
-            .map_err(|e| PveError::Transport(err_chain(&e)))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(api_error(status.as_u16(), resp).await);
-        }
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| PveError::Transport(e.to_string()))?;
-        let wrap: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| PveError::Parse(e.to_string()))?;
-        let data: HashMap<String, serde_json::Value> =
-            serde_json::from_value(wrap.get("data").cloned().unwrap_or_default())
-                .map_err(|e| PveError::Parse(e.to_string()))?;
+        let wrap = self.api_json("POST", &url, None).await?;
+        let data = PveData::new(&wrap)?;
 
-        let field = |k: &str| -> Option<String> {
-            data.get(k).and_then(|v| v.as_str()).map(str::to_string)
-        };
-        let require = |k: &str| field(k).ok_or_else(|| PveError::Parse(format!("missing '{k}'")));
-
-        let port = data
-            .get("port")
-            .and_then(|v| {
-                v.as_u64()
-                    .map(|n| n as u16)
-                    .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-            })
-            .ok_or_else(|| PveError::Parse("missing or invalid 'port'".into()))?;
+        let port = data.port("port")?;
 
         Ok(VncConfig {
             host: node.to_string(),
             port,
-            ticket: require("ticket")?,
-            cert: field("cert").unwrap_or_default(),
+            ticket: data.require("ticket")?,
+            cert: data.field("cert").unwrap_or_default(),
         })
     }
 
@@ -384,47 +332,15 @@ impl PveBroker {
         vm_type: PveVmType,
     ) -> Result<SerialConfig, PveError> {
         let url = format!("{}/termproxy", self.vm_path(node, vm_type, vmid));
-        let resp = self
-            .http_client()?
-            .post(&url)
-            .header("Authorization", format!("PVEAPIToken={}", self.api_token))
-            .send()
-            .await
-            .map_err(|e| PveError::Transport(err_chain(&e)))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(api_error(status.as_u16(), resp).await);
-        }
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| PveError::Transport(e.to_string()))?;
-        let wrap: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| PveError::Parse(e.to_string()))?;
-        let data: HashMap<String, serde_json::Value> =
-            serde_json::from_value(wrap.get("data").cloned().unwrap_or_default())
-                .map_err(|e| PveError::Parse(e.to_string()))?;
+        let wrap = self.api_json("POST", &url, None).await?;
+        let data = PveData::new(&wrap)?;
 
-        let require = |k: &str| -> Result<String, PveError> {
-            data.get(k)
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-                .ok_or_else(|| PveError::Parse(format!("missing '{k}'")))
-        };
-
-        let port = data
-            .get("port")
-            .and_then(|v| {
-                v.as_u64()
-                    .map(|n| n as u16)
-                    .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-            })
-            .ok_or_else(|| PveError::Parse("missing or invalid 'port'".into()))?;
+        let port = data.port("port")?;
 
         Ok(SerialConfig {
             host: node.to_string(),
             port,
-            ticket: require("ticket")?,
+            ticket: data.require("ticket")?,
         })
     }
 
@@ -438,45 +354,13 @@ impl PveBroker {
         vm_type: PveVmType,
     ) -> Result<XtermConfig, PveError> {
         let url = format!("{}/xtermjs", self.vm_path(node, vm_type, vmid));
-        let resp = self
-            .http_client()?
-            .post(&url)
-            .header("Authorization", format!("PVEAPIToken={}", self.api_token))
-            .send()
-            .await
-            .map_err(|e| PveError::Transport(err_chain(&e)))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(api_error(status.as_u16(), resp).await);
-        }
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| PveError::Transport(e.to_string()))?;
-        let wrap: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| PveError::Parse(e.to_string()))?;
-        let data: HashMap<String, serde_json::Value> =
-            serde_json::from_value(wrap.get("data").cloned().unwrap_or_default())
-                .map_err(|e| PveError::Parse(e.to_string()))?;
+        let wrap = self.api_json("POST", &url, None).await?;
+        let data = PveData::new(&wrap)?;
 
-        let require = |k: &str| -> Result<String, PveError> {
-            data.get(k)
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-                .ok_or_else(|| PveError::Parse(format!("missing '{k}'")))
-        };
-
-        let port = data
-            .get("port")
-            .and_then(|v| {
-                v.as_u64()
-                    .map(|n| n as u16)
-                    .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
-            })
-            .ok_or_else(|| PveError::Parse("missing or invalid 'port'".into()))?;
+        let port = data.port("port")?;
 
         Ok(XtermConfig {
-            ticket: require("ticket")?,
+            ticket: data.require("ticket")?,
             port,
         })
     }
@@ -485,27 +369,9 @@ impl PveBroker {
     /// `/cluster/resources?type=vm`. Returns every resource the API token can
     /// see, including stopped ones.
     pub async fn list_all_vms(&self) -> Result<Vec<PveVm>, PveError> {
-        let url = format!(
-            "{}/api2/json/cluster/resources?type=vm",
-            self.base_url.trim_end_matches('/')
-        );
-        let resp = self
-            .http_client()?
-            .get(&url)
-            .header("Authorization", format!("PVEAPIToken={}", self.api_token))
-            .send()
-            .await
-            .map_err(|e| PveError::Transport(err_chain(&e)))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(api_error(status.as_u16(), resp).await);
-        }
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| PveError::Transport(e.to_string()))?;
-        let wrap: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| PveError::Parse(e.to_string()))?;
+        let wrap = self
+            .api_json("GET", "/api2/json/cluster/resources?type=vm", None)
+            .await?;
         let items = wrap
             .get("data")
             .and_then(|d| d.as_array())
@@ -571,23 +437,7 @@ impl PveBroker {
             )));
         }
         let url = format!("{}/status/{}", self.vm_path(node, vm_type, vmid), action);
-        let resp = self
-            .http_client()?
-            .post(&url)
-            .header("Authorization", format!("PVEAPIToken={}", self.api_token))
-            .send()
-            .await
-            .map_err(|e| PveError::Transport(err_chain(&e)))?;
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(api_error(status.as_u16(), resp).await);
-        }
-        let body = resp
-            .text()
-            .await
-            .map_err(|e| PveError::Transport(e.to_string()))?;
-        let wrap: serde_json::Value =
-            serde_json::from_str(&body).map_err(|e| PveError::Parse(e.to_string()))?;
+        let wrap = self.api_json("POST", &url, None).await?;
         // PVE returns {"data": "UPID:node:..."} for successful power actions.
         wrap.get("data")
             .and_then(|v| v.as_str())
@@ -596,8 +446,54 @@ impl PveBroker {
     }
 }
 
+/// Field access over a PVE response `data` object. Wraps the decoded
+/// envelope and centralizes the string/number extraction the console
+/// endpoints share, with ticket-free parse errors (field names only,
+/// never response bodies).
+struct PveData<'a> {
+    data: &'a serde_json::Value,
+}
+
+impl<'a> PveData<'a> {
+    /// Wrap the `data` member of a decoded PVE response envelope.
+    fn new(wrap: &'a serde_json::Value) -> Result<Self, PveError> {
+        Ok(PveData {
+            data: wrap.get("data").unwrap_or(&serde_json::Value::Null),
+        })
+    }
+
+    /// String field value, absent or non-string yields `None`.
+    fn field(&self, k: &str) -> Option<String> {
+        self.data
+            .get(k)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    }
+
+    /// Required string field; missing parses as an error.
+    fn require(&self, k: &str) -> Result<String, PveError> {
+        self.field(k)
+            .ok_or_else(|| PveError::Parse(format!("missing '{k}'")))
+    }
+
+    /// Port field: `tls-port`/`port` may be a JSON string or number
+    /// depending on PVE version.
+    fn port(&self, k: &str) -> Result<u16, PveError> {
+        self.data
+            .get(k)
+            .and_then(|v| {
+                v.as_u64()
+                    .map(|n| n as u16)
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+            })
+            .ok_or_else(|| PveError::Parse(format!("missing or invalid '{k}'")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{PveBroker, PveVmType};
+
     #[test]
     fn parses_spiceproxy_style_fields_and_unescapes_ca() {
         // Mirror of a real spiceproxy `data` payload (ticket/CA are dummies).
@@ -630,5 +526,20 @@ mod tests {
             .replace("\\n", "\n");
         assert!(ca.contains("-----BEGIN CERTIFICATE-----\n"));
         assert!(!ca.contains("\\n"));
+    }
+
+    #[test]
+    fn vm_path_is_base_relative() {
+        // api_json prepends base_url itself; if vm_path ever embeds the
+        // base again the node endpoints would request a doubled URL.
+        let broker = PveBroker {
+            base_url: "https://pve.example.com:8006".into(),
+            api_token: "user@pam!tok=secret".into(),
+            verify_tls: false,
+        };
+        assert_eq!(
+            broker.vm_path("pve1", PveVmType::Qemu, 101),
+            "/api2/json/nodes/pve1/qemu/101"
+        );
     }
 }
