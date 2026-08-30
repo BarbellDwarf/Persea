@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ status_code }} — {{ title }}{% endblock %}
 {% block body %}
-<div style="max-width:480px;margin:80px auto;text-align:center;padding:0 16px">
+<div id="app-main" style="max-width:480px;margin:80px auto;text-align:center;padding:0 16px">
     <div style="font-size:64px;font-weight:700;color:var(--accent)">{{ status_code }}</div>
     <h1 style="font-size:20px;color:var(--text-primary);margin:16px 0 8px">{{ title|escape }}</h1>
     <p style="font-size:14px;color:var(--text-muted);margin-bottom:24px">{{ message|escape }}</p>

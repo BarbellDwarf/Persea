@@ -308,7 +308,6 @@
                 <h2 id="entry-modal-title" class="text-lg font-bold text-[var(--text-primary)]">New Entry</h2>
                 <p id="entry-modal-subtitle" class="text-xs text-[var(--text-muted)] mt-1"></p>
             </div>
-            <span id="entry-modal-badge" class="entry-modal-state-badge entry-modal-state-create">Create</span>
         </div>
 
         <div class="entry-modal-body">
@@ -2813,8 +2812,6 @@
         if (!selectedFolder) return;
         entryEditMode = null;
         document.getElementById('entry-modal-title').textContent = 'New Entry';
-        document.getElementById('entry-modal-badge').textContent = 'Create';
-        document.getElementById('entry-modal-badge').className = 'entry-modal-state-badge entry-modal-state-create';
         var nonPersonal = folders.filter(function(f) { return f.scope !== 'personal'; });
         var target = selectedFolder.scope !== 'personal' ? selectedFolder : (nonPersonal[0] || null);
         populateEntryFolders(target ? target.scope + '|' + target.path : '');
@@ -2847,8 +2844,6 @@
         if (!selectedFolder || !selectedEntry) return;
         entryEditMode = { scope: selectedFolder.scope, folder: selectedFolder.path, name: selectedEntry.name };
         document.getElementById('entry-modal-title').textContent = 'Edit Entry';
-        document.getElementById('entry-modal-badge').textContent = 'Edit';
-        document.getElementById('entry-modal-badge').className = 'entry-modal-state-badge entry-modal-state-edit';
         populateEntryFolders(entryEditMode.scope + '|' + entryEditMode.folder);
         document.getElementById('em-folder').disabled = true;
         var fh = document.getElementById('em-folder-hint');

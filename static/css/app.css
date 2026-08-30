@@ -1081,19 +1081,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     flex-shrink: 0;
 }
 
-.entry-modal-state-badge {
-    padding: 2px 10px;
-    border-radius: 9999px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    flex-shrink: 0;
-    margin-top: 2px;
-}
-.entry-modal-state-create { background: rgba(16,185,129,0.12); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
-.entry-modal-state-edit { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
-
 .entry-modal-body {
     padding: 18px 24px 36px;
     overflow-y: auto;
@@ -1392,3 +1379,36 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
     font-weight: 500;
 }
 .filter-chip-clear-all:hover { background: rgba(16,185,129,0.1); } (feat: consolidate connections page top bar (persea#215))
+
+/* ── Skip-to-content link (persea#286, WCAG 2.4.1) ────────────────
+   Visually hidden until focused, then revealed at the top-left.
+   Targets #app-main (set on <main> in layouts/app.html). The id was
+   not named "main-content" because connections.html already uses that
+   id on an inner hidden-by-default div that the ConnectionsPage
+   Playwright test locates. */
+.skip-link {
+    position: absolute;
+    left: -9999px;
+    top: auto;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    z-index: 9999;
+    padding: 12px 18px;
+    background: var(--accent);
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 14px;
+    text-decoration: none;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+    left: 16px;
+    top: 16px;
+    width: auto;
+    height: auto;
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
