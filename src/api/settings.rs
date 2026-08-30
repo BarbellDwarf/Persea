@@ -604,31 +604,41 @@ pub async fn put_settings(
 
     let db_clone = database.clone();
     let entries_clone = entries.clone();
-    tokio::task::spawn_blocking(move || {
+    let new_epoch = tokio::task::spawn_blocking(move || {
         if crate::db::pool_active() {
-            return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| crate::db::settings_put_pool(pool, entries_clone));
+            return crate::db::pool_call(move |pool: &'static crate::db_pool::DbPool| {
+                crate::db::settings_put_pool(pool, entries_clone)
+            });
         }
-        let conn = db_clone.lock().unwrap();
+        // rusqlite path: the flag rows and the epoch bump commit together
+        // (one transaction) so HA peers can never observe the flags
+        // without the matching epoch (persea#289).
+        let mut conn = db_clone.lock().unwrap();
         conn.execute_batch(CREATE_TABLE_SQL)?;
+        let tx = conn.transaction()?;
         for (key, value) in &entries_clone {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO system_settings (key, value, updated_at)
                  VALUES (?1, ?2, CURRENT_TIMESTAMP)
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
                 params![key, value],
             )?;
         }
-        Ok::<_, rusqlite::Error>(())
+        let epoch = crate::db::bump_settings_epoch_conn(&tx)?;
+        tx.commit()?;
+        Ok::<_, rusqlite::Error>(epoch)
     })
     .await
     .map_err(|e| AppError::Internal(e.to_string()))??;
 
     // Invalidate the cached settings flags for any flag-shaped keys that
-    // were just written, so subsequent API-key requests see the new values
-    // without a restart (persea#276).
+    // were just written, and record the epoch the commit produced, so
+    // subsequent requests see the new values: instantly on this instance,
+    // and on HA peers via their epoch check (persea#276, persea#289).
     for (key, value) in &entries {
         crate::auth::update_settings_cache(key, value);
     }
+    crate::auth::set_settings_cache_epoch(new_epoch);
 
     let db_clone = database.clone();
     let stored = tokio::task::spawn_blocking(move || read_all_settings(&db_clone))

@@ -12534,35 +12534,198 @@ pub async fn settings_load_all_pool(pool: &DbPool) -> rusqlite::Result<Vec<(Stri
         .collect())
 }
 
-/// Upsert system settings, one statement per pair. A failure partway
-/// through leaves the earlier pairs applied, which the settings API
-/// tolerates. Returns an error when no SQLx pool is configured.
+/// Upsert system settings, one statement per pair, then bump the settings
+/// epoch — all inside one transaction (persea#289). Committing the flag
+/// rows and the epoch together guarantees HA peers can never observe the
+/// flags without the matching epoch, so their next freshness check sees
+/// the change exactly once. Returns the new epoch value. A failure rolls
+/// the whole PUT back (previously a partial failure left the earlier pairs
+/// applied; all-or-nothing is strictly safer and the settings API tolerates
+/// both). Returns an error when no SQLx pool is configured.
 pub async fn settings_put_pool(
     pool: &DbPool,
     entries: Vec<(String, String)>,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<i64> {
+    match pool {
+        DbPool::Postgres(pg) => {
+            let mut tx = pg.begin().await.map_err(map_sqlx_err)?;
+            for (key, value) in &entries {
+                sqlx::query(
+                    "INSERT INTO system_settings (key, value, updated_at) \
+                     VALUES ($1, $2, CURRENT_TIMESTAMP) \
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                )
+                .bind(key)
+                .bind(value)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_err)?;
+            }
+            let (epoch,): (i64,) = sqlx::query_as(
+                "INSERT INTO system_settings (key, value, updated_at) \
+                 VALUES ($1, '1', CURRENT_TIMESTAMP) \
+                 ON CONFLICT (key) DO UPDATE SET \
+                     value = CAST(CAST(COALESCE(NULLIF(system_settings.value, ''), '0') AS BIGINT) + 1 AS TEXT), \
+                     updated_at = CURRENT_TIMESTAMP \
+                 RETURNING CAST(value AS BIGINT)",
+            )
+            .bind(SETTINGS_EPOCH_KEY)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_err)?;
+            tx.commit().await.map_err(map_sqlx_err)?;
+            Ok(epoch)
+        }
+        DbPool::MySQL(mysql) => {
+            let mut tx = mysql.begin().await.map_err(map_sqlx_err)?;
+            for (key, value) in &entries {
+                sqlx::query(
+                    "INSERT INTO system_settings (`key`, value, updated_at) \
+                     VALUES (?, ?, CURRENT_TIMESTAMP) AS new \
+                     ON DUPLICATE KEY UPDATE value = new.value, updated_at = CURRENT_TIMESTAMP",
+                )
+                .bind(key)
+                .bind(value)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_err)?;
+            }
+            sqlx::query(
+                "INSERT INTO system_settings (`key`, value, updated_at) \
+                 VALUES (?, '1', CURRENT_TIMESTAMP) \
+                 ON DUPLICATE KEY UPDATE \
+                     value = CAST(CAST(COALESCE(NULLIF(value, ''), '0') AS SIGNED) + 1 AS CHAR), \
+                     updated_at = CURRENT_TIMESTAMP",
+            )
+            .bind(SETTINGS_EPOCH_KEY)
+            .execute(&mut *tx)
+            .await
+            .map_err(map_sqlx_err)?;
+            let (epoch,): (i64,) =
+                sqlx::query_as("SELECT CAST(value AS SIGNED) FROM system_settings WHERE `key` = ?")
+                    .bind(SETTINGS_EPOCH_KEY)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(map_sqlx_err)?;
+            tx.commit().await.map_err(map_sqlx_err)?;
+            Ok(epoch)
+        }
+        DbPool::SQLite(sqlite) => {
+            let mut tx = sqlite.begin().await.map_err(map_sqlx_err)?;
+            for (key, value) in &entries {
+                sqlx::query(
+                    "INSERT INTO system_settings (key, value, updated_at) \
+                     VALUES (?, ?, CURRENT_TIMESTAMP) \
+                     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
+                )
+                .bind(key)
+                .bind(value)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_err)?;
+            }
+            let (epoch,): (i64,) = sqlx::query_as(
+                "INSERT INTO system_settings (key, value, updated_at) \
+                 VALUES (?, '1', CURRENT_TIMESTAMP) \
+                 ON CONFLICT (key) DO UPDATE SET \
+                     value = CAST(CAST(COALESCE(NULLIF(value, ''), '0') AS INTEGER) + 1 AS TEXT), \
+                     updated_at = CURRENT_TIMESTAMP \
+                 RETURNING CAST(value AS INTEGER)",
+            )
+            .bind(SETTINGS_EPOCH_KEY)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(map_sqlx_err)?;
+            tx.commit().await.map_err(map_sqlx_err)?;
+            Ok(epoch)
+        }
+        DbPool::None => Err(no_pool_err()),
+    }
+}
+
+// ── Settings epoch (persea#289) ────────────────────────────────────────
+//
+// HA deployments share `system_settings` across instances while the auth
+// middleware caches two hot flags per process (see src/auth.rs). The
+// `settings_epoch` row is the cheap freshness signal that keeps those
+// caches coherent: the settings PUT bumps it in the same commit as the
+// flag writes, so a changed epoch guarantees the new flags are committed.
+// `key` is the table's primary key, so every read here is a single
+// indexed point lookup — no full-table scan.
+
+/// The `system_settings` row holding the monotonic settings epoch.
+const SETTINGS_EPOCH_KEY: &str = "settings_epoch";
+
+/// Parse a stored epoch value. A missing row, an empty value, or garbage
+/// all map to 0: the epoch is advisory (a wrong 0 only costs one extra
+/// cache reload), and pre-migration databases read as epoch 0.
+fn settings_epoch_from_value(raw: Option<String>) -> i64 {
+    raw.and_then(|v| v.parse::<i64>().ok()).unwrap_or_default()
+}
+
+/// Point-read the settings epoch. Missing row → `Ok(0)`; store errors
+/// surface so callers can decide (the auth middleware serves its cache
+/// rather than churning reloads while the backend is unhealthy).
+pub fn settings_epoch(db: &Db) -> rusqlite::Result<i64> {
+    db_route!(db, settings_epoch_pool);
+    let conn = db.lock().unwrap();
+    let raw = conn
+        .query_row(
+            "SELECT value FROM system_settings WHERE key = ?1",
+            params![SETTINGS_EPOCH_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+    Ok(settings_epoch_from_value(raw))
+}
+
+/// Pool variant of [`settings_epoch`]. A missing row (fresh database
+/// before any settings PUT) reads as 0.
+pub async fn settings_epoch_pool(pool: &DbPool) -> rusqlite::Result<i64> {
     let sql = qsql!(
         pool,
-        "INSERT INTO system_settings (key, value, updated_at) \
-         VALUES ($1, $2, CURRENT_TIMESTAMP) \
-         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
-        "INSERT INTO system_settings (key, value, updated_at) \
-         VALUES (?, ?, CURRENT_TIMESTAMP) \
-         ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP"
+        "SELECT value FROM system_settings WHERE key = $1",
+        "SELECT value FROM system_settings WHERE key = ?"
     );
-    let mysql_sql = "INSERT INTO system_settings (`key`, value, updated_at) \
-         VALUES (?, ?, CURRENT_TIMESTAMP) AS new \
-         ON DUPLICATE KEY UPDATE value = new.value, updated_at = CURRENT_TIMESTAMP";
+    let mysql_sql = "SELECT value FROM system_settings WHERE `key` = ?";
     let sql = match pool {
         DbPool::MySQL(_) => mysql_sql,
         _ => sql,
     };
-    for (key, value) in entries {
-        pool_exec(pool, sql, &[Arg::Str(key), Arg::Str(value)])
-            .await
-            .map_err(map_sqlx_err)?;
+    let rows = match pool {
+        DbPool::Postgres(p) => pg_fetch(p, sql, &[Arg::Str(SETTINGS_EPOCH_KEY.to_string())]).await,
+        DbPool::MySQL(p) => mysql_fetch(p, sql, &[Arg::Str(SETTINGS_EPOCH_KEY.to_string())]).await,
+        DbPool::SQLite(p) => {
+            sqlite_fetch(p, sql, &[Arg::Str(SETTINGS_EPOCH_KEY.to_string())]).await
+        }
+        DbPool::None => return Err(no_pool_err()),
     }
-    Ok(())
+    .map_err(map_sqlx_err)?;
+    let raw = rows.first().map(|r| r.get::<String>(0));
+    Ok(settings_epoch_from_value(raw))
+}
+
+/// Bump the settings epoch row and return the new value. Called inside
+/// the settings PUT commit (rusqlite path): callers run the flag upserts
+/// and this bump in one transaction so HA peers never observe flag rows
+/// without the matching epoch. A missing row is created starting at 1.
+pub fn bump_settings_epoch_conn(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO system_settings (key, value, updated_at)
+         VALUES (?1, '1', CURRENT_TIMESTAMP)
+         ON CONFLICT(key) DO UPDATE SET
+             value = CAST(CAST(COALESCE(NULLIF(value, ''), '0') AS INTEGER) + 1 AS TEXT),
+             updated_at = CURRENT_TIMESTAMP",
+        params![SETTINGS_EPOCH_KEY],
+    )?;
+    let raw = conn
+        .query_row(
+            "SELECT value FROM system_settings WHERE key = ?1",
+            params![SETTINGS_EPOCH_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+    Ok(settings_epoch_from_value(raw))
 }
 
 // ── Personal folders (user-scoped folder trees) ────────────────────────
