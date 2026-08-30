@@ -56,6 +56,9 @@ pub mod handlers;
 pub mod import;
 pub mod metrics;
 pub mod migrate;
+/// Small host/port string helpers shared by the tunnel, session, config,
+/// and CSV-import surfaces.
+pub mod net_util;
 pub mod oidc;
 pub mod password;
 pub mod protocol;
@@ -81,6 +84,7 @@ pub mod thumbnails;
 pub mod totp;
 pub mod tunnel;
 pub mod updates;
+pub mod validation;
 pub mod vault;
 pub mod vdi;
 pub mod vsphere;

@@ -399,13 +399,10 @@ fn canonicalize(key: &str, value: &Value) -> Result<String, AppError> {
         } else {
             // guacd_addr mirrors the config validation: IP:port OR
             // hostname:port, only the port is checked.
-            match addr.rsplit(':').next() {
-                Some(p) if p.parse::<u16>().is_ok() => {}
-                _ => {
-                    return Err(AppError::Validation(format!(
-                        "{key} must end in a valid port (:1-65535)"
-                    )));
-                }
+            if !crate::net_util::has_valid_trailing_port(addr) {
+                return Err(AppError::Validation(format!(
+                    "{key} must end in a valid port (:1-65535)"
+                )));
             }
         }
         Ok(addr.to_string())

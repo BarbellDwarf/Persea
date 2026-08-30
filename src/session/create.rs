@@ -1837,18 +1837,7 @@ fn parse_autofill_credentials(
 /// input carries no explicit port. Used to tunnel Proxmox's PVE API and SPICE
 /// proxy endpoints through a jump-host chain.
 fn parse_host_port(input: &str, default_port: u16) -> Result<(String, u16), SessionError> {
-    let parsed = if input.contains("://") {
-        Url::parse(input)
-    } else {
-        Url::parse(&format!("tcp://{input}"))
-    }
-    .map_err(|e| SessionError::ValidationError(format!("invalid host/URL '{input}': {e}")))?;
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| SessionError::ValidationError(format!("no host in '{input}'")))?
-        .to_string();
-    let port = parsed.port().unwrap_or(default_port);
-    Ok((host, port))
+    crate::net_util::parse_host_port(input, default_port).map_err(SessionError::ValidationError)
 }
 
 /// Link-local / cloud-metadata networks denied as session targets

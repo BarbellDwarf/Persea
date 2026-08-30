@@ -24,6 +24,9 @@ mod error {
 mod api {
     pub use persea::api::{AppState, SettingsBaseline};
 }
+mod net_util {
+    pub use persea::net_util::*;
+}
 mod settings_merge {
     pub use persea::settings_merge::*;
 }

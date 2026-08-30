@@ -286,14 +286,7 @@ pub async fn update_user(
                     "email is managed by the identity provider for this user".into(),
                 ));
             }
-            let trimmed = new_email.trim();
-            if trimmed.is_empty()
-                || !trimmed.contains('@')
-                || trimmed.chars().any(char::is_whitespace)
-            {
-                return Err(AppError::Validation("invalid email address".into()));
-            }
-            Some(trimmed.to_string())
+            crate::validation::validate_email(Some(new_email))?
         }
         None => None,
     };
@@ -804,19 +797,13 @@ pub async fn update_me(
                     "email is managed by the identity provider for this user".into(),
                 ));
             }
-            let trimmed = new_email.trim();
-            if trimmed.is_empty()
-                || !trimmed.contains('@')
-                || trimmed.chars().any(char::is_whitespace)
-            {
-                return Err(AppError::Validation("invalid email address".into()));
-            }
+            let email = crate::validation::validate_email(Some(new_email))?;
             if body.current_password.as_deref().unwrap_or("").is_empty() {
                 return Err(AppError::Validation(
                     "current password is required to change your email".into(),
                 ));
             }
-            Some(trimmed.to_string())
+            email
         }
         None => None,
     };

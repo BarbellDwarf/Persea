@@ -168,6 +168,14 @@ pub fn normalize_host_key(expected: &str) -> Result<String, String> {
     fingerprint_openssh_key(trimmed)
 }
 
+/// Split the stored `jump_host` ("host" or "host:port") into its parts,
+/// defaulting the port to 22 exactly as the pasted snippets did. Delegates
+/// the cut to the shared last-colon splitter.
+fn split_jump_host(jump_host: &str) -> (&str, u16) {
+    let (host, port) = crate::net_util::split_host_port(jump_host);
+    (host, crate::net_util::parse_port(port).unwrap_or(22))
+}
+
 /// Read the known_hosts file and return the pinned fingerprint for `host:port`,
 /// or `None` if the host is not yet pinned.
 fn read_known_hosts(path: &std::path::Path, host: &str, port: u16) -> Option<String> {
@@ -229,13 +237,7 @@ impl client::Handler for TunnelHandler {
             Some(expected.clone())
         } else {
             self.known_hosts_path.as_ref().and_then(|path| {
-                let (host, port) = if let Some(colon_pos) = self.jump_host.rfind(':') {
-                    let host = &self.jump_host[..colon_pos];
-                    let port: u16 = self.jump_host[colon_pos + 1..].parse().unwrap_or(22);
-                    (host, port)
-                } else {
-                    (self.jump_host.as_str(), 22u16)
-                };
+                let (host, port) = split_jump_host(&self.jump_host);
                 read_known_hosts(path, host, port)
             })
         };
@@ -244,13 +246,7 @@ impl client::Handler for TunnelHandler {
             // First use — no pin in address book or known_hosts.
             // Auto-pin: persist the fingerprint for future verification.
             if let Some(ref path) = self.known_hosts_path {
-                let (host, port) = if let Some(colon_pos) = self.jump_host.rfind(':') {
-                    let host = &self.jump_host[..colon_pos];
-                    let port: u16 = self.jump_host[colon_pos + 1..].parse().unwrap_or(22);
-                    (host, port)
-                } else {
-                    (self.jump_host.as_str(), 22u16)
-                };
+                let (host, port) = split_jump_host(&self.jump_host);
                 match append_known_host(path, host, port, &fingerprint.to_string()) {
                     Ok(()) => {
                         tracing::info!(
@@ -637,6 +633,29 @@ mod tests {
     #[test]
     fn default_port_is_22() {
         assert_eq!(default_ssh_port(), 22);
+    }
+
+    #[test]
+    fn split_jump_host_bracketed_ipv6() {
+        // Bracketed IPv6 endpoints survive the last-colon split with the
+        // brackets intact, on both sides of the port.
+        assert_eq!(split_jump_host("[::1]:22"), ("[::1]", 22));
+        assert_eq!(
+            split_jump_host("[2001:db8::1]:2222"),
+            ("[2001:db8::1]", 2222)
+        );
+    }
+
+    #[test]
+    fn split_jump_host_plain_and_default() {
+        assert_eq!(
+            split_jump_host("bastion.example.com:2222"),
+            ("bastion.example.com", 2222)
+        );
+        assert_eq!(
+            split_jump_host("bastion.example.com"),
+            ("bastion.example.com", 22)
+        );
     }
 
     #[test]

@@ -24,6 +24,9 @@ mod api {
 mod settings_merge {
     pub use persea::settings_merge::*;
 }
+mod net_util {
+    pub use persea::net_util::*;
+}
 
 #[path = "../src/api/settings.rs"]
 mod settings;

@@ -647,12 +647,7 @@ impl SessionManager {
         }
 
         let mut stream: GuacdStream = if let Some(connector) = self.guacd_tls.as_ref() {
-            let hostname = self
-                .config
-                .guacd_addr
-                .rsplit_once(':')
-                .map(|(h, _)| h)
-                .unwrap_or(&self.config.guacd_addr);
+            let (hostname, _) = crate::net_util::split_host_port(&self.config.guacd_addr);
             let server_name =
                 tokio_rustls::rustls::pki_types::ServerName::try_from(hostname.to_string())
                     .map_err(|e| {
