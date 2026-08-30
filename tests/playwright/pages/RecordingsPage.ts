@@ -46,11 +46,15 @@ export class RecordingsPage {
   }
 
   async goto(): Promise<void> {
-    await this.page.goto('/');
+    // Navigate to root first to ensure session cookie from storageState is
+    // established; the redirect to connections.html confirms it. Then go
+    // directly to recordings.html — no need for the intermediate step on
+    // retry since the cookie is already set.
+    await this.page.goto('/', { waitUntil: 'domcontentloaded' });
     await this.page.evaluate((key) => {
       sessionStorage.setItem('persea_api_key', key);
     }, process.env.ADMIN_API_KEY || '');
-    await this.page.goto('/recordings.html');
+    await this.page.goto('/recordings.html', { waitUntil: 'domcontentloaded' });
   }
 
   async isPlayerVisible(): Promise<boolean> {

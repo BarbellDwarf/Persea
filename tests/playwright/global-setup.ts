@@ -19,6 +19,8 @@ async function globalSetup(config: FullConfig): Promise<void> {
   await page.click('#login-submit');
   await page.waitForURL(/connections\.html|sessions\.html/, { timeout: 15000 });
 
+  // The session cookie authenticates API calls via require_auth; the
+  // admin API key is used only by specs that read it explicitly.
   await context.storageState({ path: STORAGE_STATE });
   console.log(`[global-setup] Authenticated — storageState saved to ${STORAGE_STATE}`);
 

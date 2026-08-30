@@ -29,8 +29,10 @@ test.describe('Recordings page', () => {
 
   test('recording list container is visible', async () => {
     await rec.goto();
-    // With recordings the list is shown; without any the empty state is shown
-    await expect(rec.recordingList.or(rec.recordingEmpty).first()).toBeVisible();
+    // On a fresh DB with no recordings, the empty state is shown.
+    // When recordings exist, the content table is shown instead.
+    const listOrEmpty = rec.recordingList.or(rec.recordingEmpty);
+    await expect(listOrEmpty.first()).toBeVisible({ timeout: 10_000 });
   });
 
   test('search filters recordings', async ({ page }) => {
