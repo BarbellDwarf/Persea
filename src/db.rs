@@ -2466,10 +2466,7 @@ pub fn close_all_open_sessions(db: &Db, status: &str) -> rusqlite::Result<u64> {
 /// interrupted (persea#273).
 ///
 /// Called once at startup, before the reapers spawn.
-pub fn close_stale_active_history(
-    db: &Db,
-    owner_instance: Option<&str>,
-) -> rusqlite::Result<u64> {
+pub fn close_stale_active_history(db: &Db, owner_instance: Option<&str>) -> rusqlite::Result<u64> {
     db_route!(
         db,
         close_stale_active_history_pool,
@@ -5626,11 +5623,14 @@ mod tests {
 
         // remote-live is owned by instance-B (a different instance) and
         // has a live registry status: the sweep must skip it.
-        db.lock().unwrap().execute(
-            "INSERT INTO session_registry (session_id, owner_instance, session_type, status)
+        db.lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO session_registry (session_id, owner_instance, session_type, status)
              VALUES ('remote-live', 'instance-B', 'ssh', 'active')",
-            [],
-        ).unwrap();
+                [],
+            )
+            .unwrap();
 
         // Sweep as instance-A.
         let closed = close_stale_active_history(&db, Some("instance-A")).unwrap();
@@ -5647,7 +5647,10 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(status, "active", "remote-live must NOT be marked interrupted");
+        assert_eq!(
+            status, "active",
+            "remote-live must NOT be marked interrupted"
+        );
         assert!(ended.is_none(), "remote-live ended_at must remain NULL");
 
         // The orphan is closed.
