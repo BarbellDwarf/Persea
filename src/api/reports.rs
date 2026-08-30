@@ -9,7 +9,7 @@
 //! summary, activity, typescripts) are admin-only; deleting a recording
 //! requires admin.
 use super::AppState;
-use crate::auth::AuthIdentity;
+use crate::auth::{require_role, AuthIdentity};
 use crate::db::{self, Db};
 use crate::error::AppError;
 use aes::cipher::{Block, BlockCipherEncrypt, Key, KeyInit};
@@ -209,12 +209,7 @@ pub async fn list_typescripts(
     State(manager): State<AppState>,
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    match &identity {
-        Some(Extension(id)) if id.has_role("admin") => {}
-        _ => {
-            return Err(AppError::Forbidden("admin role required".into()));
-        }
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let ts_path = match manager
         .config()
@@ -495,9 +490,7 @@ pub async fn report_top_connections(
     Extension(database): Extension<Db>,
     axum::extract::Query(q): axum::extract::Query<ReportQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !is_admin(&identity) {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     let limit = q.limit.unwrap_or(20).min(100);
     let rows = db::top_connections(&database, limit)?;
     Ok(Json(json!(rows)))
@@ -510,9 +503,7 @@ pub async fn report_top_users(
     Extension(database): Extension<Db>,
     axum::extract::Query(q): axum::extract::Query<ReportQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !is_admin(&identity) {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     let limit = q.limit.unwrap_or(20).min(100);
     let rows = db::top_users(&database, limit)?;
     Ok(Json(json!(rows)))
@@ -530,9 +521,7 @@ pub async fn report_summary(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !is_admin(&identity) {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     let mut summary = db::session_summary(&database)?;
     // Override the DB-derived active_sessions with the live in-memory
     // count so stale zombie rows never inflate the number.
@@ -555,9 +544,7 @@ pub async fn report_activity(
     Extension(database): Extension<Db>,
     axum::extract::Query(q): axum::extract::Query<ActivityQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !is_admin(&identity) {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     let hours = q.hours.unwrap_or(24).clamp(1, 168);
     let rows = db::session_activity_by_hour(&database, hours)?;
     Ok(Json(json!(rows)))
@@ -1082,13 +1069,7 @@ pub async fn delete_recording(
     identity: Option<Extension<AuthIdentity>>,
     Path(name): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     if !is_safe_recording_name(&name, manager.recording_path()) {
         return Err(AppError::Internal("invalid recording name".into()));

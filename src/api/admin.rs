@@ -4,7 +4,7 @@
 //! (guacd, database, db pool, vault, disk). The remaining handlers require
 //! operator or higher, with the status and audit views reserved for admins.
 use super::{AppState, DriveConfigured, OidcEnabled, SiteTitle, ThemeData, VaultConfigured};
-use crate::auth::{AuthIdentity, WsTicketStore};
+use crate::auth::{require_role, AuthIdentity, WsTicketStore};
 use crate::db::Db;
 use crate::error::AppError;
 use axum::extract::State;
@@ -219,13 +219,7 @@ pub async fn system_status(
     Extension(database): Extension<Db>,
     Extension(vault_configured): Extension<VaultConfigured>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let version = env!("CARGO_PKG_VERSION");
 
@@ -445,13 +439,7 @@ include!(concat!(env!("OUT_DIR"), "/docs-rendered.rs"));
 pub async fn get_docs(
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     let sections: Vec<serde_json::Value> = DOCS
         .iter()
         .map(|(slug, title, html, _)| json!({ "slug": slug, "title": title, "html": html }))
@@ -465,13 +453,7 @@ pub async fn get_docs(
 pub async fn metrics(
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<impl IntoResponse, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     Ok((
         StatusCode::OK,
         [("Content-Type", "text/plain; version=0.0.4")],
@@ -485,13 +467,7 @@ pub async fn audit_events(
     Extension(database): Extension<Db>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let limit = params
         .get("limit")
@@ -604,13 +580,7 @@ pub async fn audit_verify(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let verification =
         tokio::task::spawn_blocking(move || crate::audit::verify_chain(&database, None, None))
@@ -639,13 +609,7 @@ pub async fn audit_export(
     Extension(database): Extension<Db>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let filters = crate::audit::AuditFilters {
         user_id: params.get("user").cloned().filter(|s| !s.is_empty()),
@@ -828,13 +792,7 @@ pub async fn tls_cert_info(
     Extension(database): Extension<Db>,
     identity: Option<Extension<AuthIdentity>>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
     // Resolve the paths server-side from the stored settings: the client
     // never supplies file paths (no arbitrary-file oracle).
     let db = database.clone();

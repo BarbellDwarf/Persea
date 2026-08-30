@@ -232,21 +232,26 @@ fn sniff_transfer_instruction(
     events
 }
 
-/// Write a transfer audit event into the hash-chain audit log. Runs the DB
-/// write on a blocking thread (rusqlite is synchronous). Silent on failure —
-/// audit logging must never take down the proxy.
-fn emit_transfer_audit(
-    database: Option<&Db>,
+/// Write a transfer audit event into the hash-chain audit log. Fire-and-forget:
+/// the proxy loop MUST NOT await this — each transfer-completion audit stalls
+/// the loop for a full rusqlite hash-chain INSERT while holding the
+/// `pending_transfers` lock. Callers spawn the returned future via
+/// `tokio::spawn(...)` so the audit write runs concurrently with the proxy
+/// loop. Silent on failure — audit logging must never take down the proxy.
+///
+/// Takes owned `Db` and `String` so the future is `'static` and safe to
+/// `tokio::spawn`.
+async fn emit_transfer_audit(
+    database: Option<Db>,
     session_id: Uuid,
-    user: Option<&str>,
+    user: Option<String>,
     event: TransferAuditEvent,
 ) {
     let Some(db) = database else {
         return;
     };
-    let db = db.clone();
     let sid = session_id.to_string();
-    let user = user.unwrap_or("unknown").to_string();
+    let user = user.as_deref().unwrap_or("unknown");
     let event_type = match event.kind {
         TransferKind::Upload => "session.file.upload",
         TransferKind::Download => "session.file.download",
@@ -257,16 +262,16 @@ fn emit_transfer_audit(
         "mimetype": event.mimetype,
         "size": event.size,
     });
-    tokio::task::spawn_blocking(move || {
-        let _ = crate::audit::log_event(
-            &db,
-            &mut crate::audit::EventBuilder::new(event_type, outcome)
-                .user_id(&user)
-                .session_id(&sid)
-                .details(details)
-                .build(),
-        );
-    });
+    crate::audit::fire(
+        &db,
+        Some(user),
+        event_type,
+        outcome,
+        details,
+        None,
+        Some(&sid),
+    )
+    .await;
 }
 
 /// Outcome of the proxy session, including whether guacd sent a disconnect instruction.
@@ -1324,12 +1329,15 @@ where
                     TransferDirection::GuacdToBrowser,
                     &mut pending,
                 ) {
-                    emit_transfer_audit(
-                        database.as_ref(),
+                    // Fire-and-forget: do NOT await. The proxy loop holds
+                    // `pending` (and the WS write side) and must not stall
+                    // on a synchronous rusqlite hash-chain INSERT.
+                    tokio::spawn(emit_transfer_audit(
+                        database.clone(),
                         session_id,
-                        session_user.as_deref(),
+                        session_user.clone(),
                         event,
-                    );
+                    ));
                 }
             }
         }
@@ -1500,12 +1508,16 @@ async fn ws_to_guacd_inner(
                                 TransferDirection::BrowserToGuacd,
                                 &mut pending,
                             ) {
-                                emit_transfer_audit(
-                                    database.as_ref(),
+                                // Fire-and-forget: do NOT await. The proxy
+                                // loop holds `pending` (and the WS write
+                                // side) and must not stall on a synchronous
+                                // rusqlite hash-chain INSERT.
+                                tokio::spawn(emit_transfer_audit(
+                                    database.clone(),
                                     session_id,
-                                    session_user.as_deref(),
+                                    session_user.clone(),
                                     event,
-                                );
+                                ));
                             }
                         }
                     }
