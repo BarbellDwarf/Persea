@@ -44,6 +44,7 @@ mod templates;
 #[cfg(test)]
 mod testing;
 mod thumbnails;
+mod tls_gen;
 mod totp;
 mod tunnel;
 mod updates;
@@ -168,6 +169,9 @@ enum Command {
         /// Admin name (unique)
         #[arg(long)]
         name: String,
+        /// Print only the raw API key (for scripting; decorations go to stderr)
+        #[arg(long)]
+        quiet: bool,
         /// Comma-separated allowed IP CIDRs (e.g. "10.0.0.0/8,192.168.1.0/24")
         #[arg(long)]
         allowed_ips: Option<String>,
@@ -310,6 +314,13 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Ensure the config file holds a `[storage].encryption_key`: an
+    /// existing key is preserved byte-for-byte, a missing or empty one is
+    /// generated and persisted atomically (file rewritten owner-only on
+    /// unix). Used by install.sh, the Docker entrypoint and the RPM/deb
+    /// postinsts instead of shell key injection. The key is never printed.
+    EnsureStorageKey,
 }
 
 #[tokio::main]
@@ -324,6 +335,22 @@ async fn main() {
 
     if cli.init {
         cmd_init();
+        return;
+    }
+
+    // ensure-storage-key must dispatch BEFORE the config load: it exists to
+    // complete or repair the config (including one a previous broken
+    // injector left with a duplicate key), and it must not open the
+    // database — the Docker entrypoint calls it ahead of the first-run
+    // admin bootstrap, which depends on the database still being untouched.
+    if let Some(Command::EnsureStorageKey) = cli.command {
+        let path = cli
+            .config
+            .clone()
+            .or_else(|| std::env::var("RUSTGUAC_CONFIG").ok())
+            .or_else(crate::config::windows_default_config_path)
+            .unwrap_or_else(|| "/opt/persea/config.toml".to_string());
+        cmd_ensure_storage_key(&path);
         return;
     }
 
@@ -403,6 +430,11 @@ async fn main() {
     // DB-configured auth providers — schema + rows
     // live in the app database; config-file providers still work alongside.
     crate::providers_db::migrate(&database).expect("Failed to migrate auth_providers table");
+
+    // Seed the settings flags cache so the auth middleware reads two
+    // booleans from memory instead of two spawn_blocking DB queries on
+    // every API-key request (persea#276).
+    auth::init_settings_cache(&database);
 
     // Resolve log format: CLI flag wins, then RUST_LOG_FORMAT=json env var.
     let log_format = match cli.log_format {
@@ -581,8 +613,15 @@ async fn main() {
             name,
             allowed_ips,
             expires,
+            quiet,
         }) => {
-            cmd_add_admin(&database, &name, allowed_ips.as_deref(), expires.as_deref());
+            cmd_add_admin(
+                &database,
+                &name,
+                allowed_ips.as_deref(),
+                expires.as_deref(),
+                quiet,
+            );
         }
         Some(Command::ListAdmins) => cmd_list_admins(&database),
         Some(Command::DisableAdmin { name }) => cmd_disable_admin(&database, &name),
@@ -660,6 +699,12 @@ async fn main() {
         }) => {
             migrate::cmd_vault_migrate(&config, &scope, &from, &to, users, overwrite, dry_run)
                 .await;
+        }
+        // Dispatched before the config load (see the check above the match):
+        // it completes or repairs the config file and must not touch the
+        // database, so it can run ahead of the first-run admin bootstrap.
+        Some(Command::EnsureStorageKey) => {
+            unreachable!("ensure-storage-key returns before the config load")
         }
     }
 }
@@ -754,9 +799,21 @@ fn cmd_unlock_user(database: &Db, email: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_add_admin(database: &Db, name: &str, allowed_ips: Option<&str>, expires: Option<&str>) {
+fn cmd_add_admin(
+    database: &Db,
+    name: &str,
+    allowed_ips: Option<&str>,
+    expires: Option<&str>,
+    quiet: bool,
+) {
     match db::add_admin(database, name, allowed_ips, expires) {
         Ok(key) => {
+            if quiet {
+                // Scripting/entrypoint mode: the key alone on stdout, so a
+                // redirect captures exactly one clean credential line.
+                println!("{}", key);
+                return;
+            }
             println!("Admin '{}' created.", name);
             println!("API Key: {}", key);
             println!();
@@ -860,49 +917,6 @@ fn cmd_rotate_key(database: &Db, name: &str) {
     }
 }
 
-/// Generate a self-signed certificate (rcgen — no openssl) and write
-/// cert.pem/key.pem into `out_dir`. localhost and 127.0.0.1 are always in
-/// the SANs. Returns the written paths.
-fn write_self_signed_cert(
-    hostname: &str,
-    out_dir: &std::path::Path,
-    extra_sans: &[String],
-) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
-    use rcgen::{generate_simple_self_signed, CertifiedKey};
-
-    let mut sans = vec![
-        hostname.to_string(),
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-    ];
-    for san in extra_sans {
-        if !sans.contains(san) {
-            sans.push(san.clone());
-        }
-    }
-
-    let CertifiedKey { cert, signing_key } = generate_simple_self_signed(sans)
-        .map_err(|e| format!("certificate generation failed: {}", e))?;
-
-    let cert_path = out_dir.join("cert.pem");
-    let key_path = out_dir.join("key.pem");
-
-    std::fs::write(&cert_path, cert.pem())
-        .map_err(|e| format!("failed to write cert.pem: {}", e))?;
-    std::fs::write(&key_path, signing_key.serialize_pem())
-        .map_err(|e| format!("failed to write key.pem: {}", e))?;
-
-    // The private key must not be world-readable: 0600 on Unix (a no-op
-    // on Windows, where the file inherits the directory ACL).
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600));
-    }
-
-    Ok((cert_path, key_path))
-}
-
 /// Data root for `--init`: `%ProgramData%\persea` on Windows, `/opt/persea`
 /// elsewhere (mirroring install.sh's layout).
 fn init_data_root() -> std::path::PathBuf {
@@ -913,6 +927,29 @@ fn init_data_root() -> std::path::PathBuf {
     #[cfg(not(windows))]
     {
         std::path::PathBuf::from("/opt/persea")
+    }
+}
+
+/// `ensure-storage-key`: make sure the config file holds a storage
+/// encryption key, then exit. The key itself is never printed — only
+/// whether it was already set or freshly generated.
+fn cmd_ensure_storage_key(path: &str) {
+    let had_key = crate::config::read_storage_encryption_key(path).is_some();
+    match crate::config::ensure_storage_encryption_key(path) {
+        Ok(_) => {
+            if had_key {
+                println!("storage encryption key already set in {} — preserved", path);
+            } else {
+                println!("generated storage encryption key in {}", path);
+            }
+        }
+        Err(e) => {
+            eprintln!(
+                "Error: could not ensure a storage encryption key in {}: {}",
+                path, e
+            );
+            std::process::exit(1);
+        }
     }
 }
 
@@ -960,7 +997,7 @@ fn cmd_init() {
         let hostname = std::env::var("COMPUTERNAME")
             .or_else(|_| std::env::var("HOSTNAME"))
             .unwrap_or_else(|_| "persea".to_string());
-        match write_self_signed_cert(&hostname, &tls_dir, &[]) {
+        match tls_gen::write_self_signed_cert(&hostname, &tls_dir, &[]) {
             Ok(_) => println!(
                 "Generated self-signed TLS certificate for '{}' in {}",
                 hostname,
@@ -1054,7 +1091,7 @@ fn cmd_init() {
 
 fn cmd_generate_cert(hostname: &str, out_dir: &str, extra_sans: &[String]) {
     let dir = std::path::Path::new(out_dir);
-    let (cert_path, key_path) = match write_self_signed_cert(hostname, dir, extra_sans) {
+    let (cert_path, key_path) = match tls_gen::write_self_signed_cert(hostname, dir, extra_sans) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -1834,6 +1871,62 @@ async fn run_server(
     // Extract shutdown timeout before config is moved into SessionManager
     let shutdown_timeout_secs = config.shutdown_timeout_secs;
 
+    // First-run TLS auto-provisioning: when server certificates are
+    // configured but missing on disk (a fresh container ships none), a
+    // self-signed pair is generated at the configured paths so the https
+    // listeners below come up instead of panicking on the missing files.
+    // Generation triggers ONLY on absence: mounted real certificates are
+    // never overwritten, and once the pair exists nothing regenerates it.
+    if let Some(tls_cfg) = &config.tls {
+        if let (Some(cert_path), Some(key_path)) = (&tls_cfg.cert_path, &tls_cfg.key_path) {
+            if !cert_path.exists() || !key_path.exists() {
+                // create_dir_all succeeds when the directory already exists;
+                // only genuine failures are logged. If the directory cannot
+                // be created the write below fails and reports it anyway.
+                if let Some(parent) = cert_path.parent() {
+                    if let Err(e) = std::fs::create_dir_all(parent) {
+                        tracing::warn!(
+                            "Failed to create TLS directory {}: {}",
+                            parent.display(),
+                            e
+                        );
+                    }
+                }
+                let missing = if !cert_path.exists() {
+                    cert_path.as_path()
+                } else {
+                    key_path.as_path()
+                };
+                // SANs always include localhost/127.0.0.1; the listen host
+                // joins them when usable (unspecified addresses fall back
+                // to localhost).
+                let bind_host = config
+                    .listen_addr
+                    .rsplit_once(':')
+                    .map(|(h, _)| h)
+                    .unwrap_or(config.listen_addr.as_str())
+                    .trim_start_matches('[')
+                    .trim_end_matches(']');
+                let hostname = match bind_host {
+                    "" | "0.0.0.0" | "::" | "[::]" => "localhost".to_string(),
+                    other => other.to_string(),
+                };
+                match tls_gen::ensure_self_signed_pair(cert_path, key_path, &hostname, &[]) {
+                    Ok(true) => tracing::warn!(
+                        "TLS certificate not found at {} — generated self-signed certificate ({}); mount real certificates for production",
+                        missing.display(),
+                        cert_path.display()
+                    ),
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(
+                        "TLS auto-provisioning failed: {} (the server will fail to load TLS)",
+                        e
+                    ),
+                }
+            }
+        }
+    }
+
     // Build TLS connector for guacd if configured
     let guacd_tls = build_guacd_tls(&config);
     let rate_limit_enabled = config.rate_limit;
@@ -1926,6 +2019,29 @@ async fn run_server(
         guacd_tls,
         database.clone(),
     ));
+
+    // Close stale active-history rows from a previous unclean shutdown
+    // (persea#273): any row whose status is still 'active' with
+    // ended_at IS NULL was left behind by a crash or restart. In HA
+    // mode, rows owned by other still-live instances are excluded.
+    if let Some(db) = manager.db() {
+        let owner = if manager.ha_enabled() {
+            Some(manager.instance_id())
+        } else {
+            None
+        };
+        match crate::db::close_stale_active_history(db, owner) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                closed = n,
+                "Startup sweep: closed stale active session-history rows"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "Startup sweep: failed to close stale active-history rows"
+            ),
+        }
+    }
 
     // Spawn background task to reap sessions that exceed max duration or
     // have been idle past the configured idle timeout. The check interval
@@ -2977,6 +3093,15 @@ async fn run_server(
                 "Graceful shutdown initiated — waiting for sessions to drain"
             );
 
+            // Close every still-open session-history row so the DB
+            // converges with live state instead of leaving zombie rows
+            // with status='active' forever (persea#273).
+            if let Some(db) = shutdown_mgr.db() {
+                if let Err(e) = crate::db::close_all_open_sessions(db, "server_shutdown") {
+                    tracing::warn!(error = %e, "Shutdown: failed to close open session-history rows");
+                }
+            }
+
             handle_clone.graceful_shutdown(Some(std::time::Duration::from_secs(timeout)));
         });
 
@@ -3042,6 +3167,15 @@ async fn run_server(
                 timeout_secs = shutdown_timeout_secs,
                 "Graceful shutdown initiated — waiting for sessions to drain"
             );
+
+            // Close every still-open session-history row so the DB
+            // converges with live state instead of leaving zombie rows
+            // with status='active' forever (persea#273).
+            if let Some(db) = shutdown_mgr.db() {
+                if let Err(e) = crate::db::close_all_open_sessions(db, "server_shutdown") {
+                    tracing::warn!(error = %e, "Shutdown: failed to close open session-history rows");
+                }
+            }
 
             // 2. Give active sessions time to drain
             tokio::time::sleep(std::time::Duration::from_secs(shutdown_timeout_secs)).await;

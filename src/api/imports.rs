@@ -11,7 +11,7 @@
 //! columns when any are configured).
 
 use super::address_book::log_ab_event;
-use super::StorageKey;
+use super::{is_db_storage_available, resolve_encryption_key, StorageKey};
 use crate::auth::{client_ip, AuthIdentity, TrustedProxies};
 use crate::csv_import::{self, validate_row};
 use crate::db::{self, Db};
@@ -27,26 +27,6 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fmt;
 use std::net::SocketAddr;
-
-/// Resolve the credential encryption key: the startup-resolved `StorageKey`
-/// extension takes precedence; the `PERSEA_STORAGE_KEY` env var is re-checked
-/// for callers that run without the extension (e.g. handler tests).
-/// Mirrors the private helper in `src/api/address_book.rs`.
-fn resolve_encryption_key(storage_key: Option<&StorageKey>) -> String {
-    storage_key
-        .and_then(|k| k.0.clone())
-        .or_else(|| {
-            std::env::var("PERSEA_STORAGE_KEY")
-                .ok()
-                .filter(|k| !k.is_empty())
-        })
-        .unwrap_or_default()
-}
-
-/// Check if the DB storage backend is available (address book tables exist).
-fn is_db_storage_available(db: &Db) -> bool {
-    db::list_ab_folders(db, None).is_ok()
-}
 
 fn default_scope() -> String {
     "shared".into()

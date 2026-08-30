@@ -178,7 +178,6 @@
                     <div id="detail-sessions" class="hidden" style="border-top:1px solid var(--border);padding-top:16px;margin-top:16px">
                         <p style="font-size:11px;font-weight:500;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:12px">Active Sessions</p>
                         <div id="detail-sessions-avatars" style="display:flex"></div>
-                        <span id="detail-sessions-count" style="font-size:12px;color:var(--text-muted);margin-top:4px"></span>
                     </div>
                 </div>
             </div>
@@ -4045,7 +4044,7 @@
     // Reconnect button that relaunches the entry. Refreshes every 30s
     // so the section tracks reality without a page reload.
     function loadActiveSessions() {
-        fetch('/api/sessions', { headers: apiHeaders(), credentials: 'same-origin' })
+        fetch('/api/sessions' + (isAdmin ? '?all=true' : ''), { headers: apiHeaders(), credentials: 'same-origin' })
             .then(function(r) {
                 if (r.status === 401) { window.location.href = '/'; return null; }
                 return r.ok ? r.json() : null;
@@ -4065,7 +4064,7 @@
                 });
                 var shown = live.concat(relaunchable);
                 section.classList.remove('hidden');
-                countEl.textContent = String(shown.length);
+                countEl.textContent = String(live.length);
                 empty.classList.toggle('hidden', shown.length > 0);
                 if (shown.length === 0) { grid.innerHTML = ''; return; }
                 var statusClass = {

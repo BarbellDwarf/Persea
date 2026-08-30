@@ -64,6 +64,10 @@ pub struct AuditEvent {
     pub prev_hash: String,
     /// SHA-256 hash of this event's own fields.
     pub event_hash: String,
+    /// Resolved username from the users table (humanized display).
+    /// `None` when the user no longer exists or the user_id is non-numeric.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
 }
 
 /// Result of chain verification.
@@ -157,6 +161,7 @@ impl EventBuilder {
             session_id: self.session_id,
             prev_hash: String::new(),
             event_hash: String::new(),
+            username: None,
         }
     }
 }
@@ -317,6 +322,7 @@ pub fn verify_chain(
                 session_id: row.get(7)?,
                 prev_hash: row.get(8)?,
                 event_hash: row.get(9)?,
+                username: None,
             },
         ))
     })?;
@@ -427,7 +433,57 @@ fn build_filter_clause(filters: &AuditFilters) -> (String, Vec<Box<dyn rusqlite:
     (where_clause, param_values)
 }
 
+/// Helper: derive the display username for an audit event.
+///
+/// Non-numeric user_id values (e.g. "admin", "-") are preserved as-is. Numeric
+/// IDs are resolved via the `users.name` column; if the user was deleted the
+/// placeholder "deleted user #N" is returned.
+fn resolve_username(raw_user_id: &str, users: &std::collections::HashMap<i64, String>) -> String {
+    if let Ok(id) = raw_user_id.parse::<i64>() {
+        users
+            .get(&id)
+            .cloned()
+            .unwrap_or_else(|| format!("deleted user #{id}"))
+    } else {
+        raw_user_id.to_string()
+    }
+}
+
+/// Build a map of user_id -> name for the given set of user IDs.
+fn build_user_map(
+    conn: &rusqlite::Connection,
+    user_ids: &[i64],
+) -> rusqlite::Result<std::collections::HashMap<i64, String>> {
+    if user_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let placeholders: Vec<String> = user_ids
+        .iter()
+        .enumerate()
+        .map(|(i, _)| format!("?{}", i + 1))
+        .collect();
+    let sql = format!(
+        "SELECT id, name FROM users WHERE id IN ({})",
+        placeholders.join(", ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<Box<dyn rusqlite::types::ToSql>> = user_ids
+        .iter()
+        .map(|id| Box::new(*id) as Box<dyn rusqlite::types::ToSql>)
+        .collect();
+    let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut map = std::collections::HashMap::new();
+    for row in rows {
+        let (id, name) = row?;
+        map.insert(id, name);
+    }
+    Ok(map)
+}
+
 /// List audit events with optional filters, pagination, and ordering (newest first).
+/// Includes resolved usernames for display.
 pub fn list_events(
     db: &Db,
     limit: u64,
@@ -444,8 +500,8 @@ pub fn list_events(
     let (where_clause, param_values) = build_filter_clause(filters);
 
     let sql = format!(
-        "SELECT id, event_type, timestamp, user_id, source_ip, outcome, details, session_id, prev_hash, event_hash
-         FROM audit_events {} ORDER BY id DESC LIMIT ?{} OFFSET ?{}",
+        "SELECT a.id, a.event_type, a.timestamp, a.user_id, a.source_ip, a.outcome, a.details, a.session_id, a.prev_hash, a.event_hash
+         FROM audit_events a {} ORDER BY a.id DESC LIMIT ?{} OFFSET ?{}",
         where_clause,
         param_values.len() + 1,
         param_values.len() + 2,
@@ -475,6 +531,7 @@ pub fn list_events(
             session_id: row.get(7)?,
             prev_hash: row.get(8)?,
             event_hash: row.get(9)?,
+            username: None,
         })
     })?;
 
@@ -482,6 +539,23 @@ pub fn list_events(
     for row in rows {
         events.push(row?);
     }
+
+    // Resolve usernames for display. Collect numeric user IDs, fetch from
+    // users table, and annotate each event. Non-numeric user_ids are
+    // preserved as-is (e.g. "admin", "-"). Missing users get a placeholder.
+    let numeric_ids: Vec<i64> = events
+        .iter()
+        .filter_map(|e| e.user_id.as_ref()?.parse::<i64>().ok())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    let user_map = build_user_map(&conn, &numeric_ids)?;
+    for event in &mut events {
+        if let Some(ref uid) = event.user_id {
+            event.username = Some(resolve_username(uid, &user_map));
+        }
+    }
+
     Ok(events)
 }
 
@@ -507,11 +581,12 @@ pub fn count_events(db: &Db, filters: &AuditFilters) -> rusqlite::Result<u64> {
 }
 
 /// Export audit events as CSV with optional filters.
+/// Includes a `username` column alongside `user_id` for human readability.
 pub fn export_events_csv(db: &Db, filters: &AuditFilters) -> rusqlite::Result<String> {
     let events = list_events(db, 100000, 0, filters)?; // large limit for export
     let mut out = String::new();
     out.push_str(
-        "id,timestamp,event_type,user_id,source_ip,outcome,details,session_id,event_hash\n",
+        "id,timestamp,event_type,user_id,username,source_ip,outcome,details,session_id,event_hash\n",
     );
 
     for event in &events {
@@ -529,6 +604,7 @@ pub fn export_events_csv(db: &Db, filters: &AuditFilters) -> rusqlite::Result<St
             event.timestamp.to_rfc3339(),
             event.event_type.clone(),
             event.user_id.clone().unwrap_or_default(),
+            event.username.clone().unwrap_or_default(),
             event.source_ip.clone().unwrap_or_default(),
             event.outcome.clone(),
             details_str,
@@ -627,7 +703,7 @@ mod tests {
 
         let csv = export_events_csv(&db, &AuditFilters::default()).unwrap();
         assert!(csv.starts_with(
-            "id,timestamp,event_type,user_id,source_ip,outcome,details,session_id,event_hash\n"
+            "id,timestamp,event_type,user_id,username,source_ip,outcome,details,session_id,event_hash\n"
         ));
         assert!(csv.contains("plain-user"));
     }

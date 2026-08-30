@@ -164,6 +164,9 @@ RUN printf 'krb5-config krb5-config/default_realm string \n' | debconf-set-selec
     # socat: the RDP relay's outbound leg (system binaries are typically
     # allowed by endpoint filters that block the gateway's own processes)
     socat \
+    # gosu: the entrypoint starts as root, reconciles ownership of the app
+    # dirs for bind mounts (PUID/PGID aware), then drops privileges
+    gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Install guacd
@@ -269,6 +272,34 @@ RUN cat > /opt/persea/entrypoint.sh <<'SCRIPT'
 #!/bin/sh
 set -e
 
+# Root-init: when started as root, reconcile ownership of the app dirs for
+# the persea user (honoring optional PUID/PGID overrides), then drop
+# privileges and re-execute this script unprivileged. When NOT started as
+# root (Kubernetes runAsNonRoot / arbitrary UID platforms / docker --user),
+# skip reconciliation entirely: mount permissions are the platform's job.
+if [ "$(id -u)" = "0" ]; then
+    PUID="${PUID:-996}"
+    PGID="${PGID:-996}"
+    CUR_UID=$(id -u persea)
+    CUR_GID=$(id -g persea)
+    if [ "$PGID" != "$CUR_GID" ]; then
+        groupmod -o -g "$PGID" persea
+    fi
+    if [ "$PUID" != "$CUR_UID" ] || [ "$PGID" != "$CUR_GID" ]; then
+        usermod -o -u "$PUID" -g "$PGID" persea
+        chown -R persea:persea /home/persea
+    fi
+    for D in /opt/persea/data /opt/persea/recordings /opt/persea/tls \
+             /opt/persea/certs /opt/persea/drives /opt/persea/scripts \
+             /opt/persea/vdi-homes; do
+        mkdir -p "$D"
+        chown -R persea:persea "$D"
+    done
+    chown persea:persea /opt/persea/config.toml.default /opt/persea
+    echo "Running as root at startup: reconciled ownership for uid=$PUID gid=$PGID, dropping to persea."
+    exec gosu persea:persea "$0" "$@"
+fi
+
 # Copy default config on first run (if no config file is mounted/present)
 CONFIG_PATH="/opt/persea/config.toml"
 if [ ! -f "$CONFIG_PATH" ]; then
@@ -276,24 +307,16 @@ if [ ! -f "$CONFIG_PATH" ]; then
     cp /opt/persea/config.toml.default "$CONFIG_PATH"
 fi
 
-# Generate a storage encryption key on first run if none is set: without
-# one the server refuses to start (credentials would sit in plaintext).
-# TOML-aware: inserts into an existing [storage] table, appends one only
-# when absent, so admin-modified configs never get a duplicate table.
+# Ensure a storage encryption key exists in the config: delegated to the
+# persea binary (TOML-aware: an existing key at any indentation is
+# preserved byte-for-byte, a missing or empty one is generated and
+# persisted atomically). The old shell grep matched column-0 keys only,
+# missed an indented key inside [storage], and injected a second one: a
+# hard TOML parse error that crash-looped the container on first boot.
 # Skipped when PERSEA_STORAGE_KEY is set: the env var wins, and a
 # placeholder there must fail loudly at startup, not be papered over.
-if [ -z "${PERSEA_STORAGE_KEY:-}" ] && ! grep -q '^encryption_key' "$CONFIG_PATH" 2>/dev/null; then
-    KEY=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-    if grep -q '^\[storage\]' "$CONFIG_PATH" 2>/dev/null; then
-        sed -i '/^\[storage\]/a encryption_key = "'"$KEY"'"' "$CONFIG_PATH"
-    else
-        {
-            echo ""
-            echo "[storage]"
-            echo "encryption_key = \"$KEY\""
-        } >> "$CONFIG_PATH"
-    fi
-    echo "Generated storage encryption key."
+if [ -z "${PERSEA_STORAGE_KEY:-}" ]; then
+    /opt/persea/bin/persea --config "$CONFIG_PATH" ensure-storage-key
 fi
 # The config now holds the encryption key: not world-readable. Best-effort:
 # some bind mounts (Windows/WSL, 9p, virtiofs) don't support chmod.
@@ -307,6 +330,31 @@ if [ ! -f "$DB_PATH" ]; then
     touch "$DB_PATH" 2>/dev/null || true
 fi
 chmod 600 "$DB_PATH" 2>/dev/null || true
+
+# Create admin API key on first run. This must happen BEFORE any other
+# persea invocation that opens the database: generate-cert and serve both
+# run db migrations in main(), so a database they have touched is non-empty
+# and a size check below it would skip credential creation on every boot
+# forever (#259: fresh containers shipped with zero credentials).
+# ensure-storage-key above is safe: it exits before the config load and
+# never opens the database.
+ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
+if [ -s "$DB_PATH" ]; then
+    echo "existing database detected; skipping admin bootstrap"
+else
+    echo "First run detected — creating admin API key..."
+    touch "$ADMIN_KEY_FILE"
+    # Best-effort: some bind mounts (Windows/WSL, 9p, virtiofs) don't support
+    # chmod and would otherwise kill the script under set -e, leaving the DB
+    # uncreated and the container looping on first run forever.
+    if ! chmod 600 "$ADMIN_KEY_FILE" 2>/dev/null; then
+        echo "warning: could not set owner-only permissions on $ADMIN_KEY_FILE (filesystem does not support chmod) — the admin API key may be readable by other users on the host"
+    fi
+    # --quiet prints ONLY the raw key on stdout; stderr goes to the container
+    # log so startup noise never contaminates the credential file (#259).
+    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin --quiet > "$ADMIN_KEY_FILE"
+    echo "Admin API key written to $ADMIN_KEY_FILE (owner-read only)"
+fi
 
 # Generate TLS cert at runtime if not already present (e.g. mounted)
 TLS_DIR="/opt/persea/tls"
@@ -335,22 +383,6 @@ if [ ! -f "$TLS_DIR/cert.pem" ] || [ ! -f "$TLS_DIR/key.pem" ]; then
         fi
         echo "Added secure_cookies = false for self-signed cert."
     fi
-fi
-
-# Create admin API key on first run (if the DB is still empty: the file is
-# pre-created above, migrations run on the first add-admin/serve).
-if [ ! -s "$DB_PATH" ]; then
-    echo "First run detected — creating admin API key..."
-    ADMIN_KEY_FILE="/opt/persea/data/admin-key.txt"
-    touch "$ADMIN_KEY_FILE"
-    # Best-effort: some bind mounts (Windows/WSL, 9p, virtiofs) don't support
-    # chmod and would otherwise kill the script under set -e, leaving the DB
-    # uncreated and the container looping on first run forever.
-    if ! chmod 600 "$ADMIN_KEY_FILE" 2>/dev/null; then
-        echo "warning: could not set owner-only permissions on $ADMIN_KEY_FILE (filesystem does not support chmod) — the admin API key may be readable by other users on the host"
-    fi
-    /opt/persea/bin/persea --config "$CONFIG_PATH" add-admin --name docker-admin > "$ADMIN_KEY_FILE" 2>&1
-    echo "Admin API key written to $ADMIN_KEY_FILE (owner-read only)"
 fi
 
 # Print the running version on beta images (PERSEA_BETA=1 set at build time
@@ -447,5 +479,8 @@ ENV HOME=/home/persea
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -skf https://localhost:8089/api/health || exit 1
 
-USER persea
+# No USER directive here on purpose: the entrypoint starts as root, reconciles
+# ownership for bind mounts (PUID/PGID), and drops to persea via gosu. Starts
+# that are already non-root (docker --user, Kubernetes runAsNonRoot) skip the
+# reconciliation block entirely.
 ENTRYPOINT ["/opt/persea/entrypoint.sh"]

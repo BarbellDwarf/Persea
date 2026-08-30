@@ -360,6 +360,30 @@ impl SessionManager {
         result
     }
 
+    /// Count live sessions: the number of in-memory sessions whose
+    /// status is Active, Pending, or Disconnected (the frontend's "live"
+    /// bucket — disconnected sessions are still within the reconnect
+    /// window). Remote HA registry sessions are included when a shared
+    /// backend pool is active.
+    ///
+    /// This is the single source of truth for "active session count"
+    /// across the API, admin, and reports surfaces, replacing the
+    /// DB-zombie-prone `SELECT COUNT(*) WHERE status='active'` that
+    /// counts rows whose status never gets cleared by crashed processes
+    /// (persea#273).
+    pub async fn active_session_count(&self) -> usize {
+        self.list_sessions()
+            .await
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.status,
+                    SessionStatus::Active | SessionStatus::Pending | SessionStatus::Disconnected
+                )
+            })
+            .count()
+    }
+
     /// Get a specific session's info: local map first, then the shared
     /// registry (remote sessions, enterprise HA only). Terminal remote
     /// sessions are reported as absent (nothing joinable remains).
@@ -2131,5 +2155,33 @@ mod tests {
         mgr.prune_session_credentials().await;
         assert_eq!(mgr.session_credentials_len(), 0);
         assert!(mgr.session_credentials(&token, user.id).is_none());
+    }
+
+    // ── active_session_count (persea#273) ────────────────────────────
+
+    #[tokio::test]
+    async fn active_session_count_matches_live_bucket() {
+        let mgr = test_manager();
+        // Seed one session in each status and verify the count.
+        let _id_active = seed(&mgr, test_session(SessionStatus::Active)).await;
+        let _id_pending = seed(&mgr, test_session(SessionStatus::Pending)).await;
+        let id_disconnected = seed(&mgr, test_session(SessionStatus::Active)).await;
+        let id_completed = seed(&mgr, test_session(SessionStatus::Completed)).await;
+        let id_error = seed(&mgr, test_session(SessionStatus::Error)).await;
+
+        // Disconnect one session so it enters the Disconnected state.
+        mgr.disconnect_session(id_disconnected).await;
+
+        // active_session_count should return 3: Active + Pending + Disconnected.
+        let count = mgr.active_session_count().await;
+        assert_eq!(
+            count, 3,
+            "active_session_count must count Active|Pending|Disconnected"
+        );
+
+        // Terminal sessions must not inflate the count.
+        mgr.sessions.write().await.remove(&id_completed);
+        mgr.sessions.write().await.remove(&id_error);
+        assert_eq!(mgr.active_session_count().await, 3);
     }
 }

@@ -1,3 +1,44 @@
+# persea v1.1.1
+
+persea v1.1.1 is a security and correctness release: force-logout now invalidates all of a user's tokens, quick-connect links work for all entry types, and session counters are consistent across every page.
+
+## Highlights
+
+**Security: force-logout closes the token gap**
+
+When an admin force-logs out a user, all of that user's API tokens — including scoped desktop tokens — are now revoked immediately. A dedicated audit event is written. Before this fix, a force-logout ended the sessions but left tokens valid, allowing reconnection without re-authentication.
+
+**Quick-connect works for all entry types**
+
+Spice, Proxmox, and VDI address-book entries now open successfully from quick-connect links. A parameter mismatch between the quick-connect surface and the full connect path caused an HTTP 400 "Unknown session type" error. Both paths now construct session parameters identically.
+
+**Session counts are consistent everywhere**
+
+The active-session counts on the Reports, Connections, and Sessions pages now agree. Stale "active" rows left behind by service restarts or crashes are closed on shutdown and swept at startup.
+
+**Audit log improvements**
+
+The admin Audit Log now shows usernames instead of numeric IDs, human-readable timestamps, and structured detail rows. CSV exports include a username column.
+
+**Settings flag reads halved**
+
+Every authenticated API request that needs to check a system setting (such as whether a feature is enabled) no longer queries the database twice for that flag. The value is cached in memory per instance. Note: in multi-instance (HA) deployments, flag changes propagate to other instances on their restart rather than immediately.
+
+## Fixed
+
+- Force-logout now revokes all user API tokens and writes a dedicated audit event (#270)
+- Quick-connect links for Spice, Proxmox, and VDI entries return HTTP 200 instead of HTTP 400 (#280)
+- Active-session counts are consistent across Reports, Connections, and Sessions pages (#273)
+- Storage-key bootstrap is consolidated into one `persea ensure-storage-key` subcommand; install.sh, Docker entrypoint, install-release.sh, and RPM/deb postinsts all call it — no more first-boot crash loops from duplicate keys (#271)
+- API-key path no longer reads system_settings twice per request (#276)
+
+## Upgrade notes
+
+- No schema migrations required; existing databases upgrade in place on first start.
+- No config migration required; storage-key handling is fully backward-compatible.
+- The new `persea ensure-storage-key` CLI subcommand is called automatically by all official installers; no manual action needed.
+
+
 # persea v1.1.0
 
 persea v1.1.0 is a large UI and enterprise release: a redesigned web UI, scoped API tokens, LDAP login fixes, session credential forwarding, and PowerShell remoting over SSH.

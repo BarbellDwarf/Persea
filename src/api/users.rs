@@ -680,8 +680,52 @@ pub async fn delete_user_sessions(
     let count = tokio::task::spawn_blocking(move || db::delete_user_sessions(&db_clone, user_id))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
-    tracing::info!(email = %email, sessions_revoked = count, "Admin force-logout user");
-    Ok(Json(json!({"ok": true, "sessions_revoked": count})))
+
+    // Revoke all derived tokens (scoped desktop tokens, etc.) so they
+    // cannot outlive the sessions they were created from.
+    let db_clone = database.clone();
+    let tokens_revoked =
+        tokio::task::spawn_blocking(move || db::revoke_all_user_tokens(&db_clone, user_id))
+            .await
+            .map_err(|e| AppError::Internal(e.to_string()))??;
+
+    tracing::info!(
+        email = %email,
+        sessions_revoked = count,
+        tokens_revoked = tokens_revoked,
+        "Admin force-logout user"
+    );
+
+    // Audit: force-logout including token revocation.
+    {
+        let db_audit = database.clone();
+        let email_audit = email.clone();
+        let admin_name = identity
+            .as_ref()
+            .map(|id| id.display_name().to_string())
+            .unwrap_or_default();
+        if let Err(e) = tokio::task::spawn_blocking(move || {
+            let _ = audit::log_event(
+                &db_audit,
+                &mut audit::EventBuilder::new("admin.user.force_logout", "success")
+                    .user_id(&admin_name)
+                    .details(serde_json::json!({
+                        "target_email": email_audit,
+                        "sessions_revoked": count,
+                        "tokens_revoked": tokens_revoked,
+                    }))
+                    .build(),
+            );
+        })
+        .await
+        {
+            tracing::error!(error = %e, "audit task failed");
+        }
+    }
+
+    Ok(Json(
+        json!({"ok": true, "sessions_revoked": count, "tokens_revoked": tokens_revoked}),
+    ))
 }
 
 /// `GET /api/me`: the current user's profile, including role,
