@@ -268,23 +268,34 @@ async fn wizard_writes_to_injected_config_path_not_default() {
 
 /// Regression for persea#290: the resolution function is a pure function
 /// of (cli config, env). Pin the precedence so a future refactor cannot
-/// silently regress to "wizard reads RUSTGUAC_CONFIG and falls through to
-/// /opt/persea" or "wizard ignores --config".
+/// silently regress. Matches the #271 storage-key writer and
+/// docs/configuration.md:384: --config is the canonical file.
 #[test]
 fn wizard_config_path_resolution_precedence() {
     use persea::config::resolve_wizard_config_path;
 
-    // 1. RUSTGUAC_CONFIG wins over --config.
+    // 1. --config wins over RUSTGUAC_CONFIG (the server reads --config,
+    //    so the wizard must write to the same file).
     assert_eq!(
         resolve_wizard_config_path(Some("/tmp/cli.toml"), Some("/tmp/env.toml"),),
+        std::path::PathBuf::from("/tmp/cli.toml")
+    );
+    // 2. RUSTGUAC_CONFIG used only when --config is unset.
+    assert_eq!(
+        resolve_wizard_config_path(None, Some("/tmp/env.toml")),
         std::path::PathBuf::from("/tmp/env.toml")
     );
-    // 2. --config wins when env is unset.
+    // 3. --config wins when env is also set.
     assert_eq!(
         resolve_wizard_config_path(Some("/tmp/cli.toml"), None),
         std::path::PathBuf::from("/tmp/cli.toml")
     );
-    // 3. Both unset → platform default. CI runs on Linux so /opt/persea.
+    // 4. Empty env treated as unset, falls through to --config.
+    assert_eq!(
+        resolve_wizard_config_path(Some("/tmp/cli.toml"), Some("")),
+        std::path::PathBuf::from("/tmp/cli.toml")
+    );
+    // 5. Both unset → platform default. CI runs on Linux so /opt/persea.
     assert_eq!(
         resolve_wizard_config_path(None, None),
         std::path::PathBuf::from("/opt/persea/config.toml")

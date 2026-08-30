@@ -473,7 +473,9 @@ async fn main() {
     // The wizard used to read RUSTGUAC_CONFIG itself and otherwise fall
     // through to /opt/persea/config.toml, which silently dropped the
     // --config path the server was actually started with (persea#290).
-    // Precedence is the documented one: env > --config > platform default.
+    // Precedence: --config > RUSTGUAC_CONFIG (if absent) > platform
+    // default.  Matches the #271 storage-key writer and
+    // docs/configuration.md:384.
     let wizard_config_path =
         handlers::setup::WizardConfigPath(crate::config::resolve_wizard_config_path(
             cli.config.as_deref(),
