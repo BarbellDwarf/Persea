@@ -6035,6 +6035,16 @@ pub fn set_active_pool(pool: DbPool) -> Result<(), DbPool> {
     match worker {
         Ok(_) => {
             let _ = POOL_STORE.set(PoolStore { pool, tx });
+            // Warm the pool on the worker runtime BEFORE anything can talk
+            // to it (persea#289). Failure to warm is never fatal: the pool
+            // still works, the first acquire just risks the cold-touch
+            // race described in `warm_active_pool`.
+            if let Err(e) = warm_active_pool() {
+                tracing::warn!(
+                    error = %e,
+                    "pool warm-up after install failed; first acquire may be cold"
+                );
+            }
             Ok(())
         }
         Err(e) => {
@@ -6042,6 +6052,69 @@ pub fn set_active_pool(pool: DbPool) -> Result<(), DbPool> {
             Err(pool)
         }
     }
+}
+
+/// Upper bound for one warm-up step. A hung warm-up must never stall boot
+/// indefinitely; the pool's own `acquire_timeout` (30s) would make a cold
+/// first request cost more than this whole budget.
+const POOL_WARM_STEP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Warm the pool on the worker runtime right after install (persea#289).
+///
+/// `DbPool::connect` + `run_migrations` run on the caller's runtime before
+/// `set_active_pool`, leaving a pooled connection whose socket is
+/// registered with THAT runtime's reactor. The first worker-runtime
+/// acquire of such a connection is the sqlx cross-runtime acquire race
+/// fixed for the health ping in 4cac536, observed again as a full 30s
+/// `acquire_timeout` on the deep health check of a freshly booted server
+/// (persea#289: the settings-epoch read made boot-time worker acquires
+/// routine, and the first serving-era acquire lost the race on CI).
+///
+/// Two steps, both on the worker runtime:
+/// 1. evict whatever the boot runtime left in the idle queue (acquired,
+///    detached, closed on drop);
+/// 2. establish a fresh connection whose entire lifecycle happens on the
+///    worker runtime and return it to the idle queue, so every
+///    serving-era acquire finds worker-proven state.
+///
+/// Runs while the boot runtime is idle (before the listener binds), the
+/// window every observed boot-time acquire crossed without incident.
+pub fn warm_active_pool() -> rusqlite::Result<()> {
+    if !pool_active() {
+        return Ok(());
+    }
+    pool_call(move |pool: &'static DbPool| async move {
+        warm_pool_connections(pool).await.map_err(map_sqlx_err)
+    })
+}
+
+async fn warm_pool_connections(pool: &DbPool) -> Result<(), sqlx::Error> {
+    match pool {
+        DbPool::Postgres(p) => warm_sqlx_pool(p).await,
+        DbPool::MySQL(p) => warm_sqlx_pool(p).await,
+        DbPool::SQLite(p) => warm_sqlx_pool(p).await,
+        DbPool::None => Ok(()),
+    }
+}
+
+async fn warm_sqlx_pool<DB>(pool: &sqlx::Pool<DB>) -> Result<(), sqlx::Error>
+where
+    DB: sqlx::Database,
+{
+    // 1) Evict the boot runtime's connection. If the acquire itself hangs
+    //    on that cross-runtime socket, the timeout cancels it and the
+    //    cancelled `PoolConnection` drop closes the connection: eviction
+    //    happens either way.
+    if let Ok(Ok(conn)) = tokio::time::timeout(POOL_WARM_STEP_TIMEOUT, pool.acquire()).await {
+        let _detached = conn.detach();
+    }
+    // 2) Open a fresh connection on the worker runtime and return it to
+    //    the idle queue (the connection drops back into the pool).
+    let conn = tokio::time::timeout(POOL_WARM_STEP_TIMEOUT, pool.acquire())
+        .await
+        .map_err(|_| sqlx::Error::PoolTimedOut)??;
+    drop(conn);
+    Ok(())
 }
 
 /// Run `f` on the pool store's worker thread and return its result.
