@@ -8543,7 +8543,8 @@ async fn close_stale_active_history_pool(
                 SELECT 1 FROM session_registry r
                 WHERE r.session_id = session_history.session_id
                   AND r.status NOT IN ('completed', 'error', 'expired')
-                  AND r.owner_instance != {}",
+                  AND r.owner_instance != {}
+            )",
             ph1(pool)
         ),
         (Some(_), _) => format!(
