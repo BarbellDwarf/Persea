@@ -116,16 +116,15 @@ pub async fn change_password(
     .map_err(|e| AppError::Internal(e.to_string()))??;
 
     // Audit the change (no secrets — just the subject).
-    let db_audit = database.clone();
-    let email_audit = email.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        let _ = crate::audit::log_event(
-            &db_audit,
-            &mut crate::audit::EventBuilder::new("user.password.change", "success")
-                .user_id(&email_audit)
-                .build(),
-        );
-    })
+    crate::audit::fire(
+        &database,
+        Some(&email),
+        "user.password.change",
+        "success",
+        serde_json::Value::Null,
+        None,
+        None,
+    )
     .await;
 
     Ok(Json(serde_json::json!({"ok": true})))

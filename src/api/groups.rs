@@ -73,24 +73,20 @@ pub(crate) async fn audit_config_change(
     identity: &Option<Extension<AuthIdentity>>,
     details: Value,
 ) {
-    let db_audit = database.clone();
     let admin_name = identity
         .as_ref()
         .map(|id| id.display_name().to_string())
         .unwrap_or_default();
-    if let Err(e) = tokio::task::spawn_blocking(move || {
-        let _ = audit::log_event(
-            &db_audit,
-            &mut audit::EventBuilder::new("admin.config.change", "success")
-                .user_id(&admin_name)
-                .details(details)
-                .build(),
-        );
-    })
-    .await
-    {
-        tracing::error!(error = %e, "audit task failed");
-    }
+    audit::fire(
+        database,
+        Some(&admin_name),
+        "admin.config.change",
+        "success",
+        details,
+        None,
+        None,
+    )
+    .await;
 }
 
 /// Map a rusqlite error: UNIQUE violations become 409, everything else 500.

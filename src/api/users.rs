@@ -222,25 +222,20 @@ pub async fn create_user(
         .as_ref()
         .map(|id| id.display_name().to_string())
         .unwrap_or_default();
-    let email_audit = body.email.clone();
-    let role_audit = role.clone();
-    let custom_role_audit = custom_role_name.clone();
-    let db_audit = database.clone();
-    tokio::task::spawn_blocking(move || {
-        let _ = audit::log_event(
-            &db_audit,
-            &mut audit::EventBuilder::new("admin.user.create", "success")
-                .user_id(&admin_name)
-                .details(serde_json::json!({
-                    "email": email_audit,
-                    "role": role_audit,
-                    "custom_role": custom_role_audit
-                }))
-                .build(),
-        );
-    })
-    .await
-    .ok();
+    audit::fire(
+        &database,
+        Some(&admin_name),
+        "admin.user.create",
+        "success",
+        serde_json::json!({
+            "email": &body.email,
+            "role": &role,
+            "custom_role": &custom_role_name,
+        }),
+        None,
+        None,
+    )
+    .await;
 
     Ok((
         StatusCode::CREATED,
@@ -397,9 +392,6 @@ pub async fn update_user(
 
     // Audit: user edit (no secrets — just which fields changed).
     {
-        let db_audit = database.clone();
-        let email_audit = email.clone();
-        let new_email_audit = new_email.clone();
         let name_changed = new_name.is_some();
         let email_changed = new_email.is_some();
         let password_changed = body.password.is_some();
@@ -407,25 +399,22 @@ pub async fn update_user(
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.user.edit", "success")
-                    .user_id(&admin_name)
-                    .details(serde_json::json!({
-                        "target_email": email_audit,
-                        "new_email": new_email_audit,
-                        "name_changed": name_changed,
-                        "email_changed": email_changed,
-                        "password_changed": password_changed,
-                    }))
-                    .build(),
-            );
-        })
-        .await
-        {
-            tracing::error!(error = %e, "audit task failed");
-        }
+        audit::fire(
+            &database,
+            Some(&admin_name),
+            "admin.user.edit",
+            "success",
+            serde_json::json!({
+                "target_email": &email,
+                "new_email": &new_email,
+                "name_changed": name_changed,
+                "email_changed": email_changed,
+                "password_changed": password_changed,
+            }),
+            None,
+            None,
+        )
+        .await;
     }
 
     Ok(Json(json!({
@@ -547,33 +536,26 @@ pub async fn set_user_role(
 
     // Audit: role change
     {
-        let db_audit = database.clone();
-        let email_audit = email.clone();
-        let new_role = role.clone();
-        let new_custom_role = custom_role_name.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.role.change", "success")
-                    .user_id(&admin_name)
-                    .details(serde_json::json!({
-                        "target_email": email_audit,
-                        "old_role": old_role,
-                        "new_role": new_role,
-                        "old_custom_role_id": old_custom_role_id,
-                        "new_custom_role": new_custom_role,
-                    }))
-                    .build(),
-            );
-        })
-        .await
-        {
-            tracing::error!(error = %e, "audit task failed");
-        }
+        audit::fire(
+            &database,
+            Some(&admin_name),
+            "admin.role.change",
+            "success",
+            serde_json::json!({
+                "target_email": &email,
+                "old_role": old_role,
+                "new_role": &role,
+                "old_custom_role_id": old_custom_role_id,
+                "new_custom_role": &custom_role_name,
+            }),
+            None,
+            None,
+        )
+        .await;
     }
 
     // Response carries the post-change state so the UI can refresh badges.
@@ -618,25 +600,20 @@ pub async fn delete_user(
         Ok(Ok(true)) => {
             // Audit: user delete
             {
-                let db_audit = database.clone();
-                let email_audit = email.clone();
                 let admin_name = identity
                     .as_ref()
                     .map(|id| id.display_name().to_string())
                     .unwrap_or_default();
-                if let Err(e) = tokio::task::spawn_blocking(move || {
-                    let _ = audit::log_event(
-                        &db_audit,
-                        &mut audit::EventBuilder::new("admin.user.delete", "success")
-                            .user_id(&admin_name)
-                            .details(serde_json::json!({"target_email": email_audit}))
-                            .build(),
-                    );
-                })
-                .await
-                {
-                    tracing::error!(error = %e, "audit task failed");
-                }
+                audit::fire(
+                    &database,
+                    Some(&admin_name),
+                    "admin.user.delete",
+                    "success",
+                    serde_json::json!({"target_email": &email}),
+                    None,
+                    None,
+                )
+                .await;
             }
             Ok(StatusCode::NO_CONTENT)
         }
@@ -698,29 +675,24 @@ pub async fn delete_user_sessions(
 
     // Audit: force-logout including token revocation.
     {
-        let db_audit = database.clone();
-        let email_audit = email.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.user.force_logout", "success")
-                    .user_id(&admin_name)
-                    .details(serde_json::json!({
-                        "target_email": email_audit,
-                        "sessions_revoked": count,
-                        "tokens_revoked": tokens_revoked,
-                    }))
-                    .build(),
-            );
-        })
-        .await
-        {
-            tracing::error!(error = %e, "audit task failed");
-        }
+        audit::fire(
+            &database,
+            Some(&admin_name),
+            "admin.user.force_logout",
+            "success",
+            serde_json::json!({
+                "target_email": &email,
+                "sessions_revoked": count,
+                "tokens_revoked": tokens_revoked,
+            }),
+            None,
+            None,
+        )
+        .await;
     }
 
     Ok(Json(
@@ -965,25 +937,20 @@ pub async fn disable_user(
     if found {
         // Audit: user disable
         {
-            let db_audit = database.clone();
-            let email_audit = email.clone();
             let admin_name = identity
                 .as_ref()
                 .map(|id| id.display_name().to_string())
                 .unwrap_or_default();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                let _ = audit::log_event(
-                    &db_audit,
-                    &mut audit::EventBuilder::new("admin.user.disable", "success")
-                        .user_id(&admin_name)
-                        .details(serde_json::json!({"target_email": email_audit}))
-                        .build(),
-                );
-            })
-            .await
-            {
-                tracing::error!(error = %e, "audit task failed");
-            }
+            audit::fire(
+                &database,
+                Some(&admin_name),
+                "admin.user.disable",
+                "success",
+                serde_json::json!({"target_email": &email}),
+                None,
+                None,
+            )
+            .await;
         }
         Ok(Json(json!({"ok": true})))
     } else {
@@ -1014,25 +981,20 @@ pub async fn enable_user(
     if found {
         // Audit: user enable
         {
-            let db_audit = database.clone();
-            let email_audit = email.clone();
             let admin_name = identity
                 .as_ref()
                 .map(|id| id.display_name().to_string())
                 .unwrap_or_default();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                let _ = audit::log_event(
-                    &db_audit,
-                    &mut audit::EventBuilder::new("admin.user.enable", "success")
-                        .user_id(&admin_name)
-                        .details(serde_json::json!({"target_email": email_audit}))
-                        .build(),
-                );
-            })
-            .await
-            {
-                tracing::error!(error = %e, "audit task failed");
-            }
+            audit::fire(
+                &database,
+                Some(&admin_name),
+                "admin.user.enable",
+                "success",
+                serde_json::json!({"target_email": &email}),
+                None,
+                None,
+            )
+            .await;
         }
         Ok(Json(json!({"ok": true})))
     } else {
@@ -1122,30 +1084,24 @@ pub async fn create_group_mapping(
     })?;
     // Audit: config change
     {
-        let db_audit = database.clone();
-        let group = req.group.clone();
-        let role = req.role.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(serde_json::json!({
-                        "action": "create_group_mapping",
-                        "group": group,
-                        "role": role,
-                    }))
-                    .build(),
-            );
-        })
-        .await
-        {
-            tracing::error!(error = %e, "audit task failed");
-        }
+        audit::fire(
+            &database,
+            Some(&admin_name),
+            "admin.config.change",
+            "success",
+            serde_json::json!({
+                "action": "create_group_mapping",
+                "group": &req.group,
+                "role": &req.role,
+            }),
+            None,
+            None,
+        )
+        .await;
     }
     Ok(Json(json!(mapping)))
 }
@@ -1215,27 +1171,23 @@ pub async fn delete_group_mapping(
         Ok(Ok(true)) => {
             // Audit: config change
             {
-                let db_audit = database.clone();
                 let admin_name = identity
                     .as_ref()
                     .map(|id| id.display_name().to_string())
                     .unwrap_or_default();
-                if let Err(e) = tokio::task::spawn_blocking(move || {
-                    let _ = audit::log_event(
-                        &db_audit,
-                        &mut audit::EventBuilder::new("admin.config.change", "success")
-                            .user_id(&admin_name)
-                            .details(serde_json::json!({
-                                "action": "delete_group_mapping",
-                                "mapping_id": id,
-                            }))
-                            .build(),
-                    );
-                })
-                .await
-                {
-                    tracing::error!(error = %e, "audit task failed");
-                }
+                audit::fire(
+                    &database,
+                    Some(&admin_name),
+                    "admin.config.change",
+                    "success",
+                    serde_json::json!({
+                        "action": "delete_group_mapping",
+                        "mapping_id": id,
+                    }),
+                    None,
+                    None,
+                )
+                .await;
             }
             Ok(StatusCode::NO_CONTENT)
         }

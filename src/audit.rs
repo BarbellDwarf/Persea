@@ -166,6 +166,59 @@ impl EventBuilder {
     }
 }
 
+/// Fire-and-forget audit emission. Builds an [`AuditEvent`], writes it to the
+/// hash-chain on a blocking thread, and logs a warning on both spawn failure
+/// and failed database INSERT. The request must never fail because audit
+/// logging failed.
+///
+/// # Arguments
+///
+/// * `db` – database handle (cloned internally for the blocking thread).
+/// * `actor` – human-readable identity of the caller (display name or email),
+///   or `None` for actorless events (e.g. failed login attempts where the
+///   username is intentionally omitted from the audit row).
+/// * `event_type` – event category, e.g. `"admin.config.change"`.
+/// * `outcome` – `"success"` or `"failure"`.
+/// * `details` – structured payload; `serde_json::Value::Null` when none.
+/// * `source_ip` – optional client IP.
+/// * `session_id` – optional session UUID.
+pub async fn fire(
+    db: &Db,
+    actor: Option<&str>,
+    event_type: &str,
+    outcome: &str,
+    details: serde_json::Value,
+    source_ip: Option<&str>,
+    session_id: Option<&str>,
+) {
+    let db = db.clone();
+    let actor = actor.map(str::to_string);
+    let event_type = event_type.to_string();
+    let outcome = outcome.to_string();
+    let source_ip = source_ip.map(str::to_string);
+    let session_id = session_id.map(str::to_string);
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        let mut builder = EventBuilder::new(&event_type, &outcome);
+        if let Some(ref uid) = actor {
+            builder = builder.user_id(uid);
+        }
+        if let Some(ref ip) = source_ip {
+            builder = builder.source_ip(ip);
+        }
+        if let Some(ref sid) = session_id {
+            builder = builder.session_id(sid);
+        }
+        let mut event = builder.details(details).build();
+        if let Err(e) = log_event(&db, &mut event) {
+            tracing::warn!(event = %event_type, error = %e, "audit write failed");
+        }
+    })
+    .await
+    {
+        tracing::warn!(error = %e, "audit spawn failed");
+    }
+}
+
 /// Compute the SHA-256 hash of an audit event using canonical JSON (sorted keys, no whitespace).
 /// The hash covers: event_type, timestamp, user_id, source_ip, outcome, details, session_id.
 pub fn compute_event_hash(event: &AuditEvent) -> String {
@@ -706,5 +759,32 @@ mod tests {
             "id,timestamp,event_type,user_id,username,source_ip,outcome,details,session_id,event_hash\n"
         ));
         assert!(csv.contains("plain-user"));
+    }
+
+    #[test]
+    fn event_without_user_id_stores_null() {
+        let db = test_db();
+        // Simulate what audit::fire does when actor is None: build
+        // an event without calling .user_id().
+        let mut event = EventBuilder::new("auth.login.failure", "failure")
+            .source_ip("10.0.0.1")
+            .details(serde_json::json!({"reason": "bad password"}))
+            .build();
+        let id = log_event(&db, &mut event).unwrap();
+        assert!(id > 0);
+
+        // Verify user_id is NULL in the stored row.
+        let conn = db.lock().unwrap();
+        let stored_user_id: Option<String> = conn
+            .query_row(
+                "SELECT user_id FROM audit_events WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            stored_user_id.is_none(),
+            "user_id must be NULL for actorless events"
+        );
     }
 }
