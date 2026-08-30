@@ -1,13 +1,11 @@
 import { test, expect } from '@playwright/test';
 test.use({ storageState: '.auth/user.json' });
-import { loginWithApiKey } from '../../fixtures/auth';
-
-const BASE_URL = process.env.BASE_URL || 'https://localhost:8089';
-const ADMIN_KEY = process.env.ADMIN_API_KEY || '';
 
 async function gotoAuthenticated(page: import('@playwright/test').Page, path: string) {
-  await loginWithApiKey(page, ADMIN_KEY);
-  await page.goto(`${BASE_URL}${path}`);
+  // The storageState already contains the admin API key in sessionStorage
+  // (seeded by global-setup), so we can navigate directly without an
+  // intermediate loginWithApiKey call that would trigger a redirect loop.
+  await page.goto(path);
   await page.waitForTimeout(1000);
 }
 

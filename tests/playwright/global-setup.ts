@@ -19,7 +19,22 @@ async function globalSetup(config: FullConfig): Promise<void> {
   await page.click('#login-submit');
   await page.waitForURL(/connections\.html|sessions\.html/, { timeout: 15000 });
 
-  await context.storageState({ path: STORAGE_STATE });
+  // Persist the admin API key in sessionStorage so the page JS can
+  // authenticate API calls. The session cookie alone is not enough: the
+  // API middleware gates on the Authorization header from apiHeaders().
+  const apiKey = process.env.ADMIN_API_KEY || '';
+  const state = await context.storageState();
+  if (apiKey) {
+    state.origins = [{
+      origin: new URL(BASE_URL).origin,
+      localStorage: [],
+      sessionStorage: [{ name: 'persea_api_key', value: apiKey }],
+    }];
+  }
+  const { mkdirSync, writeFileSync } = require('fs');
+  const { dirname } = require('path');
+  mkdirSync(dirname(STORAGE_STATE), { recursive: true });
+  writeFileSync(STORAGE_STATE, JSON.stringify(state, null, 2));
   console.log(`[global-setup] Authenticated — storageState saved to ${STORAGE_STATE}`);
 
   await browser.close();

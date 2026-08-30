@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
-test.use({ storageState: '.auth/user.json' });
 
 test.describe('Role-based navigation visibility', () => {
   test.describe('unauthenticated user', () => {
+    test.use({ storageState: { cookies: [], origins: [] } });
+
     test('sees only public nav items', async ({ page }) => {
       await page.goto('/sessions.html');
       // Without auth, page redirects to / (login page)
@@ -29,6 +30,8 @@ test.describe('Role-based navigation visibility', () => {
   });
 
   test.describe('admin user', () => {
+    test.use({ storageState: '.auth/user.json' });
+
     test('sees all nav items when authenticated as admin', async ({ page }) => {
       const apiKey = process.env.ADMIN_API_KEY || '';
       await page.goto('/');
@@ -50,6 +53,8 @@ test.describe('Role-based navigation visibility', () => {
   });
 
   test.describe('theme preferences', () => {
+    test.use({ storageState: '.auth/user.json' });
+
     test('theme toggle in header cycles dark/light/auto on click', async ({ page }) => {
       await page.goto('/');
       await page.evaluate((key) => {

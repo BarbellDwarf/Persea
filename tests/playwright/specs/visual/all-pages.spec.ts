@@ -2,7 +2,6 @@ import { test, expect } from '@playwright/test';
 test.use({ storageState: '.auth/user.json' });
 import { loginWithApiKey, logout } from '../../fixtures/auth';
 
-const BASE_URL = process.env.BASE_URL || 'https://localhost:8089';
 const ADMIN_KEY = process.env.ADMIN_API_KEY || '';
 
 // Freeze a live table's geometry for the screenshot: wait for the initial
@@ -59,23 +58,23 @@ async function stabilizeTable(
 test.describe('Visual Regression - All Pages', () => {
   test('login page screenshot', async ({ page }) => {
     // Navigate before clearing auth — sessionStorage is not accessible on about:blank
-    await page.goto(`${BASE_URL}/`);
+    await page.goto(`/`);
     await logout(page);
-    await page.goto(`${BASE_URL}/`);
+    await page.goto(`/`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('login-page.png', { fullPage: true });
   });
 
   test('connections page screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/connections.html`);
+    await page.goto(`/connections.html`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('connections-page.png', { fullPage: true });
   });
 
   test('sessions page screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/sessions.html`);
+    await page.goto(`/sessions.html`);
     await page.waitForTimeout(2000);
     await stabilizeTable(page, '#session-list', 5, '#session-empty');
     await expect(page).toHaveScreenshot('sessions-page.png', {
@@ -87,14 +86,14 @@ test.describe('Visual Regression - All Pages', () => {
 
   test('recordings page screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/recordings.html`);
+    await page.goto(`/recordings.html`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('recordings-page.png', { fullPage: true });
   });
 
   test('admin page screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/admin.html`);
+    await page.goto(`/admin.html`);
     await page.waitForTimeout(2000);
     await stabilizeTable(page, '#user-table-body', 5);
     await expect(page).toHaveScreenshot('admin-page.png', {
@@ -106,14 +105,14 @@ test.describe('Visual Regression - All Pages', () => {
 
   test('admin settings screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/admin/settings.html`);
+    await page.goto(`/admin/settings.html`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('admin-settings.png', { fullPage: true });
   });
 
   test('admin users screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/admin/users.html`);
+    await page.goto(`/admin/users.html`);
     await page.waitForTimeout(2000);
     await stabilizeTable(page, '#user-table-body', 5);
     await expect(page).toHaveScreenshot('admin-users.png', {
@@ -125,14 +124,14 @@ test.describe('Visual Regression - All Pages', () => {
 
   test('admin auth screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/admin/auth.html`);
+    await page.goto(`/admin/auth.html`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('admin-auth.png', { fullPage: true });
   });
 
   test('admin audit screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/admin/audit.html`);
+    await page.goto(`/admin/audit.html`);
     await page.waitForTimeout(2000);
     await stabilizeTable(page, '#audit-table-body', 10);
     await expect(page).toHaveScreenshot('admin-audit.png', {
@@ -144,7 +143,7 @@ test.describe('Visual Regression - All Pages', () => {
 
   test('admin reports screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/admin/reports.html`);
+    await page.goto(`/admin/reports.html`);
     await page.waitForTimeout(2000);
     await stabilizeTable(page, '#top-connections', 5);
     await stabilizeTable(page, '#top-users', 5);
@@ -167,42 +166,42 @@ test.describe('Visual Regression - All Pages', () => {
 
   test('admin tunnels screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/admin/tunnels.html`);
+    await page.goto(`/admin/tunnels.html`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('admin-tunnels.png', { fullPage: true });
   });
 
   test('account profile screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/account/profile.html`);
+    await page.goto(`/account/profile.html`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('account-profile.png', { fullPage: true });
   });
 
   test('account tokens screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/account/tokens.html`);
+    await page.goto(`/account/tokens.html`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('account-tokens.png', { fullPage: true });
   });
 
   test('account totp screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/account/totp.html`);
+    await page.goto(`/account/totp.html`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('account-totp.png', { fullPage: true });
   });
 
   test('docs page screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/docs.html`);
+    await page.goto(`/docs.html`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('docs-page.png', { fullPage: true });
   });
 
   test('client page screenshot', async ({ page }) => {
     await loginWithApiKey(page, ADMIN_KEY);
-    await page.goto(`${BASE_URL}/client.html?session_id=test`);
+    await page.goto(`/client.html?session_id=test`);
     await page.waitForTimeout(2000);
     await expect(page).toHaveScreenshot('client-page.png', { fullPage: true });
   });
