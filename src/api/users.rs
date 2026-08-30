@@ -5,7 +5,7 @@
 //! own profile. All handlers except the `/me` ones require admin.
 use super::{VaultConfigured, VaultState};
 use crate::audit;
-use crate::auth::AuthIdentity;
+use crate::auth::{require_role, AuthIdentity};
 use crate::db::{self, Db};
 use crate::error::AppError;
 use crate::rbac;
@@ -79,13 +79,7 @@ pub async fn list_users(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let users = tokio::task::spawn_blocking(move || db::list_users(&db_clone))
@@ -131,13 +125,7 @@ pub async fn create_user(
     policy: Option<Extension<crate::password::PasswordPolicy>>,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     // Password policy: minimum length enforced at creation, and the
     // new hash goes into the per-user reuse history. Handlers fall back to
@@ -259,13 +247,7 @@ pub async fn update_user(
     Path(email): Path<String>,
     Json(body): Json<UpdateUserRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     if body.name.is_none() && body.email.is_none() && body.password.is_none() {
         return Err(AppError::Validation("nothing to update".into()));
@@ -437,13 +419,7 @@ pub async fn set_user_role(
     Path(email): Path<String>,
     Json(req): Json<SetRoleRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let role = req.role.unwrap_or_default();
 
@@ -586,13 +562,7 @@ pub async fn delete_user(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or(AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let email_for_delete = email.clone();
@@ -637,13 +607,7 @@ pub async fn delete_user_sessions(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let email_clone = email.clone();
@@ -920,13 +884,7 @@ pub async fn disable_user(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let email_for_disable = email.clone();
@@ -965,13 +923,7 @@ pub async fn enable_user(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let email_for_enable = email.clone();
@@ -1008,13 +960,7 @@ pub async fn list_group_mappings(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let mappings = tokio::task::spawn_blocking(move || db::list_group_mappings(&db_clone))
@@ -1029,13 +975,7 @@ pub async fn list_known_groups(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let groups = tokio::task::spawn_blocking(move || db::list_known_groups(&db_clone))
@@ -1052,13 +992,7 @@ pub async fn create_group_mapping(
     Extension(database): Extension<Db>,
     Json(req): Json<CreateGroupMappingRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     if !crate::auth::is_valid_role(&req.role) {
         return Err(AppError::Internal(
@@ -1115,13 +1049,7 @@ pub async fn update_group_mapping(
     Path(id): Path<i64>,
     Json(req): Json<UpdateGroupMappingRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     if !crate::auth::is_valid_role(&req.role) {
         return Err(AppError::Internal(
@@ -1158,13 +1086,7 @@ pub async fn delete_group_mapping(
     Extension(database): Extension<Db>,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     match tokio::task::spawn_blocking(move || db::delete_group_mapping(&db_clone, id)).await {

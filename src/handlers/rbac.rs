@@ -1,7 +1,7 @@
 //! RBAC management API endpoints.
 
 use crate::audit;
-use crate::auth::AuthIdentity;
+use crate::auth::{require_role, AuthIdentity};
 use crate::db::Db;
 use crate::error::AppError;
 use crate::rbac;
@@ -83,7 +83,7 @@ pub async fn list_rbac_groups(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let groups = tokio::task::spawn_blocking(move || rbac::list_groups(&db_clone))
@@ -98,7 +98,7 @@ pub async fn create_rbac_group(
     Extension(database): Extension<Db>,
     Json(req): Json<CreateGroupRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let name = req.name.clone();
@@ -141,7 +141,7 @@ pub async fn delete_rbac_group(
     Extension(database): Extension<Db>,
     Path(group_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let gid = group_id.clone();
@@ -184,7 +184,7 @@ pub async fn add_group_member(
     Path(group_id): Path<String>,
     Json(req): Json<AddMemberRequest>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let gid = group_id.clone();
@@ -223,7 +223,7 @@ pub async fn remove_group_member(
     Extension(database): Extension<Db>,
     Path((group_id, user_id)): Path<(String, i64)>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let gid = group_id.clone();
@@ -262,7 +262,7 @@ pub async fn list_connection_permissions(
     Extension(database): Extension<Db>,
     Path(connection_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let cid = connection_id.clone();
@@ -280,7 +280,7 @@ pub async fn grant_connection_permission(
     Path(connection_id): Path<String>,
     Json(req): Json<GrantPermissionRequest>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let permission = rbac::ObjectPermission::parse(&req.permission)
         .ok_or_else(|| AppError::Internal(format!("invalid permission: {}", req.permission)))?;
@@ -327,7 +327,7 @@ pub async fn revoke_connection_permission(
     Path(connection_id): Path<String>,
     Json(req): Json<GrantPermissionRequest>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let permission = rbac::ObjectPermission::parse(&req.permission)
         .ok_or_else(|| AppError::Internal(format!("invalid permission: {}", req.permission)))?;
@@ -406,7 +406,7 @@ pub async fn list_custom_roles(
     identity: Option<Extension<AuthIdentity>>,
     Extension(database): Extension<Db>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let roles = tokio::task::spawn_blocking(move || rbac::list_custom_roles(&db_clone))
@@ -421,7 +421,7 @@ pub async fn create_custom_role(
     Extension(database): Extension<Db>,
     Json(req): Json<CreateCustomRoleRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     validate_custom_role_permissions(&req.permissions)?;
 
@@ -468,7 +468,7 @@ pub async fn get_custom_role(
     Extension(database): Extension<Db>,
     Path(role_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let rid = role_id.clone();
@@ -488,7 +488,7 @@ pub async fn update_custom_role(
     Path(role_id): Path<String>,
     Json(req): Json<UpdateCustomRoleRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let rid = role_id.clone();
@@ -561,7 +561,7 @@ pub async fn delete_custom_role(
     Extension(database): Extension<Db>,
     Path(role_id): Path<String>,
 ) -> Result<StatusCode, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let rid = role_id.clone();
@@ -607,7 +607,7 @@ pub async fn admin_roles_page(
     identity: Option<Extension<AuthIdentity>>,
     Extension(nonce): Extension<crate::CspNonce>,
 ) -> Result<axum::response::Response, AppError> {
-    require_admin(&identity)?;
+    require_role(&identity, "admin")?;
     let tmpl = crate::templates::AdminRolesTemplate {
         site_title: site_title.0.clone(),
         logo_url: theme.logo_url.clone().unwrap_or_default(),
@@ -619,10 +619,7 @@ pub async fn admin_roles_page(
 }
 
 // ── Helpers ──
-
-fn require_admin(identity: &Option<Extension<AuthIdentity>>) -> Result<(), AppError> {
-    match identity {
-        Some(Extension(id)) if id.has_role("admin") => Ok(()),
-        _ => Err(AppError::Forbidden("admin role required".into())),
-    }
-}
+//
+// `require_admin` was promoted to `crate::auth::require_role` (persea#281);
+// the local copy is gone and the handlers below call the shared helper
+// directly. Keeping a wrapper here would just duplicate the cascade.

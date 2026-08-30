@@ -10,7 +10,7 @@
 //! There is no admin bypass, and a request for another user's folder is
 //! indistinguishable from a missing one (404).
 use super::{AppState, StorageBackend, StorageKey, VaultState};
-use crate::auth::{client_ip, extract_cookie, AuthIdentity, TrustedProxies};
+use crate::auth::{client_ip, extract_cookie, require_role, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
 use crate::rbac;
@@ -1728,10 +1728,8 @@ pub async fn ab_apply_defaults(
     Extension(database): Extension<Db>,
     Json(req): Json<ApplyDefaultsRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
-        _ => return Err(AppError::Forbidden("admin role required".into())),
-    };
+    let id = require_role(&identity, "admin")?;
+    let admin_email = id.display_name().to_string();
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(
@@ -2326,10 +2324,8 @@ pub async fn ab_update_folder(
     Path((scope, folder)): Path<(String, String)>,
     Json(req): Json<UpdateFolderRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let admin_email = match identity.as_ref() {
-        Some(Extension(id)) if id.has_role("admin") => id.display_name().to_string(),
-        _ => return Err(AppError::Forbidden("admin role required".into())),
-    };
+    let id = require_role(&identity, "admin")?;
+    let admin_email = id.display_name().to_string();
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(
@@ -2382,13 +2378,7 @@ pub async fn ab_get_folder_config(
     Extension(database): Extension<Db>,
     Path((scope, folder)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    if !identity
-        .as_ref()
-        .map(|Extension(id)| id.has_role("admin"))
-        .unwrap_or(false)
-    {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     if !is_db_storage_available(&database) {
         return Err(AppError::Vault(

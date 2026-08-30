@@ -7,6 +7,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::Next,
     response::{IntoResponse, Redirect, Response},
+    Extension,
 };
 use ipnetwork::IpNetwork;
 use std::collections::HashMap;
@@ -497,6 +498,38 @@ impl AuthIdentity {
 
 // Re-export role utilities from the shared module.
 pub use crate::role::{is_valid_role, role_level};
+
+/// Guard helper: extract an authenticated identity from the optional
+/// extension that auth middleware inserts, and require it to hold at
+/// least `role`. Returns the inner `&AuthIdentity` so callers can keep
+/// using `display_name()` / `has_role()` / `groups()` on the same
+/// binding without an extra deref.
+///
+/// This is the single source of truth for the admin/poweruser cascade
+/// that used to be pasted across every restricted handler. Migrating
+/// a handler means replacing the `let id = identity.as_ref()...
+/// .ok_or(...)?` + `if !id.has_role(...)` pair with one call.
+///
+/// Error contract:
+/// - Missing identity → `AppError::Forbidden("authentication required")`
+/// - Identity present but role too low → `AppError::Forbidden("<role> role required")`
+/// - HTTP status is 403 in both cases (matches `AppError::Forbidden`'s
+///   existing mapping in `src/error.rs`); existing tests assert the
+///   exact strings, so do not reword them here without updating them.
+pub fn require_role<'a>(
+    identity: &'a Option<Extension<AuthIdentity>>,
+    role: &str,
+) -> Result<&'a AuthIdentity, crate::error::AppError> {
+    match identity {
+        Some(Extension(id)) if id.has_role(role) => Ok(id),
+        Some(_) => Err(crate::error::AppError::Forbidden(format!(
+            "{role} role required"
+        ))),
+        None => Err(crate::error::AppError::Forbidden(
+            "authentication required".into(),
+        )),
+    }
+}
 
 /// Compute the effective role for a user API token.
 /// Returns the lower of the user's current role and the token's max_role cap.

@@ -4,7 +4,7 @@
 //! audit logs, and the per-user credential variables used as template
 //! variables in connections.
 use super::{CredentialDefaultScope, StorageBackend, StorageKey, VaultState};
-use crate::auth::{client_ip, role_level, AuthIdentity, TrustedProxies};
+use crate::auth::{client_ip, require_role, role_level, AuthIdentity, TrustedProxies};
 use crate::db::{self, Db};
 use crate::error::AppError;
 use crate::rbac;
@@ -683,10 +683,8 @@ pub async fn admin_create_user_token(
     trusted: Option<Extension<TrustedProxies>>,
     Json(req): Json<AdminCreateTokenRequest>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let admin_name = match identity {
-        Some(Extension(ref id)) if id.has_role("admin") => id.display_name().to_string(),
-        _ => return Err(AppError::Forbidden("admin role required".into())),
-    };
+    let id = require_role(&identity, "admin")?;
+    let admin_name = id.display_name().to_string();
 
     if req.name.is_empty() || req.name.len() > 100 {
         return Err(AppError::Internal(
@@ -789,13 +787,7 @@ pub async fn admin_list_user_tokens(
     Extension(database): Extension<Db>,
     Path(email): Path<String>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or_else(|| AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let db_clone = database.clone();
     let email_clone = email.clone();
@@ -837,10 +829,8 @@ pub async fn admin_revoke_user_token(
     trusted: Option<Extension<TrustedProxies>>,
     Path(token_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let admin_name = match identity {
-        Some(Extension(ref id)) if id.has_role("admin") => id.display_name().to_string(),
-        _ => return Err(AppError::Forbidden("admin role required".into())),
-    };
+    let id = require_role(&identity, "admin")?;
+    let admin_name = id.display_name().to_string();
 
     let db_clone = database.clone();
     let found =
@@ -877,13 +867,7 @@ pub async fn admin_token_audit(
     Extension(database): Extension<Db>,
     Query(query): Query<AuditLogQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or_else(|| AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let limit = query.limit.unwrap_or(200).min(1000);
     let email = query.email.clone();
@@ -903,13 +887,7 @@ pub async fn admin_addressbook_audit(
     Extension(database): Extension<Db>,
     Query(query): Query<AuditLogQuery>,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let id = identity
-        .as_ref()
-        .map(|Extension(id)| id)
-        .ok_or_else(|| AppError::Forbidden("authentication required".into()))?;
-    if !id.has_role("admin") {
-        return Err(AppError::Forbidden("admin role required".into()));
-    }
+    let _id = require_role(&identity, "admin")?;
 
     let limit = query.limit.unwrap_or(200).min(1000);
     let email = query.email.clone();
