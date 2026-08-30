@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use crate::config::Config;
 use crate::db::{self, Db};
+use crate::session::SessionType;
 use crate::vault::{AddressBookEntry, VaultClient};
 
 /// Run the import-guacamole subcommand.
@@ -54,9 +55,14 @@ pub async fn cmd_import_guacamole(
     let mut entries: Vec<((String, String), AddressBookEntry)> = Vec::new();
     let mut skipped = 0;
 
+    // Legacy SQL import only carries parameters for SSH/RDP/VNC; everything
+    // else is rejected here with a "skipping" log line.
+    const SQL_IMPORT_PROTOCOLS: &[SessionType] =
+        &[SessionType::Ssh, SessionType::Rdp, SessionType::Vnc];
+
     for conn in &connections {
         let protocol = conn.protocol.to_lowercase();
-        if protocol != "ssh" && protocol != "rdp" && protocol != "vnc" {
+        if !SQL_IMPORT_PROTOCOLS.contains(&SessionType::from_api_str(&protocol, SessionType::Vnc)) {
             eprintln!(
                 "  Skipping: {} (unsupported protocol: {})",
                 conn.name, conn.protocol

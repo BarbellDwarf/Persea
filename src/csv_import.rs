@@ -8,6 +8,7 @@
 //! header is row 1). `CsvError.row == 0` marks a file-level error (bad or
 //! missing header, unterminated quote).
 
+use crate::session::SessionType;
 use std::collections::HashSet;
 
 /// Fixed column names, in order, for the CSV header and template.
@@ -67,14 +68,27 @@ pub const OPTIONAL_HEADERS: [&str; 13] = [
 ];
 
 /// Protocols accepted by the address book.
+///
+/// Derived from [`SessionType::ALL`] plus the `powershell` alias
+/// (PowerShell-over-SSH rides the SSH session kind). The order here
+/// is the canonical order the CSV importer surfaces in error
+/// messages.
 pub const VALID_PROTOCOLS: [&str; 8] = [
-    "ssh",
-    "rdp",
-    "vnc",
-    "spice",
-    "web",
-    "vdi",
-    "proxmox",
+    // ssh
+    SessionType::ALL[0],
+    // rdp
+    SessionType::ALL[2],
+    // vnc
+    SessionType::ALL[3],
+    // spice
+    SessionType::ALL[5],
+    // web
+    SessionType::ALL[1],
+    // vdi
+    SessionType::ALL[4],
+    // proxmox
+    SessionType::ALL[6],
+    // powershell (the SSH alias)
     "powershell",
 ];
 
@@ -453,8 +467,16 @@ pub fn validate_row(
         ));
     }
     // Web/VDI/Proxmox entries use url / container_image / proxmox_url
-    // instead of a plain hostname.
-    if hostname.trim().is_empty() && !matches!(protocol.as_str(), "web" | "vdi" | "proxmox") {
+    // instead of a plain hostname. Driven by the SessionType enum so the
+    // list tracks the wire strings automatically.
+    const HOSTNAME_OPTIONAL: &[SessionType] =
+        &[SessionType::Web, SessionType::Vdi, SessionType::Proxmox];
+    if hostname.trim().is_empty()
+        && !matches!(
+            SessionType::from_api_str_opt(&protocol),
+            Some(t) if HOSTNAME_OPTIONAL.contains(&t)
+        )
+    {
         return Err(format!("hostname is required for protocol '{}'", protocol));
     }
     Ok(())
