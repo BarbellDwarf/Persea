@@ -1885,8 +1885,6 @@ pub async fn ab_apply_defaults(
     // Audit the admin mutation on the hash chain (same pattern as the other
     // admin mutations in users.rs / groups.rs).
     {
-        let db_audit = database.clone();
-        let admin_name = admin_email.clone();
         let ip = audit_client_ip(&headers, &addr, trusted.as_ref());
         let details = json!({
             "action": "apply_defaults",
@@ -1897,20 +1895,16 @@ pub async fn ab_apply_defaults(
             "security": {"rdp": rdp_security},
             "auth_pkg": {"rdp": rdp_auth_pkg},
         });
-        if let Err(e) = tokio::task::spawn_blocking(move || {
-            let _ = crate::audit::log_event(
-                &db_audit,
-                &mut crate::audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .source_ip(&ip)
-                    .details(details)
-                    .build(),
-            );
-        })
-        .await
-        {
-            tracing::error!(error = %e, "audit task failed");
-        }
+        crate::audit::fire(
+            &database,
+            Some(&admin_email),
+            "admin.config.change",
+            "success",
+            details,
+            Some(&ip),
+            None,
+        )
+        .await;
     }
 
     Ok(Json(json!({

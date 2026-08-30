@@ -232,10 +232,11 @@ fn sniff_transfer_instruction(
     events
 }
 
-/// Write a transfer audit event into the hash-chain audit log. Runs the DB
-/// write on a blocking thread (rusqlite is synchronous). Silent on failure —
-/// audit logging must never take down the proxy.
-fn emit_transfer_audit(
+/// Write a transfer audit event into the hash-chain audit log. The DB write
+/// happens inside `audit::fire` (which spawns a blocking task internally)
+/// so the caller can await without holding up the proxy loop. Silent on
+/// failure — audit logging must never take down the proxy.
+async fn emit_transfer_audit(
     database: Option<&Db>,
     session_id: Uuid,
     user: Option<&str>,
@@ -244,9 +245,8 @@ fn emit_transfer_audit(
     let Some(db) = database else {
         return;
     };
-    let db = db.clone();
     let sid = session_id.to_string();
-    let user = user.unwrap_or("unknown").to_string();
+    let user = user.unwrap_or("unknown");
     let event_type = match event.kind {
         TransferKind::Upload => "session.file.upload",
         TransferKind::Download => "session.file.download",
@@ -257,16 +257,16 @@ fn emit_transfer_audit(
         "mimetype": event.mimetype,
         "size": event.size,
     });
-    tokio::task::spawn_blocking(move || {
-        let _ = crate::audit::log_event(
-            &db,
-            &mut crate::audit::EventBuilder::new(event_type, outcome)
-                .user_id(&user)
-                .session_id(&sid)
-                .details(details)
-                .build(),
-        );
-    });
+    crate::audit::fire(
+        db,
+        Some(user),
+        event_type,
+        outcome,
+        details,
+        None,
+        Some(&sid),
+    )
+    .await;
 }
 
 /// Outcome of the proxy session, including whether guacd sent a disconnect instruction.
@@ -1329,7 +1329,8 @@ where
                         session_id,
                         session_user.as_deref(),
                         event,
-                    );
+                    )
+                    .await;
                 }
             }
         }
@@ -1505,7 +1506,8 @@ async fn ws_to_guacd_inner(
                                     session_id,
                                     session_user.as_deref(),
                                     event,
-                                );
+                                )
+                                .await;
                             }
                         }
                     }

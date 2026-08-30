@@ -824,16 +824,16 @@ pub async fn callback(
 
     // Audit: OIDC login
     {
-        let db_audit = database.clone();
         let uid = user.id.to_string();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = crate::audit::log_event(
-                &db_audit,
-                &mut crate::audit::EventBuilder::new("auth.oidc.login", "success")
-                    .user_id(&uid)
-                    .build(),
-            );
-        })
+        crate::audit::fire(
+            &database,
+            Some(&uid),
+            "auth.oidc.login",
+            "success",
+            serde_json::Value::Null,
+            None,
+            None,
+        )
         .await;
     }
 
