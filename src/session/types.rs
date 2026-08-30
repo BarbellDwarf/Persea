@@ -650,8 +650,19 @@ impl ShareTokenValidation {
 #[derive(Debug)]
 #[must_use]
 pub enum SessionError {
-    /// Could not reach guacd, or the handshake failed; carries the underlying message.
-    GuacdConnection(String),
+    /// Could not reach guacd, or the handshake failed; carries the
+    /// underlying message for display. When guacd rejected the handshake
+    /// with an `error` instruction, the protocol status code travels as
+    /// typed data ([`GuacdStatus`], persea#277) so classification never
+    /// depends on the message prose; `guacd_status` is `None` for
+    /// TCP/TLS/timeout/parse failures where guacd said nothing.
+    GuacdConnection {
+        /// Human-readable message, for display only.
+        message: String,
+        /// Typed guacd protocol status decoded from the `error`
+        /// instruction, when guacd sent one.
+        guacd_status: Option<crate::guacd::GuacdStatus>,
+    },
     /// No session with the requested id exists.
     NotFound,
     /// The session exists but is not in a joinable state.
@@ -672,10 +683,50 @@ pub enum SessionError {
     VdiError(String),
 }
 
+impl SessionError {
+    /// Build a guacd-connection failure with no protocol status: TCP
+    /// timeouts, TLS failures, and parse errors — paths where guacd sent
+    /// no `error` instruction.
+    pub fn guacd_connection(message: impl Into<String>) -> SessionError {
+        SessionError::GuacdConnection {
+            message: message.into(),
+            guacd_status: None,
+        }
+    }
+
+    /// Map a [`crate::guacd::GuacdError`] onto the session error surface.
+    /// The rendered message is exactly the underlying error's `Display`;
+    /// a typed protocol status is carried through when guacd rejected
+    /// the handshake with an `error` instruction (persea#277).
+    pub fn from_guacd_error(e: &crate::guacd::GuacdError) -> SessionError {
+        let guacd_status = match e {
+            crate::guacd::GuacdError::ErrorInstruction { status, .. } => *status,
+            _ => None,
+        };
+        SessionError::GuacdConnection {
+            message: e.to_string(),
+            guacd_status,
+        }
+    }
+
+    /// The typed guacd protocol status for this failure: present only
+    /// when guacd sent an `error` instruction carrying a parseable
+    /// status code. Callers classify on this field, never on message
+    /// text (persea#277).
+    pub fn guacd_status(&self) -> Option<crate::guacd::GuacdStatus> {
+        match self {
+            SessionError::GuacdConnection { guacd_status, .. } => *guacd_status,
+            _ => None,
+        }
+    }
+}
+
 impl std::fmt::Display for SessionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SessionError::GuacdConnection(msg) => write!(f, "guacd connection failed: {}", msg),
+            SessionError::GuacdConnection { message, .. } => {
+                write!(f, "guacd connection failed: {}", message)
+            }
             SessionError::NotFound => write!(f, "session not found"),
             SessionError::NotActive => write!(f, "session is not active"),
             SessionError::ViewerLimit { viewers, max } => write!(

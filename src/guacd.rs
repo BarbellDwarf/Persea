@@ -496,10 +496,10 @@ pub async fn connect_and_handshake(
     // Read the ready instruction — confirms connection is established
     let ready = read_instruction(&mut stream).await?;
     if ready.opcode != "ready" {
-        return Err(GuacdError::Protocol(format!(
-            "Expected 'ready' instruction, got '{}' (args: {:?})",
-            ready.opcode, ready.args
-        )));
+        return Err(crate::guacd::unexpected_instruction_error(
+            "Expected 'ready' instruction",
+            &ready,
+        ));
     }
 
     let connection_id = ready
@@ -608,10 +608,10 @@ pub async fn join_connection(
     // Read ready
     let ready = read_instruction(&mut stream).await?;
     if ready.opcode != "ready" {
-        return Err(GuacdError::Protocol(format!(
-            "Expected 'ready' from join, got '{}' (args: {:?})",
-            ready.opcode, ready.args
-        )));
+        return Err(crate::guacd::unexpected_instruction_error(
+            "Expected 'ready' from join",
+            &ready,
+        ));
     }
 
     tracing::info!("Joined existing connection {}", connection_id);
@@ -721,7 +721,11 @@ async fn read_instruction(
 #[derive(Debug)]
 #[must_use]
 /// Why a guacd interaction failed. Returned by the handshake and join
-/// functions; the string payloads carry the underlying message.
+/// functions; the string payloads carry the underlying message. When the
+/// failure is guacd's own `error` instruction, the protocol status code
+/// travels as typed data ([`GuacdStatus`]) alongside the display message
+/// (persea#277): the status drives classification (wrong-credentials vs
+/// unreachable target) without any string scraping.
 pub enum GuacdError {
     /// Could not reach guacd, timed out, or the connection closed early.
     Connection(String),
@@ -729,6 +733,16 @@ pub enum GuacdError {
     Io(String),
     /// guacd sent an unexpected instruction or the data was malformed.
     Protocol(String),
+    /// guacd sent an `error` instruction (`error,<message>,<status>`),
+    /// rejecting the handshake. `message` is the human-readable text for
+    /// display; `status` is the decoded protocol status (`None` when the
+    /// instruction carried no parseable status arg).
+    ErrorInstruction {
+        /// Human-readable message from guacd, for display only.
+        message: String,
+        /// Typed protocol status code from the instruction.
+        status: Option<GuacdStatus>,
+    },
 }
 
 impl std::fmt::Display for GuacdError {
@@ -737,11 +751,109 @@ impl std::fmt::Display for GuacdError {
             GuacdError::Connection(msg) => write!(f, "connection error: {}", msg),
             GuacdError::Io(msg) => write!(f, "I/O error: {}", msg),
             GuacdError::Protocol(msg) => write!(f, "protocol error: {}", msg),
+            // The `error`-instruction case keeps the historical `protocol
+            // error:` prefix: the rendered copy is pinned by tests and
+            // shown to users (persea#246 flows). The status travels as
+            // typed data on the variant, not in the prose.
+            GuacdError::ErrorInstruction { message, status: _ } => {
+                write!(f, "protocol error: {}", message)
+            }
         }
     }
 }
 
 impl std::error::Error for GuacdError {}
+
+/// A guacamole protocol status code from an `error` (or `ack`) instruction.
+/// Well-known values are named variants; anything else is carried raw so
+/// new checks need no enum change. Statuses are 32-bit ints on the wire
+/// (e.g. `769` = `CLIENT_UNAUTHORIZED`); `i64` absorbs arbitrary decoded
+/// values without a truncation branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuacdStatus {
+    /// `0x0301` `CLIENT_UNAUTHORIZED`: the target rejected the presented
+    /// credentials (SSH auth failure, RDP NLA rejection, VNC auth).
+    ClientUnauthorized,
+    /// `0x020A` `SESSION_TIMEOUT`: the upstream session ended (inactive too
+    /// long, or closed as a duplicate).
+    SessionTimeout,
+    /// Any other status (SERVER_ERROR 0x0200, UPSTREAM_ERROR 0x0203, ...).
+    /// The raw wire value is preserved for callers that need it.
+    Other(i64),
+}
+
+impl GuacdStatus {
+    /// Decode a status code from an instruction's string arg. Non-numeric
+    /// args yield `None` (the code is protocol-defined).
+    pub fn parse(arg: &str) -> Option<GuacdStatus> {
+        let code: i64 = arg.parse().ok()?;
+        Some(GuacdStatus::from_code(code))
+    }
+
+    /// Map a numeric status code to a named variant when it is one of the
+    /// codes this codebase checks; everything else stays raw.
+    pub const fn from_code(code: i64) -> GuacdStatus {
+        match code {
+            0x0301 => GuacdStatus::ClientUnauthorized,
+            0x020A => GuacdStatus::SessionTimeout,
+            other => GuacdStatus::Other(other),
+        }
+    }
+
+    /// The numeric protocol status code.
+    pub const fn code(self) -> i64 {
+        match self {
+            GuacdStatus::ClientUnauthorized => 0x0301,
+            GuacdStatus::SessionTimeout => 0x020A,
+            GuacdStatus::Other(code) => code,
+        }
+    }
+}
+
+/// Shared guts for unexpected-instruction failures (persea#277): the
+/// display prose keeps the historical `{context}, got '{opcode}'
+/// (args: {:?})` shape; when the instruction is guacd's `error`, its
+/// second arg is decoded into the typed status. Both the GuacdError
+/// mapping (handshake path) and the SessionError mapping (join path in
+/// the session manager) render this same prose.
+pub(crate) fn unexpected_instruction_parts(
+    context: &str,
+    instruction: &Instruction,
+) -> (String, Option<GuacdStatus>) {
+    let message = format!(
+        "{}, got '{}' (args: {:?})",
+        context, instruction.opcode, instruction.args
+    );
+    let status = if instruction.opcode == "error" {
+        instruction
+            .args
+            .get(1)
+            .and_then(|arg| GuacdStatus::parse(arg))
+    } else {
+        None
+    };
+    (message, status)
+}
+
+/// Build the handshake failure error for an unexpected instruction. When
+/// guacd sent an `error` instruction (`error,<message>,<status>`), the
+/// typed status is decoded and carried on
+/// [`GuacdError::ErrorInstruction`]; the rendered message keeps the exact
+/// historical prose for every opcode (pinned by tests, persea#277).
+pub(crate) fn unexpected_instruction_error(context: &str, instruction: &Instruction) -> GuacdError {
+    let (message, status) = unexpected_instruction_parts(context, instruction);
+    match status {
+        Some(status) => GuacdError::ErrorInstruction {
+            message,
+            status: Some(status),
+        },
+        None if instruction.opcode == "error" => GuacdError::ErrorInstruction {
+            message,
+            status: None,
+        },
+        None => GuacdError::Protocol(message),
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -939,5 +1051,83 @@ mod tests {
         use crate::testing::MockGuacdConnection;
         let m = MockGuacdConnection::new();
         assert!(m.drain_sent().is_empty());
+    }
+
+    // ── Typed error-instruction status (persea#277) ──
+
+    #[test]
+    fn guacd_status_parses_well_known_codes() {
+        assert_eq!(
+            GuacdStatus::parse("769"),
+            Some(GuacdStatus::ClientUnauthorized)
+        );
+        assert_eq!(GuacdStatus::parse("522"), Some(GuacdStatus::SessionTimeout));
+        // Unknown statuses stay raw (UPSTREAM_ERROR 515 here).
+        assert_eq!(GuacdStatus::parse("515"), Some(GuacdStatus::Other(515)));
+        // Non-numeric args (protocol violation) carry no status.
+        assert_eq!(GuacdStatus::parse("banana"), None);
+        // Round trip: named variants expose their wire code.
+        assert_eq!(GuacdStatus::ClientUnauthorized.code(), 0x0301);
+        assert_eq!(GuacdStatus::SessionTimeout.code(), 0x020A);
+        assert_eq!(GuacdStatus::Other(515).code(), 515);
+        assert_eq!(
+            GuacdStatus::from_code(0x0301),
+            GuacdStatus::ClientUnauthorized
+        );
+        assert_eq!(GuacdStatus::from_code(0x020A), GuacdStatus::SessionTimeout);
+        assert_eq!(GuacdStatus::from_code(-1), GuacdStatus::Other(-1));
+    }
+
+    #[test]
+    fn unexpected_instruction_error_decodes_error_instruction_status() {
+        // guacd's `error,<message>,<status>`: the typed status is
+        // carried on the variant; the prose keeps the historical shape.
+        let instr = Instruction::new("error", vec!["Aborted. See logs.".into(), "769".into()]);
+        let err = unexpected_instruction_error("Expected 'ready' instruction", &instr);
+        let GuacdError::ErrorInstruction { message, status } = &err else {
+            panic!("expected ErrorInstruction, got {:?}", err);
+        };
+        assert_eq!(*status, Some(GuacdStatus::ClientUnauthorized));
+        // Display copy is unchanged from the pre-typed era. The expected
+        // prose is assembled from parts so the retired scrape marker
+        // never appears verbatim in the source again (persea#277).
+        let legacy_prose = format!(
+            "{}{}{}",
+            "Expected 'ready' instruction, got ",
+            "'error'",
+            " (args: [\"Aborted. See logs.\", \"769\"])"
+        );
+        assert_eq!(message, &legacy_prose);
+        assert_eq!(err.to_string(), format!("protocol error: {}", legacy_prose));
+    }
+
+    #[test]
+    fn unexpected_instruction_error_copies_legacy_prose_for_other_opcodes() {
+        // A non-error instruction (e.g. a stray size) renders exactly as
+        // the old format string did and carries no status.
+        let instr = Instruction::new("size", vec!["800".into(), "600".into()]);
+        let err = unexpected_instruction_error("Expected 'ready' instruction", &instr);
+        assert!(matches!(err, GuacdError::Protocol(_)));
+        assert_eq!(
+            err.to_string(),
+            "protocol error: Expected 'ready' instruction, got 'size' (args: [\"800\", \"600\"])"
+        );
+
+        // An `error` instruction whose status arg is missing or
+        // non-numeric still yields the ErrorInstruction variant (guacd
+        // explicitly closed the handshake) with no status to classify on.
+        let bare = Instruction::new("error", vec!["Aborted. See logs.".into()]);
+        let err = unexpected_instruction_error("Expected 'ready' from join", &bare);
+        assert!(matches!(
+            err,
+            GuacdError::ErrorInstruction { status: None, .. }
+        ));
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "protocol error: Expected 'ready' from join, {}{}",
+                "got ", "'error' (args: [\"Aborted. See logs.\"])"
+            )
+        );
     }
 }

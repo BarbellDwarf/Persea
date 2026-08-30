@@ -26,7 +26,7 @@ pub(crate) const GUACD_IO_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Map a guacd socket I/O error onto the join error surface.
 fn join_io_error(e: std::io::Error) -> SessionError {
-    SessionError::GuacdConnection(format!("guacd I/O error: {}", e))
+    SessionError::guacd_connection(format!("guacd I/O error: {}", e))
 }
 
 /// Manages all active sessions.
@@ -623,13 +623,13 @@ impl SessionManager {
         )
         .await
         .map_err(|_| {
-            SessionError::GuacdConnection(format!(
+            SessionError::guacd_connection(format!(
                 "timeout connecting to guacd at {}",
                 self.config.guacd_addr
             ))
         })?
         .map_err(|e| {
-            SessionError::GuacdConnection(format!(
+            SessionError::guacd_connection(format!(
                 "failed to connect to guacd at {}: {}",
                 self.config.guacd_addr, e
             ))
@@ -656,14 +656,14 @@ impl SessionManager {
             let server_name =
                 tokio_rustls::rustls::pki_types::ServerName::try_from(hostname.to_string())
                     .map_err(|e| {
-                        SessionError::GuacdConnection(format!(
+                        SessionError::guacd_connection(format!(
                             "invalid TLS server name '{}': {}",
                             hostname, e
                         ))
                     })?
                     .to_owned();
             Box::new(connector.connect(server_name, tcp).await.map_err(|e| {
-                SessionError::GuacdConnection(format!("TLS handshake with guacd failed: {}", e))
+                SessionError::guacd_connection(format!("TLS handshake with guacd failed: {}", e))
             })?)
         } else {
             Box::new(tcp)
@@ -677,10 +677,10 @@ impl SessionManager {
 
         let args_instruction = Self::read_guacd_instruction(&mut stream).await?;
         if args_instruction.opcode != "args" {
-            return Err(SessionError::GuacdConnection(format!(
-                "expected 'args' from join, got '{}'",
-                args_instruction.opcode
-            )));
+            return Err(Self::unexpected_join_instruction(
+                "expected 'args' from join",
+                &args_instruction,
+            ));
         }
 
         // The connection is already configured; only the per-user
@@ -698,10 +698,10 @@ impl SessionManager {
 
         let ready = Self::read_guacd_instruction(&mut stream).await?;
         if ready.opcode != "ready" {
-            return Err(SessionError::GuacdConnection(format!(
-                "expected 'ready' from join, got '{}' (args: {:?})",
-                ready.opcode, ready.args
-            )));
+            return Err(Self::unexpected_join_instruction(
+                "expected 'ready' from join",
+                &ready,
+            ));
         }
 
         tracing::info!(
@@ -710,6 +710,19 @@ impl SessionManager {
             "Joined existing connection"
         );
         Ok(stream)
+    }
+
+    /// Map an unexpected instruction during the join handshake onto the
+    /// session error surface. When guacd sent an `error` instruction, the
+    /// typed protocol status is decoded and carried on the error
+    /// (persea#277); the rendered message keeps the same text as the
+    /// legacy prose format for display.
+    fn unexpected_join_instruction(context: &str, instruction: &Instruction) -> SessionError {
+        let (message, status) = crate::guacd::unexpected_instruction_parts(context, instruction);
+        SessionError::GuacdConnection {
+            message,
+            guacd_status: status,
+        }
     }
 
     /// Read one complete instruction from a guacd stream, bounded by
@@ -723,22 +736,22 @@ impl SessionManager {
             let n = tokio::time::timeout(GUACD_IO_TIMEOUT, stream.read(&mut buf))
                 .await
                 .map_err(|_| {
-                    SessionError::GuacdConnection(
-                        "timed out waiting for an instruction from guacd".into(),
+                    SessionError::guacd_connection(
+                        "timed out waiting for an instruction from guacd",
                     )
                 })?
                 .map_err(join_io_error)?;
             if n == 0 {
-                return Err(SessionError::GuacdConnection(
-                    "guacd closed the connection".into(),
+                return Err(SessionError::guacd_connection(
+                    "guacd closed the connection",
                 ));
             }
             let data = std::str::from_utf8(&buf[..n]).map_err(|e| {
-                SessionError::GuacdConnection(format!("invalid UTF-8 from guacd: {}", e))
+                SessionError::guacd_connection(format!("invalid UTF-8 from guacd: {}", e))
             })?;
             let results = parser.receive(data);
             if let Some(result) = results.into_iter().next() {
-                return result.map_err(|e| SessionError::GuacdConnection(e.to_string()));
+                return result.map_err(|e| SessionError::guacd_connection(e.to_string()));
             }
         }
     }

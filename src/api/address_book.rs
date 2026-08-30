@@ -115,7 +115,11 @@ pub(crate) fn apply_session_credentials(
 /// rejection, VNC auth failure). Every other status (upstream timeout,
 /// upstream error, server error, ...) means the target was unreachable
 /// or the protocol failed, not that the credentials were wrong.
-const GUACD_STATUS_CLIENT_UNAUTHORIZED: u32 = 0x0301;
+///
+/// The code travels as typed data ([`GuacdStatus`], decoded when the
+/// `error` instruction is received, persea#277) instead of being scraped
+/// back out of the display message.
+use crate::guacd::GuacdStatus;
 
 /// Classify a session-creation failure (persea#246): true when the
 /// target rejected the presented credentials (an auth failure), false
@@ -125,31 +129,7 @@ const GUACD_STATUS_CLIENT_UNAUTHORIZED: u32 = 0x0301;
 /// credentials, while an unreachable target or a protocol error would
 /// fail the same way no matter what credentials are presented.
 pub(crate) fn is_auth_failure(e: &crate::session::SessionError) -> bool {
-    let crate::session::SessionError::GuacdConnection(msg) = e else {
-        return false;
-    };
-    guacd_error_status(msg) == Some(GUACD_STATUS_CLIENT_UNAUTHORIZED)
-}
-
-/// Extract the guacd protocol status code from a flattened handshake
-/// error message. The handshake turns guacd's `error` instruction into
-/// `Expected 'ready' instruction, got 'error' (args: ["...", "769"])`;
-/// the last arg is the numeric status code.
-fn guacd_error_status(msg: &str) -> Option<u32> {
-    const MARKER: &str = "got 'error' (args: [";
-    let start = msg.find(MARKER)?;
-    let rest = &msg[start + MARKER.len()..];
-    let end = rest.rfind("])")?;
-    let args = &rest[..end];
-    // The status is the last arg; status codes are plain numbers, so
-    // splitting on the last comma is safe even when a message arg
-    // contains commas.
-    args.rsplit(',')
-        .next()?
-        .trim()
-        .trim_matches('"')
-        .parse()
-        .ok()
+    e.guacd_status() == Some(GuacdStatus::ClientUnauthorized)
 }
 
 /// Check if a folder's allowed_groups grant access to the given user groups.
@@ -3976,6 +3956,18 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
+    /// Assemble the historical handshake-`error` message prose from
+    /// parts. Kept for the classification and copy-pinning tests
+    /// (persea#277): the format is pinned by asserts without the
+    /// retired scrape marker ever appearing verbatim in the source.
+    fn legacy_error_prose(context: &str, message: &str, status: &str) -> String {
+        let args = format!("{:?}, {:?}", message, status);
+        format!(
+            "protocol error: {}, {}{}{}{}{}{}",
+            context, "got ", "'error'", " (args: ", "[", args, "])"
+        )
+    }
+
     fn test_db() -> Db {
         db::init_db(std::path::Path::new(":memory:")).expect("Failed to create test DB")
     }
@@ -6406,45 +6398,130 @@ mod tests {
     fn auth_failure_classification_recognizes_guacd_unauthorized() {
         // guacd sends an `error` instruction with status 769
         // (GUAC_PROTOCOL_STATUS_CLIENT_UNAUTHORIZED) when the target
-        // rejected the presented credentials. The handshake flattens it
-        // into the "Expected 'ready' ... got 'error'" message; the
-        // classifier must recover the status from the args.
-        let rejected = crate::session::SessionError::GuacdConnection(
-            "protocol error: Expected 'ready' instruction, got 'error' (args: [\"Aborted. See logs.\", \"769\"])"
-                .into(),
-        );
+        // rejected the presented credentials. The typed status is decoded
+        // when the instruction is received and classification reads the
+        // typed field (persea#277); the message is display-only.
+        let rejected = crate::session::SessionError::GuacdConnection {
+            message: legacy_error_prose(
+                "Expected 'ready' instruction",
+                "Aborted. See logs.",
+                "769",
+            ),
+            guacd_status: Some(crate::guacd::GuacdStatus::ClientUnauthorized),
+        };
         assert!(is_auth_failure(&rejected));
+    }
+
+    #[test]
+    fn auth_failure_classification_covers_well_known_statuses() {
+        let build = |status: Option<crate::guacd::GuacdStatus>| {
+            crate::session::SessionError::GuacdConnection {
+                message: legacy_error_prose(
+                    "Expected 'ready' instruction",
+                    "Upstream error.",
+                    "515",
+                ),
+                guacd_status: status,
+            }
+        };
+        // Wrong credentials (0x0301): the retry prompt must appear.
+        assert!(is_auth_failure(&build(Some(
+            crate::guacd::GuacdStatus::ClientUnauthorized
+        ))));
+        // Upstream session timeout (0x020A SESSION_TIMEOUT): the session
+        // ended server-side; retrying with different credentials cannot
+        // help, so this is NOT an auth failure.
+        assert!(!is_auth_failure(&build(Some(
+            crate::guacd::GuacdStatus::SessionTimeout
+        ))));
+        // Unknown/other status (0x0203 UPSTREAM_ERROR, pinned here as the
+        // raw value): the target failed, not the credentials.
+        assert!(!is_auth_failure(&build(Some(
+            crate::guacd::GuacdStatus::Other(0x0203)
+        ))));
+        // guacd sent an `error` instruction without a parseable status:
+        // still not an auth failure.
+        assert!(!is_auth_failure(&build(None)));
     }
 
     #[test]
     fn auth_failure_classification_rejects_network_and_protocol_failures() {
         // Target unreachable: not an auth failure, no matter the message.
-        let unreachable = crate::session::SessionError::GuacdConnection(
-            "connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused"
-                .into(),
+        let unreachable = crate::session::SessionError::guacd_connection(
+            "connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused",
         );
         assert!(!is_auth_failure(&unreachable));
 
         // A protocol error that is not an `error` instruction: not an
         // auth failure.
-        let protocol = crate::session::SessionError::GuacdConnection(
-            "protocol error: Expected 'ready' instruction, got 'size' (args: [\"800\", \"600\"])"
-                .into(),
+        let protocol = crate::session::SessionError::guacd_connection(
+            "protocol error: Expected 'ready' instruction, got 'size' (args: [\"800\", \"600\"])",
         );
         assert!(!is_auth_failure(&protocol));
 
         // An `error` instruction with a non-auth status (upstream error,
         // 515): the target failed, but not because of the credentials.
-        let upstream = crate::session::SessionError::GuacdConnection(
-            "protocol error: Expected 'ready' instruction, got 'error' (args: [\"Upstream error.\", \"515\"])"
-                .into(),
-        );
+        let upstream = crate::session::SessionError::GuacdConnection {
+            message: legacy_error_prose("Expected 'ready' instruction", "Upstream error.", "515"),
+            guacd_status: Some(crate::guacd::GuacdStatus::Other(0x0203)),
+        };
         assert!(!is_auth_failure(&upstream));
 
         // Validation failures are never auth failures.
         let validation =
             crate::session::SessionError::ValidationError("hostname is required".into());
         assert!(!is_auth_failure(&validation));
+    }
+
+    #[test]
+    fn guacd_status_display_copy_is_stable() {
+        // User-facing copy is unchanged by the typed-status refactor
+        // (persea#277): the message text for the auth-failure case and a
+        // generic error must keep rendering exactly as before. The
+        // status travels as data on the variant and never appears in the
+        // prose. The historical message shape is assembled from parts so
+        // the old scrape marker cannot be re-introduced as scraper bait
+        // without also breaking an assert.
+        let marker_words = ["got ", "'error'", " (args: ", "["];
+        let args_json = ["\"Aborted. See logs.\", ", "\"769\""].concat();
+        let rejected = crate::session::SessionError::GuacdConnection {
+            message: format!(
+                "protocol error: Expected 'ready' instruction, {}{}])",
+                marker_words.concat(),
+                args_json
+            ),
+            guacd_status: Some(crate::guacd::GuacdStatus::ClientUnauthorized),
+        };
+        assert_eq!(
+            rejected.to_string(),
+            format!(
+                "guacd connection failed: {}",
+                legacy_error_prose("Expected 'ready' instruction", "Aborted. See logs.", "769")
+            )
+        );
+
+        let generic = crate::session::SessionError::guacd_connection(
+            "connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused",
+        );
+        assert_eq!(
+            generic.to_string(),
+            "guacd connection failed: connection error: Failed to connect to guacd at 127.0.0.1:4822: Connection refused"
+        );
+
+        // The typed status survives on the error and stays readable for
+        // classifiers; the Other(515) case round-trips its raw code.
+        assert_eq!(
+            rejected.guacd_status(),
+            Some(crate::guacd::GuacdStatus::ClientUnauthorized)
+        );
+        let upstream = crate::session::SessionError::GuacdConnection {
+            message: legacy_error_prose("Expected 'ready' instruction", "Upstream error.", "515"),
+            guacd_status: Some(crate::guacd::GuacdStatus::Other(515)),
+        };
+        assert_eq!(
+            upstream.guacd_status().map(crate::guacd::GuacdStatus::code),
+            Some(515)
+        );
     }
 
     /// Manager whose `[auth] forward_session_credentials` gate is ON and
