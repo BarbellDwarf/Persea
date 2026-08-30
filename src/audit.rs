@@ -166,6 +166,50 @@ impl EventBuilder {
     }
 }
 
+/// Fire-and-forget audit emission. Builds an [`AuditEvent`], writes it to the
+/// hash-chain on a blocking thread, and logs a warning on failure. The request
+/// must never fail because audit logging failed.
+///
+/// # Arguments
+///
+/// * `db` – database handle (cloned internally for the blocking thread).
+/// * `actor` – human-readable identity of the caller (display name or email).
+/// * `event_type` – event category, e.g. `"admin.config.change"`.
+/// * `outcome` – `"success"` or `"failure"`.
+/// * `details` – structured payload; `serde_json::Value::Null` when none.
+/// * `source_ip` – optional client IP.
+/// * `session_id` – optional session UUID.
+pub async fn fire(
+    db: &Db,
+    actor: &str,
+    event_type: &str,
+    outcome: &str,
+    details: serde_json::Value,
+    source_ip: Option<&str>,
+    session_id: Option<&str>,
+) {
+    let db = db.clone();
+    let actor = actor.to_string();
+    let event_type = event_type.to_string();
+    let outcome = outcome.to_string();
+    let source_ip = source_ip.map(str::to_string);
+    let session_id = session_id.map(str::to_string);
+    if let Err(e) = tokio::task::spawn_blocking(move || {
+        let mut builder = EventBuilder::new(&event_type, &outcome).user_id(&actor);
+        if let Some(ref ip) = source_ip {
+            builder = builder.source_ip(ip);
+        }
+        if let Some(ref sid) = session_id {
+            builder = builder.session_id(sid);
+        }
+        let _ = log_event(&db, &mut builder.details(details).build());
+    })
+    .await
+    {
+        tracing::warn!(error = %e, "audit spawn failed");
+    }
+}
+
 /// Compute the SHA-256 hash of an audit event using canonical JSON (sorted keys, no whitespace).
 /// The hash covers: event_type, timestamp, user_id, source_ip, outcome, details, session_id.
 pub fn compute_event_hash(event: &AuditEvent) -> String {

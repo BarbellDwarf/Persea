@@ -193,24 +193,18 @@ pub async fn create_session(
                 "Session created successfully"
             );
             // Audit: session start
-            if let Some(db_audit) = manager.db().cloned() {
-                let sid = info.session_id.to_string();
-                let ip = client_ip.to_string();
-                let user_id = admin_name.clone();
-                if let Err(e) = tokio::task::spawn_blocking(move || {
-                    let _ = audit::log_event(
-                        &db_audit,
-                        &mut audit::EventBuilder::new("session.start", "success")
-                            .user_id(&user_id)
-                            .source_ip(&ip)
-                            .session_id(&sid)
-                            .build(),
-                    );
-                })
-                .await
-                {
-                    tracing::error!(error = %e, "audit task failed");
-                }
+            if let Some(db_ref) = manager.db() {
+                let ip_str = client_ip.to_string();
+                audit::fire(
+                    db_ref,
+                    &admin_name,
+                    "session.start",
+                    "success",
+                    serde_json::Value::Null,
+                    Some(&ip_str),
+                    Some(&info.session_id.to_string()),
+                )
+                .await;
             }
             Ok(Json(json!(info)))
         }
@@ -546,24 +540,18 @@ pub async fn delete_session(
             "Session deleted"
         );
         // Audit: session end
-        if let Some(db_audit) = manager.db().cloned() {
-            let sid = id.to_string();
-            let user_id = identity_key(&id_inner).to_string();
-            let ip_audit = ip.to_string();
-            if let Err(e) = tokio::task::spawn_blocking(move || {
-                let _ = audit::log_event(
-                    &db_audit,
-                    &mut audit::EventBuilder::new("session.end", "success")
-                        .user_id(&user_id)
-                        .source_ip(&ip_audit)
-                        .session_id(&sid)
-                        .build(),
-                );
-            })
-            .await
-            {
-                tracing::error!(error = %e, "audit task failed");
-            }
+        if let Some(db_ref) = manager.db() {
+            let ip_str = ip.to_string();
+            audit::fire(
+                db_ref,
+                identity_key(&id_inner),
+                "session.end",
+                "success",
+                serde_json::Value::Null,
+                Some(&ip_str),
+                Some(&id.to_string()),
+            )
+            .await;
         }
         Ok(StatusCode::NO_CONTENT)
     } else {

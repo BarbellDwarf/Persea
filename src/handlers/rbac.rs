@@ -112,26 +112,23 @@ pub async fn create_rbac_group(
 
     // Audit
     {
-        let db_audit = database.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let gname = req.name.clone();
-        let gid = group_id.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(json!({
-                        "action": "create_rbac_group",
-                        "group_id": gid,
-                        "name": gname,
-                    }))
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &admin_name,
+            "admin.config.change",
+            "success",
+            json!({
+                "action": "create_rbac_group",
+                "group_id": &group_id,
+                "name": &req.name,
+            }),
+            None,
+            None,
+        )
         .await;
     }
 
@@ -154,23 +151,22 @@ pub async fn delete_rbac_group(
 
     // Audit
     {
-        let db_audit = database.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(json!({
-                        "action": "delete_rbac_group",
-                        "group_id": group_id,
-                    }))
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &admin_name,
+            "admin.config.change",
+            "success",
+            json!({
+                "action": "delete_rbac_group",
+                "group_id": &group_id,
+            }),
+            None,
+            None,
+        )
         .await;
     }
 
@@ -198,24 +194,23 @@ pub async fn add_group_member(
 
     // Audit
     {
-        let db_audit = database.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(json!({
-                        "action": "add_group_member",
-                        "group_id": group_id,
-                        "member_user_id": req.user_id,
-                    }))
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &admin_name,
+            "admin.config.change",
+            "success",
+            json!({
+                "action": "add_group_member",
+                "group_id": &group_id,
+                "member_user_id": req.user_id,
+            }),
+            None,
+            None,
+        )
         .await;
     }
 
@@ -238,24 +233,23 @@ pub async fn remove_group_member(
 
     // Audit
     {
-        let db_audit = database.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(json!({
-                        "action": "remove_group_member",
-                        "group_id": group_id,
-                        "member_user_id": user_id,
-                    }))
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &admin_name,
+            "admin.config.change",
+            "success",
+            json!({
+                "action": "remove_group_member",
+                "group_id": &group_id,
+                "member_user_id": user_id,
+            }),
+            None,
+            None,
+        )
         .await;
     }
 
@@ -302,25 +296,24 @@ pub async fn grant_connection_permission(
 
     // Audit
     {
-        let db_audit = database.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(json!({
-                        "action": "grant_connection_permission",
-                        "connection_id": connection_id,
-                        "entity_id": req.entity_id,
-                        "permission": req.permission,
-                    }))
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &admin_name,
+            "admin.config.change",
+            "success",
+            json!({
+                "action": "grant_connection_permission",
+                "connection_id": &connection_id,
+                "entity_id": &req.entity_id,
+                "permission": &req.permission,
+            }),
+            None,
+            None,
+        )
         .await;
     }
 
@@ -350,26 +343,25 @@ pub async fn revoke_connection_permission(
 
     // Audit
     {
-        let db_audit = database.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(json!({
-                        "action": "revoke_connection_permission",
-                        "connection_id": connection_id,
-                        "entity_id": req.entity_id,
-                        "permission": req.permission,
-                        "revoked": revoked,
-                    }))
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &admin_name,
+            "admin.config.change",
+            "success",
+            json!({
+                "action": "revoke_connection_permission",
+                "connection_id": &connection_id,
+                "entity_id": &req.entity_id,
+                "permission": &req.permission,
+                "revoked": revoked,
+            }),
+            None,
+            None,
+        )
         .await;
     }
 
@@ -446,28 +438,24 @@ pub async fn create_custom_role(
 
     // Audit
     {
-        let db_audit = database.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let rid_audit = role_id.clone();
-        let rname = req.name.clone();
-        let rperms = req.permissions.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(json!({
-                        "action": "create_custom_role",
-                        "role_id": rid_audit,
-                        "name": rname,
-                        "permissions": rperms,
-                    }))
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &admin_name,
+            "admin.config.change",
+            "success",
+            json!({
+                "action": "create_custom_role",
+                "role_id": &role_id,
+                "name": &req.name,
+                "permissions": &req.permissions,
+            }),
+            None,
+            None,
+        )
         .await;
     }
 
@@ -538,28 +526,24 @@ pub async fn update_custom_role(
 
     // Audit
     {
-        let db_audit = database.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let rid_audit = role_id.clone();
-        let rname = name.clone();
-        let rperms = permissions.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(json!({
-                        "action": "update_custom_role",
-                        "role_id": rid_audit,
-                        "name": rname,
-                        "permissions": rperms,
-                    }))
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &admin_name,
+            "admin.config.change",
+            "success",
+            json!({
+                "action": "update_custom_role",
+                "role_id": &role_id,
+                "name": &name,
+                "permissions": &permissions,
+            }),
+            None,
+            None,
+        )
         .await;
     }
 
@@ -587,23 +571,22 @@ pub async fn delete_custom_role(
 
     // Audit
     {
-        let db_audit = database.clone();
         let admin_name = identity
             .as_ref()
             .map(|id| id.display_name().to_string())
             .unwrap_or_default();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("admin.config.change", "success")
-                    .user_id(&admin_name)
-                    .details(json!({
-                        "action": "delete_custom_role",
-                        "role_id": role_id,
-                    }))
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &admin_name,
+            "admin.config.change",
+            "success",
+            json!({
+                "action": "delete_custom_role",
+                "role_id": &role_id,
+            }),
+            None,
+            None,
+        )
         .await;
     }
 

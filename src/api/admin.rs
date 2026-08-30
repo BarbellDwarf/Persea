@@ -704,6 +704,7 @@ fn html_escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
 }
 
 /// Render audit details as structured HTML: key/value rows with clamped
@@ -990,7 +991,7 @@ mod tests {
             "event_type must be escaped: {html}"
         );
         assert!(
-            html.contains("failure'&gt;&lt;script&gt;alert(1)&lt;/script&gt;"),
+            html.contains("failure&#x27;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"),
             "outcome must be escaped: {html}"
         );
         assert!(

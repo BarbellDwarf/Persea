@@ -547,18 +547,16 @@ pub async fn login_submit(
 
             // Audit: successful login
             {
-                let db_audit = database.clone();
-                let uid = user.id.to_string();
                 let ip = client_ip.to_string();
-                let _ = tokio::task::spawn_blocking(move || {
-                    let _ = audit::log_event(
-                        &db_audit,
-                        &mut audit::EventBuilder::new("auth.login.success", "success")
-                            .user_id(&uid)
-                            .source_ip(&ip)
-                            .build(),
-                    );
-                })
+                audit::fire(
+                    &database,
+                    &user.id.to_string(),
+                    "auth.login.success",
+                    "success",
+                    serde_json::Value::Null,
+                    Some(&ip),
+                    None,
+                )
                 .await;
             }
 
@@ -714,18 +712,16 @@ pub async fn login_submit(
             );
             // Audit: failed login
             {
-                let db_audit = database.clone();
                 let ip = client_ip.to_string();
-                let reason = msg.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    let _ = audit::log_event(
-                        &db_audit,
-                        &mut audit::EventBuilder::new("auth.login.failure", "failure")
-                            .source_ip(&ip)
-                            .details(serde_json::json!({"reason": reason}))
-                            .build(),
-                    );
-                })
+                audit::fire(
+                    &database,
+                    "",
+                    "auth.login.failure",
+                    "failure",
+                    serde_json::json!({"reason": &msg}),
+                    Some(&ip),
+                    None,
+                )
                 .await;
             }
 
@@ -967,18 +963,16 @@ pub async fn mfa_submit(
 
     // Audit: successful MFA login
     {
-        let db_audit = database.clone();
-        let uid = pending.user_id.to_string();
         let ip = client_ip.to_string();
-        let _ = tokio::task::spawn_blocking(move || {
-            let _ = audit::log_event(
-                &db_audit,
-                &mut audit::EventBuilder::new("auth.mfa.success", "success")
-                    .user_id(&uid)
-                    .source_ip(&ip)
-                    .build(),
-            );
-        })
+        audit::fire(
+            &database,
+            &pending.user_id.to_string(),
+            "auth.mfa.success",
+            "success",
+            serde_json::Value::Null,
+            Some(&ip),
+            None,
+        )
         .await;
     }
 
@@ -1386,18 +1380,16 @@ pub async fn saml_acs(
 
             // Audit: successful SAML login
             {
-                let db_audit = database.clone();
-                let uid = user.id.to_string();
                 let ip = client_ip.to_string();
-                let _ = tokio::task::spawn_blocking(move || {
-                    let _ = audit::log_event(
-                        &db_audit,
-                        &mut audit::EventBuilder::new("auth.saml.login", "success")
-                            .user_id(&uid)
-                            .source_ip(&ip)
-                            .build(),
-                    );
-                })
+                audit::fire(
+                    &database,
+                    &user.id.to_string(),
+                    "auth.saml.login",
+                    "success",
+                    serde_json::Value::Null,
+                    Some(&ip),
+                    None,
+                )
                 .await;
             }
 
