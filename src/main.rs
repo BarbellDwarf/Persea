@@ -468,6 +468,20 @@ async fn main() {
         "db_only_mode": config.storage.as_ref().map(|st| st.backend != "vault").unwrap_or(true),
     }));
 
+    // Resolve the on-disk path the setup wizard will rewrite with the
+    // generated [storage] section and the operator-chosen listen_addr.
+    // The wizard used to read RUSTGUAC_CONFIG itself and otherwise fall
+    // through to /opt/persea/config.toml, which silently dropped the
+    // --config path the server was actually started with (persea#290).
+    // Precedence: --config > RUSTGUAC_CONFIG (if absent) > platform
+    // default.  Matches the #271 storage-key writer and
+    // docs/configuration.md:384.
+    let wizard_config_path =
+        handlers::setup::WizardConfigPath(crate::config::resolve_wizard_config_path(
+            cli.config.as_deref(),
+            std::env::var("RUSTGUAC_CONFIG").ok().as_deref(),
+        ));
+
     match cli.command {
         None | Some(Command::Serve) => {
             // Overlay DB-persisted settings (admin settings page) onto the
@@ -572,6 +586,7 @@ async fn main() {
                     database.clone(),
                     log_format,
                     settings_baseline.clone(),
+                    wizard_config_path.clone(),
                 );
                 match crate::windows_service::dispatch(service_fut) {
                     Ok(()) => return,
@@ -592,7 +607,14 @@ async fn main() {
                     }
                 }
             }
-            run_server(config, database, log_format, settings_baseline).await
+            run_server(
+                config,
+                database,
+                log_format,
+                settings_baseline,
+                wizard_config_path,
+            )
+            .await
         }
         Some(Command::CreateUser {
             email,
@@ -1417,6 +1439,7 @@ async fn run_server(
     database: Db,
     log_format: LogFormat,
     settings_baseline: SettingsBaseline,
+    wizard_config_path: handlers::setup::WizardConfigPath,
 ) {
     // Initialize logging. RUST_LOG_FORMAT=json (or --log-format json) selects
     // JSON lines for structured log ingestion; plain fmt is the default.
@@ -2668,6 +2691,7 @@ async fn run_server(
         .route("/setup", post(handlers::setup::setup_submit))
         .layer(csrf::CsrfLayer)
         .layer(Extension(setup_config))
+        .layer(Extension(wizard_config_path))
         .layer(Extension(database.clone()))
         .layer(Extension(site_title.clone()));
 

@@ -1612,6 +1612,48 @@ pub(crate) fn windows_default_config_path() -> Option<String> {
     p.exists().then(|| p.to_string_lossy().into_owned())
 }
 
+/// Resolve the on-disk path the setup wizard should write to, given the
+/// `--config` CLI value and the value of the `RUSTGUAC_CONFIG` env var.
+///
+/// Precedence (highest wins):
+/// 1. `--config <path>` CLI argument (the file the running server actually
+///    reads; the wizard must write to the same path — #271 storage-key
+///    writer, docs/configuration.md:384).
+/// 2. `RUSTGUAC_CONFIG` environment variable (legacy name, documented in
+///    `docs/configuration.md`) — used only when `--config` is absent.
+///    Empty string is treated as unset so it cannot silently shadow
+///    `--config`.
+/// 3. Windows default (`%ProgramData%\persea\config.toml`) when it
+///    exists, matching `Config::load`'s "present means required" rule.
+/// 4. `/opt/persea/config.toml` (Linux/Docker bare-metal default).
+///
+/// Pure function of its inputs — no environment access beyond what the
+/// caller passes — so the resolution is testable in isolation. This is the
+/// fix for persea#290: the wizard used to read `RUSTGUAC_CONFIG` itself
+/// and fall through to `/opt/persea`, ignoring the path the server was
+/// actually started with.
+pub fn resolve_wizard_config_path(
+    cli_config: Option<&str>,
+    rustguac_config: Option<&str>,
+) -> PathBuf {
+    // --config wins: it is the file the server is actually reading, and
+    // the wizard must write to the same path (#271, config.md:384).
+    if let Some(p) = cli_config {
+        return PathBuf::from(p);
+    }
+    // RUSTGUAC_CONFIG only when --config is absent; empty string treated
+    // as unset so it cannot silently shadow a future --config flag.
+    if let Some(p) = rustguac_config {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    if let Some(p) = windows_default_config_path() {
+        return PathBuf::from(p);
+    }
+    PathBuf::from("/opt/persea/config.toml")
+}
+
 fn default_static_path() -> PathBuf {
     PathBuf::from("./static")
 }
@@ -3382,5 +3424,60 @@ mod tests {
             config.effective_recording_path(),
             std::path::Path::new(&default_recording_path())
         );
+    }
+
+    /// `resolve_wizard_config_path` — pure resolution with documented
+    /// precedence. Matches the #271 storage-key writer and
+    /// docs/configuration.md:384: --config is the canonical file.
+    #[test]
+    fn resolve_wizard_config_path_prefers_cli_over_env() {
+        // #271 consistency: --config is the file the server reads, so the
+        // wizard must write to it even when RUSTGUAC_CONFIG differs.
+        let p =
+            resolve_wizard_config_path(Some("/etc/persea/cli.toml"), Some("/etc/persea/env.toml"));
+        assert_eq!(p, std::path::PathBuf::from("/etc/persea/cli.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_uses_env_when_cli_unset() {
+        let p = resolve_wizard_config_path(None, Some("/etc/persea/env.toml"));
+        assert_eq!(p, std::path::PathBuf::from("/etc/persea/env.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_uses_cli_when_env_unset() {
+        let p = resolve_wizard_config_path(Some("/etc/persea/cli.toml"), None);
+        assert_eq!(p, std::path::PathBuf::from("/etc/persea/cli.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_treats_empty_env_as_unset() {
+        // Empty string must not shadow --config. The env is present but
+        // blank, which is indistinguishable from "operator didn't set it".
+        let p = resolve_wizard_config_path(Some("/etc/persea/cli.toml"), Some(""));
+        assert_eq!(p, std::path::PathBuf::from("/etc/persea/cli.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_empty_env_falls_through_to_opt() {
+        // Empty env + no CLI → bare-metal default.
+        let p = resolve_wizard_config_path(None, Some(""));
+        assert_eq!(p, std::path::PathBuf::from("/opt/persea/config.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_falls_back_to_opt_when_nothing_set() {
+        // No CLI, no env, no Windows default (CI on Linux). Must fall
+        // through to the bare-metal /opt/persea default.
+        let p = resolve_wizard_config_path(None, None);
+        assert_eq!(p, std::path::PathBuf::from("/opt/persea/config.toml"));
+    }
+
+    #[test]
+    fn resolve_wizard_config_path_uses_cli_over_default() {
+        // Crucial regression: when the server was started with
+        // `--config foo.toml` and the wizard used to ignore it.
+        let p = resolve_wizard_config_path(Some("config.local.toml"), None);
+        assert_eq!(p, std::path::PathBuf::from("config.local.toml"));
     }
 }

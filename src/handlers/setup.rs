@@ -2,12 +2,24 @@ use axum::extract::Form;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::Extension;
 use serde::Deserialize;
+use std::path::PathBuf;
 
 use crate::api::SiteTitle;
 use crate::config::{storage_section_for, toml_escape, Config};
 use crate::db_pool::{DbKind, DbPool};
 use crate::templates::SetupTemplate;
 use crate::CspNonce;
+
+/// Resolved on-disk path the setup wizard will write to. Threaded as an
+/// axum `Extension` from `main.rs` so the wizard writes where the server
+/// was actually started (`--config <path>`), not the hardcoded
+/// `/opt/persea/config.toml` it used to default to (persea#290).
+///
+/// Precedence: `RUSTGUAC_CONFIG` env > `--config` arg > Windows default >
+/// `/opt/persea/config.toml`. See
+/// `crate::config::resolve_wizard_config_path` for the pure resolver.
+#[derive(Debug, Clone)]
+pub struct WizardConfigPath(pub PathBuf);
 
 /// Form body of the setup wizard (POST /setup).
 #[derive(Debug, Deserialize)]
@@ -154,6 +166,7 @@ pub async fn setup_submit(
     Extension(config): Extension<Config>,
     Extension(database): Extension<crate::db::Db>,
     Extension(nonce): Extension<CspNonce>,
+    Extension(WizardConfigPath(config_path)): Extension<WizardConfigPath>,
     Form(form): Form<SetupForm>,
 ) -> Response {
     if !needs_setup(&database) {
@@ -317,9 +330,15 @@ pub async fn setup_submit(
         format!("db_url = \"{}\"", toml_escape(&db_url))
     };
 
-    // Write to config path (same as the --config arg, or default location)
-    let config_path =
-        std::env::var("RUSTGUAC_CONFIG").unwrap_or_else(|_| "/opt/persea/config.toml".to_string());
+    // Write to config path. `config_path` is threaded in as an axum
+    // Extension from main.rs, so it tracks whatever the server was
+    // actually started with (--config <path>, RUSTGUAC_CONFIG, or the
+    // platform default — see crate::config::resolve_wizard_config_path).
+    // Pre-fix, the wizard read RUSTGUAC_CONFIG itself and silently fell
+    // back to /opt/persea, ignoring --config: dev runs and any custom
+    // path emitted a "Could not write config" warn even though setup
+    // still completed (persea#290).
+    let config_path = config_path.to_string_lossy().into_owned();
 
     // The storage section holds the credential encryption key: preserve an
     // existing one verbatim and always emit a key (single implementation in
@@ -346,9 +365,18 @@ session_history_retention_days = 90
         storage_section
     );
 
-    if let Err(e) = std::fs::write(&config_path, &config) {
-        tracing::warn!("Could not write config to {}: {}", config_path, e);
-        // Non-fatal — user can create config manually
+    let write_result = std::fs::write(&config_path, &config);
+    if let Err(ref e) = write_result {
+        // Best-effort write: setup still completes (admin is created in
+        // the active store), but surface the skip to the operator. The
+        // warn logs the resolved path; the redirect's query param lets
+        // the login page flag it for the operator too (persea#290).
+        tracing::warn!(
+            path = %config_path,
+            error = %e,
+            "Could not write config file; setup will still complete — re-run or \
+             edit the config manually at this path"
+        );
     } else {
         // The written config holds the encryption key: not world-readable.
         #[cfg(unix)]
@@ -364,9 +392,18 @@ session_history_retention_days = 90
         listen = %form.listen_addr,
         guacd_addr = %form.guacd_addr,
         db_url_set = !db_url.is_empty(),
+        config_path = %config_path,
+        config_written = write_result.is_ok(),
         "Setup completed"
     );
 
-    // Redirect to login
-    Redirect::to("/?setup=complete").into_response()
+    // Redirect to login. On a skipped config write, add a flag so the
+    // login page can surface "config persistence was skipped" without a
+    // second round-trip (persea#290).
+    let target = if write_result.is_ok() {
+        "/?setup=complete"
+    } else {
+        "/?setup=complete&config=skipped"
+    };
+    Redirect::to(target).into_response()
 }
