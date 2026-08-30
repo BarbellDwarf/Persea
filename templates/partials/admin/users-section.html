@@ -172,23 +172,6 @@
 <script nonce="{{ csp_nonce }}">
 var _allUsers = [];
 
-function usersEsc(s) {
-    if (typeof escapeHtml === 'function') { return escapeHtml(s); }
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
-}
-
-function openModal(id) {
-    var m = document.getElementById(id);
-    m.classList.remove('hidden');
-    m.setAttribute('aria-hidden', 'false');
-}
-
-function closeModal(id) {
-    var m = document.getElementById(id);
-    m.classList.add('hidden');
-    m.setAttribute('aria-hidden', 'true');
-}
-
 function selectOption(sel, value) {
     for (var i = 0; i < sel.options.length; i++) {
         if (sel.options[i].value === value) { sel.selectedIndex = i; return true; }
@@ -245,11 +228,11 @@ function roleBadge(user) {
         viewer: 'bg-[var(--bg-card)] text-[var(--text-muted)] border-[var(--border)]'
     };
     if (user && user.custom_role && user.custom_role.name) {
-        var safeCustom = usersEsc(user.custom_role.name);
+        var safeCustom = escapeHtml(user.custom_role.name);
         return '<span class="inline-block px-2 py-0.5 text-xs rounded border bg-purple-900/30 text-purple-300 border-purple-700">' + safeCustom + '</span>';
     }
     var role = (user && user.role) || 'viewer';
-    var safeRole = usersEsc(role);
+    var safeRole = escapeHtml(role);
     return '<span class="inline-block px-2 py-0.5 text-xs rounded border ' + (colors[role] || colors.viewer) + '">' + safeRole + '</span>';
 }
 
@@ -259,10 +242,10 @@ function renderUserRow(user) {
     var toggleLabel = user.disabled ? 'Enable' : 'Disable';
     var toggleClass = user.disabled ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 hover:text-amber-300';
     var statusLower = statusText.toLowerCase();
-    var safeName = usersEsc(user.name || '-');
-    var safeEmail = usersEsc(user.email || '-');
-    var safeAuth = usersEsc(user.auth_source || '-');
-    var safeLogin = usersEsc(user.last_login_at || 'never');
+    var safeName = escapeHtml(user.name || '-');
+    var safeEmail = escapeHtml(user.email || '-');
+    var safeAuth = escapeHtml(user.auth_source || '-');
+    var safeLogin = escapeHtml(user.last_login_at || 'never');
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
         '<td class="px-4 py-3 text-sm text-[var(--text-primary)]">' + safeName + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + safeEmail + '</td>' +
@@ -272,7 +255,7 @@ function renderUserRow(user) {
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + safeLogin + '</td>' +
         '<td class="px-4 py-3 text-right text-sm">' +
             '<button data-action="edit-user" data-email="' + safeEmail + '" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] mr-3">Edit</button>' +
-            '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + usersEsc(user.role || '') + '" data-custom-role="' + usersEsc((user.custom_role && user.custom_role.name) || '') + '" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] mr-3">Edit Role</button>' +
+            '<button data-action="edit-role" data-email="' + safeEmail + '" data-role="' + escapeHtml(user.role || '') + '" data-custom-role="' + escapeHtml((user.custom_role && user.custom_role.name) || '') + '" class="text-[var(--text-muted)] hover:text-[var(--text-secondary)] mr-3">Edit Role</button>' +
             '<button data-action="toggle-status" data-email="' + safeEmail + '" data-status="' + statusLower + '" class="' + toggleClass + ' mr-3">' + toggleLabel + '</button>' +
             '<button data-action="delete-user" data-email="' + safeEmail + '" class="text-red-400 hover:text-red-300">Delete</button>' +
         '</td></tr>';

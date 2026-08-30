@@ -123,16 +123,11 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
-function groupsEsc(s) {
-    if (typeof escapeHtml === 'function') { return escapeHtml(s); }
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
-}
-
 function groupsShowStatus(msg, ok) {
     var el = document.getElementById('groups-feedback');
     el.innerHTML = '<div class="text-sm px-4 py-2 rounded-lg border ' +
         (ok ? 'bg-emerald-900/40 text-emerald-300 border-emerald-800'
-            : 'bg-red-900/40 text-red-300 border-red-800') + '">' + groupsEsc(msg) + '</div>';
+            : 'bg-red-900/40 text-red-300 border-red-800') + '">' + escapeHtml(msg) + '</div>';
     if (ok) { setTimeout(function() { el.innerHTML = ''; }, 4000); }
 }
 
@@ -160,10 +155,10 @@ function renderGroupRow(g) {
         ? '<span class="text-emerald-400">' + g.provider_group_count + ' mapped</span>'
         : '<span class="text-[var(--text-muted)]">—</span>';
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
-        '<td class="px-4 py-3 text-sm font-medium text-[var(--text-primary)]">' + groupsEsc(g.name) +
+        '<td class="px-4 py-3 text-sm font-medium text-[var(--text-primary)]">' + escapeHtml(g.name) +
             (g.auto_provisioned ? ' <span class="ml-1.5 inline-block px-1.5 py-0.5 text-[10px] font-semibold rounded bg-blue-900/40 text-blue-300 border border-blue-800">auto</span>' : '') +
         '</td>' +
-        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (g.description ? groupsEsc(g.description) : '—') + '</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (g.description ? escapeHtml(g.description) : '—') + '</td>' +
         '<td class="px-4 py-3 text-sm">' + mapped + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + g.folder_count + '</td>' +
         '<td class="px-4 py-3 text-right text-sm whitespace-nowrap">' +
@@ -294,7 +289,7 @@ window.openMappingsModal = function(id) {
             } else {
                 list.innerHTML = mappings.map(function(m) {
                     return '<li class="flex items-center justify-between px-4 py-3 text-sm">' +
-                        '<span class="text-[var(--text-primary)]">' + groupsEsc(m.provider_group) + '</span>' +
+                        '<span class="text-[var(--text-primary)]">' + escapeHtml(m.provider_group) + '</span>' +
                         '<button data-action="remove-mapping" data-mapping-id="' + m.id + '" class="text-xs text-red-400 hover:text-red-300">Remove</button>' +
                     '</li>';
                 }).join('');
@@ -313,7 +308,7 @@ window.openMappingsModal = function(id) {
                 select.innerHTML = '<option value="">No unmapped groups available</option>';
             } else {
                 select.innerHTML = options.map(function(k) {
-                    return '<option value="' + groupsEsc(k.name) + '">' + groupsEsc(k.name) + '</option>';
+                    return '<option value="' + escapeHtml(k.name) + '">' + escapeHtml(k.name) + '</option>';
                 }).join('');
             }
             var ew = document.getElementById('mappings-elsewhere');

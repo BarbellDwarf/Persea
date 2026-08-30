@@ -154,16 +154,11 @@ var PERM_LABELS = {
     audit: 'Audit'
 };
 
-function rolesEsc(s) {
-    if (typeof escapeHtml === 'function') { return escapeHtml(s); }
-    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#x27;');
-}
-
 function rolesShowStatus(msg, ok) {
     var el = document.getElementById('roles-feedback');
     el.innerHTML = '<div class="text-sm px-4 py-2 rounded-lg border ' +
         (ok ? 'bg-emerald-900/40 text-emerald-300 border-emerald-800'
-            : 'bg-red-900/40 text-red-300 border-red-800') + '">' + rolesEsc(msg) + '</div>';
+            : 'bg-red-900/40 text-red-300 border-red-800') + '">' + escapeHtml(msg) + '</div>';
     if (ok) { setTimeout(function() { el.innerHTML = ''; }, 4000); }
 }
 
@@ -183,7 +178,7 @@ function rolesApi(path, opts) {
 function fmtDate(s) {
     if (!s) { return '—'; }
     var d = new Date(s);
-    if (isNaN(d.getTime())) { return rolesEsc(s); }
+    if (isNaN(d.getTime())) { return escapeHtml(s); }
     return d.toLocaleDateString();
 }
 
@@ -204,13 +199,13 @@ function roleById(id) {
 
 function renderRoleRow(r) {
     return '<tr class="hover:bg-[var(--bg-hover)]/50">' +
-        '<td class="px-4 py-3 text-sm font-medium text-[var(--text-primary)]">' + rolesEsc(r.name) + '</td>' +
-        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (r.description ? rolesEsc(r.description) : '—') + '</td>' +
-        '<td class="px-4 py-3 text-sm text-[var(--text-secondary)]">' + rolesEsc(permLabels(r.permissions)) + '</td>' +
+        '<td class="px-4 py-3 text-sm font-medium text-[var(--text-primary)]">' + escapeHtml(r.name) + '</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + (r.description ? escapeHtml(r.description) : '—') + '</td>' +
+        '<td class="px-4 py-3 text-sm text-[var(--text-secondary)]">' + escapeHtml(permLabels(r.permissions)) + '</td>' +
         '<td class="px-4 py-3 text-sm text-[var(--text-muted)]">' + fmtDate(r.created_at) + '</td>' +
         '<td class="px-4 py-3 text-right text-sm whitespace-nowrap">' +
-            '<button data-action="roles-open-edit-modal" data-id="' + rolesEsc(String(r.id)) + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit</button>' +
-            '<button data-action="roles-open-delete-modal" data-id="' + rolesEsc(String(r.id)) + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
+            '<button data-action="roles-open-edit-modal" data-id="' + escapeHtml(String(r.id)) + '" class="text-[var(--text-muted)] hover:text-emerald-400 mr-3">Edit</button>' +
+            '<button data-action="roles-open-delete-modal" data-id="' + escapeHtml(String(r.id)) + '" class="text-[var(--text-muted)] hover:text-red-400">Delete</button>' +
         '</td></tr>';
 }
 

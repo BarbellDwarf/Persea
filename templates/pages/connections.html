@@ -3625,17 +3625,6 @@
         return chain;
     }
 
-    // ── Modal helpers ────────────────────────────────────────────────
-    function openModal(id) {
-        var el = document.getElementById(id);
-        el.classList.remove('hidden');
-        var focusTarget = el.querySelector('input:not([type="hidden"]), select, textarea, button');
-        if (focusTarget) focusTarget.focus();
-    }
-    function closeModal(id) {
-        document.getElementById(id).classList.add('hidden');
-    }
-
     // ── vSphere virtual machines ─────────────────────────────────────
     function loadVSphere() {
         var section = document.getElementById('vsphere-section');

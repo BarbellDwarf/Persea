@@ -125,12 +125,6 @@ function formatUptime(secs) {
     return m + 'm';
 }
 
-function escapeHtml(s) {
-    var div = document.createElement('div');
-    div.appendChild(document.createTextNode(s));
-    return div.innerHTML;
-}
-
 function renderTopConnectionRow(conn) {
     var name = conn.name || conn.address_book_entry || '';
     var proto = (conn.session_type || '').toUpperCase();
