@@ -258,10 +258,13 @@ document.getElementById('logo-file').addEventListener('change', function() {
                 document.getElementById('branding-logo-url').value = s.logo_url;
             }
             if (s.primary_color !== undefined && s.primary_color !== null) {
-                // <input type="color"> only accepts lowercase 7-char hex;
-                // any other value (uppercase, shorthand, whitespace) is
-                // silently coerced to #000000 — which is why the swatch
-                // can show black even when the stored colour is correct.
+                // <input type="color"> prefers lowercase 7-char hex. Browsers
+                // do accept uppercase (#10B981 survives) and expand shorthand
+                // (#abc -> #aabbcc) — the swatch won't silently go black — but
+                // the hex text field and any consumer that string-compares
+                // the value still benefits from one canonical form. Normalise
+                // and assign; fall back to the raw value if it isn't a
+                // recognised hex so the user can see / correct it.
                 var raw = String(s.primary_color).trim().toLowerCase();
                 var normalized = /^#[0-9a-f]{6}$/.test(raw) ? raw : null;
                 var picker = document.getElementById('branding-primary-color');

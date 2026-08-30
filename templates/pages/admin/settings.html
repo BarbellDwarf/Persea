@@ -1040,16 +1040,28 @@ document.getElementById('add-custom-field').addEventListener('click', function()
 
 // Re-serialize right before the request goes out so a fresh edit is never
 // submitted stale.
-document.getElementById('settings-form').addEventListener('htmx:configRequest', function() {
-    syncCustomFields();
+document.getElementById('settings-form').addEventListener('htmx:configRequest', function(evt) {
+    // htmx 2.0.4 captures the FormData in `getInputValues` (cn) BEFORE
+    // dispatching htmx:configRequest (issueAjaxRequest flow), then exposes
+    // it as `evt.detail.parameters` via a Proxy over that snapshot. Mutating
+    // `input.value` here is a no-op for the wire body — htmx has already
+    // read the DOM. Writes through the parameters proxy, however, land in
+    // the rebuilt FormData that htmx uses for p.send().
+    var params = evt.detail.parameters;
+    // Custom fields: the editor mirrors its array into the hidden
+    // `custom_fields` input on every keystroke, but rewrite via the
+    // proxy so a stale DOM read can never submit an older snapshot.
+    if (customFields !== undefined) {
+        params['custom_fields'] = JSON.stringify(customFields);
+    }
     // Max Duration: edited as hours for readability, stored as seconds
-    // server-side. The input keeps its original name (session_max_duration_secs)
-    // so existing selectors / tests still find it; rewrite its value to
-    // seconds right before htmx serializes the form.
+    // server-side. The input keeps its original name
+    // (session_max_duration_secs) so existing selectors / tests still find
+    // it; convert hours -> seconds in the parameters, not in the DOM.
     var maxDurationInput = document.querySelector('input[name="session_max_duration_secs"]');
     if (maxDurationInput) {
         var secs = Math.round(Number(maxDurationInput.value) * 3600);
-        maxDurationInput.value = isNaN(secs) ? '0' : String(secs);
+        params['session_max_duration_secs'] = isNaN(secs) ? '0' : String(secs);
     }
 });
 
@@ -1074,7 +1086,7 @@ document.getElementById('settings-form').addEventListener('htmx:configRequest', 
                     // session_max_duration_secs is edited as hours in the UI
                     // for readability. Divide on load so the input shows the
                     // human unit; the htmx:configRequest handler above
-                    // multiplies back to seconds before submission.
+                    // converts back to seconds via evt.detail.parameters.
                     if (name === 'session_max_duration_secs') {
                         var hours = Number(s[name]) / 3600;
                         el.value = isNaN(hours) ? '0' : String(hours);
