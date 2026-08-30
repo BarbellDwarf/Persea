@@ -46,10 +46,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other instances on their restart rather than immediately (#289)
 
 <!--
-Release checklist (delete this comment before tagging v1.0.1):
+Release checklist (delete this comment before tagging v1.1.1):
 - [ ] `cargo test` + `cargo fmt --check` green on the final commit
 - [ ] CI green for the final push (`gh run list`)
-- [ ] Tag `v1.0.1` (annotated) and push it
+- [ ] Tag `v1.1.1` (annotated) and push it
 - [ ] Release workflow green (deb/rpm/Windows artifacts, guacd pin untouched)
 - [ ] Push the beta image + beta pre-release (`gh workflow run beta.yml --ref main`) after the tag
 -->
