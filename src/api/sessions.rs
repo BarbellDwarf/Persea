@@ -197,7 +197,7 @@ pub async fn create_session(
                 let ip_str = client_ip.to_string();
                 audit::fire(
                     db_ref,
-                    &admin_name,
+                    Some(&admin_name),
                     "session.start",
                     "success",
                     serde_json::Value::Null,
@@ -544,7 +544,7 @@ pub async fn delete_session(
             let ip_str = ip.to_string();
             audit::fire(
                 db_ref,
-                identity_key(&id_inner),
+                Some(identity_key(&id_inner)),
                 "session.end",
                 "success",
                 serde_json::Value::Null,

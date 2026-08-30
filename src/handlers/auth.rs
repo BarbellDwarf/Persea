@@ -550,7 +550,7 @@ pub async fn login_submit(
                 let ip = client_ip.to_string();
                 audit::fire(
                     &database,
-                    &user.id.to_string(),
+                    Some(&user.id.to_string()),
                     "auth.login.success",
                     "success",
                     serde_json::Value::Null,
@@ -710,12 +710,13 @@ pub async fn login_submit(
                 "Password login failed: {}",
                 msg
             );
-            // Audit: failed login
+            // Audit: failed login (NULL user_id — username intentionally
+            // omitted to avoid leaking which account was targeted).
             {
                 let ip = client_ip.to_string();
                 audit::fire(
                     &database,
-                    "",
+                    None,
                     "auth.login.failure",
                     "failure",
                     serde_json::json!({"reason": &msg}),
@@ -966,7 +967,7 @@ pub async fn mfa_submit(
         let ip = client_ip.to_string();
         audit::fire(
             &database,
-            &pending.user_id.to_string(),
+            Some(&pending.user_id.to_string()),
             "auth.mfa.success",
             "success",
             serde_json::Value::Null,
@@ -1383,7 +1384,7 @@ pub async fn saml_acs(
                 let ip = client_ip.to_string();
                 audit::fire(
                     &database,
-                    &user.id.to_string(),
+                    Some(&user.id.to_string()),
                     "auth.saml.login",
                     "success",
                     serde_json::Value::Null,

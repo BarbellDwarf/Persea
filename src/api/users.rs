@@ -224,7 +224,7 @@ pub async fn create_user(
         .unwrap_or_default();
     audit::fire(
         &database,
-        &admin_name,
+        Some(&admin_name),
         "admin.user.create",
         "success",
         serde_json::json!({
@@ -401,7 +401,7 @@ pub async fn update_user(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.user.edit",
             "success",
             serde_json::json!({
@@ -542,7 +542,7 @@ pub async fn set_user_role(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.role.change",
             "success",
             serde_json::json!({
@@ -606,7 +606,7 @@ pub async fn delete_user(
                     .unwrap_or_default();
                 audit::fire(
                     &database,
-                    &admin_name,
+                    Some(&admin_name),
                     "admin.user.delete",
                     "success",
                     serde_json::json!({"target_email": &email}),
@@ -681,7 +681,7 @@ pub async fn delete_user_sessions(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.user.force_logout",
             "success",
             serde_json::json!({
@@ -943,7 +943,7 @@ pub async fn disable_user(
                 .unwrap_or_default();
             audit::fire(
                 &database,
-                &admin_name,
+                Some(&admin_name),
                 "admin.user.disable",
                 "success",
                 serde_json::json!({"target_email": &email}),
@@ -987,7 +987,7 @@ pub async fn enable_user(
                 .unwrap_or_default();
             audit::fire(
                 &database,
-                &admin_name,
+                Some(&admin_name),
                 "admin.user.enable",
                 "success",
                 serde_json::json!({"target_email": &email}),
@@ -1090,7 +1090,7 @@ pub async fn create_group_mapping(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             serde_json::json!({
@@ -1177,7 +1177,7 @@ pub async fn delete_group_mapping(
                     .unwrap_or_default();
                 audit::fire(
                     &database,
-                    &admin_name,
+                    Some(&admin_name),
                     "admin.config.change",
                     "success",
                     serde_json::json!({

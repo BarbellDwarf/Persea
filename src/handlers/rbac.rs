@@ -118,7 +118,7 @@ pub async fn create_rbac_group(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             json!({
@@ -157,7 +157,7 @@ pub async fn delete_rbac_group(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             json!({
@@ -200,7 +200,7 @@ pub async fn add_group_member(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             json!({
@@ -239,7 +239,7 @@ pub async fn remove_group_member(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             json!({
@@ -302,7 +302,7 @@ pub async fn grant_connection_permission(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             json!({
@@ -349,7 +349,7 @@ pub async fn revoke_connection_permission(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             json!({
@@ -444,7 +444,7 @@ pub async fn create_custom_role(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             json!({
@@ -532,7 +532,7 @@ pub async fn update_custom_role(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             json!({
@@ -577,7 +577,7 @@ pub async fn delete_custom_role(
             .unwrap_or_default();
         audit::fire(
             &database,
-            &admin_name,
+            Some(&admin_name),
             "admin.config.change",
             "success",
             json!({

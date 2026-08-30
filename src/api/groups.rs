@@ -79,7 +79,7 @@ pub(crate) async fn audit_config_change(
         .unwrap_or_default();
     audit::fire(
         database,
-        &admin_name,
+        Some(&admin_name),
         "admin.config.change",
         "success",
         details,

@@ -118,7 +118,7 @@ pub async fn change_password(
     // Audit the change (no secrets — just the subject).
     crate::audit::fire(
         &database,
-        &email,
+        Some(&email),
         "user.password.change",
         "success",
         serde_json::Value::Null,
