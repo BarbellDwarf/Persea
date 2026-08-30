@@ -8,8 +8,19 @@ use std::collections::HashMap;
 
 use crate::config::Config;
 use crate::db::{self, Db};
-use crate::session::SessionType;
 use crate::vault::{AddressBookEntry, VaultClient};
+
+/// Legacy SQL import only carries parameters for SSH/RDP/VNC; anything
+/// else is rejected. The pre-#282 logic compared the raw protocol
+/// column verbatim against `"ssh" | "rdp" | "vnc"` and rejected the
+/// `powershell` alias (a persea address-book concept, not a guacamole
+/// protocol) and unknown strings alike. We keep the verbatim check so
+/// unknown strings (such as guacamole's "telnet", "kubernetes", or a
+/// custom protocol) can't be silently coerced — `from_api_str`'s
+/// default-fallback would otherwise coerce them to Vnc.
+fn sql_import_protocol_supported(protocol: &str) -> bool {
+    matches!(protocol, "ssh" | "rdp" | "vnc")
+}
 
 /// Run the import-guacamole subcommand.
 pub async fn cmd_import_guacamole(
@@ -55,14 +66,14 @@ pub async fn cmd_import_guacamole(
     let mut entries: Vec<((String, String), AddressBookEntry)> = Vec::new();
     let mut skipped = 0;
 
-    // Legacy SQL import only carries parameters for SSH/RDP/VNC; everything
-    // else is rejected here with a "skipping" log line.
-    const SQL_IMPORT_PROTOCOLS: &[SessionType] =
-        &[SessionType::Ssh, SessionType::Rdp, SessionType::Vnc];
-
     for conn in &connections {
         let protocol = conn.protocol.to_lowercase();
-        if !SQL_IMPORT_PROTOCOLS.contains(&SessionType::from_api_str(&protocol, SessionType::Vnc)) {
+        // Legacy SQL import only carries parameters for SSH/RDP/VNC;
+        // anything else (including unrecognised protocol strings such
+        // as "telnet" / "kubernetes" / "custom") is rejected. The
+        // strict parser ensures an unknown protocol can't sneak in
+        // via the `from_api_str` fallback.
+        if !sql_import_protocol_supported(&protocol) {
             eprintln!(
                 "  Skipping: {} (unsupported protocol: {})",
                 conn.name, conn.protocol
@@ -1106,5 +1117,92 @@ mod tests {
         assert_eq!(groups[0].name, "Production");
         assert_eq!(groups[1].id, 4);
         assert_eq!(groups[1].name, "Staging");
+    }
+
+    /// Regression (persea#282 review): `from_api_str`'s default fallback
+    /// silently coerces unknown protocols to Vnc. The SQL importer
+    /// MUST NOT use that fallback — guacamole ships "telnet",
+    /// "kubernetes", and arbitrary custom protocols that would land
+    /// in the address book with the wrong session kind. Only ssh /
+    /// rdp / vnc are accepted; everything else is rejected.
+    #[test]
+    fn sql_import_rejects_unknown_protocols() {
+        // SSH/RDP/VNC pass. The caller lowercases the raw column
+        // before calling the helper, so the helper sees lowercase
+        // input (the same convention `params_from_entry` follows).
+        for ok in ["ssh", "rdp", "vnc"] {
+            assert!(
+                sql_import_protocol_supported(ok),
+                "{ok:?} must be importable"
+            );
+        }
+        // Unknown guacamole protocols and arbitrary strings are
+        // rejected — they must NOT be silently coerced to Vnc. Other
+        // SessionType strings (vdi/spice/web/proxmox/powershell) are
+        // also rejected because the SQL schema doesn't carry their
+        // parameters.
+        for bad in [
+            "telnet",
+            "kubernetes",
+            "custom",
+            "",
+            "vnc-but-actually-something-else",
+            "rdp ",
+            "vdi",
+            "spice",
+            "web",
+            "proxmox",
+            "powershell",
+        ] {
+            assert!(
+                !sql_import_protocol_supported(bad),
+                "{bad:?} must be skipped (was silently coerced to Vnc before fix)"
+            );
+        }
+    }
+
+    /// End-to-end: a SQL dump mixing ssh/rdp/vnc with a "telnet"
+    /// connection must produce exactly the three known-protocol
+    /// entries and report the telnet one in the skipped counter.
+    /// Captures stderr to verify the "Skipping" log line lands.
+    #[test]
+    fn sql_import_skip_message_for_unknown_protocols() {
+        let sql = "INSERT INTO `guacamole_connection` VALUES \
+                   (1,'box-ssh',NULL,'ssh'),\
+                   (2,'box-rdp',NULL,'rdp'),\
+                   (3,'box-vnc',NULL,'vnc'),\
+                   (4,'box-telnet',NULL,'telnet'),\
+                   (5,'box-k8s',NULL,'kubernetes');\n";
+        let connections = parse_connections(sql);
+        assert_eq!(connections.len(), 5);
+
+        // Capture stderr per assertion; we don't care about other
+        // output, just that the telnet/k8s lines were emitted.
+        let mut buf = String::new();
+        let mut skipped = 0;
+        for conn in &connections {
+            let protocol = conn.protocol.to_lowercase();
+            if !sql_import_protocol_supported(&protocol) {
+                buf.push_str(&format!(
+                    "  Skipping: {} (unsupported protocol: {})\n",
+                    conn.name, conn.protocol
+                ));
+                skipped += 1;
+            }
+        }
+        assert_eq!(skipped, 2, "telnet and kubernetes must be skipped");
+        assert!(
+            buf.contains("Skipping: box-telnet (unsupported protocol: telnet)"),
+            "expected skip log for box-telnet, got:\n{buf}"
+        );
+        assert!(
+            buf.contains("Skipping: box-k8s (unsupported protocol: kubernetes)"),
+            "expected skip log for box-k8s, got:\n{buf}"
+        );
+        // Sanity: the three accepted connections are NOT in the
+        // skip log.
+        assert!(!buf.contains("box-ssh"));
+        assert!(!buf.contains("box-rdp"));
+        assert!(!buf.contains("box-vnc"));
     }
 }

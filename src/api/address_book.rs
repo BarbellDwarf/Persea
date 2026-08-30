@@ -3223,6 +3223,23 @@ document.getElementById('cred-form').addEventListener('submit', async function(e
     (StatusCode::OK, axum::response::Html(html)).into_response()
 }
 
+/// Protocols accepted by ad-hoc `?protocol=...` quick-connect. The
+/// `powershell` alias maps to Ssh and is therefore accepted (PowerShell
+/// over SSH is just SSH on the wire; the powershell-specific `command`
+/// only lands when the request carries an `address_book_entry` with a
+/// stored `powershell_binary`, which ad-hoc quick-connect never has).
+/// Mirrors `params_from_entry` (address-book connect) and the per-folder
+/// protocol list in db.rs.
+fn quick_connect_protocol_supported(protocol: &str) -> bool {
+    matches!(
+        SessionType::from_api_str_opt(protocol),
+        Some(SessionType::Ssh)
+            | Some(SessionType::Rdp)
+            | Some(SessionType::Vnc)
+            | Some(SessionType::Web)
+    )
+}
+
 fn quick_connect_error(status: StatusCode, message: &str) -> Response {
     let html = format!(
         r#"<!DOCTYPE html>
@@ -3518,27 +3535,21 @@ pub async fn quick_connect(
         );
     }
 
-    // Quick-connect is intentionally restrictive: only ssh/rdp/vnc/web
-    // are accepted. `powershell` is an SSH address-book entry type, but
-    // ad-hoc quick-connect has no entry to read the powershell binary
-    // from, so it rejects the alias. `from_api_str_opt` already maps
-    // the alias to `Ssh`; we filter on the allowed set to keep the
-    // legacy "Use ssh, rdp, vnc, or web" error message intact.
-    const QUICK_CONNECT_ALLOWED: &[SessionType] = &[
-        SessionType::Ssh,
-        SessionType::Rdp,
-        SessionType::Vnc,
-        SessionType::Web,
-    ];
+    // Quick-connect accepts every protocol a session can speak; see
+    // `quick_connect_protocol_supported` for the rationale on
+    // `powershell` (it's SSH on the wire).
     let session_type = match query.protocol.as_deref() {
         None => SessionType::Ssh,
         Some(s) => {
-            match SessionType::from_api_str_opt(s).filter(|t| QUICK_CONNECT_ALLOWED.contains(t)) {
+            match SessionType::from_api_str_opt(s).filter(|_| quick_connect_protocol_supported(s)) {
                 Some(t) => t,
                 None => {
                     return quick_connect_error(
                         StatusCode::BAD_REQUEST,
-                        &format!("Unknown protocol '{}'. Use ssh, rdp, vnc, or web.", s),
+                        &format!(
+                            "Unknown protocol '{}'. Use ssh, powershell, rdp, vnc, or web.",
+                            s
+                        ),
                     );
                 }
             }
@@ -6790,5 +6801,36 @@ mod tests {
             "a network failure must not signal credentials_required, got: {}",
             body
         );
+    }
+
+    /// Pinning test (persea#282 review): ad-hoc `?protocol=...`
+    /// quick-connect MUST accept the `powershell` alias because
+    /// PowerShell-over-SSH is plain SSH on the wire. Without this
+    /// pin, a regression that re-filters powershell out of the
+    /// allowed set would silently break the operator's "open a
+    /// quick SSH session" path (and contradict params_from_entry, which
+    /// already accepts powershell for address-book entries).
+    #[test]
+    fn quick_connect_protocol_supported_accepts_powershell_alias() {
+        // Allowed: every SessionType the wire speaks.
+        for p in ["ssh", "rdp", "vnc", "web", "powershell"] {
+            assert!(
+                quick_connect_protocol_supported(p),
+                "{p:?} must be accepted by quick-connect"
+            );
+        }
+        // The empty-string case is treated as "no protocol given",
+        // which the handler maps to Ssh — but the helper itself
+        // rejects empty input (matches the behaviour of
+        // `SessionType::from_api_str_opt("") == None`).
+        assert!(!quick_connect_protocol_supported(""));
+        // Genuinely unknown protocols must still be rejected so the
+        // 400 BAD_REQUEST branch keeps its meaning.
+        for bad in ["telnet", "kubernetes", "vnc-but-actually-something-else"] {
+            assert!(
+                !quick_connect_protocol_supported(bad),
+                "{bad:?} must NOT be silently coerced"
+            );
+        }
     }
 }

@@ -284,6 +284,30 @@ fn parse_bad_protocol() {
     assert!(result.errors[0].message.contains("invalid protocol 'ftp'"));
 }
 
+/// Pinning test (persea#282 review): the CSV importer must accept the
+/// `powershell` alias because PowerShell-over-SSH rides the SSH session
+/// kind. Without this pin a refactor of VALID_PROTOCOLS could silently
+/// drop powershell and every PowerShell-Remoting address-book entry
+/// would fail to import.
+#[test]
+fn parse_powershell_protocol_is_accepted() {
+    let csv = format!("{}\nwinrm,PowerShell,10.0.0.5,22,admin,,Infra,,", HEADER);
+    let result = csv_import::parse_rows(&csv, &[]).unwrap();
+    assert!(
+        result.rows.len() == 1,
+        "powershell must parse as a valid row; errors: {:?}, skipped: {:?}",
+        result.errors,
+        result.skipped,
+    );
+    assert!(
+        result.errors.is_empty(),
+        "powershell must not produce a validation error; got: {:?}",
+        result.errors,
+    );
+    assert_eq!(result.rows[0].protocol, "powershell");
+    assert_eq!(result.rows[0].name, "winrm");
+}
+
 #[test]
 fn parse_missing_hostname_non_web() {
     let csv = format!("{}\nfoo,ssh,,22,,,Root,,", HEADER);
