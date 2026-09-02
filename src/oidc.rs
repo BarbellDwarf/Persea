@@ -1013,21 +1013,41 @@ fn extract_groups_from_jwt(token_str: &str, groups_claim: &str) -> Vec<String> {
 /// Reshape the openidconnect crate's discovery error into something an
 /// operator can act on without grepping Debug output.
 ///
-/// The specific case we handle is the issuer-URI mismatch that OIDC
-/// Discovery's spec demands (the `issuer` claim in the discovery document
-/// must byte-for-byte match the URL the client used to fetch it). This
-/// fires for any OIDC provider where the operator has a trailing slash
-/// wrong or copy-pasted the authorisation URL instead of the issuer URL:
-/// Keycloak, Authentik, Azure AD / Entra ID, Okta, Auth0, JumpCloud,
-/// Google, and so on. The original library error gives the two URIs but
-/// phrases "expected" from the validator's perspective, which is
-/// exactly backwards for what the operator needs to do. We flip it
-/// around and name the fix explicitly.
+/// Two cases we handle:
+///
+/// * Issuer-URI mismatch: the `issuer` claim in the discovery document
+///   must byte-for-byte match the URL the client used to fetch it. This
+///   fires for any OIDC provider where the operator has a trailing slash
+///   wrong or copy-pasted the authorisation URL instead of the issuer URL:
+///   Keycloak, Authentik, Azure AD / Entra ID, Okta, Auth0, JumpCloud,
+///   Google, and so on. The original library error gives the two URIs but
+///   phrases "expected" from the validator's perspective, which is
+///   exactly backwards for what the operator needs to do. We flip it
+///   around and name the fix explicitly.
+/// * Empty JWKS: the IdP has no signing certificate selected on its OIDC
+///   provider (authentik defaults to none), so the document at `jwks_uri`
+///   lacks the required `keys` array. Discovery itself parses fine, so
+///   the raw serde error reads like a persea bug while the actual fix
+///   lives in the IdP's provider settings.
 ///
 /// Every other discovery failure (network, TLS, JSON parse, wrong path)
 /// falls through to the raw Debug string so we don't swallow useful
 /// diagnostics.
-fn friendly_discovery_error(raw: &str) -> String {
+///
+/// `pub(crate)` so the admin provider Test Connection endpoint
+/// (`src/api/providers.rs`) can reuse the same reshaping for its
+/// discovery probe.
+pub(crate) fn friendly_discovery_error(raw: &str) -> String {
+    // serde reports an empty JWKS as `missing field `keys`` on the
+    // top-level JWK set object. Check for it before the issuer mismatch
+    // so the operator sees the IdP-side fix instead of a Debug dump.
+    if raw.contains("missing field `keys`") {
+        return "OIDC discovery failed: the provider returned an empty JWKS (no signing key published).\n  \
+                Fix: select a signing certificate on the OIDC provider in your IdP \
+                (e.g. authentik: Applications → Providers → <provider> → Signing Key), then retry."
+            .to_string();
+    }
+
     let (got, expected) = match parse_issuer_mismatch(raw) {
         Some(pair) => pair,
         None => return format!("OIDC discovery failed: {raw}"),
@@ -1326,6 +1346,20 @@ mod tests {
         assert!(msg.contains("config:   \"https://login.microsoftonline.com/tenant-id/v2.0\""));
         assert!(msg.contains("provider: \"https://sts.windows.net/tenant-id/\""));
         assert!(msg.contains("Fix: set issuer_url = \"https://sts.windows.net/tenant-id/\""));
+    }
+
+    #[test]
+    fn friendly_discovery_error_empty_jwks() {
+        // IdP with no signing certificate selected on its OIDC provider
+        // (e.g. authentik): discovery parses, then the JWKS fetch comes
+        // back without the required `keys` array and serde says so.
+        let raw = r#"Parse(Error { path: Path { segments: [] }, original: Error("missing field `keys`", line: 1, column: 2) })"#;
+        let msg = friendly_discovery_error(raw);
+        assert!(msg.contains("empty JWKS"));
+        assert!(msg.contains("signing certificate"));
+        assert!(msg.starts_with("OIDC discovery failed:"));
+        // The raw serde dump must stay out of the operator-facing text.
+        assert!(!msg.contains("Parse(Error"));
     }
 
     #[test]
