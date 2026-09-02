@@ -10722,6 +10722,68 @@ pub fn ping_active_pool() -> rusqlite::Result<()> {
     pool_call(move |pool: &'static DbPool| async move { pool.ping().await.map_err(map_sqlx_err) })
 }
 
+/// Insert a pending desktop pairing THROUGH the worker thread. The pairing
+/// store must not touch the pool from the axum runtime: pool connections
+/// acquired outside the worker's own runtime race the worker's acquire
+/// waiter (sqlx cross-runtime lost-wakeup, observed as a full 30s
+/// `acquire_timeout` stall on the deep health ping; persea#319).
+///
+/// Returns `Ok(true)` when the record was inserted via the pool store and
+/// `Ok(false)` when no pool store is active, so the caller can fall back to
+/// the legacy SQLite path. Pool-store failures are returned as errors and
+/// must NOT trigger that fallback: the record belongs in the real store.
+pub fn insert_active_pairing(
+    code_hash: &str,
+    hostname: &str,
+    expires_at: &str,
+) -> rusqlite::Result<bool> {
+    if !pool_active() {
+        return Ok(false);
+    }
+    let code_hash = code_hash.to_string();
+    let hostname = hostname.to_string();
+    let expires_at = expires_at.to_string();
+    pool_call(move |pool: &'static DbPool| async move {
+        insert_pairing_pool(pool, &code_hash, &hostname, &expires_at)
+            .await
+            .map(|()| true)
+    })
+}
+
+/// Pool-store insert backing [`insert_active_pairing`] (called from
+/// `src/api/pairing.rs`). Same table and columns the legacy SQLite path
+/// creates in `ensure_pairing_table`; the SQLx DDL comes from
+/// `migrations/*/011_desktop_pairings.sql` at startup.
+async fn insert_pairing_pool(
+    pool: &DbPool,
+    code_hash: &str,
+    hostname: &str,
+    expires_at: &str,
+) -> rusqlite::Result<()> {
+    let n = pool_exec(
+        pool,
+        qsql!(
+            pool,
+            "INSERT INTO desktop_pairings (code_hash, hostname, expires_at) VALUES ($1, $2, $3)",
+            "INSERT INTO desktop_pairings (code_hash, hostname, expires_at) VALUES (?, ?, ?)"
+        ),
+        &[
+            Arg::Str(code_hash.to_string()),
+            Arg::Str(hostname.to_string()),
+            Arg::Str(expires_at.to_string()),
+        ],
+    )
+    .await
+    .map_err(map_sqlx_err)?;
+    if n == 0 {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(1),
+            Some("failed to insert pairing record".into()),
+        ));
+    }
+    Ok(())
+}
+
 // ── RBAC ───────────────────────────────────────────────────────────────
 
 pub(crate) async fn rbac_create_group_pool(

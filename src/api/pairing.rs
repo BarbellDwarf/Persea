@@ -280,8 +280,17 @@ pub async fn insert_pairing(
     hostname: String,
     expires_at: String,
 ) -> Result<(), AppError> {
-    if let Some(pool) = db::active_pool() {
-        return pool_insert_pairing(pool, &code_hash, &hostname, &expires_at).await;
+    // The SQLx pool store is served by the dedicated db worker runtime:
+    // awaiting a pool query here (axum runtime) risks the sqlx
+    // cross-runtime acquire race (persea#319). `insert_active_pairing`
+    // dispatches through the worker and reports `false` when no pool store
+    // is active, which falls through to the legacy SQLite path below.
+    // Errors propagate: the record belongs in the pool store, so a failed
+    // pool insert must not be retried against SQLite.
+    match db::insert_active_pairing(&code_hash, &hostname, &expires_at) {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(e) => return Err(AppError::from(e)),
     }
     let db = db.clone();
     tokio::task::spawn_blocking(move || -> rusqlite::Result<()> {
@@ -426,48 +435,6 @@ pub async fn user_identity_by_id(
 }
 
 // ── SQLx pool storage ───────────────────────────────────────────────────
-
-async fn pool_insert_pairing(
-    pool: &DbPool,
-    code_hash: &str,
-    hostname: &str,
-    expires_at: &str,
-) -> Result<(), AppError> {
-    let n = match pool {
-        DbPool::Postgres(p) => sqlx::query(
-            "INSERT INTO desktop_pairings (code_hash, hostname, expires_at) VALUES ($1, $2, $3)",
-        )
-        .bind(code_hash)
-        .bind(hostname)
-        .bind(expires_at)
-        .execute(p)
-        .await
-        .map(|r| r.rows_affected()),
-        DbPool::MySQL(p) => sqlx::query(
-            "INSERT INTO desktop_pairings (code_hash, hostname, expires_at) VALUES (?, ?, ?)",
-        )
-        .bind(code_hash)
-        .bind(hostname)
-        .bind(expires_at)
-        .execute(p)
-        .await
-        .map(|r| r.rows_affected()),
-        DbPool::SQLite(p) => sqlx::query(
-            "INSERT INTO desktop_pairings (code_hash, hostname, expires_at) VALUES (?, ?, ?)",
-        )
-        .bind(code_hash)
-        .bind(hostname)
-        .bind(expires_at)
-        .execute(p)
-        .await
-        .map(|r| r.rows_affected()),
-        DbPool::None => return Err(no_pool_err()),
-    };
-    if n.map_err(|e| db_err(&e))? == 0 {
-        return Err(AppError::Internal("failed to insert pairing record".into()));
-    }
-    Ok(())
-}
 
 async fn pool_lookup_pairing(
     pool: &DbPool,
