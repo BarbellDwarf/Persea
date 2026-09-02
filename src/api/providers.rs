@@ -19,6 +19,7 @@
 use crate::auth::AuthIdentity;
 use crate::db::Db;
 use crate::error::AppError;
+use crate::oidc::friendly_discovery_error;
 use crate::providers_db::{self, DbProvider, MoveDirection};
 use axum::extract::Path;
 use axum::http::StatusCode;
@@ -463,9 +464,12 @@ async fn test_oidc_discovery(provider: &DbProvider) -> (bool, String) {
         Err(e) => return (false, format!("invalid issuer_url: {e}")),
     };
 
+    // Reshape failures the same way the interactive login path does
+    // (issuer slash mistakes, empty JWKS): the operator gets the fix
+    // instead of a Debug dump.
     match CoreProviderMetadata::discover_async(issuer, &http_client).await {
         Ok(_) => (true, "discovery ok".into()),
-        Err(e) => (false, format!("OIDC discovery failed: {e:?}")),
+        Err(e) => (false, friendly_discovery_error(&format!("{e:?}"))),
     }
 }
 
