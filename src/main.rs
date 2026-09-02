@@ -1622,6 +1622,11 @@ async fn run_server(
                 );
                 continue;
             }
+            // Set by arms that keep a provider out of the chain on purpose
+            // and log their own reason. The generic "failed to load"
+            // warning below is for genuine load failures only, not for
+            // deliberate skips.
+            let mut intentional_skip = false;
             let provider: Option<Box<dyn AuthProvider>> = match p.provider_type.as_str() {
                 "ldap" => serde_json::from_value::<crate::auth_providers::ldap::LdapConfig>(
                     p.config.clone(),
@@ -1653,8 +1658,17 @@ async fn run_server(
                     )) as Box<dyn AuthProvider>,
                 ),
                 "totp" => {
+                    intentional_skip = true;
                     tracing::warn!(
                         "TOTP provider '{}' is not wired into the auth chain — configure [auth.totp] instead",
+                        p.name
+                    );
+                    None
+                }
+                "oidc" => {
+                    intentional_skip = true;
+                    tracing::info!(
+                        "OIDC provider '{}' handles SSO via the OIDC registry; not part of the password auth chain",
                         p.name
                     );
                     None
@@ -1667,7 +1681,7 @@ async fn run_server(
             if let Some(prov) = provider {
                 providers.insert(key.clone(), prov);
                 db_methods.push(key);
-            } else {
+            } else if !intentional_skip {
                 tracing::warn!(
                     "DB auth provider '{}' (type {}) failed to load and was skipped",
                     p.name,
