@@ -195,6 +195,14 @@ existing identity provider (Authentik, Keycloak, Okta, Azure AD,
 Google, ...) with a button on the login page. When OIDC is configured,
 API key authentication continues to work alongside it.
 
+The provider must publish a signing key. Discovery fetches the IdP's
+JWKS document and fails with an "empty JWKS" error when the OIDC
+provider has no signing certificate selected (Authentik defaults to
+none: pick a certificate-key pair under the provider's **Signing Key**
+setting, preferably RSA). SSO providers are registered once at startup,
+so restart persea after changing the IdP configuration before you
+expect the button on the login page.
+
 | Key | Default | What it controls |
 |-----|---------|------------------|
 | `issuer_url` | *(required)* | Your provider's issuer URL. Must match the discovered issuer **exactly**, including default ports and trailing slashes: `https://idp.example.com/` and `https://idp.example.com` can be treated as different issuers. Check your provider's `.well-known/openid-configuration` for the canonical value. |
